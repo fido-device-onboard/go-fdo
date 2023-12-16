@@ -348,6 +348,26 @@ func TestEncodeMap(t *testing.T) {
 		t.Errorf("marshaling %+v; expected one of [% x], got % x", input, oneOf, got)
 	})
 
+	t.Run("int->any", func(t *testing.T) {
+		var (
+			oneOf = [][]byte{
+				{0xa2, 0x01, 0x02, 0x03, 0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f},
+				{0xa2, 0x03, 0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x01, 0x02},
+			}
+			input = map[int]any{1: 2, 3: "hello"}
+		)
+		got, err := cbor.Marshal(input)
+		if err != nil {
+			t.Errorf("error marshaling %+v: %v", input, err)
+		}
+		for _, expect := range oneOf {
+			if reflect.DeepEqual(got, expect) {
+				return
+			}
+		}
+		t.Errorf("marshaling %+v; expected one of [% x], got % x", input, oneOf, got)
+	})
+
 	t.Run("int->struct{}", func(t *testing.T) {
 		var (
 			oneOf = [][]byte{
@@ -445,6 +465,176 @@ func TestEncodeNull(t *testing.T) {
 
 func TestEncodeUndefined(t *testing.T) {
 	// No way to encode undefined
+}
+
+func TestDecodeAny(t *testing.T) {
+	t.Run("unsigned", func(t *testing.T) {
+		input := []byte{0x19, 0x03, 0xe7}
+		expect := int64(999)
+
+		var got any
+		if err := cbor.Unmarshal(input, &got); err != nil {
+			t.Errorf("error unmarshaling % x: %v", input, err)
+		} else if got.(int64) != expect {
+			t.Errorf("unmarshaling % x; expected %d, got %d", input, expect, got)
+		}
+	})
+
+	t.Run("negative", func(t *testing.T) {
+		input := []byte{0x20}
+		expect := int64(-1)
+
+		var got any
+		if err := cbor.Unmarshal(input, &got); err != nil {
+			t.Errorf("error unmarshaling % x: %v", input, err)
+		} else if got.(int64) != expect {
+			t.Errorf("unmarshaling % x; expected %d, got %d", input, expect, got)
+		}
+	})
+
+	t.Run("byte string", func(t *testing.T) {
+		input := []byte{0x45, 0x68, 0x65, 0x6c, 0x6c, 0x6f}
+		expect := []byte("hello")
+
+		var got any
+		if err := cbor.Unmarshal(input, &got); err != nil {
+			t.Errorf("error unmarshaling % x: %v", input, err)
+		} else if !bytes.Equal(got.([]byte), expect) {
+			t.Errorf("unmarshaling % x; expected % x, got % x", input, expect, got)
+		}
+	})
+
+	t.Run("text string", func(t *testing.T) {
+		input := []byte{0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f}
+		expect := "hello"
+
+		var got any
+		if err := cbor.Unmarshal(input, &got); err != nil {
+			t.Errorf("error unmarshaling % x: %v", input, err)
+		} else if got.(string) != expect {
+			t.Errorf("unmarshaling % x; expected %s, got %s", input, expect, got)
+		}
+	})
+
+	t.Run("array", func(t *testing.T) {
+		input := []byte{0x82, 0x01, 0x64, 0x49, 0x45, 0x54, 0x46}
+		expect := []any{int64(1), "IETF"}
+
+		var got any
+		if err := cbor.Unmarshal(input, &got); err != nil {
+			t.Errorf("error unmarshaling % x: %v", input, err)
+		} else if !reflect.DeepEqual(got.([]interface{}), expect) {
+			t.Errorf("unmarshaling % x; expected %s, got %s", input, expect, got)
+		}
+	})
+
+	t.Run("map", func(t *testing.T) {
+		var (
+			input = []byte{0xa2,
+				0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x02,
+				0x03, 0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f,
+			}
+			expect = map[any]any{"hello": int64(2), int64(3): "hello"}
+		)
+		var got any
+		if err := cbor.Unmarshal(input, &got); err != nil {
+			t.Errorf("error unmarshaling % x: %v", input, err)
+		} else if !reflect.DeepEqual(got.(map[any]any), expect) {
+			t.Errorf("unmarshaling % x; expected %v, got %v", input, expect, got)
+		}
+	})
+
+	t.Run("tag", func(t *testing.T) {
+		for _, test := range []struct {
+			input     []byte
+			expectNum uint64
+			expectVal any
+		}{
+			{
+				input:     []byte{0xd8, 0x2a, 0x07},
+				expectNum: 42,
+				expectVal: 7,
+			},
+			{
+				input:     []byte{0xd8, 0x2a, 0x22},
+				expectNum: 42,
+				expectVal: -3,
+			},
+			{
+				input:     []byte{0xc7, 0xf5},
+				expectNum: 7,
+				expectVal: true,
+			},
+			{
+				input:     []byte{0xc1, 0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f},
+				expectNum: 1,
+				expectVal: "hello",
+			},
+			{
+				input:     []byte{0xc1, 0x44, 0x01, 0x02, 0x03, 0x04},
+				expectNum: 1,
+				expectVal: []byte{0x01, 0x02, 0x03, 0x04},
+			},
+			{
+				input:     []byte{0xc3, 0x84, 0x01, 0x02, 0x03, 0x04},
+				expectNum: 3,
+				expectVal: []int{1, 2, 3, 4},
+			},
+			{
+				input:     []byte{0xc3, 0x82, 0x01, 0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f},
+				expectNum: 3,
+				expectVal: struct {
+					A int
+					B string
+				}{A: 1, B: "hello"},
+			},
+			{
+				input:     []byte{0xc4, 0xa1, 0x65, 0x68, 0x65, 0x6C, 0x6C, 0x6F, 0x44, 0x01, 0x02, 0x03, 0x04},
+				expectNum: 4,
+				expectVal: map[string][]byte{"hello": {0x01, 0x02, 0x03, 0x04}},
+			},
+			{
+				input:     []byte{0xc5, 0xc4, 0x03},
+				expectNum: 5,
+				expectVal: cbor.Tag{Number: 4, DecodedVal: []byte{0x03}},
+			},
+		} {
+			var tag any
+			if err := cbor.Unmarshal(test.input, &tag); err != nil {
+				t.Errorf("error unmarshaling % x: %v", test.input, err)
+			} else if tag.(cbor.Tag).Number != test.expectNum {
+				t.Errorf("unmarshaling % x; expected tag number %d, got %d", test.input, test.expectNum, tag.(cbor.Tag).Number)
+				continue
+			}
+
+			valAddr := reflect.New(reflect.TypeOf(test.expectVal)).Interface()
+			if err := cbor.Unmarshal([]byte(tag.(cbor.Tag).DecodedVal), valAddr); err != nil {
+				t.Errorf("error unmarshaling tagged value % x: %v", tag.(cbor.Tag).DecodedVal, err)
+				continue
+			}
+			val := reflect.ValueOf(valAddr).Elem().Interface()
+			if !reflect.DeepEqual(val, test.expectVal) {
+				t.Errorf("unmarshaling % x; expected %#v, got %#v", tag.(cbor.Tag).DecodedVal, test.expectVal, val)
+			}
+		}
+	})
+
+	t.Run("bool", func(t *testing.T) {
+		var got any
+		for _, test := range []struct {
+			input  []byte
+			expect bool
+		}{
+			{input: []byte{0xf4}, expect: false},
+			{input: []byte{0xf5}, expect: true},
+		} {
+			if err := cbor.Unmarshal(test.input, &got); err != nil {
+				t.Errorf("error unmarshaling % x: %v", test.input, err)
+			} else if got.(bool) != test.expect {
+				t.Errorf("unmarshaling % x; expected %v, got %v", test.input, test.expect, got)
+			}
+		}
+	})
 }
 
 func TestDecodeInt(t *testing.T) {
@@ -721,6 +911,7 @@ func TestDecodeArray(t *testing.T) {
 			{expect: []int{1}, input: []byte{0x81, 0x01}},
 			{expect: []int{1, 15}, input: []byte{0x82, 0x01, 0x0f}},
 			{expect: []string{"IETF"}, input: []byte{0x81, 0x64, 0x49, 0x45, 0x54, 0x46}},
+			{expect: []any{int64(1), "IETF"}, input: []byte{0x82, 0x01, 0x64, 0x49, 0x45, 0x54, 0x46}},
 		} {
 			gotAddr := reflect.New(reflect.TypeOf(test.expect)).Interface()
 			if err := cbor.Unmarshal(test.input, gotAddr); err != nil {
@@ -790,6 +981,22 @@ func TestDecodeMap(t *testing.T) {
 		}
 	})
 
+	t.Run("any->any", func(t *testing.T) {
+		var (
+			input = []byte{0xa2,
+				0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x02,
+				0x03, 0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f,
+			}
+			got    = make(map[any]any)
+			expect = map[any]any{"hello": int64(2), int64(3): "hello"}
+		)
+		if err := cbor.Unmarshal(input, &got); err != nil {
+			t.Errorf("error unmarshaling % x: %v", input, err)
+		} else if !reflect.DeepEqual(got, expect) {
+			t.Errorf("unmarshaling % x; expected %v, got %v", input, expect, got)
+		}
+	})
+
 	t.Run("int->struct{}", func(t *testing.T) {
 		var (
 			input  = []byte{0xa2, 0x01, 0x80, 0x03, 0x80}
@@ -831,7 +1038,6 @@ func TestDecodeMap(t *testing.T) {
 }
 
 func TestDecodeTag(t *testing.T) {
-	var ()
 	for _, test := range []struct {
 		input     []byte
 		expectNum uint64

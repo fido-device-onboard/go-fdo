@@ -7,9 +7,7 @@ Not supported:
   - Indefinite length arrays, maps, byte strings, or text strings
   - Simple values other than bool, null, and undefined
   - Numbers greater than 64 bits
-  - Maps with mixed-type keys or values
   - Encoding/decoding structs to/from CBOR maps
-  - Decoding into interface{} or []interface{}
   - Floats (yet)
 
 However, the Marshaler/Unmarshaler interfaces allow any determinate sized
@@ -146,6 +144,22 @@ generally more memory efficient than reading an entire [io.Reader] into a
 	// tag = {Number: 1, DecodedVal: [0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f]}
 	var tagged string
 	_ = cbor.Unmarshal([]byte(cbor.DecodedVal), &tagged) // tagged = "hello"
+
+When decoding into an any/empty interface type, the following CBOR to Go type
+mapping is used:
+
+	Unsigned     -> int64
+	Negative     -> int64
+	Byte String  -> []byte
+	Text String  -> string
+	Array        -> []interface{}
+	Map          -> map[interface{}]interface{}
+	Tag          -> cbor.Tag
+	Simple(Bool) -> bool
+
+Decoding other types will fail, because it is not clear what memory to
+allocate. Even null cannot be decoded, because nil values still require a type
+in Go.
 */
 package cbor
 
@@ -398,24 +412,60 @@ func (d *Decoder) decodeVal(rv reflect.Value) error {
 	// Dispatch decoding by major type
 	switch highThreeBits {
 	case unsignedIntMajorType:
+		allocateNilAny(rv, int64(0))
 		return d.decodePositive(rv, additional)
 	case negativeIntMajorType:
+		allocateNilAny(rv, int64(0))
 		return d.decodeNegative(rv, additional)
 	case byteStringMajorType:
+		allocateNilAny(rv, []byte(nil))
 		return d.decodeByteSlice(rv, additional)
 	case textStringMajorType:
+		allocateNilAny(rv, "")
 		return d.decodeByteSlice(rv, additional)
 	case arrayMajorType:
+		allocateNilAny(rv, []any(nil))
 		return d.decodeArray(rv, additional)
 	case mapMajorType:
+		allocateNilAny(rv, map[any]any(nil))
 		return d.decodeMap(rv, additional)
 	case tagMajorType:
+		allocateNilAny(rv, Tag{})
 		return d.decodeTag(rv, additional)
 	case simpleMajorType:
+		if lowFiveBits == falseVal || lowFiveBits == trueVal {
+			allocateNilAny(rv, false)
+		}
 		return d.decodeSimple(rv, lowFiveBits, additional)
 	}
 
 	panic("unreachable")
+}
+
+// Initialize the memory of a value if it is a nil interface{}/any type.
+func allocateNilAny(maybeUnsetVal reflect.Value, defaultVal any) {
+	if maybeUnsetVal.Kind() != reflect.Interface || maybeUnsetVal.NumMethod() > 0 {
+		// Not an empty interface
+		return
+	}
+	if !maybeUnsetVal.IsNil() {
+		// Already has an underlying value
+		return
+	}
+
+	// Create a new zero value of the defaultVal type
+	newType := reflect.TypeOf(defaultVal)
+	switch newType.Kind() {
+	case reflect.Map:
+		// Explicitly allocate for maps because the zero value is nil.
+		maybeUnsetVal.Set(reflect.MakeMap(newType))
+	case reflect.Slice:
+		// This slice will need to be created again with its correct length,
+		// but for now we still allocate it in order to pass type information.
+		maybeUnsetVal.Set(reflect.MakeSlice(newType, 0, 0))
+	default:
+		maybeUnsetVal.Set(reflect.New(newType).Elem())
+	}
 }
 
 func (d *Decoder) decodePositive(rv reflect.Value, additional []byte) error {
@@ -423,7 +473,11 @@ func (d *Decoder) decodePositive(rv reflect.Value, additional []byte) error {
 
 	// Check that value fits
 	overflows := false
-	switch rv.Kind() {
+	kind := rv.Kind()
+	if kind == reflect.Interface && !rv.IsNil() {
+		kind = rv.Elem().Kind()
+	}
+	switch kind {
 	case reflect.Uint:
 		overflows = len(additional) > (bits.UintSize / 8)
 	case reflect.Uint8:
@@ -453,12 +507,29 @@ func (d *Decoder) decodePositive(rv reflect.Value, additional []byte) error {
 			ErrUnsupportedType{typeName: rv.Type().Name()})
 	}
 
-	// Set value
-	switch rv.Kind() {
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		rv.SetUint(u64)
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		rv.SetInt(int64(u64))
+	// Note that setting cannot be done with reflect.Value.SetXXX because the
+	// reflect.Value may be an interface and its Elem() is not settable.
+	switch kind {
+	case reflect.Uint:
+		rv.Set(reflect.ValueOf(uint(u64)))
+	case reflect.Uint8:
+		rv.Set(reflect.ValueOf(uint8(u64)))
+	case reflect.Uint16:
+		rv.Set(reflect.ValueOf(uint16(u64)))
+	case reflect.Uint32:
+		rv.Set(reflect.ValueOf(uint32(u64)))
+	case reflect.Uint64:
+		rv.Set(reflect.ValueOf(uint64(u64)))
+	case reflect.Int:
+		rv.Set(reflect.ValueOf(int(u64)))
+	case reflect.Int8:
+		rv.Set(reflect.ValueOf(int8(u64)))
+	case reflect.Int16:
+		rv.Set(reflect.ValueOf(int16(u64)))
+	case reflect.Int32:
+		rv.Set(reflect.ValueOf(int32(u64)))
+	case reflect.Int64:
+		rv.Set(reflect.ValueOf(int64(u64)))
 	}
 	return nil
 }
@@ -468,7 +539,11 @@ func (d *Decoder) decodeNegative(rv reflect.Value, additional []byte) error {
 
 	// Check that value fits
 	overflows := false
-	switch rv.Kind() {
+	kind := rv.Kind()
+	if kind == reflect.Interface && !rv.IsNil() {
+		kind = rv.Elem().Kind()
+	}
+	switch kind {
 	case reflect.Int:
 		overflows = len(additional) > (bits.UintSize/8) || int(u64) < 0
 	case reflect.Int8:
@@ -488,7 +563,20 @@ func (d *Decoder) decodeNegative(rv reflect.Value, additional []byte) error {
 			ErrUnsupportedType{typeName: rv.Type().Name()})
 	}
 
-	rv.SetInt(-int64(u64 + 1))
+	// Note that setting cannot be done with reflect.Value.SetXXX because the
+	// reflect.Value may be an interface and its Elem() is not settable.
+	switch kind {
+	case reflect.Int:
+		rv.Set(reflect.ValueOf(-int(u64 + 1)))
+	case reflect.Int8:
+		rv.Set(reflect.ValueOf(-int8(u64 + 1)))
+	case reflect.Int16:
+		rv.Set(reflect.ValueOf(-int16(u64 + 1)))
+	case reflect.Int32:
+		rv.Set(reflect.ValueOf(-int32(u64 + 1)))
+	case reflect.Int64:
+		rv.Set(reflect.ValueOf(-int64(u64 + 1)))
+	}
 	return nil
 }
 
@@ -499,11 +587,13 @@ func (d *Decoder) decodeByteSlice(rv reflect.Value, additional []byte) error {
 		return fmt.Errorf("error reading byte/text string: %w", err)
 	}
 
+	// Note that setting cannot be done with reflect.Value.SetXXX because the
+	// reflect.Value may be an interface and its Elem() is not settable.
 	switch rv.Interface().(type) {
 	case []byte:
-		rv.SetBytes(bs)
+		rv.Set(reflect.ValueOf(bs))
 	case string:
-		rv.SetString(string(bs))
+		rv.Set(reflect.ValueOf(string(bs)))
 	default:
 		return fmt.Errorf("%w: only string and []byte are supported",
 			ErrUnsupportedType{typeName: rv.Type().Name()})
@@ -512,7 +602,11 @@ func (d *Decoder) decodeByteSlice(rv reflect.Value, additional []byte) error {
 }
 
 func (d *Decoder) decodeArray(rv reflect.Value, additional []byte) error {
-	switch rv.Kind() {
+	kind := rv.Kind()
+	if kind == reflect.Interface && !rv.IsNil() {
+		kind = rv.Elem().Kind()
+	}
+	switch kind {
 	case reflect.Struct:
 		return d.decodeArrayToStruct(rv, additional)
 	case reflect.Slice:
@@ -524,6 +618,11 @@ func (d *Decoder) decodeArray(rv reflect.Value, additional []byte) error {
 }
 
 func (d *Decoder) decodeArrayToStruct(rv reflect.Value, additional []byte) error {
+	if rv.Kind() != reflect.Struct {
+		return fmt.Errorf("%w: expected a struct type",
+			ErrUnsupportedType{typeName: rv.Type().Name()})
+	}
+
 	indices := orderAndFilterFields(rv.NumField(), rv.Type().Field)
 	for _, i := range indices {
 		f := rv.Field(i)
@@ -533,15 +632,39 @@ func (d *Decoder) decodeArrayToStruct(rv reflect.Value, additional []byte) error
 		}
 		f.Set(newVal.Elem())
 	}
+
 	return nil
 }
 
 func (d *Decoder) decodeArrayToSlice(rv reflect.Value, additional []byte) error {
-	// Set slice to the correct length
+	// At this point the reflect.Value is either a reflect.Slice or a
+	// reflect.Interface. If it is a slice, then it is mutable - it came from a
+	// reference. If it is an interface, however, it came from a reference to
+	// the interface and the underlying value is not addressable.
+	//
+	// Unlike maps, which are size-mutable, slices cannot be grown without a
+	// reference type (e.g. *[]any) as shown by append returning a new slice,
+	// rather than extending it in place.
+	//
+	// For addressable slices, we can grow them to the correct size. For
+	// interface types, we must instead set them to a slice created with the
+	// correct size.
 	length := int(toU64(additional))
 	slice := rv
-	slice.Grow(length)
-	slice.SetLen(length)
+	switch slice.Kind() {
+	case reflect.Slice:
+		// Set slice to the correct length
+		slice.Grow(length)
+		slice.SetLen(length)
+
+	case reflect.Interface:
+		slice.Set(reflect.MakeSlice(slice.Elem().Type(), length, length))
+		slice = slice.Elem()
+
+	default:
+		return fmt.Errorf("%w: expected a slice type",
+			ErrUnsupportedType{typeName: rv.Type().Name()})
+	}
 
 	// Decode each item into the correctly sized slice
 	itemType := slice.Type().Elem()
@@ -557,7 +680,12 @@ func (d *Decoder) decodeArrayToSlice(rv reflect.Value, additional []byte) error 
 }
 
 func (d *Decoder) decodeMap(rv reflect.Value, additional []byte) error {
-	if rv.Kind() != reflect.Map {
+	kind := rv.Kind()
+	if kind == reflect.Interface && !rv.IsNil() {
+		kind = rv.Elem().Kind()
+		rv = rv.Elem()
+	}
+	if kind != reflect.Map {
 		return fmt.Errorf("%w: expected a map type",
 			ErrUnsupportedType{typeName: rv.Type().Name()})
 	}
@@ -612,11 +740,18 @@ func (d *Decoder) decodeTag(rv reflect.Value, additional []byte) error {
 func (d *Decoder) decodeSimple(rv reflect.Value, lowFiveBits byte, additional []byte) error {
 	switch lowFiveBits {
 	case falseVal, trueVal:
-		if rv.Kind() != reflect.Bool {
+		// Note that setting cannot be done with reflect.Value.SetXXX because
+		// the reflect.Value may be an interface and its Elem() is not
+		// settable.
+		kind := rv.Kind()
+		if kind == reflect.Interface && !rv.IsNil() {
+			kind = rv.Elem().Kind()
+		}
+		if kind != reflect.Bool {
 			return fmt.Errorf("%w: must be a bool",
 				ErrUnsupportedType{typeName: rv.Type().Name()})
 		}
-		rv.SetBool(lowFiveBits == trueVal)
+		rv.Set(reflect.ValueOf(lowFiveBits == trueVal))
 	case nullVal, undefinedVal:
 		switch {
 		case rv.Kind() == reflect.Pointer && rv.IsNil():
