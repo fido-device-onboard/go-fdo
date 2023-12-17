@@ -1,3 +1,6 @@
+// Copyright 2023 Intel Corporation
+// SPDX-License-Identifier: Apache 2.0
+
 /*
 cbor implements a basic encoding/decoding API for RFC 8949 Concise Binary
 Object Representation (CBOR).
@@ -8,7 +11,9 @@ Not supported:
   - Simple values other than bool, null, and undefined
   - Numbers greater than 64 bits
   - Encoding/decoding structs to/from CBOR maps
+  - Decoding CBOR maps with array/map/uncomparable keys to Go maps
   - Floats (yet)
+  - UTF-8 validation of strings
 
 However, the Marshaler/Unmarshaler interfaces allow any determinate sized
 CBOR item to be encoded to/from any Go type.
@@ -78,6 +83,8 @@ allows for setting encoding options.
 	_ = enc.Encode(map[int]string{1: "hello"})
 	// Empty struct values also work (for sets)
 	_ = enc.Encode(map[int]struct{}{1: {}, 2: {}})
+	// Core deterministic encoding is used by default
+	_ = enc.Encode(map[int]struct{}{1: {}, 2: {}}, "hello": {}) // always ordered 1, 2, "hello"
 
 	# Tags
 	_ = enc.Encode(cbor.Tag{Number: 42, EncodeVal: "Meaning of life"})
@@ -808,7 +815,15 @@ func (d *Decoder) typeInfo() (highThreeBits, lowFiveBits byte, additional []byte
 type Encoder struct {
 	w io.Writer
 
-	// Future encoding options
+	// MapKeySort is used to determine sort order of map keys for encoding. If
+	// none is set, then Core Deterministic (bytewise lexical) encoding is
+	// used.
+	//
+	// The provided function is called with indices 0..len(keys)-1 and
+	// marshaled map keys in a random order. The return value is expected to be
+	// a "less" function that is used to iteratively sort the indices in place
+	// while the marshaled keys remain unmodified.
+	MapKeySort func(indices []int, marshaledKeys [][]byte) func(i, j int) bool
 }
 
 // NewEncoder returns a new Encoder. The [io.Writer] is not automatically flushed.
@@ -836,6 +851,15 @@ func (e *Encoder) Encode(v any) error {
 		rv = rv.Elem()
 	}
 	v = rv.Interface()
+
+	// If the value implements Marshaler, use MarshalCBOR
+	if m, ok := rv.Interface().(Marshaler); ok {
+		b, err := m.MarshalCBOR()
+		if err != nil {
+			return err
+		}
+		return e.write(b)
+	}
 
 	// Dispatch encoding by reflected data type
 	switch {
@@ -970,12 +994,36 @@ func (e *Encoder) encodeMap(length int, keys []reflect.Value, get func(k reflect
 		return err
 	}
 
-	// Append each key-value pair by encoding key then value
-	for _, key := range keys {
-		if err := e.Encode(key.Interface()); err != nil {
+	// Marhshal all keys
+	marshaledKeys := make([][]byte, len(keys))
+	var buf bytes.Buffer
+	enc := NewEncoder(&buf)
+	enc.MapKeySort = e.MapKeySort
+	for i, key := range keys {
+		buf.Reset()
+		if err := enc.Encode(key.Interface()); err != nil {
 			return err
 		}
-		if err := e.Encode(get(key).Interface()); err != nil {
+		marshaledKeys[i] = bytes.Clone(buf.Bytes())
+	}
+
+	// Sort keys deterministically
+	lessFn := e.MapKeySort
+	if lessFn == nil {
+		lessFn = bytewiseLexicalSort
+	}
+	indices := make([]int, len(keys))
+	for i := range keys {
+		indices[i] = i
+	}
+	sort.Slice(indices, lessFn(indices, marshaledKeys))
+
+	// Append each key-value pair by encoding key then value
+	for _, i := range indices {
+		if err := e.Encode(RawBytes(marshaledKeys[i])); err != nil {
+			return err
+		}
+		if err := e.Encode(get(keys[i]).Interface()); err != nil {
 			return err
 		}
 	}
@@ -1067,4 +1115,18 @@ func orderAndFilterFields(n int, field func(i int) reflect.StructField) (indices
 		indices = append(indices, x.index)
 	}
 	return indices
+}
+
+// This is the "new" canonical form whereas length-first is the "old" canonical
+// form.
+func bytewiseLexicalSort(indices []int, keys [][]byte) func(i, j int) bool {
+	return func(i, j int) bool {
+		left, right := keys[indices[i]], keys[indices[j]]
+		for k := 0; k < len(left); k++ {
+			if left[k] != right[k] {
+				return left[k] < right[k]
+			}
+		}
+		panic("unreachable for valid CBOR map keys")
+	}
 }

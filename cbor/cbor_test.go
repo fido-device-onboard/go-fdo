@@ -311,119 +311,126 @@ func TestEncodeArray(t *testing.T) {
 func TestEncodeMap(t *testing.T) {
 	t.Run("empty", func(t *testing.T) {
 		var (
-			oneOf = [][]byte{
-				{0xa0},
-			}
-			input = make(map[int]int)
+			expect = []byte{0xa0}
+			input  = make(map[int]int)
 		)
 		got, err := cbor.Marshal(input)
 		if err != nil {
 			t.Errorf("error marshaling %+v: %v", input, err)
 		}
-		for _, expect := range oneOf {
-			if reflect.DeepEqual(got, expect) {
-				return
-			}
+		if !reflect.DeepEqual(got, expect) {
+			t.Errorf("marshaling %+v; expected % x, got % x", input, expect, got)
 		}
-		t.Errorf("marshaling %+v; expected one of [% x], got % x", input, oneOf, got)
 	})
 
 	t.Run("int->int", func(t *testing.T) {
 		var (
-			oneOf = [][]byte{
-				{0xa2, 0x01, 0x02, 0x03, 0x04},
-				{0xa2, 0x03, 0x04, 0x01, 0x02},
-			}
-			input = map[int]int{1: 2, 3: 4}
+			expect = []byte{0xa2, 0x01, 0x02, 0x03, 0x04}
+			input  = map[int]int{1: 2, 3: 4}
 		)
 		got, err := cbor.Marshal(input)
 		if err != nil {
 			t.Errorf("error marshaling %+v: %v", input, err)
 		}
-		for _, expect := range oneOf {
-			if reflect.DeepEqual(got, expect) {
-				return
-			}
+		if !reflect.DeepEqual(got, expect) {
+			t.Errorf("marshaling %+v; expected % x, got % x", input, expect, got)
 		}
-		t.Errorf("marshaling %+v; expected one of [% x], got % x", input, oneOf, got)
 	})
 
 	t.Run("int->any", func(t *testing.T) {
 		var (
-			oneOf = [][]byte{
-				{0xa2, 0x01, 0x02, 0x03, 0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f},
-				{0xa2, 0x03, 0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x01, 0x02},
-			}
-			input = map[int]any{1: 2, 3: "hello"}
+			expect = []byte{0xa2, 0x01, 0x02, 0x03, 0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f}
+			input  = map[int]any{1: 2, 3: "hello"}
 		)
 		got, err := cbor.Marshal(input)
 		if err != nil {
 			t.Errorf("error marshaling %+v: %v", input, err)
 		}
-		for _, expect := range oneOf {
-			if reflect.DeepEqual(got, expect) {
-				return
-			}
+		if !reflect.DeepEqual(got, expect) {
+			t.Errorf("marshaling %+v; expected % x, got % x", input, expect, got)
 		}
-		t.Errorf("marshaling %+v; expected one of [% x], got % x", input, oneOf, got)
 	})
 
 	t.Run("int->struct{}", func(t *testing.T) {
 		var (
-			oneOf = [][]byte{
-				{0xa2, 0x01, 0x80, 0x03, 0x80},
-				{0xa2, 0x03, 0x80, 0x01, 0x80},
-			}
-			input = map[int]struct{}{1: {}, 3: {}}
+			expect = []byte{0xa2, 0x01, 0x80, 0x03, 0x80}
+			input  = map[int]struct{}{1: {}, 3: {}}
 		)
 		got, err := cbor.Marshal(input)
 		if err != nil {
 			t.Errorf("error marshaling %+v: %v", input, err)
 		}
-		for _, expect := range oneOf {
-			if reflect.DeepEqual(got, expect) {
-				return
-			}
+		if !reflect.DeepEqual(got, expect) {
+			t.Errorf("marshaling %+v; expected % x, got % x", input, expect, got)
 		}
-		t.Errorf("marshaling %+v; expected one of [% x], got % x", input, oneOf, got)
 	})
 
 	t.Run("string->[]byte", func(t *testing.T) {
 		var (
-			oneOf = [][]byte{
-				{0xa1, 0x65, 0x68, 0x65, 0x6C, 0x6C, 0x6F, 0x44, 0x01, 0x02, 0x03, 0x04},
-			}
-			input = map[string][]byte{"hello": {0x01, 0x02, 0x03, 0x04}}
+			expect = []byte{0xa1, 0x65, 0x68, 0x65, 0x6C, 0x6C, 0x6F, 0x44, 0x01, 0x02, 0x03, 0x04}
+			input  = map[string][]byte{"hello": {0x01, 0x02, 0x03, 0x04}}
 		)
 		got, err := cbor.Marshal(input)
 		if err != nil {
 			t.Errorf("error marshaling %+v: %v", input, err)
 		}
-		for _, expect := range oneOf {
-			if reflect.DeepEqual(got, expect) {
-				return
-			}
+		if !reflect.DeepEqual(got, expect) {
+			t.Errorf("marshaling %+v; expected % x, got % x", input, expect, got)
 		}
-		t.Errorf("marshaling %+v; expected one of [% x], got % x", input, oneOf, got)
 	})
 
 	t.Run("string->map(string->string)", func(t *testing.T) {
 		var (
-			oneOf = [][]byte{
-				{0xa1, 0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0xa1, 0x65, 0x77, 0x6f, 0x72, 0x6c, 0x64, 0x61, 0x21},
-			}
-			input = map[string]map[string]string{"hello": {"world": "!"}}
+			expect = []byte{0xa1, 0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0xa1, 0x65, 0x77, 0x6f, 0x72, 0x6c, 0x64, 0x61, 0x21}
+			input  = map[string]map[string]string{"hello": {"world": "!"}}
 		)
 		got, err := cbor.Marshal(input)
 		if err != nil {
 			t.Errorf("error marshaling %+v: %v", input, err)
 		}
-		for _, expect := range oneOf {
-			if reflect.DeepEqual(got, expect) {
-				return
-			}
+		if !reflect.DeepEqual(got, expect) {
+			t.Errorf("marshaling %+v; expected % x, got % x", input, expect, got)
 		}
-		t.Errorf("marshaling %+v; expected one of [% x], got % x", input, oneOf, got)
+	})
+
+	t.Run("core deterministic order", func(t *testing.T) {
+		// 10, encoded as 0x0a.
+		// 100, encoded as 0x1864.
+		// -1, encoded as 0x20.
+		// "z", encoded as 0x617a.
+		// "aa", encoded as 0x626161.
+		// [100], encoded as 0x811864.
+		// [-1], encoded as 0x8120.
+		// false, encoded as 0xf4.
+		var (
+			input = map[any]struct{}{
+				10:          {},
+				100:         {},
+				-1:          {},
+				"z":         {},
+				"aa":        {},
+				[1]int{100}: {},
+				[1]int{-1}:  {},
+				false:       {},
+			}
+			expect = []byte{0xa8,
+				0x0a, 0x80,
+				0x18, 0x64, 0x80,
+				0x20, 0x80,
+				0x61, 0x7a, 0x80,
+				0x62, 0x61, 0x61, 0x80,
+				0x81, 0x18, 0x64, 0x80,
+				0x81, 0x20, 0x80,
+				0xf4, 0x80,
+			}
+		)
+		got, err := cbor.Marshal(input)
+		if err != nil {
+			t.Errorf("error marshaling %+v: %v", input, err)
+		}
+		if !reflect.DeepEqual(got, expect) {
+			t.Errorf("marshaling %+v; expected % x, got % x", input, expect, got)
+		}
 	})
 }
 
