@@ -470,6 +470,15 @@ func TestEncodeNull(t *testing.T) {
 	}
 }
 
+func TestEncodeUntypedNull(t *testing.T) {
+	expect := []byte{0xf6}
+	if got, err := cbor.Marshal(nil); err != nil {
+		t.Errorf("error marshaling nil: %v", err)
+	} else if !bytes.Equal(got, expect) {
+		t.Errorf("marshaling nil; expected % x, got % x", expect, got)
+	}
+}
+
 func TestEncodeUndefined(t *testing.T) {
 	// No way to encode undefined
 }

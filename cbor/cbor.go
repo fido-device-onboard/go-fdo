@@ -10,6 +10,8 @@ Not supported:
   - Indefinite length arrays, maps, byte strings, or text strings
   - Simple values other than bool, null, and undefined
   - Numbers greater than 64 bits
+  - Omittable struct fields
+  - Treating embedded struct fields as embedded when encoding/decoding
   - Encoding/decoding structs to/from CBOR maps
   - Decoding CBOR maps with array/map/uncomparable keys to Go maps
   - Floats (yet)
@@ -850,10 +852,14 @@ func (e *Encoder) Encode(v any) error {
 		}
 		rv = rv.Elem()
 	}
-	v = rv.Interface()
+	// Encoding nil will result in a zero reflect.Value and Interface will panic
+	if rv.IsValid() {
+		// Update v with the new value rv describes
+		v = rv.Interface()
+	}
 
 	// If the value implements Marshaler, use MarshalCBOR
-	if m, ok := rv.Interface().(Marshaler); ok {
+	if m, ok := v.(Marshaler); ok {
 		b, err := m.MarshalCBOR()
 		if err != nil {
 			return err
@@ -880,6 +886,8 @@ func (e *Encoder) Encode(v any) error {
 	case rv.Kind() == reflect.Bool:
 		return e.encodeBool(v.(bool))
 	case (rv.Kind() == reflect.Pointer || rv.Kind() == reflect.Interface) && rv.IsNil():
+		return e.encodeNull()
+	case !rv.IsValid():
 		return e.encodeNull()
 	default:
 		return ErrUnsupportedType{typeName: rv.Type().String()}
