@@ -10,7 +10,7 @@ Not supported:
   - Indefinite length arrays, maps, byte strings, or text strings
   - Simple values other than bool, null, and undefined
   - Numbers greater than 64 bits
-  - Omittable struct fields
+  - Decoding structs with more than one omittable field
   - Treating embedded struct fields as embedded when encoding/decoding
   - Encoding/decoding structs to/from CBOR maps
   - Decoding CBOR maps with array/map/uncomparable keys to Go maps
@@ -19,6 +19,10 @@ Not supported:
 
 However, the Marshaler/Unmarshaler interfaces allow any determinate sized
 CBOR item to be encoded to/from any Go type.
+
+Specifically, >1 omittable struct fields (i.e. `omitempty`) is not supported,
+because handling this case is not generally solvable and depends on the
+specification of the API being implemented.
 
 # Encoding
 
@@ -140,7 +144,15 @@ generally more memory efficient than reading an entire [io.Reader] into a
 		B string
 		C bool `cbor:"-"`
 	}
-	_ = cbor.Unmarshal([]byte{0x82, 0x01, 0x64, 0x49, 0x45, 0x54, 0x46}, &s4) // s4 = {A: 1, B: "IETF"}
+	_ = cbor.Unmarshal([]byte{0x82, 0x01, 0x64, 0x49, 0x45, 0x54, 0x46}, &s4) // s4 = {A: 1, B: "IETF", C: false}
+
+	// Struct tags: omit empty
+	var s5 struct{
+		A int
+		B string
+		C bool `cbor:",omitempty"`
+	}
+	_ = cbor.Unmarshal([]byte{0x82, 0x01, 0x64, 0x49, 0x45, 0x54, 0x46}, &s5) // s5 = {A: 1, B: "IETF", C: false}
 
 	# Maps
 	var m1 map[int]int // m = nil
@@ -632,7 +644,31 @@ func (d *Decoder) decodeArrayToStruct(rv reflect.Value, additional []byte) error
 			ErrUnsupportedType{typeName: rv.Type().Name()})
 	}
 
-	indices := orderAndFilterFields(rv.NumField(), rv.Type().Field)
+	// Get order of fields and validate that there is an appropriate amount
+	length := int(toU64(additional))
+	indices, omittable := fieldOrder(rv.NumField(), rv.Type().Field)
+	if len(omittable) > 1 {
+		return fmt.Errorf("%w: unmarshaling to a struct with more than one omittable field is not supported",
+			ErrUnsupportedType{typeName: rv.Type().Name()})
+	}
+	if length > len(indices) || length < len(indices)-len(omittable) {
+		return fmt.Errorf("%w: struct has an incorrect number of fields",
+			ErrUnsupportedType{typeName: rv.Type().Name()})
+	}
+
+	// If length and indices (number of fields) does not match, then the
+	// omittable field should be omitted
+	if length != len(indices) {
+		// Remove omittable field index from the indices list
+		for i, idx := range indices {
+			if idx == omittable[0] {
+				indices = append(indices[:i], indices[i+1:]...)
+				break
+			}
+		}
+	}
+
+	// Decode each item into the appropriate field
 	for _, i := range indices {
 		f := rv.Field(i)
 		newVal := reflect.New(f.Type())
@@ -975,19 +1011,35 @@ func (e *Encoder) encodeTextOrBinary(majorType byte, b []byte) error {
 	return e.write(b)
 }
 
-func (e *Encoder) encodeArray(items int, get func(i int) reflect.Value, field func(i int) reflect.StructField) error {
-	// Get index and weight of items
-	indices := orderAndFilterFields(items, field)
+func (e *Encoder) encodeArray(size int, get func(i int) reflect.Value, field func(i int) reflect.StructField) error {
+	// Get encoding order of fields
+	indices, omittable := fieldOrder(size, field)
+
+	// Filter omittable fields which are the zero value for the associated type
+	var items []any
+CollectItems:
+	for _, i := range indices {
+		rv := get(i)
+		for _, j := range omittable {
+			if i == j {
+				if rv.IsZero() {
+					continue CollectItems
+				}
+				break
+			}
+		}
+		items = append(items, rv.Interface())
+	}
 
 	// Write the length as additional info
-	info := u64Bytes(uint64(len(indices)))
+	info := u64Bytes(uint64(len(items)))
 	if err := e.write(additionalInfo(arrayMajorType, info)); err != nil {
 		return err
 	}
 
 	// Write each item
-	for _, i := range indices {
-		if err := e.Encode(get(i).Interface()); err != nil {
+	for _, item := range items {
+		if err := e.Encode(item); err != nil {
 			return err
 		}
 	}
@@ -1073,7 +1125,7 @@ func (e *Encoder) encodeNull() error {
 // }
 
 // Handle weighting/skipping options in struct tags
-func orderAndFilterFields(n int, field func(i int) reflect.StructField) (indices []int) {
+func fieldOrder(n int, field func(i int) reflect.StructField) (indices, omittable []int) {
 	// Collect weights by struct tag and skip fields with "-"
 	type widx struct {
 		index  int
@@ -1093,11 +1145,20 @@ func orderAndFilterFields(n int, field func(i int) reflect.StructField) (indices
 
 			// Extract cbor tag value before the first comma separator (if any)
 			tag := field(i).Tag.Get("cbor")
-			val, _, _ := strings.Cut(tag, ",")
+			vals := strings.Split(tag, ",")
+			val, options := vals[0], vals[1:]
 
 			// Skip item if it is a struct field and has the tag `cbor:"-"`
 			if val == "-" {
 				continue
+			}
+
+			// Check if omittable
+			for _, option := range options {
+				switch option {
+				case "omitempty":
+					omittable = append(omittable, i)
+				}
 			}
 
 			// Parse weight from string
@@ -1122,7 +1183,7 @@ func orderAndFilterFields(n int, field func(i int) reflect.StructField) (indices
 	for _, x := range weighted {
 		indices = append(indices, x.index)
 	}
-	return indices
+	return indices, omittable
 }
 
 // This is the "new" canonical form whereas length-first is the "old" canonical

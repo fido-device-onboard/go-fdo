@@ -312,6 +312,12 @@ func TestEncodeArray(t *testing.T) {
 				A int `cbor:"-"`
 			}{A: 1}, expect: []byte{0x80}},
 			{input: struct {
+				A int `cbor:",omitempty"`
+			}{A: 0}, expect: []byte{0x80}},
+			{input: struct {
+				A int `cbor:",omitempty"`
+			}{A: 1}, expect: []byte{0x81, 0x01}},
+			{input: struct {
 				A int
 				B string
 			}{A: 1, B: "IETF"}, expect: []byte{0x82, 0x01, 0x64, 0x49, 0x45, 0x54, 0x46}},
