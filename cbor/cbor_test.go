@@ -243,6 +243,23 @@ func TestEncodeByteSlice(t *testing.T) {
 	}
 }
 
+func TestEncodeByteSliceNewtype(t *testing.T) {
+	type bstr []byte
+	for _, test := range []struct {
+		input  bstr
+		expect []byte
+	}{
+		{expect: []byte{0x40}, input: bstr{}},
+		{expect: []byte{0x44, 0x01, 0x02, 0x03, 0x04}, input: bstr{0x01, 0x02, 0x03, 0x04}},
+	} {
+		if got, err := cbor.Marshal(test.input); err != nil {
+			t.Errorf("error marshaling % x: %v", test.input, err)
+		} else if !bytes.Equal(got, test.expect) {
+			t.Errorf("marshaling % x; expected % x, got % x", test.input, test.expect, got)
+		}
+	}
+}
+
 func TestEncodeString(t *testing.T) {
 	for _, test := range []struct {
 		input  string
@@ -510,6 +527,19 @@ func TestDecodeAny(t *testing.T) {
 
 	t.Run("byte string", func(t *testing.T) {
 		input := []byte{0x45, 0x68, 0x65, 0x6c, 0x6c, 0x6f}
+		expect := []byte("hello")
+
+		var got any
+		if err := cbor.Unmarshal(input, &got); err != nil {
+			t.Errorf("error unmarshaling % x: %v", input, err)
+		} else if !bytes.Equal(got.([]byte), expect) {
+			t.Errorf("unmarshaling % x; expected % x, got % x", input, expect, got)
+		}
+	})
+
+	t.Run("byte string - newtype", func(t *testing.T) {
+		type bstr []byte
+		input := bstr{0x45, 0x68, 0x65, 0x6c, 0x6c, 0x6f}
 		expect := []byte("hello")
 
 		var got any
@@ -887,6 +917,24 @@ func TestDecodeByteSlice(t *testing.T) {
 	}{
 		{input: []byte{0x40}, expect: []byte{}},
 		{input: []byte{0x44, 0x01, 0x02, 0x03, 0x04}, expect: []byte{0x01, 0x02, 0x03, 0x04}},
+	} {
+		if err := cbor.Unmarshal(test.input, &got); err != nil {
+			t.Errorf("error unmarshaling % x: %v", test.input, err)
+		} else if !bytes.Equal(got, test.expect) {
+			t.Errorf("unmarshaling % x; expected % x, got % x", test.input, test.expect, got)
+		}
+	}
+}
+
+func TestDecodeByteSliceNewtype(t *testing.T) {
+	type bstr []byte
+	var got []byte
+	for _, test := range []struct {
+		input  []byte
+		expect bstr
+	}{
+		{input: []byte{0x40}, expect: bstr{}},
+		{input: []byte{0x44, 0x01, 0x02, 0x03, 0x04}, expect: bstr{0x01, 0x02, 0x03, 0x04}},
 	} {
 		if err := cbor.Unmarshal(test.input, &got); err != nil {
 			t.Errorf("error unmarshaling % x: %v", test.input, err)

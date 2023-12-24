@@ -869,14 +869,14 @@ func (e *Encoder) Encode(v any) error {
 
 	// Dispatch encoding by reflected data type
 	switch {
-	case rv.CanInt() || rv.CanUint():
-		return e.encodeNumber(rv)
-	case func() bool { _, ok := v.([]byte); return ok }():
-		return e.encodeTextOrBinary(byteStringMajorType, v.([]byte))
 	case func() bool { _, ok := v.(Tag); return ok }():
 		return e.encodeTag(v.(Tag))
+	case rv.CanInt() || rv.CanUint():
+		return e.encodeNumber(rv)
+	case (rv.Kind() == reflect.Array || rv.Kind() == reflect.Slice) && rv.Type().Elem().Kind() == reflect.Uint8:
+		return e.encodeTextOrBinary(byteStringMajorType, rv.Bytes())
 	case rv.Kind() == reflect.String:
-		return e.encodeTextOrBinary(textStringMajorType, []byte(v.(string)))
+		return e.encodeTextOrBinary(textStringMajorType, []byte(rv.String()))
 	case rv.Kind() == reflect.Array || rv.Kind() == reflect.Slice:
 		return e.encodeArray(rv.Len(), rv.Index, nil)
 	case rv.Kind() == reflect.Struct:
@@ -884,7 +884,7 @@ func (e *Encoder) Encode(v any) error {
 	case rv.Kind() == reflect.Map:
 		return e.encodeMap(rv.Len(), rv.MapKeys(), rv.MapIndex)
 	case rv.Kind() == reflect.Bool:
-		return e.encodeBool(v.(bool))
+		return e.encodeBool(rv.Bool())
 	case (rv.Kind() == reflect.Pointer || rv.Kind() == reflect.Interface) && rv.IsNil():
 		return e.encodeNull()
 	case !rv.IsValid():
