@@ -25,9 +25,9 @@ specification of the API being implemented.
 
 # Encoding
 
-Encoding can be done with [Encoder.Encode] or [Marshal]. Using an [Encoder] may
-be more efficient when writing many items if a buffered writer is used. It also
-allows for setting encoding options.
+Encoding can be done with [any] or [Marshal]. Using an [Encoder] may be more
+efficient when writing many items if a buffered writer is used. It also allows
+for setting encoding options.
 
 	var w bytes.Buffer
 	enc := cbor.NewEncoder(&w)
@@ -291,9 +291,7 @@ type Tag struct {
 	EncodeVal any
 
 	// Raw data set in Decode/Unmarshal
-	//
-	// NOTE: Be sure to type convert into []byte before calling Unmarshal!
-	DecodedVal RawBytes
+	DecodedVal []byte
 }
 
 // Marshal any type into CBOR.
@@ -362,7 +360,10 @@ func (d *Decoder) decodeRaw() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return d.decodeRawVal(highThreeBits, lowFiveBits, additional)
+}
 
+func (d *Decoder) decodeRawVal(highThreeBits, lowFiveBits byte, additional []byte) ([]byte, error) {
 	head := append([]byte{(highThreeBits << 5) | lowFiveBits}, additional...)
 
 	switch highThreeBits {
@@ -421,12 +422,7 @@ func (d *Decoder) decodeVal(rv reflect.Value) error {
 	if err != nil {
 		return err
 	}
-
-	// If the low five bits are 0..23 then use them in additional so that a
-	// single additional byte can contain any value 0-255
-	if lowFiveBits < 0x18 {
-		additional = []byte{lowFiveBits}
-	}
+	fmt.Println("Decoding")
 
 	// Allow rv to be a pointer for nullable types
 	//
@@ -444,36 +440,52 @@ func (d *Decoder) decodeVal(rv reflect.Value) error {
 			rv.Set(reflect.New(rv.Type().Elem()))
 		}
 
+		// Check one more time if the type implements Unmarshaler. This check was
+		// deferred until memory allocation for the underlying type was done.
+		if u, ok := rv.Interface().(Unmarshaler); ok {
+			b, err := d.decodeRawVal(highThreeBits, lowFiveBits, additional)
+			if err != nil {
+				return err
+			}
+			return u.UnmarshalCBOR(b)
+		}
+
 		// Dereference the pointer
 		rv = rv.Elem()
+	}
+
+	// If the low five bits are 0..23 then use them in additional so that a
+	// single additional byte can contain any value 0-255
+	if lowFiveBits < 0x18 {
+		additional = []byte{lowFiveBits}
 	}
 
 	// Dispatch decoding by major type
 	switch highThreeBits {
 	case unsignedIntMajorType:
-		allocateNilAny(rv, int64(0))
+		allocateInterface(rv, reflect.TypeOf(int64(0)))
 		return d.decodePositive(rv, additional)
 	case negativeIntMajorType:
-		allocateNilAny(rv, int64(0))
+		allocateInterface(rv, reflect.TypeOf(int64(0)))
 		return d.decodeNegative(rv, additional)
 	case byteStringMajorType:
-		allocateNilAny(rv, []byte(nil))
+		allocateInterface(rv, reflect.TypeOf([]byte(nil)))
 		return d.decodeByteSlice(rv, additional)
 	case textStringMajorType:
-		allocateNilAny(rv, "")
+		allocateInterface(rv, reflect.TypeOf(""))
 		return d.decodeByteSlice(rv, additional)
 	case arrayMajorType:
-		allocateNilAny(rv, []any(nil))
+		allocateInterface(rv, reflect.TypeOf([]any(nil)))
 		return d.decodeArray(rv, additional)
 	case mapMajorType:
-		allocateNilAny(rv, map[any]any(nil))
+		allocateInterface(rv, reflect.TypeOf(map[any]any(nil)))
 		return d.decodeMap(rv, additional)
 	case tagMajorType:
-		allocateNilAny(rv, Tag{})
+		allocateInterface(rv, reflect.TypeOf(Tag{}))
 		return d.decodeTag(rv, additional)
 	case simpleMajorType:
 		if lowFiveBits == falseVal || lowFiveBits == trueVal {
-			allocateNilAny(rv, false)
+			allocateInterface(rv, reflect.TypeOf(false))
 		}
 		return d.decodeSimple(rv, lowFiveBits, additional)
 	}
@@ -481,19 +493,12 @@ func (d *Decoder) decodeVal(rv reflect.Value) error {
 	panic("unreachable")
 }
 
-// Initialize the memory of a value if it is a nil interface{}/any type.
-func allocateNilAny(maybeUnsetVal reflect.Value, defaultVal any) {
-	if maybeUnsetVal.Kind() != reflect.Interface || maybeUnsetVal.NumMethod() > 0 {
-		// Not an empty interface
-		return
-	}
-	if !maybeUnsetVal.IsNil() {
-		// Already has an underlying value
+// Initialize the memory of a value if it is a nil interface type.
+func allocateInterface(maybeUnsetVal reflect.Value, newType reflect.Type) {
+	if maybeUnsetVal.Kind() != reflect.Interface || !maybeUnsetVal.IsNil() {
 		return
 	}
 
-	// Create a new zero value of the defaultVal type
-	newType := reflect.TypeOf(defaultVal)
 	switch newType.Kind() {
 	case reflect.Map:
 		// Explicitly allocate for maps because the zero value is nil.
@@ -539,11 +544,11 @@ func (d *Decoder) decodePositive(rv reflect.Value, additional []byte) error {
 		overflows = len(additional) > 8 || int64(u64) < 0
 	default:
 		return fmt.Errorf("%w: only primitive (u)int(N) types supported",
-			ErrUnsupportedType{typeName: rv.Type().Name()})
+			ErrUnsupportedType{typeName: rv.Type().String()})
 	}
 	if overflows {
 		return fmt.Errorf("%w: value overflows",
-			ErrUnsupportedType{typeName: rv.Type().Name()})
+			ErrUnsupportedType{typeName: rv.Type().String()})
 	}
 
 	// Note that setting cannot be done with reflect.Value.SetXXX because the
@@ -595,11 +600,11 @@ func (d *Decoder) decodeNegative(rv reflect.Value, additional []byte) error {
 		overflows = len(additional) > 8 || int64(u64+1) < 0
 	default:
 		return fmt.Errorf("%w: only primitive int(N) types supported",
-			ErrUnsupportedType{typeName: rv.Type().Name()})
+			ErrUnsupportedType{typeName: rv.Type().String()})
 	}
 	if overflows {
 		return fmt.Errorf("%w: value overflows",
-			ErrUnsupportedType{typeName: rv.Type().Name()})
+			ErrUnsupportedType{typeName: rv.Type().String()})
 	}
 
 	// Note that setting cannot be done with reflect.Value.SetXXX because the
@@ -635,7 +640,7 @@ func (d *Decoder) decodeByteSlice(rv reflect.Value, additional []byte) error {
 		rv.Set(reflect.ValueOf(string(bs)))
 	default:
 		return fmt.Errorf("%w: only string and []byte are supported",
-			ErrUnsupportedType{typeName: rv.Type().Name()})
+			ErrUnsupportedType{typeName: rv.Type().String()})
 	}
 	return nil
 }
@@ -652,14 +657,14 @@ func (d *Decoder) decodeArray(rv reflect.Value, additional []byte) error {
 		return d.decodeArrayToSlice(rv, additional)
 	default:
 		return fmt.Errorf("%w: expected a slice or struct type",
-			ErrUnsupportedType{typeName: rv.Type().Name()})
+			ErrUnsupportedType{typeName: rv.Type().String()})
 	}
 }
 
 func (d *Decoder) decodeArrayToStruct(rv reflect.Value, additional []byte) error {
 	if rv.Kind() != reflect.Struct {
 		return fmt.Errorf("%w: expected a struct type",
-			ErrUnsupportedType{typeName: rv.Type().Name()})
+			ErrUnsupportedType{typeName: rv.Type().String()})
 	}
 	length := int(toU64(additional))
 
@@ -671,7 +676,7 @@ func (d *Decoder) decodeArrayToStruct(rv reflect.Value, additional []byte) error
 			if omittable(idx) {
 				if omittedOne {
 					return fmt.Errorf("%w: unmarshaling to a struct with more than one omittable field is not supported",
-						ErrUnsupportedType{typeName: rv.Type().Name()})
+						ErrUnsupportedType{typeName: rv.Type().String()})
 				}
 
 				omittedOne = true
@@ -681,13 +686,21 @@ func (d *Decoder) decodeArrayToStruct(rv reflect.Value, additional []byte) error
 	}
 	if length != len(indices) {
 		return fmt.Errorf("%w: struct has an incorrect number of fields",
-			ErrUnsupportedType{typeName: rv.Type().Name()})
+			ErrUnsupportedType{typeName: rv.Type().String()})
 	}
 
 	// Decode each item into the appropriate field
 	for _, idx := range indices {
 		f := rv.FieldByIndex(idx)
+
+		// Allocate addressable memory for field
 		newVal := reflect.New(f.Type())
+
+		// Allocate underlying memory for pointer fields
+		if f.Kind() == reflect.Pointer {
+			newVal.Elem().Set(reflect.New(f.Type().Elem()))
+		}
+
 		if err := d.Decode(newVal.Interface()); err != nil {
 			return fmt.Errorf("error decoding array item %+v: %w", idx, err)
 		}
@@ -724,7 +737,7 @@ func (d *Decoder) decodeArrayToSlice(rv reflect.Value, additional []byte) error 
 
 	default:
 		return fmt.Errorf("%w: expected a slice type",
-			ErrUnsupportedType{typeName: rv.Type().Name()})
+			ErrUnsupportedType{typeName: rv.Type().String()})
 	}
 
 	// Decode each item into the correctly sized slice
@@ -748,7 +761,12 @@ func (d *Decoder) decodeMap(rv reflect.Value, additional []byte) error {
 	}
 	if kind != reflect.Map {
 		return fmt.Errorf("%w: expected a map type",
-			ErrUnsupportedType{typeName: rv.Type().Name()})
+			ErrUnsupportedType{typeName: rv.Type().String()})
+	}
+
+	// Create map if needed
+	if rv.IsNil() {
+		rv.Set(reflect.MakeMap(rv.Type()))
 	}
 
 	// Clear map
@@ -781,7 +799,7 @@ func (d *Decoder) decodeMap(rv reflect.Value, additional []byte) error {
 func (d *Decoder) decodeTag(rv reflect.Value, additional []byte) error {
 	if _, ok := rv.Interface().(Tag); !ok {
 		return fmt.Errorf("%w: expected a cbor.Tag type",
-			ErrUnsupportedType{typeName: rv.Type().Name()})
+			ErrUnsupportedType{typeName: rv.Type().String()})
 	}
 
 	num := toU64(additional)
@@ -810,12 +828,12 @@ func (d *Decoder) decodeSimple(rv reflect.Value, lowFiveBits byte, additional []
 		}
 		if kind != reflect.Bool {
 			return fmt.Errorf("%w: must be a bool",
-				ErrUnsupportedType{typeName: rv.Type().Name()})
+				ErrUnsupportedType{typeName: rv.Type().String()})
 		}
 		rv.Set(reflect.ValueOf(lowFiveBits == trueVal))
 	case nullVal, undefinedVal:
 		switch {
-		case rv.Kind() == reflect.Pointer && rv.IsNil():
+		case rv.Kind() == reflect.Pointer:
 			rv.SetZero()
 		case rv.Kind() == reflect.Struct && rv.NumField() == 0:
 			rv.SetZero()
@@ -911,7 +929,7 @@ func (e *Encoder) Encode(v any) error {
 	}
 
 	// If the value implements Marshaler, use MarshalCBOR
-	if m, ok := v.(Marshaler); ok {
+	if m, ok := v.(Marshaler); ok && !holdsNilPtr(v) {
 		b, err := m.MarshalCBOR()
 		if err != nil {
 			return err
@@ -943,6 +961,15 @@ func (e *Encoder) Encode(v any) error {
 		return e.encodeNull()
 	default:
 		return ErrUnsupportedType{typeName: rv.Type().String()}
+	}
+}
+
+func holdsNilPtr(v any) bool {
+	switch rv := reflect.ValueOf(v); rv.Kind() {
+	case reflect.Ptr, reflect.Map, reflect.Array, reflect.Chan, reflect.Slice:
+		return rv.IsNil()
+	default:
+		return false
 	}
 }
 

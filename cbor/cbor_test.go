@@ -1,3 +1,6 @@
+// Copyright 2023 Intel Corporation
+// SPDX-License-Identifier: Apache 2.0
+
 // Tests are partially adapted from https://github.com/r4gus/zbor/blob/0.12.2/src/cbor.zig
 package cbor_test
 
@@ -676,7 +679,7 @@ func TestDecodeAny(t *testing.T) {
 			}
 
 			valAddr := reflect.New(reflect.TypeOf(test.expectVal)).Interface()
-			if err := cbor.Unmarshal([]byte(tag.(cbor.Tag).DecodedVal), valAddr); err != nil {
+			if err := cbor.Unmarshal(tag.(cbor.Tag).DecodedVal, valAddr); err != nil {
 				t.Errorf("error unmarshaling tagged value % x: %v", tag.(cbor.Tag).DecodedVal, err)
 				continue
 			}
@@ -1187,7 +1190,7 @@ func TestDecodeTag(t *testing.T) {
 		}
 
 		valAddr := reflect.New(reflect.TypeOf(test.expectVal)).Interface()
-		if err := cbor.Unmarshal([]byte(tag.DecodedVal), valAddr); err != nil {
+		if err := cbor.Unmarshal(tag.DecodedVal, valAddr); err != nil {
 			t.Errorf("error unmarshaling tagged value % x: %v", tag.DecodedVal, err)
 			continue
 		}
@@ -1216,7 +1219,20 @@ func TestDecodeBool(t *testing.T) {
 }
 
 func TestDecodeNull(t *testing.T) {
-	t.Run("pointer", func(t *testing.T) {
+	t.Run("pointer (initialized)", func(t *testing.T) {
+		var (
+			got    = new(int)
+			input  = []byte{0xf6}
+			expect = (*int)(nil)
+		)
+		if err := cbor.Unmarshal(input, &got); err != nil {
+			t.Errorf("error unmarshaling % x: %v", input, err)
+		} else if got != expect {
+			t.Errorf("unmarshaling % x; expected %+v, got %+v", input, expect, got)
+		}
+	})
+
+	t.Run("pointer (uninitialized)", func(t *testing.T) {
 		var (
 			got    *int
 			input  = []byte{0xf6}
@@ -1242,7 +1258,20 @@ func TestDecodeNull(t *testing.T) {
 }
 
 func TestDecodeUndefined(t *testing.T) {
-	t.Run("pointer", func(t *testing.T) {
+	t.Run("pointer (initialized)", func(t *testing.T) {
+		var (
+			got    = new(int)
+			input  = []byte{0xf7}
+			expect = (*int)(nil)
+		)
+		if err := cbor.Unmarshal(input, &got); err != nil {
+			t.Errorf("error unmarshaling % x: %v", input, err)
+		} else if got != expect {
+			t.Errorf("unmarshaling % x; expected %+v, got %+v", input, expect, got)
+		}
+	})
+
+	t.Run("pointer (uninitialized)", func(t *testing.T) {
 		var (
 			got    *int
 			input  = []byte{0xf7}
@@ -1263,6 +1292,184 @@ func TestDecodeUndefined(t *testing.T) {
 		)
 		if err := cbor.Unmarshal(input, &got); !errors.As(err, &expect) {
 			t.Errorf("expected %#v error unmarshaling % x, got %#v", expect, input, err)
+		}
+	})
+}
+
+func TestDecodePointer(t *testing.T) {
+	t.Run("initialized primitive", func(t *testing.T) {
+		var (
+			got    = new(int)
+			input  = []byte{0x20}
+			expect = -1
+		)
+		if err := cbor.Unmarshal(input, &got); err != nil {
+			t.Errorf("error unmarshaling % x: %v", input, err)
+		} else if !reflect.DeepEqual(got, &expect) {
+			t.Errorf("unmarshaling % x; expected %+v, got %+v", input, expect, *got)
+		}
+	})
+
+	t.Run("uninitialized primitive", func(t *testing.T) {
+		var (
+			got    *int
+			input  = []byte{0x20}
+			expect = -1
+		)
+		if err := cbor.Unmarshal(input, &got); err != nil {
+			t.Errorf("error unmarshaling % x: %v", input, err)
+		} else if !reflect.DeepEqual(got, &expect) {
+			t.Errorf("unmarshaling % x; expected %+v, got %+v", input, expect, *got)
+		}
+	})
+
+	t.Run("initialized bytes", func(t *testing.T) {
+		var (
+			bs     = make([]byte, 0)
+			got    = &bs
+			input  = []byte{0x44, 0x49, 0x45, 0x54, 0x46}
+			expect = []byte("IETF")
+		)
+		if err := cbor.Unmarshal(input, &got); err != nil {
+			t.Errorf("error unmarshaling % x: %v", input, err)
+		} else if !reflect.DeepEqual(got, &expect) {
+			t.Errorf("unmarshaling % x; expected %+v, got %+v", input, expect, *got)
+		}
+	})
+
+	t.Run("uninitialized bytes", func(t *testing.T) {
+		var (
+			got    = new([]byte)
+			input  = []byte{0x44, 0x49, 0x45, 0x54, 0x46}
+			expect = []byte("IETF")
+		)
+		if err := cbor.Unmarshal(input, &got); err != nil {
+			t.Errorf("error unmarshaling % x: %v", input, err)
+		} else if !reflect.DeepEqual(got, &expect) {
+			t.Errorf("unmarshaling % x; expected %+v, got %+v", input, expect, *got)
+		}
+	})
+
+	t.Run("initialized map", func(t *testing.T) {
+		var (
+			m      = make(map[int]int, 0)
+			got    = &m
+			input  = []byte{0xa2, 0x01, 0x02, 0x03, 0x04}
+			expect = map[int]int{1: 2, 3: 4}
+		)
+		if err := cbor.Unmarshal(input, &got); err != nil {
+			t.Errorf("error unmarshaling % x: %v", input, err)
+		} else if !reflect.DeepEqual(got, &expect) {
+			t.Errorf("unmarshaling % x; expected %+v, got %+v", input, expect, *got)
+		}
+	})
+
+	t.Run("uninitialized map", func(t *testing.T) {
+		var (
+			got    = new(map[int]int)
+			input  = []byte{0xa2, 0x01, 0x02, 0x03, 0x04}
+			expect = map[int]int{1: 2, 3: 4}
+		)
+		if err := cbor.Unmarshal(input, &got); err != nil {
+			t.Errorf("error unmarshaling % x: %v", input, err)
+		} else if !reflect.DeepEqual(got, &expect) {
+			t.Errorf("unmarshaling % x; expected %+v, got %+v", input, expect, *got)
+		}
+	})
+}
+
+func TestEncodeBstr(t *testing.T) {
+	t.Run("non-pointer field", func(t *testing.T) {
+		type a struct {
+			A int
+			B cbor.Bstr[[]byte]
+		}
+		var (
+			input  = a{A: 1, B: cbor.Bstr[[]byte]{Val: []byte("IETF")}}
+			expect = []byte{0x82, 0x01, 0x45, 0x44, 0x49, 0x45, 0x54, 0x46}
+		)
+		if got, err := cbor.Marshal(input); err != nil {
+			t.Errorf("error marshaling %#v: %v", input, err)
+		} else if !bytes.Equal(got, expect) {
+			t.Errorf("marshaling %#v; expected % x, got % x", input, expect, got)
+		}
+	})
+
+	t.Run("pointer field", func(t *testing.T) {
+		type a struct {
+			A int
+			B *cbor.Bstr[any]
+		}
+		tests := []struct {
+			input  a
+			expect []byte
+		}{
+			{
+				input:  a{A: 1, B: &cbor.Bstr[any]{Val: []byte("IETF")}},
+				expect: []byte{0x82, 0x01, 0x45, 0x44, 0x49, 0x45, 0x54, 0x46},
+			},
+			{
+				input:  a{A: 1, B: nil},
+				expect: []byte{0x82, 0x01, 0xf6},
+			},
+		}
+		for _, test := range tests {
+			if got, err := cbor.Marshal(test.input); err != nil {
+				t.Errorf("error marshaling %#v: %v", test.input, err)
+			} else if !bytes.Equal(got, test.expect) {
+				t.Errorf("marshaling %#v; expected % x, got % x", test.input, test.expect, got)
+			}
+		}
+	})
+}
+
+func TestDecodeBstr(t *testing.T) {
+	t.Run("non-pointer field", func(t *testing.T) {
+		type a struct {
+			A int
+			B cbor.Bstr[any]
+		}
+		var (
+			input  = []byte{0x82, 0x01, 0x45, 0x44, 0x49, 0x45, 0x54, 0x46}
+			expect = a{A: 1, B: cbor.Bstr[any]{Val: []byte("IETF")}}
+		)
+		var got a
+		if err := cbor.Unmarshal(input, &got); err != nil {
+			t.Errorf("error unmarshaling % x: %v", input, err)
+			return
+		}
+		if !reflect.DeepEqual(got, expect) {
+			t.Errorf("unmarshaling % x; expected %#v, got %#v", input, expect, got)
+		}
+	})
+
+	t.Run("pointer field", func(t *testing.T) {
+		type a struct {
+			A int
+			B *cbor.Bstr[any]
+		}
+		tests := []struct {
+			input  []byte
+			expect a
+		}{
+			{
+				input:  []byte{0x82, 0x01, 0x45, 0x44, 0x49, 0x45, 0x54, 0x46},
+				expect: a{A: 1, B: &cbor.Bstr[any]{Val: []byte("IETF")}},
+			},
+			{
+				input:  []byte{0x82, 0x01, 0xf6},
+				expect: a{A: 1, B: nil},
+			},
+		}
+		for _, test := range tests {
+			var got a
+			if err := cbor.Unmarshal(test.input, &got); err != nil {
+				t.Errorf("error unmarshaling % x: %v", test.input, err)
+				return
+			}
+			if !reflect.DeepEqual(got, test.expect) {
+				t.Errorf("unmarshaling % x; expected %#v, got %#v", test.input, test.expect, got)
+			}
 		}
 	})
 }
