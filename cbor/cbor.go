@@ -102,8 +102,8 @@ for setting encoding options.
 	_ = enc.Encode(map[int]struct{}{1: {}, 2: {}}, "hello": {}) // always ordered 1, 2, "hello"
 
 	# Tags
-	_ = enc.Encode(cbor.Tag{Number: 42, EncodeVal: "Meaning of life"})
-	_ = enc.Encode(cbor.Tag{Number: 42, EncodeVal: []string{"Meaning", "of", "life"}})
+	_ = enc.Encode(cbor.Tag[string]{Num: 42, Val: "Meaning of life"})
+	_ = enc.Encode(cbor.Tag[[]string]{Num: 42, Val: []string{"Meaning", "of", "life"}})
 
 # Decoding
 
@@ -177,11 +177,9 @@ generally more memory efficient than reading an entire [io.Reader] into a
 	_ = cbor.Unmarshal([]byte{0xa2, 0x01, 0x02, 0x03, 0x04}, &m1) // m1 = {1: 2, 3: 4}
 
 	# Tags
-	var tag cbor.Tag
+	var tag cbor.Tag[string]
 	_ = cbor.Unmarshal([]byte{0xc1, 0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f}, &tag)
-	// tag = {Number: 1, DecodedVal: [0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f]}
-	var tagged string
-	_ = cbor.Unmarshal([]byte(cbor.DecodedVal), &tagged) // tagged = "hello"
+	// tag = {Num: 1, Val: "hello"}
 
 When decoding into an any/empty interface type, the following CBOR to Go type
 mapping is used:
@@ -192,7 +190,7 @@ mapping is used:
 	Text String  -> string
 	Array        -> []interface{}
 	Map          -> map[interface{}]interface{}
-	Tag          -> cbor.Tag
+	Tag          -> cbor.Tag[cbor.RawBytes]
 	Simple(Bool) -> bool
 
 Decoding other types will fail, because it is not clear what memory to
@@ -280,18 +278,21 @@ func (b RawBytes) MarshalCBOR() ([]byte, error) { return b, nil }
 
 func (b *RawBytes) UnmarshalCBOR(p []byte) error { *b = p; return nil }
 
-// Tag is a tagged CBOR type. When decoding, it is expected that the tag number
-// will affect how the underlying data is parsed. A single CBOR item is decoded
-// as raw bytes to be further parsed with [Unmarshal].
-type Tag struct {
-	// Any integer 0..(2**64)-1
-	Number uint64
+// Tag is a tagged CBOR type.
+type Tag[T any] struct {
+	Num uint64 // 0..(2**64)-1
+	Val T
+}
 
-	// Value to encode when passed to Encode/Marshal
-	EncodeVal any
+func (Tag[T]) isTag()           {}
+func (t Tag[T]) Number() uint64 { return t.Num }
+func (t Tag[T]) Value() any     { return t.Val }
 
-	// Raw data set in Decode/Unmarshal
-	DecodedVal []byte
+// TagData allows read-only access to a Tag without value type information.
+type TagData interface {
+	isTag() // no external types can implement a Tag
+	Number() uint64
+	Value() any
 }
 
 // Marshal any type into CBOR.
@@ -422,7 +423,6 @@ func (d *Decoder) decodeVal(rv reflect.Value) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println("Decoding")
 
 	// Allow rv to be a pointer for nullable types
 	//
@@ -481,7 +481,7 @@ func (d *Decoder) decodeVal(rv reflect.Value) error {
 		allocateInterface(rv, reflect.TypeOf(map[any]any(nil)))
 		return d.decodeMap(rv, additional)
 	case tagMajorType:
-		allocateInterface(rv, reflect.TypeOf(Tag{}))
+		allocateInterface(rv, reflect.TypeOf(Tag[RawBytes]{}))
 		return d.decodeTag(rv, additional)
 	case simpleMajorType:
 		if lowFiveBits == falseVal || lowFiveBits == trueVal {
@@ -797,21 +797,34 @@ func (d *Decoder) decodeMap(rv reflect.Value, additional []byte) error {
 }
 
 func (d *Decoder) decodeTag(rv reflect.Value, additional []byte) error {
-	if _, ok := rv.Interface().(Tag); !ok {
-		return fmt.Errorf("%w: expected a cbor.Tag type",
+	if _, ok := rv.Interface().(TagData); !ok {
+		return fmt.Errorf("%w: expected a cbor.Tag type (or interface wrapping it)",
 			ErrUnsupportedType{typeName: rv.Type().String()})
 	}
 
+	// If the value is an interface wrapping a Tag, then a new struct with
+	// addressable fields must be created and set.
+	var iface reflect.Value
+	if rv.Kind() == reflect.Interface {
+		newVal := reflect.New(rv.Elem().Type())
+		iface, rv = rv, newVal.Elem()
+	}
+
+	// Set number field
 	num := toU64(additional)
-	tagged, err := d.decodeRaw()
-	if err != nil {
+	numField := rv.FieldByName("Num")
+	numField.SetUint(num)
+
+	// Set value field
+	valField := rv.FieldByName("Val")
+	if err := d.Decode(valField.Addr().Interface()); err != nil {
 		return fmt.Errorf("error decoding tag %d type: %w", num, err)
 	}
 
-	rv.Set(reflect.ValueOf(Tag{
-		Number:     num,
-		DecodedVal: tagged,
-	}))
+	// When decoding to an interface, set its value to the newly created struct
+	if iface.IsValid() {
+		iface.Set(rv)
+	}
 
 	return nil
 }
@@ -939,8 +952,8 @@ func (e *Encoder) Encode(v any) error {
 
 	// Dispatch encoding by reflected data type
 	switch {
-	case func() bool { _, ok := v.(Tag); return ok }():
-		return e.encodeTag(v.(Tag))
+	case func() bool { _, ok := v.(TagData); return ok }():
+		return e.encodeTag(v.(TagData))
 	case rv.CanInt() || rv.CanUint():
 		return e.encodeNumber(rv)
 	case (rv.Kind() == reflect.Array || rv.Kind() == reflect.Slice) && rv.Type().Elem().Kind() == reflect.Uint8:
@@ -1144,15 +1157,15 @@ func (e *Encoder) encodeMap(length int, keys []reflect.Value, get func(k reflect
 	return nil
 }
 
-func (e *Encoder) encodeTag(tag Tag) error {
+func (e *Encoder) encodeTag(tag TagData) error {
 	// Write tag number as additional info
-	info := u64Bytes(tag.Number)
+	info := u64Bytes(tag.Number())
 	if err := e.write(additionalInfo(tagMajorType, info)); err != nil {
 		return err
 	}
 
 	// Write the enclosed value
-	return e.Encode(tag.EncodeVal)
+	return e.Encode(tag.Value())
 }
 
 func (e *Encoder) encodeBool(truthy bool) error {

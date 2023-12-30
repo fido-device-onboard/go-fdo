@@ -477,7 +477,7 @@ func TestEncodeMap(t *testing.T) {
 }
 
 func TestEncodeTag(t *testing.T) {
-	input := cbor.Tag{Number: 42, EncodeVal: "Life"}
+	input := cbor.Tag[string]{Num: 42, Val: "Life"}
 	expect := []byte{0xd8, 0x2a, 0x64, 0x4c, 0x69, 0x66, 0x65}
 	if got, err := cbor.Marshal(input); err != nil {
 		t.Errorf("error marshaling %+v: %v", input, err)
@@ -667,25 +667,25 @@ func TestDecodeAny(t *testing.T) {
 			{
 				input:     []byte{0xc5, 0xc4, 0x03},
 				expectNum: 5,
-				expectVal: cbor.Tag{Number: 4, DecodedVal: []byte{0x03}},
+				expectVal: cbor.Tag[int]{Num: 4, Val: 3},
 			},
 		} {
 			var tag any
 			if err := cbor.Unmarshal(test.input, &tag); err != nil {
 				t.Errorf("error unmarshaling % x: %v", test.input, err)
-			} else if tag.(cbor.Tag).Number != test.expectNum {
-				t.Errorf("unmarshaling % x; expected tag number %d, got %d", test.input, test.expectNum, tag.(cbor.Tag).Number)
+			} else if n := tag.(cbor.TagData).Number(); n != test.expectNum {
+				t.Errorf("unmarshaling % x; expected tag number %d, got %d", test.input, test.expectNum, n)
 				continue
 			}
 
 			valAddr := reflect.New(reflect.TypeOf(test.expectVal)).Interface()
-			if err := cbor.Unmarshal(tag.(cbor.Tag).DecodedVal, valAddr); err != nil {
-				t.Errorf("error unmarshaling tagged value % x: %v", tag.(cbor.Tag).DecodedVal, err)
+			if err := cbor.Unmarshal(tag.(cbor.Tag[cbor.RawBytes]).Val, valAddr); err != nil {
+				t.Errorf("error unmarshaling tagged value % x: %v", tag.(cbor.Tag[cbor.RawBytes]).Val, err)
 				continue
 			}
 			val := reflect.ValueOf(valAddr).Elem().Interface()
 			if !reflect.DeepEqual(val, test.expectVal) {
-				t.Errorf("unmarshaling % x; expected %#v, got %#v", tag.(cbor.Tag).DecodedVal, test.expectVal, val)
+				t.Errorf("unmarshaling % x; expected %#v, got %#v", tag.(cbor.Tag[cbor.RawBytes]).Val, test.expectVal, val)
 			}
 		}
 	})
@@ -1178,25 +1178,25 @@ func TestDecodeTag(t *testing.T) {
 		{
 			input:     []byte{0xc5, 0xc4, 0x03},
 			expectNum: 5,
-			expectVal: cbor.Tag{Number: 4, DecodedVal: []byte{0x03}},
+			expectVal: cbor.Tag[int]{Num: 4, Val: 3},
 		},
 	} {
-		var tag cbor.Tag
+		var tag cbor.Tag[cbor.RawBytes]
 		if err := cbor.Unmarshal(test.input, &tag); err != nil {
 			t.Errorf("error unmarshaling % x: %v", test.input, err)
-		} else if tag.Number != test.expectNum {
-			t.Errorf("unmarshaling % x; expected tag number %d, got %d", test.input, test.expectNum, tag.Number)
+		} else if tag.Num != test.expectNum {
+			t.Errorf("unmarshaling % x; expected tag number %d, got %d", test.input, test.expectNum, tag.Num)
 			continue
 		}
 
 		valAddr := reflect.New(reflect.TypeOf(test.expectVal)).Interface()
-		if err := cbor.Unmarshal(tag.DecodedVal, valAddr); err != nil {
-			t.Errorf("error unmarshaling tagged value % x: %v", tag.DecodedVal, err)
+		if err := cbor.Unmarshal(tag.Val, valAddr); err != nil {
+			t.Errorf("error unmarshaling tagged value % x: %v", tag.Val, err)
 			continue
 		}
 		val := reflect.ValueOf(valAddr).Elem().Interface()
 		if !reflect.DeepEqual(val, test.expectVal) {
-			t.Errorf("unmarshaling % x; expected %#v, got %#v", tag.DecodedVal, test.expectVal, val)
+			t.Errorf("unmarshaling % x; expected %#v, got %#v", tag.Val, test.expectVal, val)
 		}
 	}
 }
