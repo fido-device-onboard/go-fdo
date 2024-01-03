@@ -4,18 +4,9 @@
 package fdo
 
 import (
-	"bytes"
 	"context"
-	"errors"
-	"fmt"
 	"io"
-	"net/http"
-	"net/url"
-	"path"
-	"strconv"
-	"strings"
-
-	"github.com/fido-device-onboard/go-fdo/cbor"
+	"time"
 )
 
 // Protocol is the FDO specification-defined protocol.
@@ -48,153 +39,52 @@ func ProtocolOf(msgType uint8) Protocol {
 	}
 }
 
-// AuthorizationJar stores authorization tokens. Context parameters are used to
-// allow passing arbitrary data which may be needed for thread-safe
-// implementations.
-type AuthorizationJar interface {
-	Clear(ctx context.Context)
-	GetToken(ctx context.Context, msgType uint8) string
-	StoreToken(ctx context.Context, msgType uint8, token string)
-}
-
-// The default AuthorizationJar implementation which does not support
-// concurrent use.
-type jar map[Protocol]string
-
-var _ AuthorizationJar = jar(nil)
-
-func (j jar) Clear(context.Context) {
-	clear(j)
-}
-func (j jar) GetToken(_ context.Context, msgType uint8) string {
-	return j[ProtocolOf(msgType)]
-}
-func (j jar) StoreToken(_ context.Context, msgType uint8, token string) {
-	j[ProtocolOf(msgType)] = token
-}
-
-// Client implements FDO message sending capabilities over HTTP. Send may be
-// used for sending one message and receiving one response message. Higher
-// level protocols may also be run using the respective methods.
+// Client implements methods for performing FDO protocols DI (non-normative),
+// TO1, and TO2.
 type Client struct {
-	// Http client to use. Nil indicates that the default client should be
-	// used.
-	Http *http.Client
-
-	// BaseURL of HTTP endpoint. The URL should not end in a forward slash and
-	// should not include the /fdo/$ver/msg part of the path.
-	BaseURL string
-
-	// Auth stores Authorization headers much like a CookieJar in a standard
-	// *http.Client stores cookie headers. As specified in Section 4.3, each
-	// protocol (TO1, TO2, etc.) generally starts with a message containing no
-	// Authorization header and the server responds with one. This header, like
-	// a cookie, is used for tracking protocol state on the server side.
-	//
-	// If no jar is set, then a default jar will be used. The default jar
-	// stores tokens based on DI/TO1/TO2 protocol classification of the request
-	// message type.
-	Auth AuthorizationJar
-
-	// MaxContentLength defaults to 65535. Negative values disable content
-	// length checking.
-	MaxContentLength int64
+	// Transport
+	Transport Transport
 
 	// Retry optionally sets a policy for retrying protocol messages.
 	Retry RetryDecider
+	// if c.Retry == nil {
+	// 	c.Retry = neverRetry{}
+	// }
+
+	// TODO: DeviceCredential get/set interface, including sign/verify
+	// and hmac/hmacverify abstractions
+
+	// TODO: RVBypass settings
+
+	// TODO: TO2 address list get/set interface
+
+	// TODO: Map of registered FSIMs by name
 }
 
-// SendOnce sends a single message and receives a single response message. The
-// message is never retried, even if the Retry field is set.
-func (c *Client) SendOnce(ctx context.Context, msgType uint8, msg any) (respType uint8, _ io.ReadCloser, _ error) {
-	// Initialize default values
-	if c.Auth == nil {
-		c.Auth = make(jar)
-	}
-	if c.Retry == nil {
-		c.Retry = neverRetry{}
-	}
+// DeviceInitialization runs the DI protocol and has side effects of setting
+// device credentials.
+func (*Client) DeviceInitialization(ctx context.Context) error
 
-	// Create request with URL and body
-	uri, err := url.JoinPath(c.BaseURL, "fdo/101/msg", strconv.Itoa(int(msgType)))
-	if err != nil {
-		return 0, nil, fmt.Errorf("error parsing base URL: %w", err)
-	}
-	body := new(bytes.Buffer)
-	if err := cbor.NewEncoder(body).Encode(msg); err != nil {
-		return 0, nil, fmt.Errorf("error encoding message %d: %w", msgType, err)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, uri, body)
-	if err != nil {
-		return 0, nil, fmt.Errorf("error creating FDO request: %w", err)
-	}
+// TransferOwnership1 runs the TO1 protocol and has side effects of setting the
+// RV blob for TO2 addresses.
+func (*Client) TransferOwnership1(ctx context.Context) error
 
-	// Add request headers
-	req.Header.Add("Content-Type", "application/cbor")
-	if token := c.Auth.GetToken(ctx, msgType); token != "" {
-		req.Header.Add("Authorization", token)
-	}
+// TransferOwnership2 runs the TO2 protocol and has side effects of performing
+// FSIMs.
+func (*Client) TransferOwnership2(ctx context.Context) error
 
-	// Perform HTTP request
-	res, err := c.Http.Do(req)
-	if err != nil {
-		return 0, nil, fmt.Errorf("error making HTTP request for message %d: %w", msgType, err)
-	}
-
-	return c.handleResponse(res)
+// Transport abstracts the underlying TCP/HTTP/CoAP transport.
+type Transport interface {
+	Send(ctx context.Context, base string, msgType uint8, msg any) (respType uint8, _ io.ReadCloser, _ error)
 }
 
-func (c *Client) handleResponse(resp *http.Response) (msgType uint8, _ io.ReadCloser, _ error) {
-	// Store token header in AuthorizationJar
-	if token := resp.Header.Get("Authorization"); token != "" {
-		reqType, err := strconv.ParseUint(path.Base(resp.Request.URL.Path), 10, 8)
-		if err != nil {
-			_ = resp.Body.Close()
-			return 0, nil, fmt.Errorf("request contains invalid message type in path: %w", err)
-		}
-		c.Auth.StoreToken(resp.Request.Context(), uint8(reqType), token)
-	}
-
-	// Parse message type from headers (or implicit from response code)
-	switch resp.StatusCode {
-	case http.StatusOK:
-		typ, err := strconv.ParseUint(strings.TrimSpace(resp.Header.Get("Message-Type")), 10, 8)
-		if err != nil {
-			_ = resp.Body.Close()
-			return 0, nil, fmt.Errorf("response contains invalid message type header: %w", err)
-		}
-		msgType = uint8(typ)
-	case http.StatusInternalServerError:
-		msgType = 255
-	default:
-		_ = resp.Body.Close()
-		return 0, nil, fmt.Errorf("unexpected HTTP response code: %s", resp.Status)
-	}
-
-	// Validate content length
-	maxSize := c.MaxContentLength
-	if maxSize == 0 {
-		maxSize = 65535
-	}
-	if maxSize > 0 && resp.ContentLength > maxSize {
-		_ = resp.Body.Close()
-		return 0, nil, fmt.Errorf("content too large (%d bytes)", resp.ContentLength)
-	}
-	if maxSize > 0 && resp.ContentLength < 0 {
-		_ = resp.Body.Close()
-		return 0, nil, errors.New("content length must be specified in response headers")
-	}
-	if resp.ContentLength < 0 {
-		return msgType, resp.Body, nil
-	}
-
-	// Allow reading up to expected content length
-	content := struct {
-		io.Reader
-		io.Closer
-	}{
-		Reader: io.LimitReader(resp.Body, resp.ContentLength),
-		Closer: resp.Body,
-	}
-	return msgType, content, nil
+// RetryDecider allows for deciding whether a retry should occur, based on the
+// request's message type and the error response.
+type RetryDecider interface {
+	// ShouldRetry returns nil when a retry should not be attempted. Otherwise
+	// it returns a non-nil channel. The channel will have exactly one value
+	// sent on it and is not guaranteed to close.
+	//
+	// TODO: Return next set of options for RV?
+	ShouldRetry(ErrorMessage) <-chan time.Time
 }

@@ -3,7 +3,12 @@
 
 package fdo
 
-// DeviceCredentials is non-normative, but the [TPM Draft Spec] proposes a CBOR
+import (
+	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/cose"
+)
+
+// DeviceCredential is non-normative, but the [TPM Draft Spec] proposes a CBOR
 // encoding, so that will be used.
 //
 //	DCTPM = [
@@ -17,7 +22,7 @@ package fdo
 //	]
 //
 // [TPM Draft Spec]: https://fidoalliance.org/specs/FDO/securing-fdo-in-tpm-v1.0-rd-20231010/securing-fdo-in-tpm-v1.0-rd-20231010.html
-type DeviceCredentials struct {
+type DeviceCredential struct {
 	Version         uint16
 	DeviceInfo      string
 	Guid            []byte
@@ -27,12 +32,29 @@ type DeviceCredentials struct {
 	DeviceKeyHandle uint64
 }
 
-// DeviceVariable contains all device state, including both public and private
+type DeviceCredentialTPM struct {
+	DeviceCredential
+
+	// TODO
+	TpmHandle string `cbor:"-"`
+}
+
+// TODO
+func (dc DeviceCredentialTPM) Hmac(alg HashAlg, payload any) (Hmac, error)
+
+// TODO
+func (dc DeviceCredentialTPM) Sign(payload []byte) (cose.Sign1[cbor.RawBytes], error)
+
+// DeviceCredentialBlob contains all device state, including both public and private
 // parts of keys and secrets.
-type DeviceVariable struct {
+type DeviceCredentialBlob struct {
+	DeviceCredential
+
 	Active     bool
-	DC         DeviceCredentials
 	HmacType   int64
 	HmacSecret []byte
 	PrivateKey []byte // PKCS#8
 }
+
+// TODO: Add interface implemented by both DeviceCredentialTPM and
+// DeviceCredentialBlob that handles Sign/Verify and Hmac/HmacVerify.

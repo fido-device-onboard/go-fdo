@@ -119,15 +119,6 @@ func (ts *Timestamp) UnmarshalCBOR(data []byte) error {
 	return fmt.Errorf("unknown tag number %d", tag.Number())
 }
 
-// RetryDecider allows for deciding whether a retry should occur, based on the
-// request's message type and the error response.
-type RetryDecider interface {
-	// ShouldRetry returns nil when a retry should not be attempted. Otherwise
-	// it returns a non-nil channel. The channel will have exactly one value
-	// sent on it and is not guaranteed to close.
-	ShouldRetry(ErrorMessage) <-chan time.Time
-}
-
 type neverRetry struct{}
 
 func (neverRetry) ShouldRetry(ErrorMessage) <-chan time.Time { return nil }
@@ -188,6 +179,6 @@ func (r *Retrier) ShouldRetry(em ErrorMessage) <-chan time.Time {
 	if counter.count > r.max {
 		return nil
 	}
-	// TODO: Choose a better default backoff scheme
+	// TODO: Default delay is 120s +/- 30s
 	return time.After(time.Second)
 }
