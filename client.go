@@ -42,23 +42,22 @@ func ProtocolOf(msgType uint8) Protocol {
 // Client implements methods for performing FDO protocols DI (non-normative),
 // TO1, and TO2.
 type Client struct {
-	// Transport
+	// Transport performs message passing and may be implemented over TCP,
+	// HTTP, CoAP, and others.
 	Transport Transport
+
+	// Signer performs COSE sign/verify and HMAC hash/verify functions.
+	Signer Signer
+
+	// OwnerServiceBaseAddrs TO2 base address list
+	OwnerServiceBaseAddrs func(context.Context) []string
+
+	// ServiceInfoModulesForOwner returns a map of registered FDO Service Info
+	// Modules (FSIMs) for a given Owner Service.
+	ServiceInfoModulesForOwner func(RVTO2AddrEntry) map[string]ServiceInfoModule
 
 	// Retry optionally sets a policy for retrying protocol messages.
 	Retry RetryDecider
-	// if c.Retry == nil {
-	// 	c.Retry = neverRetry{}
-	// }
-
-	// TODO: DeviceCredential get/set interface, including sign/verify
-	// and hmac/hmacverify abstractions
-
-	// TODO: RVBypass settings
-
-	// TODO: TO2 address list get/set interface
-
-	// TODO: Map of registered FSIMs by name
 }
 
 // DeviceInitialization runs the DI protocol and has side effects of setting
