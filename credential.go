@@ -4,7 +4,6 @@
 package fdo
 
 import (
-	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
 )
 
@@ -44,25 +43,12 @@ type Signer interface {
 type DeviceCredential struct {
 	Version         uint16
 	DeviceInfo      string
-	Guid            []byte
-	RvInfo          []RvInstruction
+	Guid            Guid
+	RvInfo          [][]RvVariable
 	PublicKeyHash   Hash
 	DeviceKeyType   uint64
 	DeviceKeyHandle uint64
 }
-
-type DeviceCredentialTPM struct {
-	DeviceCredential
-
-	// TODO
-	TpmPath string `cbor:"-"`
-}
-
-// TODO
-func (dc *DeviceCredentialTPM) Hmac(alg HashAlg, payload any) (Hmac, error)
-
-// TODO
-func (dc *DeviceCredentialTPM) Sign(payload []byte) (cose.Sign1[cbor.RawBytes], error)
 
 // DeviceCredentialBlob contains all device state, including both public and private
 // parts of keys and secrets.
@@ -70,10 +56,33 @@ type DeviceCredentialBlob struct {
 	DeviceCredential
 
 	Active     bool
-	HmacType   int64
+	HmacType   HashAlg
 	HmacSecret []byte
 	PrivateKey []byte // PKCS#8
 }
 
-// TODO: Add interface implemented by both DeviceCredentialTPM and
-// DeviceCredentialBlob that handles Sign/Verify and Hmac/HmacVerify.
+var _ Signer = (*DeviceCredentialBlob)(nil)
+
+// Hmac encodes the given value to CBOR and calculates the hashed MAC for the
+// given algorithm.
+func (dc *DeviceCredentialBlob) Hmac(alg HashAlg, payload any) (Hmac, error) {
+	panic("unimplemented")
+}
+
+// HmacVerify encodes the given value to CBOR and verifies that the given HMAC
+// matches it.
+func (dc *DeviceCredentialBlob) HmacVerify(h Hmac, v any) error {
+	panic("unimplemented")
+}
+
+// Sign encodes the given payload to CBOR and performs signs it as a COSE Sign1
+// signature structure.
+func (dc *DeviceCredentialBlob) Sign(payload any) (cose.Sign1[any], error) {
+	panic("unimplemented")
+}
+
+// Verify uses the same private material as Sign to verify the given COSE Sign1
+// signature structure.
+func (dc *DeviceCredentialBlob) Verify(v cose.Sign1[any]) error {
+	panic("unimplemented")
+}

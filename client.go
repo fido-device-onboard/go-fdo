@@ -62,15 +62,21 @@ type Client struct {
 
 // DeviceInitialization runs the DI protocol and has side effects of setting
 // device credentials.
-func (*Client) DeviceInitialization(ctx context.Context) error
+func (*Client) DeviceInitialization(ctx context.Context) (*DeviceCredential, error) {
+	panic("unimplemented")
+}
 
 // TransferOwnership1 runs the TO1 protocol and has side effects of setting the
 // RV blob for TO2 addresses.
-func (*Client) TransferOwnership1(ctx context.Context) error
+func (*Client) TransferOwnership1(ctx context.Context) error {
+	panic("unimplemented")
+}
 
 // TransferOwnership2 runs the TO2 protocol and has side effects of performing
 // FSIMs.
-func (*Client) TransferOwnership2(ctx context.Context) error
+func (*Client) TransferOwnership2(ctx context.Context) error {
+	panic("unimplemented")
+}
 
 // Transport abstracts the underlying TCP/HTTP/CoAP transport.
 type Transport interface {

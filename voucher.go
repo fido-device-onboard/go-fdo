@@ -106,12 +106,17 @@ type Voucher struct {
 //	;; use null for Intel® EPID
 //	OVDevCertChainHashOrNull = Hash / null     ;; CBOR null for Intel® EPID device key
 type VoucherHeader struct {
-	Version       uint64
-	Guid          []byte
-	RvInfo        []RvInstruction
+	Version       uint16
+	Guid          Guid
+	RvInfo        [][]RvVariable
 	DeviceInfo    string
 	PublicKey     PublicKey
 	CertChainHash *Hash
+}
+
+type RvVariable struct {
+	Variable uint64
+	Value    []byte
 }
 
 // VoucherEntryPayload is an entry in a voucher's list of recorded transfers.
@@ -152,12 +157,3 @@ type VoucherEntryPayload struct {
 }
 
 type ExtraInfo map[int][]byte
-
-type RvInstruction struct {
-	Variables []RvVariable
-}
-
-type RvVariable struct {
-	Variable uint64
-	Value    []byte
-}
