@@ -1,7 +1,7 @@
 // Copyright 2023 Intel Corporation
 // SPDX-License-Identifier: Apache 2.0
 
-package fdo
+package http
 
 import (
 	"bytes"
@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
 )
 
@@ -29,7 +30,7 @@ type AuthorizationJar interface {
 
 // The default AuthorizationJar implementation which does not support
 // concurrent use.
-type jar map[Protocol]string
+type jar map[fdo.Protocol]string
 
 var _ AuthorizationJar = jar(nil)
 
@@ -37,18 +38,18 @@ func (j jar) Clear(context.Context) {
 	clear(j)
 }
 func (j jar) GetToken(_ context.Context, msgType uint8) string {
-	return j[ProtocolOf(msgType)]
+	return j[fdo.ProtocolOf(msgType)]
 }
 func (j jar) StoreToken(_ context.Context, msgType uint8, token string) {
-	j[ProtocolOf(msgType)] = token
+	j[fdo.ProtocolOf(msgType)] = token
 }
 
-// HttpTransport implements FDO message sending capabilities over HTTP. Send
-// may be used for sending one message and receiving one response message.
-type HttpTransport struct {
-	// Http client to use. Nil indicates that the default client should be
-	// used.
-	Http *http.Client
+// Transport implements FDO message sending capabilities over HTTP. Send may be
+// used for sending one message and receiving one response message.
+type Transport struct {
+	// Client to use for HTTP requests. Nil indicates that the default client
+	// should be used.
+	Client *http.Client
 
 	// Auth stores Authorization headers much like a CookieJar in a standard
 	// *http.Client stores cookie headers. As specified in Section 4.3, each
@@ -66,11 +67,14 @@ type HttpTransport struct {
 	MaxContentLength int64
 }
 
-var _ Transport = (*HttpTransport)(nil)
+var _ fdo.Transport = (*Transport)(nil)
 
 // Send sends a single message and receives a single response message.
-func (t *HttpTransport) Send(ctx context.Context, base string, msgType uint8, msg any) (respType uint8, _ io.ReadCloser, _ error) {
+func (t *Transport) Send(ctx context.Context, base string, msgType uint8, msg any) (respType uint8, _ io.ReadCloser, _ error) {
 	// Initialize default values
+	if t.Client == nil {
+		t.Client = http.DefaultClient
+	}
 	if t.Auth == nil {
 		t.Auth = make(jar)
 	}
@@ -96,7 +100,7 @@ func (t *HttpTransport) Send(ctx context.Context, base string, msgType uint8, ms
 	}
 
 	// Perform HTTP request
-	res, err := t.Http.Do(req)
+	res, err := t.Client.Do(req)
 	if err != nil {
 		return 0, nil, fmt.Errorf("error making HTTP request for message %d: %w", msgType, err)
 	}
@@ -104,7 +108,7 @@ func (t *HttpTransport) Send(ctx context.Context, base string, msgType uint8, ms
 	return t.handleResponse(res)
 }
 
-func (c *HttpTransport) handleResponse(resp *http.Response) (msgType uint8, _ io.ReadCloser, _ error) {
+func (c *Transport) handleResponse(resp *http.Response) (msgType uint8, _ io.ReadCloser, _ error) {
 	// Store token header in AuthorizationJar
 	if token := resp.Header.Get("Authorization"); token != "" {
 		reqType, err := strconv.ParseUint(path.Base(resp.Request.URL.Path), 10, 8)
