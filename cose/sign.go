@@ -95,28 +95,12 @@ type Sign[T any] struct {
 	Signatures []Signature   // non-empty array of Signature
 }
 
-// AsTag returns the CBOR tag representation.
-func (s Sign[T]) AsTag() cbor.Tag[Sign[T]] {
-	return cbor.Tag[Sign[T]]{
-		Num: signTag,
-		Val: s,
-	}
-}
-
 // Sign1 is a COSE_Sign1 signature structure, which is used when only one
 // signature is being placed on a message.
 type Sign1[T any] struct {
 	Header
 	Payload   *cbor.Bstr[T] // non-empty byte string or null
 	Signature []byte        // non-empty byte string
-}
-
-// AsTag returns the CBOR tag representation.
-func (s1 Sign1[T]) AsTag() cbor.Tag[Sign1[T]] {
-	return cbor.Tag[Sign1[T]]{
-		Num: signTag,
-		Val: s1,
-	}
 }
 
 // Sign using a single private key. Unless it was transported independently of

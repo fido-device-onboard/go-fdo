@@ -17,14 +17,6 @@ type Encrypt[T any] struct {
 	Recipients []Recipient   // non-empty array of recipients
 }
 
-// AsTag returns the CBOR tag representation.
-func (e Encrypt[T]) AsTag() cbor.Tag[Encrypt[T]] {
-	return cbor.Tag[Encrypt[T]]{
-		Num: encryptTag,
-		Val: e,
-	}
-}
-
 // Encrypt0 holds the encrypted content of an enveloped structure. It assumes
 // contains no recipient information adn therefore assumes that the recipient
 // of the object will already know the identity of the key to be used in order
@@ -34,14 +26,6 @@ func (e Encrypt[T]) AsTag() cbor.Tag[Encrypt[T]] {
 type Encrypt0[T any] struct {
 	Header
 	Ciphertext *cbor.Bstr[T] // byte string or null when transported separately
-}
-
-// AsTag returns the CBOR tag representation.
-func (e0 Encrypt0[T]) AsTag() cbor.Tag[Encrypt0[T]] {
-	return cbor.Tag[Encrypt0[T]]{
-		Num: encrypt0Tag,
-		Val: e0,
-	}
 }
 
 // Mac is a message authentication code structure that is used when the key to
@@ -55,14 +39,6 @@ type Mac[T any] struct {
 	Recipients []Recipient   // non-empty array of recipients
 }
 
-// AsTag returns the CBOR tag representation.
-func (m Mac[T]) AsTag() cbor.Tag[Mac[T]] {
-	return cbor.Tag[Mac[T]]{
-		Num: macTag,
-		Val: m,
-	}
-}
-
 // Mac0 is a message authentication code structure that is used when the
 // recipient structure is not needed, because the key to be used is implicitly
 // known.
@@ -70,14 +46,6 @@ type Mac0[T any] struct {
 	Header
 	Payload *cbor.Bstr[T] // byte string or null when transported separately
 	Tag     []byte        // non-empty byte string containing the MAC
-}
-
-// AsTag returns the CBOR tag representation.
-func (m0 Mac0[T]) AsTag() cbor.Tag[Mac0[T]] {
-	return cbor.Tag[Mac0[T]]{
-		Num: mac0Tag,
-		Val: m0,
-	}
 }
 
 const (

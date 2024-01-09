@@ -45,34 +45,6 @@ func init() {
 	}
 }
 
-/*
-COSE Tags
-
-	+-------+---------------+---------------+---------------------------+
-	| CBOR  | cose-type     | Data Item     | Semantics                 |
-	| Tag   |               |               |                           |
-	+-------+---------------+---------------+---------------------------+
-	| 98    | cose-sign     | COSE_Sign     | COSE Signed Data Object   |
-	| 18    | cose-sign1    | COSE_Sign1    | COSE Single Signer Data   |
-	|       |               |               | Object                    |
-	| 96    | cose-encrypt  | COSE_Encrypt  | COSE Encrypted Data       |
-	|       |               |               | Object                    |
-	| 16    | cose-encrypt0 | COSE_Encrypt0 | COSE Single Recipient     |
-	|       |               |               | Encrypted Data Object     |
-	| 97    | cose-mac      | COSE_Mac      | COSE MACed Data Object    |
-	| 17    | cose-mac0     | COSE_Mac0     | COSE Mac w/o Recipients   |
-	|       |               |               | Object                    |
-	+-------+---------------+---------------+---------------------------+
-*/
-const (
-	signTag     uint64 = 98
-	sign1Tag    uint64 = 18
-	encryptTag  uint64 = 96
-	encrypt0Tag uint64 = 16
-	macTag      uint64 = 97
-	mac0Tag     uint64 = 17
-)
-
 // Header is a type for embedding protected and unprotected headers into many
 // COSE structures.
 type Header struct {
