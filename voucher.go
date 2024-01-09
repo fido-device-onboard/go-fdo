@@ -5,6 +5,8 @@ package fdo
 
 import (
 	"crypto/x509"
+	"errors"
+	"fmt"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
@@ -67,6 +69,36 @@ const (
 	RVMedWifiAll uint64 = 21
 )
 
+// Certificate is a newtype for x509.Certificate implementing proper CBOR
+// encoding.
+type Certificate x509.Certificate
+
+// X509 is a helper function for conversion.
+func (c *Certificate) X509() *x509.Certificate { return (*x509.Certificate)(c) }
+
+func (c *Certificate) MarshalCBOR() ([]byte, error) {
+	if c == nil {
+		return cbor.Marshal(nil)
+	}
+	return cbor.Marshal(c.Raw)
+}
+
+func (c *Certificate) UnmarshalCBOR(data []byte) error {
+	if c == nil {
+		return errors.New("cannot unmarshal to a nil pointer")
+	}
+	var der []byte
+	if err := cbor.Unmarshal(data, &der); err != nil {
+		return err
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		return fmt.Errorf("error parsing x509 certificate DER-encoded bytes: %w", err)
+	}
+	*c = Certificate(*cert)
+	return nil
+}
+
 // Voucher is the top level structure.
 //
 //	OwnershipVoucher = [
@@ -87,8 +119,52 @@ type Voucher struct {
 	Version   uint16
 	Header    cbor.Bstr[VoucherHeader]
 	Hmac      Hmac
-	CertChain *[]*x509.Certificate
-	Entries   []cbor.Tag[cose.Sign1[VoucherEntryPayload]]
+	CertChain *[]*Certificate
+	Entries   []cose.Sign1Tag[VoucherEntryPayload]
+}
+
+// VerifyCertChain using trusted roots. If roots is nil then the last
+// certificate in the chain will be implicitly trusted.
+func (v *Voucher) VerifyCertChain(roots *x509.CertPool) error {
+	if v.CertChain == nil || len(*v.CertChain) == 0 {
+		return errors.New("empty cert chain")
+	}
+	chain := *v.CertChain
+
+	// All all intermediates (if any) to a pool
+	intermediates := x509.NewCertPool()
+	if len(chain) > 2 {
+		for _, cert := range chain[1 : len(chain)-1] {
+			intermediates.AddCert(cert.X509())
+		}
+	}
+
+	// Trust last certificate in chain if roots is nil
+	if roots == nil {
+		roots = x509.NewCertPool()
+		roots.AddCert(chain[len(chain)-1].X509())
+	}
+
+	// Return the result of (*x509.Certificate).Verify
+	_, err := chain[0].X509().Verify(x509.VerifyOptions{
+		Roots:         roots,
+		Intermediates: intermediates,
+	})
+	return err
+}
+
+// VerifyEntries checks the COSE signature of every voucher entry payload using
+// the manufacturer public key from the header.
+func (v *Voucher) VerifyEntries() error {
+	key := v.Header.Val.PublicKey.Public()
+	for i, entry := range v.Entries {
+		if ok, err := entry.Untag().Verify(key, nil); err != nil {
+			return fmt.Errorf("COSE signature for entry %d could not be verified: %w", i, err)
+		} else if !ok {
+			return fmt.Errorf("COSE signature for entry %d did not match manufacturer key", i)
+		}
+	}
+	return nil
 }
 
 // VoucherHeader is the Ownership Voucher header, also used in TO1 protocol.
