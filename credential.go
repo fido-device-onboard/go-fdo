@@ -4,6 +4,14 @@
 package fdo
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/sha512"
+	"errors"
+	"fmt"
+	"hash"
+
+	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
 )
 
@@ -66,13 +74,37 @@ var _ Signer = (*DeviceCredentialBlob)(nil)
 // Hmac encodes the given value to CBOR and calculates the hashed MAC for the
 // given algorithm.
 func (dc *DeviceCredentialBlob) Hmac(alg HashAlg, payload any) (Hmac, error) {
-	panic("unimplemented")
+	var newHash func() hash.Hash
+	switch alg {
+	case HmacSha256Hash:
+		newHash = sha256.New
+	case HmacSha384Hash:
+		newHash = sha512.New384
+	default:
+		return Hmac{}, fmt.Errorf("unsupported hmac algorithm: %v", alg)
+	}
+
+	mac := hmac.New(newHash, dc.HmacSecret)
+	if err := cbor.NewEncoder(mac).Encode(payload); err != nil {
+		return Hmac{}, fmt.Errorf("error computing hmac: marshaling payload: %w", err)
+	}
+	return Hmac{
+		Algorithm: alg,
+		Value:     mac.Sum(nil),
+	}, nil
 }
 
 // HmacVerify encodes the given value to CBOR and verifies that the given HMAC
 // matches it.
 func (dc *DeviceCredentialBlob) HmacVerify(h Hmac, v any) error {
-	panic("unimplemented")
+	h1, err := dc.Hmac(h.Algorithm, v)
+	if err != nil {
+		return err
+	}
+	if !hmac.Equal(h.Value, h1.Value) {
+		return errors.New("hmac did not match")
+	}
+	return nil
 }
 
 // Sign encodes the given payload to CBOR and performs signs it as a COSE Sign1

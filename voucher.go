@@ -123,6 +123,12 @@ type Voucher struct {
 	Entries   []cose.Sign1Tag[VoucherEntryPayload]
 }
 
+// VerifyHeader checks that the OVHeader was not modified by comparing the HMAC
+// generated using the secret from the device credentials.
+func (v *Voucher) VerifyHeader(deviceCredential Signer) error {
+	return deviceCredential.HmacVerify(v.Hmac, v.Header.Val)
+}
+
 // VerifyCertChain using trusted roots. If roots is nil then the last
 // certificate in the chain will be implicitly trusted.
 func (v *Voucher) VerifyCertChain(roots *x509.CertPool) error {
@@ -146,17 +152,21 @@ func (v *Voucher) VerifyCertChain(roots *x509.CertPool) error {
 	}
 
 	// Return the result of (*x509.Certificate).Verify
-	_, err := chain[0].X509().Verify(x509.VerifyOptions{
+	if _, err := chain[0].X509().Verify(x509.VerifyOptions{
 		Roots:         roots,
 		Intermediates: intermediates,
-	})
-	return err
+	}); err != nil {
+		return err
+	}
+
+	// TODO: Check that cert chain hash matches value in OVHeader
+	return nil
 }
 
 // VerifyEntries checks the COSE signature of every voucher entry payload using
 // the manufacturer public key from the header.
 func (v *Voucher) VerifyEntries() error {
-	key := v.Header.Val.PublicKey.Public
+	key := v.Header.Val.ManufacturerKey.Public
 	for i, entry := range v.Entries {
 		if ok, err := entry.Untag().Verify(key, nil); err != nil {
 			return fmt.Errorf("COSE signature for entry %d could not be verified: %w", i, err)
@@ -182,12 +192,12 @@ func (v *Voucher) VerifyEntries() error {
 //	;; use null for Intel® EPID
 //	OVDevCertChainHashOrNull = Hash / null     ;; CBOR null for Intel® EPID device key
 type VoucherHeader struct {
-	Version       uint16
-	Guid          Guid
-	RvInfo        [][]RvVariable
-	DeviceInfo    string
-	PublicKey     PublicKey
-	CertChainHash *Hash
+	Version         uint16
+	Guid            Guid
+	RvInfo          [][]RvVariable
+	DeviceInfo      string
+	ManufacturerKey PublicKey
+	CertChainHash   *Hash
 }
 
 type RvVariable struct {
