@@ -7,7 +7,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/sha512"
-	"errors"
 	"fmt"
 	"hash"
 
@@ -22,7 +21,8 @@ type Signer interface {
 	Hmac(HashAlg, any) (Hmac, error)
 
 	// HmacVerify encodes the given value to CBOR and verifies that the given
-	// HMAC matches it.
+	// HMAC matches it. If verification fails, the returned error must wrap
+	// ErrVerificationFailed.
 	HmacVerify(Hmac, any) error
 
 	// Sign encodes the given payload to CBOR and performs signs it as a COSE
@@ -30,7 +30,8 @@ type Signer interface {
 	Sign(any) (cose.Sign1[any], error)
 
 	// Verify uses the same private material as Sign to verify the given COSE
-	// Sign1 signature structure.
+	// Sign1 signature structure. If verification fails, the returned error
+	// must wrap ErrVerificationFailed.
 	Verify(cose.Sign1[any]) error
 }
 
@@ -102,7 +103,7 @@ func (dc *DeviceCredentialBlob) HmacVerify(h Hmac, v any) error {
 		return err
 	}
 	if !hmac.Equal(h.Value, h1.Value) {
-		return errors.New("hmac did not match")
+		return fmt.Errorf("%w: hmac did not match", ErrVerificationFailed)
 	}
 	return nil
 }

@@ -22,8 +22,16 @@ func TestDecodeVoucher(t *testing.T) {
 		t.Fatal("error parsing voucher test data", err)
 	}
 
+	// if err := ov.VerifyHeader(deviceCredential); err != nil {
+	// 	t.Error("error verifying voucher header", err)
+	// }
+
 	if err := ov.VerifyCertChain(nil); err != nil {
 		t.Fatal("error verifying voucher cert chain (with implicit trusted root)", err)
+	}
+
+	if err := ov.VerifyCertChainHash(); err != nil {
+		t.Fatal("error verifying voucher cert chain hash", err)
 	}
 
 	if err := ov.VerifyEntries(); err != nil {

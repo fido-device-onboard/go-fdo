@@ -4,9 +4,13 @@
 package fdo
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/sha512"
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"hash"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
@@ -68,6 +72,10 @@ const (
 	RVMedWifi9   uint64 = 19
 	RVMedWifiAll uint64 = 21
 )
+
+// ErrCryptoVerifyFailed indicates that the wrapping error originated from a
+// case of cryptographic verification failing rather than a broken invariant.
+var ErrCryptoVerifyFailed = errors.New("cryptographic verification failed")
 
 // Certificate is a newtype for x509.Certificate implementing proper CBOR
 // encoding.
@@ -132,7 +140,10 @@ func (v *Voucher) VerifyHeader(deviceCredential Signer) error {
 // VerifyCertChain using trusted roots. If roots is nil then the last
 // certificate in the chain will be implicitly trusted.
 func (v *Voucher) VerifyCertChain(roots *x509.CertPool) error {
-	if v.CertChain == nil || len(*v.CertChain) == 0 {
+	if v.CertChain == nil {
+		return nil
+	}
+	if len(*v.CertChain) == 0 {
 		return errors.New("empty cert chain")
 	}
 	chain := *v.CertChain
@@ -156,10 +167,45 @@ func (v *Voucher) VerifyCertChain(roots *x509.CertPool) error {
 		Roots:         roots,
 		Intermediates: intermediates,
 	}); err != nil {
-		return err
+		return fmt.Errorf("%w: %w", ErrCryptoVerifyFailed, err)
 	}
 
-	// TODO: Check that cert chain hash matches value in OVHeader
+	return nil
+}
+
+// VerifyCertChainHash uses the hash in the voucher header to verify that the
+// certificate chain of the voucher has not been tampered with. This method
+// should therefore not be called before VerifyHeader.
+func (v *Voucher) VerifyCertChainHash() error {
+	switch {
+	case v.CertChain == nil && v.Header.Val.CertChainHash == nil:
+		return nil
+	case v.CertChain == nil || v.Header.Val.CertChainHash == nil:
+		return errors.New("device cert chain and hash must both be present or both be absent")
+	}
+
+	cchash := v.Header.Val.CertChainHash
+
+	var digest hash.Hash
+	switch cchash.Algorithm {
+	case Sha256Hash:
+		digest = sha256.New()
+	case Sha384Hash:
+		digest = sha512.New384()
+	default:
+		return fmt.Errorf("unsupported hmac algorithm: %v", cchash.Algorithm)
+	}
+
+	enc := cbor.NewEncoder(digest)
+	for _, cert := range *v.CertChain {
+		if err := enc.Encode(cert); err != nil {
+			return fmt.Errorf("error computing hash: marshaling certificate: %w", err)
+		}
+	}
+
+	if !hmac.Equal(digest.Sum(nil), cchash.Value) {
+		return fmt.Errorf("%w: certificate chain hash did not match", ErrCryptoVerifyFailed)
+	}
 	return nil
 }
 
