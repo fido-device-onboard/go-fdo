@@ -675,10 +675,10 @@ func (d *Decoder) decodeArray(rv reflect.Value, additional []byte) error {
 	switch kind {
 	case reflect.Struct:
 		return d.decodeArrayToStruct(rv, additional)
-	case reflect.Slice:
+	case reflect.Slice, reflect.Array:
 		return d.decodeArrayToSlice(rv, additional)
 	default:
-		return fmt.Errorf("%w: expected a slice or struct type",
+		return fmt.Errorf("%w: expected a slice, array, or struct type",
 			ErrUnsupportedType{typeName: rv.Type().String()})
 	}
 }
@@ -752,6 +752,16 @@ func (d *Decoder) decodeArrayToSlice(rv reflect.Value, additional []byte) error 
 		// Set slice to the correct length
 		slice.Grow(length)
 		slice.SetLen(length)
+
+	case reflect.Array:
+		// Check array is long enough and clear extra elements
+		if rv.Len() < length {
+			return fmt.Errorf("fixed-size array is too small: must be at least length %d", length)
+		}
+		zeroVal := reflect.Zero(slice.Type().Elem())
+		for i := length; i < rv.Len(); i++ {
+			slice.Index(i).Set(zeroVal)
+		}
 
 	case reflect.Interface:
 		slice.Set(reflect.MakeSlice(slice.Elem().Type(), length, length))
