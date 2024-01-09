@@ -6,7 +6,6 @@ package fdo
 import (
 	"crypto"
 	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/x509"
 	"errors"
 	"fmt"
@@ -102,183 +101,107 @@ const (
 	CoseKeyEnc KeyEncoding = 3
 )
 
-// rawPubKey is an FDO PublicKey structure.
-//
-//	PublicKey = [
-//	    pkType,
-//	    pkEnc,
-//	    pkBody
-//	]
-type rawPubKey struct {
-	Type  KeyType
-	Enc   KeyEncoding
-	Bytes cbor.RawBytes
+type PublicKey struct {
+	Type     KeyType
+	Encoding KeyEncoding
+	Public   crypto.PublicKey
+
+	x5chain []*Certificate
 }
 
-// PublicKey can be any supported underlying key type and handles marshaling.
-// For unmarshaling from an FDO PublicKey structure, use [ParsePublicKey].
-type PublicKey interface {
-	// Marshal to an FDO PublicKey structure
-	cbor.Marshaler
-	// Unmarshal from an FDO PublicKey.pkBody element
-	cbor.Unmarshaler
+func (pub PublicKey) MarshalCBOR() ([]byte, error) {
+	switch pub.Encoding {
+	case X509KeyEnc:
+		subjectPubKeyInfo, err := x509.MarshalPKIXPublicKey(pub.Public)
+		if err != nil {
+			return nil, err
+		}
+		return cbor.Marshal(struct {
+			Type KeyType
+			Enc  KeyEncoding
+			Body []byte
+		}{
+			Type: pub.Type,
+			Enc:  pub.Encoding,
+			Body: subjectPubKeyInfo,
+		})
 
-	// Return the FDO pkType
-	Type() KeyType
-	// Return the FDO pkEnc
-	Encoding() KeyEncoding
-	// Return a standard Go public key
-	Public() crypto.PublicKey
+	case X5ChainKeyEnc:
+		return cbor.Marshal(struct {
+			Type  KeyType
+			Enc   KeyEncoding
+			Certs []*Certificate
+		}{
+			Type:  pub.Type,
+			Enc:   pub.Encoding,
+			Certs: pub.x5chain,
+		})
+
+	default:
+		return nil, fmt.Errorf("unsupported key encoding: %s", pub.Encoding)
+	}
 }
 
-// ParsePublicKey unmarshals any supported key type from an FDO PublicKey
-// structure.
-func ParsePublicKey(data []byte) (PublicKey, error) {
-	var raw rawPubKey
+func (pub *PublicKey) UnmarshalCBOR(data []byte) error {
+	var raw struct {
+		Type KeyType
+		Enc  KeyEncoding
+		Body []byte
+	}
 	if err := cbor.Unmarshal(data, &raw); err != nil {
-		return nil, err
+		return err
 	}
 
 	switch raw.Enc {
 	case X509KeyEnc:
 		switch raw.Type {
 		case Secp256r1KeyType, Secp384r1KeyType:
-			var pub ecdsaX509PubKey
-			if err := pub.UnmarshalCBOR(raw.Bytes); err != nil {
-				return nil, err
+			key, err := x509.ParsePKIXPublicKey(raw.Body)
+			if err != nil {
+				return err
 			}
-			return &pub, nil
+			eckey, ok := key.(*ecdsa.PublicKey)
+			if !ok {
+				return errors.New("public key must be an ECDSA public key")
+			}
+			*pub = PublicKey{
+				Type:     raw.Type,
+				Encoding: raw.Enc,
+				Public:   eckey,
+			}
+			return nil
+
 		default:
-			return nil, fmt.Errorf("unsupported key type: %s", raw.Type)
+			return fmt.Errorf("unsupported key type: %s", raw.Type)
 		}
 
 	case X5ChainKeyEnc:
 		switch raw.Type {
 		case Secp256r1KeyType, Secp384r1KeyType:
-			var pub ecdsaX5Chain
-			if err := pub.UnmarshalCBOR(raw.Bytes); err != nil {
-				return nil, err
+			var certs []*Certificate
+			if err := cbor.Unmarshal(raw.Body, &certs); err != nil {
+				return err
 			}
-			return &pub, nil
+			if len(certs) == 0 {
+				return errors.New("X5CHAIN key cannot be an empty certificate chain")
+			}
+			eckey, ok := certs[len(certs)-1].PublicKey.(*ecdsa.PublicKey)
+			if !ok {
+				return errors.New("public key must be an ECDSA public key")
+			}
+			*pub = PublicKey{
+				Type:     raw.Type,
+				Encoding: raw.Enc,
+				Public:   eckey,
+				x5chain:  certs,
+			}
+			return nil
+
 		default:
-			return nil, fmt.Errorf("unsupported key type: %s", raw.Type)
+			return fmt.Errorf("unsupported key type: %s", raw.Type)
 		}
 
 	default:
-		return nil, fmt.Errorf("unsupported key encoding: %s", raw.Enc)
+		return fmt.Errorf("unsupported key encoding: %s", raw.Enc)
 	}
-}
-
-type ecdsaX509PubKey ecdsa.PublicKey
-
-var _ PublicKey = (*ecdsaX509PubKey)(nil)
-
-func (pub ecdsaX509PubKey) Type() KeyType {
-	switch pub.Curve {
-	case elliptic.P256():
-		return Secp256r1KeyType
-	case elliptic.P384():
-		return Secp384r1KeyType
-	default:
-		panic("unsupported curve: " + pub.Params().Name)
-	}
-}
-
-func (pub ecdsaX509PubKey) Encoding() KeyEncoding { return X509KeyEnc }
-
-func (pub ecdsaX509PubKey) Public() crypto.PublicKey { return &pub }
-
-func (pub ecdsaX509PubKey) MarshalCBOR() ([]byte, error) {
-	key, err := x509.MarshalPKIXPublicKey(pub)
-	if err != nil {
-		return nil, err
-	}
-	raw, err := cbor.Marshal(key)
-	if err != nil {
-		return nil, err
-	}
-	return cbor.Marshal(rawPubKey{
-		Type:  pub.Type(),
-		Enc:   pub.Encoding(),
-		Bytes: raw,
-	})
-}
-
-func (pub *ecdsaX509PubKey) UnmarshalCBOR(data []byte) error {
-	var b []byte
-	if err := cbor.Unmarshal(data, &b); err != nil {
-		return err
-	}
-	key, err := x509.ParsePKIXPublicKey(b)
-	if err != nil {
-		return err
-	}
-	eckey, ok := key.(*ecdsa.PublicKey)
-	if !ok {
-		return errors.New("public key must be an ECDSA public key")
-	}
-	*pub = ecdsaX509PubKey(*eckey)
-	return nil
-}
-
-type ecdsaX5Chain []*x509.Certificate
-
-var _ PublicKey = (*ecdsaX5Chain)(nil)
-
-func (pub ecdsaX5Chain) Type() KeyType {
-	eckey, ok := pub.Public().(*ecdsa.PublicKey)
-	if !ok {
-		panic("public key of leaf certificate (last cert in chain) must be an ECDSA public key")
-	}
-	switch eckey.Curve {
-	case elliptic.P256():
-		return Secp256r1KeyType
-	case elliptic.P384():
-		return Secp384r1KeyType
-	default:
-		panic("unsupported curve: " + eckey.Params().Name)
-	}
-
-}
-
-func (pub ecdsaX5Chain) Encoding() KeyEncoding { return X5ChainKeyEnc }
-
-func (pub ecdsaX5Chain) Public() crypto.PublicKey {
-	if len(pub) == 0 {
-		return nil
-	}
-	return pub[len(pub)-1].PublicKey
-}
-
-func (pub ecdsaX5Chain) MarshalCBOR() ([]byte, error) {
-	rawCerts := make([][]byte, len(pub))
-	for i, cert := range pub {
-		rawCerts[i] = cert.Raw
-	}
-	return cbor.Marshal(struct {
-		Type  KeyType
-		Enc   KeyEncoding
-		Certs [][]byte
-	}{
-		Type:  pub.Type(),
-		Enc:   pub.Encoding(),
-		Certs: rawCerts,
-	})
-}
-
-func (pub *ecdsaX5Chain) UnmarshalCBOR(data []byte) error {
-	var rawCerts [][]byte
-	if err := cbor.Unmarshal(data, &rawCerts); err != nil {
-		return err
-	}
-	certs := make([]*x509.Certificate, len(rawCerts))
-	for i, raw := range rawCerts {
-		cert, err := x509.ParseCertificate(raw)
-		if err != nil {
-			return fmt.Errorf("error parsing certificate [i=%d] of X5CHAIN: %w", i, err)
-		}
-		certs[i] = cert
-	}
-	*pub = ecdsaX5Chain(certs)
-	return nil
 }

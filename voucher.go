@@ -156,7 +156,7 @@ func (v *Voucher) VerifyCertChain(roots *x509.CertPool) error {
 // VerifyEntries checks the COSE signature of every voucher entry payload using
 // the manufacturer public key from the header.
 func (v *Voucher) VerifyEntries() error {
-	key := v.Header.Val.PublicKey.Public()
+	key := v.Header.Val.PublicKey.Public
 	for i, entry := range v.Entries {
 		if ok, err := entry.Untag().Verify(key, nil); err != nil {
 			return fmt.Errorf("COSE signature for entry %d could not be verified: %w", i, err)
