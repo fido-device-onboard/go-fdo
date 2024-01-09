@@ -1473,3 +1473,24 @@ func TestDecodeBstr(t *testing.T) {
 		}
 	})
 }
+
+func TestDecodeFixedArray(t *testing.T) {
+	for _, test := range []struct {
+		input  []byte
+		expect [4]byte
+	}{
+		{input: []byte{0x40}, expect: [4]byte{0x00, 0x00, 0x00, 0x00}},
+		{input: []byte{0x44, 0x01, 0x02, 0x03, 0x04}, expect: [4]byte{0x01, 0x02, 0x03, 0x04}},
+	} {
+		var got [4]byte
+		if err := cbor.Unmarshal(test.input, &got); err != nil {
+			t.Errorf("error unmarshaling % x: %v", test.input, err)
+		} else if !bytes.Equal(got[:], test.expect[:]) {
+			t.Errorf("unmarshaling % x; expected % x, got % x", test.input, test.expect, got)
+		}
+	}
+}
+
+func TestDecodeNewtype(t *testing.T) {
+	// TODO: Newtypes for each major
+}
