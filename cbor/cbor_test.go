@@ -706,6 +706,23 @@ func TestDecodeAny(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("simple", func(t *testing.T) {
+		var got any
+		for _, test := range []struct {
+			input  []byte
+			expect int64
+		}{
+			{input: []byte{0xe1}, expect: 1},
+			{input: []byte{0xe5}, expect: 5},
+		} {
+			if err := cbor.Unmarshal(test.input, &got); err != nil {
+				t.Errorf("error unmarshaling % x: %v", test.input, err)
+			} else if got.(int64) != test.expect {
+				t.Errorf("unmarshaling % x; expected %v, got %v", test.input, test.expect, got)
+			}
+		}
+	})
 }
 
 func TestDecodeInt(t *testing.T) {
@@ -1481,6 +1498,7 @@ func TestDecodeFixedArray(t *testing.T) {
 			expect [4]byte
 		}{
 			{input: []byte{0x40}, expect: [4]byte{0x00, 0x00, 0x00, 0x00}},
+			{input: []byte{0x42, 0x01, 0x02}, expect: [4]byte{0x01, 0x02, 0x00, 0x00}},
 			{input: []byte{0x44, 0x01, 0x02, 0x03, 0x04}, expect: [4]byte{0x01, 0x02, 0x03, 0x04}},
 		} {
 			got := [4]byte{0x01, 0x01, 0x01, 0x01}
@@ -1536,5 +1554,49 @@ func TestDecodeFixedArray(t *testing.T) {
 }
 
 func TestDecodeNewtype(t *testing.T) {
+	t.Run("uint newtype", func(t *testing.T) {
+		type myUint uint
+		for _, test := range []struct {
+			input  []byte
+			expect myUint
+		}{
+			{
+				input:  []byte{0x19, 0x03, 0xe7},
+				expect: myUint(999),
+			},
+		} {
+			var got myUint
+			if err := cbor.Unmarshal(test.input, &got); err != nil {
+				t.Errorf("error unmarshaling % x: %v", test.input, err)
+			} else if got != test.expect {
+				t.Errorf("unmarshaling % x; expected %d, got %d", test.input, test.expect, got)
+			}
+		}
+	})
+
+	t.Run("int newtype", func(t *testing.T) {
+		type myInt int
+		for _, test := range []struct {
+			input  []byte
+			expect myInt
+		}{
+			{
+				input:  []byte{0x19, 0x03, 0xe7},
+				expect: myInt(999),
+			},
+			{
+				input:  []byte{0x38, 0x64},
+				expect: myInt(-101),
+			},
+		} {
+			var got myInt
+			if err := cbor.Unmarshal(test.input, &got); err != nil {
+				t.Errorf("error unmarshaling % x: %v", test.input, err)
+			} else if got != test.expect {
+				t.Errorf("unmarshaling % x; expected %d, got %d", test.input, test.expect, got)
+			}
+		}
+	})
+
 	// TODO: Newtypes for each major
 }

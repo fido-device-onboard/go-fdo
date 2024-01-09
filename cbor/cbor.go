@@ -553,28 +553,11 @@ func (d *Decoder) decodePositive(rv reflect.Value, additional []byte) error {
 
 	// Note that setting cannot be done with reflect.Value.SetXXX because the
 	// reflect.Value may be an interface and its Elem() is not settable.
-	switch kind {
-	case reflect.Uint:
-		rv.Set(reflect.ValueOf(uint(u64)))
-	case reflect.Uint8:
-		rv.Set(reflect.ValueOf(uint8(u64)))
-	case reflect.Uint16:
-		rv.Set(reflect.ValueOf(uint16(u64)))
-	case reflect.Uint32:
-		rv.Set(reflect.ValueOf(uint32(u64)))
-	case reflect.Uint64:
-		rv.Set(reflect.ValueOf(uint64(u64)))
-	case reflect.Int:
-		rv.Set(reflect.ValueOf(int(u64)))
-	case reflect.Int8:
-		rv.Set(reflect.ValueOf(int8(u64)))
-	case reflect.Int16:
-		rv.Set(reflect.ValueOf(int16(u64)))
-	case reflect.Int32:
-		rv.Set(reflect.ValueOf(int32(u64)))
-	case reflect.Int64:
-		rv.Set(reflect.ValueOf(int64(u64)))
+	newVal := reflect.ValueOf(u64)
+	if rv.Kind() == reflect.Interface {
+		newVal = newVal.Convert(rv.Elem().Type())
 	}
+	rv.Set(newVal.Convert(rv.Type()))
 	return nil
 }
 
@@ -609,18 +592,11 @@ func (d *Decoder) decodeNegative(rv reflect.Value, additional []byte) error {
 
 	// Note that setting cannot be done with reflect.Value.SetXXX because the
 	// reflect.Value may be an interface and its Elem() is not settable.
-	switch kind {
-	case reflect.Int:
-		rv.Set(reflect.ValueOf(-int(u64 + 1)))
-	case reflect.Int8:
-		rv.Set(reflect.ValueOf(-int8(u64 + 1)))
-	case reflect.Int16:
-		rv.Set(reflect.ValueOf(-int16(u64 + 1)))
-	case reflect.Int32:
-		rv.Set(reflect.ValueOf(-int32(u64 + 1)))
-	case reflect.Int64:
-		rv.Set(reflect.ValueOf(-int64(u64 + 1)))
+	newVal := reflect.ValueOf(-u64 - 1)
+	if rv.Kind() == reflect.Interface {
+		newVal = newVal.Convert(rv.Elem().Type())
 	}
+	rv.Set(newVal.Convert(rv.Type()))
 	return nil
 }
 
@@ -890,6 +866,7 @@ func (d *Decoder) decodeSimple(rv reflect.Value, lowFiveBits byte, additional []
 		return ErrUnsupportedType{typeName: "decoding float"}
 	default:
 		if lowFiveBits <= oneByteAdditional {
+			allocateInterface(rv, reflect.TypeOf(int64(0)))
 			return d.decodePositive(rv, additional)
 		}
 		return ErrUnsupportedType{typeName: "decoding reserved simple value"}
