@@ -197,10 +197,9 @@ func (v *Voucher) VerifyCertChainHash() error {
 		return fmt.Errorf("unsupported hmac algorithm: %v", cchash.Algorithm)
 	}
 
-	enc := cbor.NewEncoder(digest)
 	for _, cert := range *v.CertChain {
-		if err := enc.Encode(cert); err != nil {
-			return fmt.Errorf("error computing hash: marshaling certificate: %w", err)
+		if _, err := digest.Write(cert.Raw); err != nil {
+			return fmt.Errorf("error computing hash: %w", err)
 		}
 	}
 
@@ -212,14 +211,16 @@ func (v *Voucher) VerifyCertChainHash() error {
 
 // VerifyEntries checks the COSE signature of every voucher entry payload using
 // the manufacturer public key from the header.
-func (v *Voucher) VerifyEntries() error {
-	key := v.Header.Val.ManufacturerKey.Public
+func (v *Voucher) VerifyEntries(mfgPubKeyHash Hash) error {
+	prevOwnerKey := v.Header.Val.ManufacturerKey.Public
 	for i, entry := range v.Entries {
-		if ok, err := entry.Untag().Verify(key, nil); err != nil {
+		payload := entry.Untag()
+		if ok, err := payload.Verify(prevOwnerKey, nil); err != nil {
 			return fmt.Errorf("COSE signature for entry %d could not be verified: %w", i, err)
 		} else if !ok {
-			return fmt.Errorf("COSE signature for entry %d did not match manufacturer key", i)
+			return fmt.Errorf("%w: COSE signature for entry %d did not match previous owner key", ErrCryptoVerifyFailed, i)
 		}
+		prevOwnerKey = payload.Payload.Val.PublicKey.Public
 	}
 	return nil
 }
