@@ -1497,10 +1497,35 @@ func TestDecodeFixedArray(t *testing.T) {
 			input  []byte
 			expect [4]int
 		}{
-			{input: []byte{0x80}, expect: [4]int{0x00, 0x00, 0x00, 0x00}},
+			{input: []byte{0x80}, expect: [4]int{0, 0, 0, 0}},
+			{input: []byte{0x82, 0x01, 0x02}, expect: [4]int{1, 2, 0, 0}},
 			{input: []byte{0x84, 0x01, 0x02, 0x03, 0x04}, expect: [4]int{1, 2, 3, 4}},
 		} {
 			got := [4]int{4, 3, 2, 1}
+			if err := cbor.Unmarshal(test.input, &got); err != nil {
+				t.Errorf("error unmarshaling % x: %v", test.input, err)
+			} else if !reflect.DeepEqual(got[:], test.expect[:]) {
+				t.Errorf("unmarshaling % x; expected % x, got % x", test.input, test.expect, got)
+			}
+		}
+	})
+
+	t.Run("pointer array", func(t *testing.T) {
+		var (
+			one   = 1
+			two   = 2
+			three = 3
+			four  = 4
+		)
+		for _, test := range []struct {
+			input  []byte
+			expect [4]*int
+		}{
+			{input: []byte{0x80}, expect: [4]*int{nil, nil, nil, nil}},
+			{input: []byte{0x82, 0x01, 0x02}, expect: [4]*int{&one, &two, nil, nil}},
+			{input: []byte{0x84, 0x01, 0x02, 0x03, 0x04}, expect: [4]*int{&one, &two, &three, &four}},
+		} {
+			got := [4]*int{nil, nil, nil, nil}
 			if err := cbor.Unmarshal(test.input, &got); err != nil {
 				t.Errorf("error unmarshaling % x: %v", test.input, err)
 			} else if !reflect.DeepEqual(got[:], test.expect[:]) {
