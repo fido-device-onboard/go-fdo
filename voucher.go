@@ -4,6 +4,7 @@
 package fdo
 
 import (
+	"crypto"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/sha512"
@@ -221,6 +222,19 @@ func (v *Voucher) VerifyEntries() error {
 		}
 	}
 	return nil
+}
+
+// DevicePublicKey extracts the device's public key from from the certificate
+// chain. Before calling this method, the voucher must be fully verified. For
+// certain key types, such as Intel EPID, the public key will be nil.
+func (v *Voucher) DevicePublicKey() (crypto.PublicKey, error) {
+	if v.CertChain == nil {
+		return nil, nil
+	}
+	if len(*v.CertChain) == 0 {
+		return nil, errors.New("empty cert chain")
+	}
+	return (*v.CertChain)[len(*v.CertChain)-1].PublicKey, nil
 }
 
 // VoucherHeader is the Ownership Voucher header, also used in TO1 protocol.
