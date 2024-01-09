@@ -161,7 +161,7 @@ func newHeaderMap(unmarshaled map[Label]any) (headerMap, error) {
 
 // serializedOrEmptyHeaderMap encodes to/from a CBOR byte string which either
 // contains a serialized non-empty map or is empty itself.
-type serializedOrEmptyHeaderMap cbor.Bstr[omitEmpty[headerMap]]
+type serializedOrEmptyHeaderMap = cbor.Bstr[omitEmpty[headerMap]]
 
 // newSerializedOrEmptyHeaderMap marshals the values of a header map and wraps
 // it in a SerializedOrEmptyHeaders type.
@@ -174,7 +174,7 @@ func newSerializedOrEmptyHeaderMap(unmarshaled map[Label]any) (serializedOrEmpty
 	}, err
 }
 
-func (m serializedOrEmptyHeaderMap) Get(l Label) (val cbor.RawBytes, ok bool) {
+func mapGet(m serializedOrEmptyHeaderMap, l Label) (val cbor.RawBytes, ok bool) {
 	if m.Val.Val == nil {
 		return nil, false
 	}
@@ -182,7 +182,7 @@ func (m serializedOrEmptyHeaderMap) Get(l Label) (val cbor.RawBytes, ok bool) {
 	return
 }
 
-func (m *serializedOrEmptyHeaderMap) Set(l Label, b cbor.RawBytes) {
+func mapSet(m *serializedOrEmptyHeaderMap, l Label, b cbor.RawBytes) {
 	if m.Val.Val == nil {
 		m.Val.Val = make(headerMap)
 	}

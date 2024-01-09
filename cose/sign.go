@@ -129,8 +129,8 @@ func (s1 *Sign1[T]) Sign(key crypto.PrivateKey, payload []byte) error {
 	}
 
 	// Set signature and algorithm ID for top-level signing structure
-	algID, _ := sig.Protected.Get(AlgLabel)
-	s1.Protected.Set(AlgLabel, algID)
+	algID, _ := mapGet(sig.Protected, AlgLabel)
+	mapSet(&s1.Protected, AlgLabel, algID)
 	s1.Signature = sig.Signature
 
 	return nil
@@ -195,7 +195,7 @@ func (s1 *Sign1[T]) Verify(key crypto.PublicKey, payload []byte) (bool, error) {
 // Algorithm returns the ID of the algorithm set in the protected headers. If
 // no algorithm is set or the value is not an int64, then 0 is returned.
 func algorithm(protected serializedOrEmptyHeaderMap) (id int64) {
-	data, ok := protected.Get(AlgLabel)
+	data, ok := mapGet(protected, AlgLabel)
 	if !ok {
 		return 0
 	}
@@ -221,7 +221,7 @@ func sign(key crypto.PrivateKey, sig signature) (*Signature, error) {
 	default:
 		return nil, fmt.Errorf("unsupported curve: %s", priv.Params().Name)
 	}
-	sig.BodyProtected.Set(AlgLabel, algID)
+	mapSet(&sig.BodyProtected, AlgLabel, algID)
 
 	// Serialize signature structure
 	data, err := cbor.Marshal(sig)
@@ -254,7 +254,7 @@ func sign(key crypto.PrivateKey, sig signature) (*Signature, error) {
 
 	// Return COSE_Signature structure with algorithm header and signed bytes
 	header := Header{}
-	header.Protected.Set(AlgLabel, algID)
+	mapSet(&header.Protected, AlgLabel, algID)
 	return &Signature{
 		Header:    header,
 		Signature: sigBytes,
