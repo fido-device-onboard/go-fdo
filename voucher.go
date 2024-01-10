@@ -194,7 +194,7 @@ func (v *Voucher) VerifyCertChainHash() error {
 	case Sha384Hash:
 		digest = sha512.New384()
 	default:
-		return fmt.Errorf("unsupported hmac algorithm: %v", cchash.Algorithm)
+		return fmt.Errorf("unsupported hash algorithm: %v", cchash.Algorithm)
 	}
 
 	for _, cert := range *v.CertChain {
@@ -209,19 +209,71 @@ func (v *Voucher) VerifyCertChainHash() error {
 	return nil
 }
 
-// VerifyEntries checks the COSE signature of every voucher entry payload using
-// the manufacturer public key from the header.
+// VerifyEntries checks the chain of signatures on each voucher entry payload
 func (v *Voucher) VerifyEntries(mfgPubKeyHash Hash) error {
-	prevOwnerKey := v.Header.Val.ManufacturerKey.Public
+	// Validate the manufacturer key by hash stored in device credential
+	var digest hash.Hash
+	switch mfgPubKeyHash.Algorithm {
+	case Sha256Hash:
+		digest = sha256.New()
+	case Sha384Hash:
+		digest = sha512.New384()
+	default:
+		return fmt.Errorf("unsupported hash algorithm for hashing manufacturer public key: %v", mfgPubKeyHash.Algorithm)
+	}
+	if err := cbor.NewEncoder(digest).Encode(v.Header.Val.ManufacturerKey.Body); err != nil {
+		return fmt.Errorf("error computing hash of manufacturer public key: %w", err)
+	}
+	if !hmac.Equal(digest.Sum(nil), mfgPubKeyHash.Value) {
+		return fmt.Errorf("%w: manufacturer public key hash did not match", ErrCryptoVerifyFailed)
+	}
+
+	// Validate each entry
+	mfgKey, err := v.Header.Val.ManufacturerKey.Public()
+	if err != nil {
+		return fmt.Errorf("error parsing manufacturer public key: %w", err)
+	}
+	var (
+		prevHash     hash.Hash
+		prevOwnerKey = mfgKey
+	)
 	for i, entry := range v.Entries {
-		payload := entry.Untag()
-		if ok, err := payload.Verify(prevOwnerKey, nil); err != nil {
+		entry := entry.Untag()
+
+		// Check payload has a valid COSE signature from the previous owner key
+		if ok, err := entry.Verify(prevOwnerKey, nil); err != nil {
 			return fmt.Errorf("COSE signature for entry %d could not be verified: %w", i, err)
 		} else if !ok {
 			return fmt.Errorf("%w: COSE signature for entry %d did not match previous owner key", ErrCryptoVerifyFailed, i)
 		}
-		prevOwnerKey = payload.Payload.Val.PublicKey.Public
+
+		// TODO:: Check payload's HeaderHash matches voucher header
+
+		// Check payload's PreviousHash matches the previous entry
+		if prevHash != nil && !hmac.Equal(prevHash.Sum(nil), entry.Payload.Val.PreviousHash.Value) {
+			return fmt.Errorf("%w: voucher entry payload %d hash did not match", ErrCryptoVerifyFailed, i-1)
+		}
+
+		// Set owner key for next iteration
+		prevOwnerKey, err = entry.Payload.Val.PublicKey.Public()
+		if err != nil {
+			return fmt.Errorf("error parsing public key of entry %d: %w", i-1, err)
+		}
+
+		// Hash payload for next iteration
+		switch alg := entry.Payload.Val.PreviousHash.Algorithm; alg {
+		case Sha256Hash:
+			prevHash = sha256.New()
+		case Sha384Hash:
+			prevHash = sha512.New384()
+		default:
+			return fmt.Errorf("unsupported hash algorithm for hashing voucher entry payload: %v", alg)
+		}
+		if err := cbor.NewEncoder(prevHash).Encode(entry.Payload.Val); err != nil {
+			return fmt.Errorf("error computing hash of voucher entry payload: %w", err)
+		}
 	}
+
 	return nil
 }
 

@@ -104,104 +104,57 @@ const (
 type PublicKey struct {
 	Type     KeyType
 	Encoding KeyEncoding
-	Public   crypto.PublicKey
+	Body     []byte
 
-	x5chain []*Certificate
+	key crypto.PublicKey
 }
 
-func (pub PublicKey) MarshalCBOR() ([]byte, error) {
+func (pub *PublicKey) Public() (crypto.PublicKey, error) {
+	if pub.key != nil {
+		return pub.key, nil
+	}
+
 	switch pub.Encoding {
 	case X509KeyEnc:
-		subjectPubKeyInfo, err := x509.MarshalPKIXPublicKey(pub.Public)
-		if err != nil {
-			return nil, err
-		}
-		return cbor.Marshal(struct {
-			Type KeyType
-			Enc  KeyEncoding
-			Body []byte
-		}{
-			Type: pub.Type,
-			Enc:  pub.Encoding,
-			Body: subjectPubKeyInfo,
-		})
-
-	case X5ChainKeyEnc:
-		return cbor.Marshal(struct {
-			Type  KeyType
-			Enc   KeyEncoding
-			Certs []*Certificate
-		}{
-			Type:  pub.Type,
-			Enc:   pub.Encoding,
-			Certs: pub.x5chain,
-		})
-
-	default:
-		return nil, fmt.Errorf("unsupported key encoding: %s", pub.Encoding)
-	}
-}
-
-func (pub *PublicKey) UnmarshalCBOR(data []byte) error {
-	var raw struct {
-		Type KeyType
-		Enc  KeyEncoding
-		Body []byte
-	}
-	if err := cbor.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-
-	switch raw.Enc {
-	case X509KeyEnc:
-		switch raw.Type {
+		switch pub.Type {
 		case Secp256r1KeyType, Secp384r1KeyType:
-			key, err := x509.ParsePKIXPublicKey(raw.Body)
+			key, err := x509.ParsePKIXPublicKey(pub.Body)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			eckey, ok := key.(*ecdsa.PublicKey)
 			if !ok {
-				return errors.New("public key must be an ECDSA public key")
+				return nil, errors.New("public key must be an ECDSA public key")
 			}
-			*pub = PublicKey{
-				Type:     raw.Type,
-				Encoding: raw.Enc,
-				Public:   eckey,
-			}
-			return nil
+			pub.key = eckey
+			return eckey, nil
 
 		default:
-			return fmt.Errorf("unsupported key type: %s", raw.Type)
+			return nil, fmt.Errorf("unsupported key type: %s", pub.Type)
 		}
 
 	case X5ChainKeyEnc:
-		switch raw.Type {
+		switch pub.Type {
 		case Secp256r1KeyType, Secp384r1KeyType:
 			var certs []*Certificate
-			if err := cbor.Unmarshal(raw.Body, &certs); err != nil {
-				return err
+			if err := cbor.Unmarshal(pub.Body, &certs); err != nil {
+				return nil, err
 			}
 			if len(certs) == 0 {
-				return errors.New("X5CHAIN key cannot be an empty certificate chain")
+				return nil, errors.New("X5CHAIN key cannot be an empty certificate chain")
 			}
 			eckey, ok := certs[len(certs)-1].PublicKey.(*ecdsa.PublicKey)
 			if !ok {
-				return errors.New("public key must be an ECDSA public key")
+				return nil, errors.New("public key must be an ECDSA public key")
 			}
-			*pub = PublicKey{
-				Type:     raw.Type,
-				Encoding: raw.Enc,
-				Public:   eckey,
-				x5chain:  certs,
-			}
-			return nil
+			pub.key = eckey
+			return eckey, nil
 
 		default:
-			return fmt.Errorf("unsupported key type: %s", raw.Type)
+			return nil, fmt.Errorf("unsupported key type: %s", pub.Type)
 		}
 
 	default:
-		return fmt.Errorf("unsupported key encoding: %s", raw.Enc)
+		return nil, fmt.Errorf("unsupported key encoding: %s", pub.Encoding)
 	}
 }
