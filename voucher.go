@@ -194,7 +194,7 @@ func (v *Voucher) VerifyCertChainHash() error {
 	case Sha384Hash:
 		digest = sha512.New384()
 	default:
-		return fmt.Errorf("unsupported hash algorithm: %v", cchash.Algorithm)
+		return fmt.Errorf("unsupported hash algorithm: %s", cchash.Algorithm)
 	}
 
 	for _, cert := range *v.CertChain {
@@ -236,7 +236,8 @@ func (v *Voucher) VerifyEntries(mfgPubKeyHash Hash) error {
 
 		// Check payload's HeaderHash matches voucher header as hash[GUID||DeviceInfo]
 		//
-		// TODO: Memoize result
+		// TODO: Memoize hash of header, since only the algorithm can change
+		// between entries
 		headerHash := entry.Payload.Val.HeaderHash
 		var headerDigest hash.Hash
 		switch alg := headerHash.Algorithm; alg {
@@ -245,7 +246,7 @@ func (v *Voucher) VerifyEntries(mfgPubKeyHash Hash) error {
 		case Sha384Hash:
 			headerDigest = sha512.New384()
 		default:
-			return fmt.Errorf("unsupported hash algorithm for hashing voucher header info: %v", alg)
+			return fmt.Errorf("unsupported hash algorithm for hashing voucher header info: %s", alg)
 		}
 		headerInfo := append(v.Header.Val.Guid[:], []byte(v.Header.Val.DeviceInfo)...)
 		if _, err := headerDigest.Write(headerInfo); err != nil {
@@ -273,7 +274,7 @@ func (v *Voucher) VerifyEntries(mfgPubKeyHash Hash) error {
 		case Sha384Hash:
 			prevHash = sha512.New384()
 		default:
-			return fmt.Errorf("unsupported hash algorithm for hashing voucher entry payload: %v", alg)
+			return fmt.Errorf("unsupported hash algorithm for hashing voucher entry payload: %s", alg)
 		}
 		if err := cbor.NewEncoder(prevHash).Encode(entry.Payload.Val); err != nil {
 			return fmt.Errorf("error computing hash of voucher entry payload: %w", err)
@@ -292,7 +293,7 @@ func verifyManufacturerKey(h Hash, key []byte) error {
 	case Sha384Hash:
 		digest = sha512.New384()
 	default:
-		return fmt.Errorf("unsupported hash algorithm for hashing manufacturer public key: %v", h.Algorithm)
+		return fmt.Errorf("unsupported hash algorithm for hashing manufacturer public key: %s", h.Algorithm)
 	}
 	if err := cbor.NewEncoder(digest).Encode(key); err != nil {
 		return fmt.Errorf("error computing hash of manufacturer public key: %w", err)

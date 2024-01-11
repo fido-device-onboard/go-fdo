@@ -61,6 +61,20 @@ const (
 	HmacSha384Hash HashAlg = 6
 )
 
+func (alg HashAlg) String() string {
+	switch alg {
+	case Sha256Hash:
+		return "Sha256Hash"
+	case Sha384Hash:
+		return "Sha384Hash"
+	case HmacSha256Hash:
+		return "HmacSha256Hash"
+	case HmacSha384Hash:
+		return "HmacSha384Hash"
+	}
+	panic("HashAlg missing switch case(s)")
+}
+
 // SigInfo is used to encode parameters for the device attestation signature.
 //
 // SigInfo flows in both directions, initially from the protocol client
