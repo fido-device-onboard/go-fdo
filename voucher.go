@@ -211,28 +211,15 @@ func (v *Voucher) VerifyCertChainHash() error {
 
 // VerifyEntries checks the chain of signatures on each voucher entry payload
 func (v *Voucher) VerifyEntries(mfgPubKeyHash Hash) error {
-	// Validate the manufacturer key by hash stored in device credential
-	var digest hash.Hash
-	switch mfgPubKeyHash.Algorithm {
-	case Sha256Hash:
-		digest = sha256.New()
-	case Sha384Hash:
-		digest = sha512.New384()
-	default:
-		return fmt.Errorf("unsupported hash algorithm for hashing manufacturer public key: %v", mfgPubKeyHash.Algorithm)
-	}
-	if err := cbor.NewEncoder(digest).Encode(v.Header.Val.ManufacturerKey.Body); err != nil {
-		return fmt.Errorf("error computing hash of manufacturer public key: %w", err)
-	}
-	if !hmac.Equal(digest.Sum(nil), mfgPubKeyHash.Value) {
-		return fmt.Errorf("%w: manufacturer public key hash did not match", ErrCryptoVerifyFailed)
-	}
-
-	// Validate each entry
 	mfgKey, err := v.Header.Val.ManufacturerKey.Public()
 	if err != nil {
 		return fmt.Errorf("error parsing manufacturer public key: %w", err)
 	}
+	if err := verifyManufacturerKey(mfgPubKeyHash, v.Header.Val.ManufacturerKey.Body); err != nil {
+		return err
+	}
+
+	// Validate each entry
 	var (
 		prevHash     hash.Hash
 		prevOwnerKey = mfgKey
@@ -247,11 +234,30 @@ func (v *Voucher) VerifyEntries(mfgPubKeyHash Hash) error {
 			return fmt.Errorf("%w: COSE signature for entry %d did not match previous owner key", ErrCryptoVerifyFailed, i)
 		}
 
-		// TODO:: Check payload's HeaderHash matches voucher header
+		// Check payload's HeaderHash matches voucher header as hash[GUID||DeviceInfo]
+		//
+		// TODO: Memoize result
+		headerHash := entry.Payload.Val.HeaderHash
+		var headerDigest hash.Hash
+		switch alg := headerHash.Algorithm; alg {
+		case Sha256Hash:
+			headerDigest = sha256.New()
+		case Sha384Hash:
+			headerDigest = sha512.New384()
+		default:
+			return fmt.Errorf("unsupported hash algorithm for hashing voucher header info: %v", alg)
+		}
+		headerInfo := append(v.Header.Val.Guid[:], []byte(v.Header.Val.DeviceInfo)...)
+		if _, err := headerDigest.Write(headerInfo); err != nil {
+			return fmt.Errorf("error computing hash of header info: %w", err)
+		}
+		if !hmac.Equal(headerDigest.Sum(nil), headerHash.Value) {
+			return fmt.Errorf("%w: voucher entry payload %d header hash did not match", ErrCryptoVerifyFailed, i-1)
+		}
 
 		// Check payload's PreviousHash matches the previous entry
 		if prevHash != nil && !hmac.Equal(prevHash.Sum(nil), entry.Payload.Val.PreviousHash.Value) {
-			return fmt.Errorf("%w: voucher entry payload %d hash did not match", ErrCryptoVerifyFailed, i-1)
+			return fmt.Errorf("%w: voucher entry payload %d previous hash did not match", ErrCryptoVerifyFailed, i-1)
 		}
 
 		// Set owner key for next iteration
@@ -274,6 +280,26 @@ func (v *Voucher) VerifyEntries(mfgPubKeyHash Hash) error {
 		}
 	}
 
+	return nil
+}
+
+// Validate the manufacturer key by hash stored in device credential
+func verifyManufacturerKey(h Hash, key []byte) error {
+	var digest hash.Hash
+	switch h.Algorithm {
+	case Sha256Hash:
+		digest = sha256.New()
+	case Sha384Hash:
+		digest = sha512.New384()
+	default:
+		return fmt.Errorf("unsupported hash algorithm for hashing manufacturer public key: %v", h.Algorithm)
+	}
+	if err := cbor.NewEncoder(digest).Encode(key); err != nil {
+		return fmt.Errorf("error computing hash of manufacturer public key: %w", err)
+	}
+	if !hmac.Equal(digest.Sum(nil), h.Value) {
+		return fmt.Errorf("%w: manufacturer public key hash did not match", ErrCryptoVerifyFailed)
+	}
 	return nil
 }
 
