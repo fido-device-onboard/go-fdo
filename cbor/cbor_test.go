@@ -1491,6 +1491,59 @@ func TestDecodeBstr(t *testing.T) {
 	})
 }
 
+func TestEncodeFixedArray(t *testing.T) {
+	t.Run("byte array", func(t *testing.T) {
+		for _, test := range []struct {
+			input  [4]byte
+			expect []byte
+		}{
+			{expect: []byte{0x44, 0x01, 0x02, 0x03, 0x04}, input: [4]byte{0x01, 0x02, 0x03, 0x04}},
+		} {
+			if got, err := cbor.Marshal(test.input); err != nil {
+				t.Errorf("error marshaling % x: %v", test.input, err)
+			} else if !bytes.Equal(got[:], test.expect[:]) {
+				t.Errorf("marshaling % x; expected % x, got % x", test.input, test.expect, got)
+			}
+		}
+	})
+
+	t.Run("int array", func(t *testing.T) {
+		for _, test := range []struct {
+			input  [4]int
+			expect []byte
+		}{
+			{expect: []byte{0x84, 0x01, 0x02, 0x03, 0x04}, input: [4]int{1, 2, 3, 4}},
+		} {
+			if got, err := cbor.Marshal(test.input); err != nil {
+				t.Errorf("error marshaling % x: %v", test.input, err)
+			} else if !reflect.DeepEqual(got[:], test.expect[:]) {
+				t.Errorf("marshaling % x; expected % x, got % x", test.input, test.expect, got)
+			}
+		}
+	})
+
+	t.Run("pointer array", func(t *testing.T) {
+		var (
+			one   = 1
+			two   = 2
+			three = 3
+			four  = 4
+		)
+		for _, test := range []struct {
+			input  [4]*int
+			expect []byte
+		}{
+			{expect: []byte{0x84, 0x01, 0x02, 0x03, 0x04}, input: [4]*int{&one, &two, &three, &four}},
+		} {
+			if got, err := cbor.Marshal(test.input); err != nil {
+				t.Errorf("error marshaling % x: %v", test.input, err)
+			} else if !reflect.DeepEqual(got[:], test.expect[:]) {
+				t.Errorf("marshaling % x; expected % x, got % x", test.input, test.expect, got)
+			}
+		}
+	})
+}
+
 func TestDecodeFixedArray(t *testing.T) {
 	t.Run("byte array", func(t *testing.T) {
 		for _, test := range []struct {

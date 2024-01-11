@@ -12,6 +12,8 @@ import (
 // [TPM Draft Spec](https://fidoalliance.org/specs/FDO/securing-fdo-in-tpm-v1.0-rd-20231010/securing-fdo-in-tpm-v1.0-rd-20231010.html).
 type DeviceCredential struct {
 	fdo.DeviceCredential
+	DeviceKeyType   uint64
+	DeviceKeyHandle uint64
 
 	// Path to the TPM resource manager
 	TpmRmPath string `cbor:"-"`

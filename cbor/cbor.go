@@ -965,7 +965,7 @@ func (e *Encoder) Encode(v any) error {
 		return e.encodeTag(v.(TagData))
 	case rv.CanInt() || rv.CanUint():
 		return e.encodeNumber(rv)
-	case (rv.Kind() == reflect.Array || rv.Kind() == reflect.Slice) && rv.Type().Elem().Kind() == reflect.Uint8:
+	case rv.Kind() == reflect.Slice && rv.Type().Elem().Kind() == reflect.Uint8:
 		return e.encodeTextOrBinary(byteStringMajorType, rv.Bytes())
 	case rv.Kind() == reflect.String:
 		return e.encodeTextOrBinary(textStringMajorType, []byte(rv.String()))
@@ -1077,9 +1077,15 @@ func (e *Encoder) encodeTextOrBinary(majorType byte, b []byte) error {
 }
 
 func (e *Encoder) encodeArray(size int, get func(int) reflect.Value) error {
+	// Set the major type to byte string if the underlying data is bytes
+	major := arrayMajorType
+	if size > 0 && get(0).Kind() == reflect.Uint8 {
+		major = byteStringMajorType
+	}
+
 	// Write the length as additional info
 	info := u64Bytes(uint64(size))
-	if err := e.write(additionalInfo(arrayMajorType, info)); err != nil {
+	if err := e.write(additionalInfo(major, info)); err != nil {
 		return err
 	}
 

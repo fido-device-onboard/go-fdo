@@ -15,7 +15,7 @@ import (
 )
 
 // DeviceCredential is non-normative, but the [TPM Draft Spec] proposes a CBOR
-// encoding, so that will be used.
+// encoding, so that will be used, excluding the key type/handle.
 //
 //	DCTPM = [
 //	    DCProtVer: protver,
@@ -29,22 +29,20 @@ import (
 //
 // [TPM Draft Spec]: https://fidoalliance.org/specs/FDO/securing-fdo-in-tpm-v1.0-rd-20231010/securing-fdo-in-tpm-v1.0-rd-20231010.html
 type DeviceCredential struct {
-	Version         uint16
-	DeviceInfo      string
-	Guid            Guid
-	RvInfo          [][]RvVariable
-	PublicKeyHash   Hash
-	DeviceKeyType   uint64
-	DeviceKeyHandle uint64
+	Version       uint16
+	DeviceInfo    string
+	Guid          Guid
+	RvInfo        [][]RvVariable
+	PublicKeyHash Hash
 }
 
 // DeviceCredentialBlob contains all device state, including both public and private
 // parts of keys and secrets.
 type DeviceCredentialBlob struct {
+	Active bool
 	DeviceCredential
 
-	Active     bool
-	HmacType   HashAlg
+	// Secrets that would otherwise be stored inside a TPM or other enclave.
 	HmacSecret []byte
 	PrivateKey []byte // PKCS#8
 }
