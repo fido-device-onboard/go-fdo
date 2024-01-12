@@ -4,12 +4,14 @@
 package fdo_test
 
 import (
+	"bytes"
 	"encoding/pem"
 	"os"
 	"testing"
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/cose"
 )
 
 /*
@@ -35,7 +37,7 @@ Test data was generated with https://github.com/fdo-rs/fido-device-onboard-rs
 	../target/release/fdo-owner-tool initialize-device --manufacturer-cert ./mfg.pem --device-cert-ca-private-key dev_ca.key --device-cert-ca-chain dev_ca.pem --rendezvous-info ./rvinfo.yml go.fdo.example ov.pem dc.bin
 */
 
-func readVoucher(t *testing.T) *fdo.Voucher {
+func voucherBytes(t *testing.T) []byte {
 	b, err := os.ReadFile("testdata/ov.pem")
 	if err != nil {
 		t.Fatalf("error opening voucher test data: %v", err)
@@ -44,12 +46,52 @@ func readVoucher(t *testing.T) *fdo.Voucher {
 	if len(more) > 0 {
 		t.Fatal("voucher PEM contained unparsed data")
 	}
+	return blk.Bytes
+}
+
+func TestVoucherDeterministic(t *testing.T) {
+	b := voucherBytes(t)
 
 	var ov fdo.Voucher
-	if err := cbor.Unmarshal(blk.Bytes, &ov); err != nil {
+	if err := cbor.Unmarshal(b, &ov); err != nil {
 		t.Fatalf("error parsing voucher test data: %v", err)
 	}
-	return &ov
+
+	// Try marshaling again to ensure determinism
+	if b1, err := cbor.Marshal(ov); err != nil {
+		t.Fatalf("error marshaling voucher: %v", err)
+	} else if !bytes.Equal(b, b1) {
+		t.Fatalf("marshaled voucher does not equal original voucher data:\n\noriginal: %x\n\nmarshaled: %x", b, b1)
+	}
+}
+
+func TestVoucherHeaderDeterministic(t *testing.T) {
+	b := voucherBytes(t)
+
+	var ov struct {
+		Version   uint16
+		Header    cbor.Bstr[cbor.RawBytes]
+		Hmac      fdo.Hmac
+		CertChain *[]*fdo.Certificate
+		Entries   []cose.Sign1Tag[fdo.VoucherEntryPayload]
+	}
+	if err := cbor.Unmarshal(b, &ov); err != nil {
+		t.Fatalf("error parsing voucher test data: %v", err)
+	}
+
+	// Unmarshal voucher header
+	h1 := []byte(ov.Header.Val)
+	var ovh fdo.VoucherHeader
+	if err := cbor.Unmarshal(h1, &ovh); err != nil {
+		t.Fatalf("error parsing voucher header test data: %v", err)
+	}
+
+	// Try marshaling again to ensure determinism
+	if h2, err := cbor.Marshal(ovh); err != nil {
+		t.Fatalf("error marshaling voucher: %v", err)
+	} else if !bytes.Equal(h1, h2) {
+		t.Fatalf("marshaled voucher does not equal original voucher data:\n\noriginal: %x\n\nmarshaled: %x", h1, h2)
+	}
 }
 
 func readCredential(t *testing.T) *fdo.DeviceCredentialBlob {
@@ -75,7 +117,11 @@ func readCredential(t *testing.T) *fdo.DeviceCredentialBlob {
 }
 
 func TestVerifyVoucher(t *testing.T) {
-	ov := readVoucher(t)
+	var ov fdo.Voucher
+	if err := cbor.Unmarshal(voucherBytes(t), &ov); err != nil {
+		t.Fatalf("error parsing voucher test data: %v", err)
+	}
+
 	cred := readCredential(t)
 
 	if err := ov.VerifyHeader(cred); err != nil {
