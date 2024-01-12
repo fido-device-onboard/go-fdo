@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/pem"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/fido-device-onboard/go-fdo"
@@ -37,20 +38,20 @@ Test data was generated with https://github.com/fdo-rs/fido-device-onboard-rs
 	../target/release/fdo-owner-tool initialize-device --manufacturer-cert ./mfg.pem --device-cert-ca-private-key dev_ca.key --device-cert-ca-chain dev_ca.pem --rendezvous-info ./rvinfo.yml go.fdo.example ov.pem dc.bin
 */
 
-func voucherBytes(t *testing.T) []byte {
-	b, err := os.ReadFile("testdata/ov.pem")
+func voucherBytes(t *testing.T, basename string) []byte {
+	b, err := os.ReadFile(filepath.Join("testdata", basename))
 	if err != nil {
 		t.Fatalf("error opening voucher test data: %v", err)
 	}
-	blk, more := pem.Decode(b)
-	if len(more) > 0 {
-		t.Fatal("voucher PEM contained unparsed data")
+	blk, _ := pem.Decode(b)
+	if blk == nil {
+		t.Fatal("voucher contained invalid PEM data")
 	}
 	return blk.Bytes
 }
 
 func TestVoucherDeterministic(t *testing.T) {
-	b := voucherBytes(t)
+	b := voucherBytes(t, "ov.pem")
 
 	var ov fdo.Voucher
 	if err := cbor.Unmarshal(b, &ov); err != nil {
@@ -66,7 +67,7 @@ func TestVoucherDeterministic(t *testing.T) {
 }
 
 func TestVoucherHeaderDeterministic(t *testing.T) {
-	b := voucherBytes(t)
+	b := voucherBytes(t, "ov.pem")
 
 	var ov struct {
 		Version   uint16
@@ -116,9 +117,9 @@ func readCredential(t *testing.T) *fdo.DeviceCredentialBlob {
 	}
 }
 
-func TestVerifyVoucher(t *testing.T) {
+func TestVerifyUnextendedVoucher(t *testing.T) {
 	var ov fdo.Voucher
-	if err := cbor.Unmarshal(voucherBytes(t), &ov); err != nil {
+	if err := cbor.Unmarshal(voucherBytes(t, "ov.pem"), &ov); err != nil {
 		t.Fatalf("error parsing voucher test data: %v", err)
 	}
 
@@ -136,7 +137,11 @@ func TestVerifyVoucher(t *testing.T) {
 		t.Error("error verifying voucher cert chain hash", err)
 	}
 
-	if err := ov.VerifyEntries(cred.PublicKeyHash); err != nil {
+	if err := ov.VerifyManufacturerKey(cred.PublicKeyHash); err != nil {
+		t.Error("error verifying voucher created by manufacturer key", err)
+	}
+
+	if err := ov.VerifyEntries(); err != nil {
 		t.Error("error verifying voucher entries", err)
 	}
 }

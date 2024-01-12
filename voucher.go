@@ -209,18 +209,33 @@ func (v *Voucher) VerifyCertChainHash() error {
 	return nil
 }
 
-// VerifyEntries checks the chain of signatures on each voucher entry payload
-func (v *Voucher) VerifyEntries(mfgPubKeyHash Hash) error {
+// VerifyManufacturerKey by using a public key hash (generally stored as part
+// of the device credential).
+func (v *Voucher) VerifyManufacturerKey(keyHash Hash) error {
+	var digest hash.Hash
+	switch keyHash.Algorithm {
+	case Sha256Hash:
+		digest = sha256.New()
+	case Sha384Hash:
+		digest = sha512.New384()
+	default:
+		return fmt.Errorf("unsupported hash algorithm for hashing manufacturer public key: %s", keyHash.Algorithm)
+	}
+	if err := cbor.NewEncoder(digest).Encode(v.Header.Val.ManufacturerKey); err != nil {
+		return fmt.Errorf("error computing hash of manufacturer public key: %w", err)
+	}
+	if !hmac.Equal(digest.Sum(nil), keyHash.Value) {
+		return fmt.Errorf("%w: manufacturer public key hash did not match", ErrCryptoVerifyFailed)
+	}
+	return nil
+}
+
+// VerifyEntries checks the chain of signatures on each voucher entry payload.
+func (v *Voucher) VerifyEntries() error {
 	// Parse the public key from the voucher header
 	mfgKey, err := v.Header.Val.ManufacturerKey.Public()
 	if err != nil {
 		return fmt.Errorf("error parsing manufacturer public key: %w", err)
-	}
-
-	// Verify the manufacturer using a public key hash (generally stored as
-	// part of the device credential)
-	if err := verifyManufacturerKey(mfgPubKeyHash, v.Header.Val.ManufacturerKey); err != nil {
-		return err
 	}
 
 	// Voucher may have never been extended since manufacturing
@@ -297,26 +312,6 @@ func validateNextEntry(prevOwnerKey crypto.PublicKey, prevHash hash.Hash, header
 
 	// Validate the next entry recursively
 	return validateNextEntry(ownerKey, payloadHash, headerInfo, i+1, entries[1:])
-}
-
-// Validate the manufacturer key by hash stored in device credential
-func verifyManufacturerKey(h Hash, key any) error {
-	var digest hash.Hash
-	switch h.Algorithm {
-	case Sha256Hash:
-		digest = sha256.New()
-	case Sha384Hash:
-		digest = sha512.New384()
-	default:
-		return fmt.Errorf("unsupported hash algorithm for hashing manufacturer public key: %s", h.Algorithm)
-	}
-	if err := cbor.NewEncoder(digest).Encode(key); err != nil {
-		return fmt.Errorf("error computing hash of manufacturer public key: %w", err)
-	}
-	if !hmac.Equal(digest.Sum(nil), h.Value) {
-		return fmt.Errorf("%w: manufacturer public key hash did not match", ErrCryptoVerifyFailed)
-	}
-	return nil
 }
 
 // DevicePublicKey extracts the device's public key from from the certificate
