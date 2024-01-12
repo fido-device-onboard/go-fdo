@@ -33,7 +33,7 @@ type DeviceCredential struct {
 	DeviceInfo    string
 	Guid          Guid
 	RvInfo        [][]RvVariable
-	PublicKeyHash Hash
+	PublicKeyHash Hash // expected to be a hash of the entire CBOR structure (not just pkBody) for Voucher.VerifyEntries to succeed
 }
 
 // DeviceCredentialBlob contains all device state, including both public and private

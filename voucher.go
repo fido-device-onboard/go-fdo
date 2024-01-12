@@ -211,17 +211,25 @@ func (v *Voucher) VerifyCertChainHash() error {
 
 // VerifyEntries checks the chain of signatures on each voucher entry payload
 func (v *Voucher) VerifyEntries(mfgPubKeyHash Hash) error {
+	// Parse the public key from the voucher header
 	mfgKey, err := v.Header.Val.ManufacturerKey.Public()
 	if err != nil {
 		return fmt.Errorf("error parsing manufacturer public key: %w", err)
 	}
 
-	if err := verifyManufacturerKey(mfgPubKeyHash, v.Header.Val.ManufacturerKey.Body); err != nil {
+	// Verify the manufacturer using a public key hash (generally stored as
+	// part of the device credential)
+	if err := verifyManufacturerKey(mfgPubKeyHash, v.Header.Val.ManufacturerKey); err != nil {
 		return err
 	}
 
-	headerInfo := append(v.Header.Val.Guid[:], []byte(v.Header.Val.DeviceInfo)...)
+	// Voucher may have never been extended since manufacturing
+	if len(v.Entries) == 0 {
+		return nil
+	}
 
+	// Validate all entries
+	headerInfo := append(v.Header.Val.Guid[:], []byte(v.Header.Val.DeviceInfo)...)
 	return validateNextEntry(mfgKey, nil, headerInfo, 0, v.Entries)
 }
 
@@ -292,7 +300,7 @@ func validateNextEntry(prevOwnerKey crypto.PublicKey, prevHash hash.Hash, header
 }
 
 // Validate the manufacturer key by hash stored in device credential
-func verifyManufacturerKey(h Hash, key []byte) error {
+func verifyManufacturerKey(h Hash, key any) error {
 	var digest hash.Hash
 	switch h.Algorithm {
 	case Sha256Hash:
