@@ -1653,3 +1653,158 @@ func TestDecodeNewtype(t *testing.T) {
 
 	// TODO: Newtypes for each major
 }
+
+func TestEncodeArrayOfArray(t *testing.T) {
+	t.Run("[][]int", func(t *testing.T) {
+		for _, test := range []struct {
+			input  [][]int
+			expect []byte
+		}{
+			{input: [][]int{}, expect: []byte{0x80}},
+			{input: [][]int{{}}, expect: []byte{0x81, 0x80}},
+			{input: [][]int{{1}}, expect: []byte{0x81, 0x81, 0x01}},
+			{input: [][]int{{1, 15}, {2}}, expect: []byte{0x82, 0x82, 0x01, 0x0f, 0x81, 0x02}},
+		} {
+			got, err := cbor.Marshal(test.input)
+			if err != nil {
+				t.Errorf("error marshaling %v: %v", test.input, err)
+				continue
+			}
+			if !reflect.DeepEqual(got, test.expect) {
+				t.Errorf("marshaling %#v; expected % x, got % x", test.input, test.expect, got)
+			}
+		}
+	})
+
+	t.Run("[][]struct", func(t *testing.T) {
+		type s struct {
+			A int
+			B string
+		}
+		for _, test := range []struct {
+			input  [][]s
+			expect []byte
+		}{
+			{input: [][]s{}, expect: []byte{0x80}},
+			{input: [][]s{{{A: 1, B: "A"}}}, expect: []byte{0x81, 0x81, 0x82, 0x01, 0x61, 0x41}},
+		} {
+			got, err := cbor.Marshal(test.input)
+			if err != nil {
+				t.Errorf("error marshaling %v: %v", test.input, err)
+				continue
+			}
+			if !reflect.DeepEqual(got, test.expect) {
+				t.Errorf("marshaling %#v; expected % x, got % x", test.input, test.expect, got)
+			}
+		}
+	})
+
+	t.Run("struct([][]struct)", func(t *testing.T) {
+		type ss struct {
+			A int
+			B string
+		}
+		type s struct {
+			S [][]ss
+		}
+		for _, test := range []struct {
+			input  s
+			expect []byte
+		}{
+			{input: s{S: [][]ss{{{A: 1, B: "A"}}}}, expect: []byte{0x81, 0x81, 0x81, 0x82, 0x01, 0x61, 0x41}},
+		} {
+			got, err := cbor.Marshal(test.input)
+			if err != nil {
+				t.Errorf("error marshaling %v: %v", test.input, err)
+				continue
+			}
+			if !reflect.DeepEqual(got, test.expect) {
+				t.Errorf("marshaling %#v; expected % x, got % x", test.input, test.expect, got)
+			}
+		}
+	})
+}
+
+func TestDecodeArrayOfArray(t *testing.T) {
+	t.Run("[][]int", func(t *testing.T) {
+		for _, test := range []struct {
+			input  []byte
+			expect [][]int
+		}{
+			{expect: [][]int{}, input: []byte{0x80}},
+			{expect: [][]int{{}}, input: []byte{0x81, 0x80}},
+			{expect: [][]int{{1}}, input: []byte{0x81, 0x81, 0x01}},
+			{expect: [][]int{{1, 15}, {2}}, input: []byte{0x82, 0x82, 0x01, 0x0f, 0x81, 0x02}},
+		} {
+			var got [][]int
+			if err := cbor.Unmarshal(test.input, &got); err != nil {
+				t.Errorf("error unmarshaling % x: %v", test.input, err)
+				continue
+			}
+			if !reflect.DeepEqual(got, test.expect) {
+				t.Errorf("unmarshaling %#v; expected %#v, got %#v", test.input, test.expect, got)
+			}
+		}
+	})
+
+	t.Run("[][N]byte", func(t *testing.T) {
+		for _, test := range []struct {
+			input  []byte
+			expect [][2]byte
+		}{
+			{expect: [][2]byte{}, input: []byte{0x80}},
+			{expect: [][2]byte{{0x01, 0x02}}, input: []byte{0x81, 0x82, 0x01, 0x02}},
+			{expect: [][2]byte{{0x01, 0x02}, {0x03, 0x04}}, input: []byte{0x82, 0x82, 0x01, 0x02, 0x82, 0x03, 0x04}},
+		} {
+			var got [][2]byte
+			if err := cbor.Unmarshal(test.input, &got); err != nil {
+				t.Errorf("error unmarshaling % x: %v", test.input, err)
+				continue
+			}
+			if !reflect.DeepEqual(got, test.expect) {
+				t.Errorf("unmarshaling %#v; expected %#v, got %#v", test.input, test.expect, got)
+			}
+		}
+	})
+
+	t.Run("[N][N]byte", func(t *testing.T) {
+		for _, test := range []struct {
+			input  []byte
+			expect [1][2]byte
+		}{
+			{expect: [1][2]byte{{0x01, 0x02}}, input: []byte{0x81, 0x82, 0x01, 0x02}},
+		} {
+			var got [1][2]byte
+			if err := cbor.Unmarshal(test.input, &got); err != nil {
+				t.Errorf("error unmarshaling % x: %v", test.input, err)
+				continue
+			}
+			if !reflect.DeepEqual(got, test.expect) {
+				t.Errorf("unmarshaling %#v; expected %#v, got %#v", test.input, test.expect, got)
+			}
+		}
+	})
+
+	t.Run("[][]struct", func(t *testing.T) {
+		type s struct {
+			A int
+			B string
+		}
+		for _, test := range []struct {
+			input  []byte
+			expect [][]s
+		}{
+			{expect: [][]s{}, input: []byte{0x80}},
+			{expect: [][]s{{{A: 1, B: "A"}}}, input: []byte{0x81, 0x81, 0x82, 0x01, 0x61, 0x41}},
+		} {
+			var got [][]s
+			if err := cbor.Unmarshal(test.input, &got); err != nil {
+				t.Errorf("error unmarshaling % x: %v", test.input, err)
+				continue
+			}
+			if !reflect.DeepEqual(got, test.expect) {
+				t.Errorf("unmarshaling %#v; expected %#v, got %#v", test.input, test.expect, got)
+			}
+		}
+	})
+}
