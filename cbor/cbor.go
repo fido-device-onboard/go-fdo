@@ -965,10 +965,9 @@ func (e *Encoder) Encode(v any) error {
 		return e.encodeTag(v.(TagData))
 	case rv.CanInt() || rv.CanUint():
 		return e.encodeNumber(rv)
-	case rv.Kind() == reflect.Slice && rv.Type().Elem().Kind() == reflect.Uint8:
-		return e.encodeTextOrBinary(byteStringMajorType, rv.Bytes())
-	case rv.Kind() == reflect.String:
-		return e.encodeTextOrBinary(textStringMajorType, []byte(rv.String()))
+	case rv.Kind() == reflect.String,
+		(rv.Kind() == reflect.Array || rv.Kind() == reflect.Slice) && rv.Type().Elem().Kind() == reflect.Uint8:
+		return e.encodeTextOrBinary(rv)
 	case rv.Kind() == reflect.Array || rv.Kind() == reflect.Slice:
 		return e.encodeArray(rv.Len(), rv.Index)
 	case rv.Kind() == reflect.Struct:
@@ -1068,7 +1067,36 @@ func (e *Encoder) encodeNumber(rv reflect.Value) error {
 	return e.write(additionalInfo(majorType, u64Bytes(u64)))
 }
 
-func (e *Encoder) encodeTextOrBinary(majorType byte, b []byte) error {
+func (e *Encoder) encodeTextOrBinary(rv reflect.Value) error {
+	var b []byte
+	var majorType byte
+	switch rv.Kind() {
+	case reflect.String:
+		majorType = textStringMajorType
+		b = []byte(rv.String())
+	case reflect.Slice:
+		majorType = byteStringMajorType
+		b = rv.Bytes()
+	case reflect.Array:
+		majorType = byteStringMajorType
+		if rv.CanAddr() {
+			b = rv.Bytes()
+			break
+		}
+
+		// Unaddressable arrays cannot be made into slices, so we must create a
+		// slice and copy contents into it
+		slice := reflect.MakeSlice(
+			reflect.SliceOf(rv.Type().Elem()),
+			rv.Len(),
+			rv.Len(),
+		)
+		if n := reflect.Copy(slice, rv); n != rv.Len() {
+			panic("array contents were not fully copied into a slice for encoding")
+		}
+		b = slice.Bytes()
+	}
+
 	info := u64Bytes(uint64(len(b)))
 	if err := e.write(additionalInfo(majorType, info)); err != nil {
 		return err
@@ -1077,15 +1105,9 @@ func (e *Encoder) encodeTextOrBinary(majorType byte, b []byte) error {
 }
 
 func (e *Encoder) encodeArray(size int, get func(int) reflect.Value) error {
-	// Set the major type to byte string if the underlying data is bytes
-	major := arrayMajorType
-	if size > 0 && get(0).Kind() == reflect.Uint8 {
-		major = byteStringMajorType
-	}
-
 	// Write the length as additional info
 	info := u64Bytes(uint64(size))
-	if err := e.write(additionalInfo(major, info)); err != nil {
+	if err := e.write(additionalInfo(arrayMajorType, info)); err != nil {
 		return err
 	}
 

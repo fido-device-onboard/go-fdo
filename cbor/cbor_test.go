@@ -1498,6 +1498,7 @@ func TestEncodeFixedArray(t *testing.T) {
 			expect []byte
 		}{
 			{expect: []byte{0x44, 0x01, 0x02, 0x03, 0x04}, input: [4]byte{0x01, 0x02, 0x03, 0x04}},
+			{expect: []byte{0x44, 0x49, 0x45, 0x54, 0x46}, input: [4]byte{0x49, 0x45, 0x54, 0x46}},
 		} {
 			if got, err := cbor.Marshal(test.input); err != nil {
 				t.Errorf("error marshaling % x: %v", test.input, err)
