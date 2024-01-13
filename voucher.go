@@ -243,9 +243,18 @@ func (v *Voucher) VerifyEntries() error {
 		return nil
 	}
 
+	// For entry 0, the previous hash is computed on OVHeader||OVHeaderHMac
+	initialHash := sha512.New384()
+	if err := cbor.NewEncoder(initialHash).Encode(v.Header.Val); err != nil {
+		return fmt.Errorf("error computing initial entry hash, writing encoded header: %w", err)
+	}
+	if err := cbor.NewEncoder(initialHash).Encode(v.Hmac); err != nil {
+		return fmt.Errorf("error computing initial entry hash, writing encoded header hmac: %w", err)
+	}
+
 	// Validate all entries
 	headerInfo := append(v.Header.Val.Guid[:], []byte(v.Header.Val.DeviceInfo)...)
-	return validateNextEntry(mfgKey, nil, headerInfo, 0, v.Entries)
+	return validateNextEntry(mfgKey, initialHash, headerInfo, 0, v.Entries)
 }
 
 // Validate each entry recursively
@@ -281,7 +290,7 @@ func validateNextEntry(prevOwnerKey crypto.PublicKey, prevHash hash.Hash, header
 	}
 
 	// Check payload's PreviousHash matches the previous entry
-	if prevHash != nil && !hmac.Equal(prevHash.Sum(nil), entry.Payload.Val.PreviousHash.Value) {
+	if !hmac.Equal(prevHash.Sum(nil), entry.Payload.Val.PreviousHash.Value) {
 		return fmt.Errorf("%w: voucher entry payload %d previous hash did not match", ErrCryptoVerifyFailed, i-1)
 	}
 
@@ -325,6 +334,15 @@ func (v *Voucher) DevicePublicKey() (crypto.PublicKey, error) {
 		return nil, errors.New("empty cert chain")
 	}
 	return (*v.CertChain)[len(*v.CertChain)-1].PublicKey, nil
+}
+
+// OwnerPublicKey extracts the voucher owner's public key from either the
+// header or the entries list.
+func (v *Voucher) OwnerPublicKey() (crypto.PublicKey, error) {
+	if len(v.Entries) == 0 {
+		return v.Header.Val.ManufacturerKey.Public()
+	}
+	return v.Entries[len(v.Entries)-1].Payload.Val.PublicKey.Public()
 }
 
 // VoucherHeader is the Ownership Voucher header, also used in TO1 protocol.
@@ -393,3 +411,8 @@ type VoucherEntryPayload struct {
 }
 
 type ExtraInfo map[int][]byte
+
+// TODO: ExtendVoucher adds a new signed voucher entry to the list and
+func ExtendVoucher(ov *Voucher, owner crypto.PrivateKey, nextOwner crypto.PublicKey, extra ExtraInfo) (*Voucher, error) {
+	return nil, nil
+}
