@@ -8,6 +8,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/sha512"
 	"errors"
@@ -105,7 +106,11 @@ type Sign1[T any] struct {
 
 // Sign using a single private key. Unless it was transported independently of
 // the signature, payload may be nil.
-func (s1 *Sign1[T]) Sign(key crypto.PrivateKey, payload []byte) error {
+//
+// For RSA keys, opts should be type *rsa.PSSOptions and SaltLength must be
+// PSSSaltLengthEqualsHash. If opts is not provided, then the PSS hash used
+// will be SHA256.
+func (s1 *Sign1[T]) Sign(key crypto.PrivateKey, payload []byte, opts crypto.SignerOpts) error {
 	// Check that some payload was given
 	if s1.Payload == nil && len(payload) == 0 {
 		return errors.New("payload was transported independently but not given as an argument to Sign")
@@ -119,13 +124,30 @@ func (s1 *Sign1[T]) Sign(key crypto.PrivateKey, payload []byte) error {
 	}
 
 	// Sign contents of Sig_structure
-	sig, err := sign(key, signature{
-		Context:       sig1Context,
-		BodyProtected: s1.Protected,
-		Payload:       payload,
-	})
-	if err != nil {
-		return err
+	var sig *Signature
+	switch key := key.(type) {
+	case *ecdsa.PrivateKey:
+		var err error
+		sig, err = signEc(key, signature{
+			Context:       sig1Context,
+			BodyProtected: s1.Protected,
+			Payload:       payload,
+		})
+		if err != nil {
+			return err
+		}
+	case *rsa.PrivateKey:
+		var err error
+		sig, err = signRsa(key, signature{
+			Context:       sig1Context,
+			BodyProtected: s1.Protected,
+			Payload:       payload,
+		}, opts)
+		if err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("unsupported key type: %T", key)
 	}
 
 	// Set signature and algorithm ID for top-level signing structure
@@ -139,11 +161,6 @@ func (s1 *Sign1[T]) Sign(key crypto.PrivateKey, payload []byte) error {
 // Verify using a single public key. Unless it was transported independently of
 // the signature, payload may be nil.
 func (s1 *Sign1[T]) Verify(key crypto.PublicKey, payload []byte) (bool, error) {
-	pub, ok := key.(*ecdsa.PublicKey)
-	if !ok {
-		panic("invalid key for verifying: only *ecdsa.PublicKey supported")
-	}
-
 	// Check that some payload was given
 	if s1.Payload == nil && len(payload) == 0 {
 		return false, errors.New("payload was transported independently but not given as an argument to Verify")
@@ -175,21 +192,42 @@ func (s1 *Sign1[T]) Verify(key crypto.PublicKey, payload []byte) (bool, error) {
 
 	// Hash and verify
 	var hash []byte
+	var hashAlg crypto.Hash
 	switch algorithm(s1.Protected) {
-	case es256AlgId:
+	case es256AlgId, ps256AlgId:
 		hashBytes := sha256.Sum256(data)
 		hash = hashBytes[:]
-	case es384AlgId:
+		hashAlg = crypto.SHA256
+	case es384AlgId, ps384AlgId:
 		hashBytes := sha512.Sum384(data)
 		hash = hashBytes[:]
+		hashAlg = crypto.SHA384
+	case es512AlgId, ps512AlgId:
+		hashBytes := sha512.Sum512(data)
+		hash = hashBytes[:]
+		hashAlg = crypto.SHA512
 	default:
 		return false, errors.New("unsupported algorithm")
 	}
-	// Decode signature following RFC8152 8.1.
-	n := (pub.Params().N.BitLen() + 7) / 8
-	r := big.NewInt(0).SetBytes(s1.Signature[:n])
-	s := big.NewInt(0).SetBytes(s1.Signature[n:])
-	return ecdsa.Verify(pub, hash, r, s), nil
+
+	switch pub := key.(type) {
+	case *ecdsa.PublicKey:
+		// Decode signature following RFC8152 8.1.
+		n := (pub.Params().N.BitLen() + 7) / 8
+		r := big.NewInt(0).SetBytes(s1.Signature[:n])
+		s := big.NewInt(0).SetBytes(s1.Signature[n:])
+		return ecdsa.Verify(pub, hash, r, s), nil
+
+	case *rsa.PublicKey:
+		err := rsa.VerifyPSS(pub, hashAlg, hash, s1.Signature, &rsa.PSSOptions{
+			SaltLength: rsa.PSSSaltLengthEqualsHash,
+			Hash:       hashAlg,
+		})
+		return err == nil, nil
+
+	default:
+		return false, fmt.Errorf("")
+	}
 }
 
 // Algorithm returns the ID of the algorithm set in the protected headers. If
@@ -205,21 +243,18 @@ func algorithm(protected serializedOrEmptyHeaderMap) (id int64) {
 	return id
 }
 
-func sign(key crypto.PrivateKey, sig signature) (*Signature, error) {
-	priv, ok := key.(*ecdsa.PrivateKey)
-	if !ok {
-		panic("invalid key for signing: only *ecdsa.PrivateKey supported")
-	}
-
+func signEc(key *ecdsa.PrivateKey, sig signature) (*Signature, error) {
 	// Put algorithm ID in the signature protected header before signing
 	var algID cbor.RawBytes
-	switch priv.Curve {
+	switch key.Curve {
 	case elliptic.P256():
 		algID = es256AlgIdCbor
 	case elliptic.P384():
 		algID = es384AlgIdCbor
+	case elliptic.P521():
+		algID = es512AlgIdCbor
 	default:
-		return nil, fmt.Errorf("unsupported curve: %s", priv.Params().Name)
+		return nil, fmt.Errorf("unsupported curve: %s", key.Params().Name)
 	}
 	mapSet(&sig.BodyProtected, AlgLabel, algID)
 
@@ -231,23 +266,23 @@ func sign(key crypto.PrivateKey, sig signature) (*Signature, error) {
 
 	// Hash and sign with the appropriate algorithm
 	var r, s *big.Int
-	switch priv.Curve {
+	switch key.Curve {
 	case elliptic.P256():
 		hash := sha256.Sum256(data)
-		r, s, err = ecdsa.Sign(rand.Reader, priv, hash[:])
+		r, s, err = ecdsa.Sign(rand.Reader, key, hash[:])
 		if err != nil {
 			return nil, err
 		}
 	case elliptic.P384():
 		hash := sha512.Sum384(data)
-		r, s, err = ecdsa.Sign(rand.Reader, priv, hash[:])
+		r, s, err = ecdsa.Sign(rand.Reader, key, hash[:])
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	// Encode signature following RFC8152 8.1.
-	n := (priv.Params().N.BitLen() + 7) / 8
+	n := (key.Params().N.BitLen() + 7) / 8
 	sigBytes := make([]byte, n*2)
 	r.FillBytes(sigBytes[:n])
 	s.FillBytes(sigBytes[n:])
@@ -259,5 +294,48 @@ func sign(key crypto.PrivateKey, sig signature) (*Signature, error) {
 		Header:    header,
 		Signature: sigBytes,
 	}, nil
+}
 
+func signRsa(key *rsa.PrivateKey, sig signature, opts crypto.SignerOpts) (*Signature, error) {
+	// Validate opts
+	pss, ok := opts.(*rsa.PSSOptions)
+	if !ok || opts == nil {
+		pss = &rsa.PSSOptions{Hash: crypto.SHA256, SaltLength: rsa.PSSSaltLengthEqualsHash}
+	}
+	if pss.SaltLength != rsa.PSSSaltLengthEqualsHash && pss.SaltLength != pss.Hash.Size() {
+		return nil, fmt.Errorf("PSS salt length must match hash size")
+	}
+
+	// Put algorithm ID in the signature protected header before signing
+	var algID cbor.RawBytes
+	switch pss.Hash.Size() {
+	case 32:
+		algID = ps256AlgIdCbor
+	case 48:
+		algID = ps384AlgIdCbor
+	case 64:
+		algID = ps512AlgIdCbor
+	default:
+		return nil, fmt.Errorf("unsupported hash size: %d bit", pss.Hash.Size()*8)
+	}
+	mapSet(&sig.BodyProtected, AlgLabel, algID)
+
+	// Serialize and hash signature structure then sign
+	digest := pss.Hash.New()
+	if err := cbor.NewEncoder(digest).Encode(sig); err != nil {
+		return nil, err
+	}
+	hash := digest.Sum(nil)
+	sigBytes, err := rsa.SignPSS(rand.Reader, key, opts.HashFunc(), hash[:], pss)
+	if err != nil {
+		return nil, err
+	}
+
+	// Return COSE_Signature structure with algorithm header and signed bytes
+	header := Header{}
+	mapSet(&header.Protected, AlgLabel, algID)
+	return &Signature{
+		Header:    header,
+		Signature: sigBytes,
+	}, nil
 }

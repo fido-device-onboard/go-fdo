@@ -4,6 +4,7 @@
 package cose
 
 import (
+	"crypto"
 	"fmt"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
@@ -85,6 +86,18 @@ func (t *Sign1Tag[T]) UnmarshalCBOR(data []byte) error {
 	}
 	*t = Sign1Tag[T](tag.Val)
 	return nil
+}
+
+// Sign using a single private key. Unless it was transported independently of
+// the signature, payload may be nil.
+func (s1 *Sign1Tag[T]) Sign(key crypto.PrivateKey, payload []byte, opts crypto.SignerOpts) error {
+	return (*Sign1[T])(s1).Sign(key, payload, opts)
+}
+
+// Verify using a single public key. Unless it was transported independently of
+// the signature, payload may be nil.
+func (s1 *Sign1Tag[T]) Verify(key crypto.PublicKey, payload []byte) (bool, error) {
+	return (*Sign1[T])(s1).Verify(key, payload)
 }
 
 // EncryptTag encodes to a CBOR tag while ensuring the right tag number.

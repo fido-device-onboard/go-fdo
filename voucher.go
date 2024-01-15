@@ -446,9 +446,13 @@ func ExtendVoucher(v *Voucher, owner crypto.PrivateKey, nextOwner any, extra Ext
 			return nil, fmt.Errorf("owner key for voucher extension did not match the type and size/curve of the manufacturer key")
 		}
 	case *rsa.PublicKey:
-		// TODO: Requires updates to the COSE API to allow specifying RSA PSS
-		// vs PKCS1 v1.5 when signing/verifying with an RSA key.
-		return nil, fmt.Errorf("RSA owner keys are not yet supported")
+		if mfgKey, err := v.Header.Val.ManufacturerKey.Public(); err != nil {
+			return nil, fmt.Errorf("error parsing manufacturer key from header: %w", err)
+		} else if mfgPubKey, ok := mfgKey.(*rsa.PublicKey); !ok {
+			return nil, fmt.Errorf("owner key for voucher extension did not match the type of the manufacturer key")
+		} else if mfgPubKey.Size() != ownerPub.Size() {
+			return nil, fmt.Errorf("owner key for voucher extension did not match the type and size/curve of the manufacturer key")
+		}
 	default:
 		return nil, fmt.Errorf("unsupported key type: %T", ownerPub)
 	}
@@ -511,7 +515,7 @@ func ExtendVoucher(v *Voucher, owner crypto.PrivateKey, nextOwner any, extra Ext
 	if err != nil {
 		return nil, fmt.Errorf("creating voucher entry payload header: %w", err)
 	}
-	entry := cose.Sign1[VoucherEntryPayload]{
+	entry := cose.Sign1Tag[VoucherEntryPayload]{
 		Header: entryHeader,
 		Payload: cbor.NewBstrPtr(VoucherEntryPayload{
 			PreviousHash: prevHash,
@@ -520,10 +524,17 @@ func ExtendVoucher(v *Voucher, owner crypto.PrivateKey, nextOwner any, extra Ext
 			PublicKey:    nextOwnerPublicKey,
 		}),
 	}
-	if err := entry.Sign(owner, nil); err != nil {
+	var signOpts crypto.SignerOpts
+	if v.Header.Val.ManufacturerKey.Type == RsaPssKeyType {
+		signOpts = &rsa.PSSOptions{
+			SaltLength: rsa.PSSSaltLengthEqualsHash,
+			Hash:       crypto.SHA384,
+		}
+	}
+	if err := entry.Sign(owner, nil, signOpts); err != nil {
 		return nil, fmt.Errorf("error signing voucher entry payload: %w", err)
 	}
 
-	xv.Entries = append(xv.Entries, cose.Sign1Tag[VoucherEntryPayload](entry))
+	xv.Entries = append(xv.Entries, entry)
 	return &xv, nil
 }

@@ -40,7 +40,7 @@ func TestSignAndVerify(t *testing.T) {
 	}
 
 	t.Run("es256", func(t *testing.T) {
-		if err := s1.Sign(key256, nil); err != nil {
+		if err := s1.Sign(key256, nil, nil); err != nil {
 			t.Errorf("error signing: %v", err)
 			return
 		}
@@ -56,7 +56,7 @@ func TestSignAndVerify(t *testing.T) {
 	})
 
 	t.Run("es384", func(t *testing.T) {
-		if err := s1.Sign(key384, nil); err != nil {
+		if err := s1.Sign(key384, nil, nil); err != nil {
 			t.Errorf("error signing: %v", err)
 			return
 		}

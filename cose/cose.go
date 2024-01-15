@@ -25,12 +25,13 @@ ECDSA Algorithm Values
 const (
 	es256AlgId int64 = -7
 	es384AlgId int64 = -35
-	// es512AlgId int64 = -36
+	es512AlgId int64 = -36
 )
 
 var (
 	es256AlgIdCbor cbor.RawBytes
 	es384AlgIdCbor cbor.RawBytes
+	es512AlgIdCbor cbor.RawBytes
 )
 
 func init() {
@@ -42,6 +43,49 @@ func init() {
 	es384AlgIdCbor, err = cbor.Marshal(es384AlgId)
 	if err != nil {
 		panic("error marshaling ES384 algorithm ID: " + err.Error())
+	}
+	es512AlgIdCbor, err = cbor.Marshal(es512AlgId)
+	if err != nil {
+		panic("error marshaling ES512 algorithm ID: " + err.Error())
+	}
+}
+
+/*
+RSASSA-PSS Algorithm Values from RFC 8230
+
+	+-------+-------+---------+-------------+-----------------------+
+	| Name  | Value | Hash    | Salt Length | Description           |
+	+-------+-------+---------+-------------+-----------------------+
+	| PS256 | -37   | SHA-256 | 32          | RSASSA-PSS w/ SHA-256 |
+	| PS384 | -38   | SHA-384 | 48          | RSASSA-PSS w/ SHA-384 |
+	| PS512 | -39   | SHA-512 | 64          | RSASSA-PSS w/ SHA-512 |
+	+-------+-------+---------+-------------+-----------------------+
+*/
+const (
+	ps256AlgId int64 = -37
+	ps384AlgId int64 = -38
+	ps512AlgId int64 = -39
+)
+
+var (
+	ps256AlgIdCbor cbor.RawBytes
+	ps384AlgIdCbor cbor.RawBytes
+	ps512AlgIdCbor cbor.RawBytes
+)
+
+func init() {
+	var err error
+	ps256AlgIdCbor, err = cbor.Marshal(ps256AlgId)
+	if err != nil {
+		panic("error marshaling PS256 algorithm ID: " + err.Error())
+	}
+	ps384AlgIdCbor, err = cbor.Marshal(ps384AlgId)
+	if err != nil {
+		panic("error marshaling PS384 algorithm ID: " + err.Error())
+	}
+	ps512AlgIdCbor, err = cbor.Marshal(ps512AlgId)
+	if err != nil {
+		panic("error marshaling PS512 algorithm ID: " + err.Error())
 	}
 }
 
