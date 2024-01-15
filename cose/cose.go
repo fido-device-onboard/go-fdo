@@ -51,6 +51,45 @@ func init() {
 }
 
 /*
+RSASSA-PKCS1-v1_5 Algorithm Values
+
+	+-------+-------+---------+------------------------------+
+	| Name  | Value | Hash    | Description                  |
+	+-------+-------+---------+------------------------------+
+	| RS256 | -257  | SHA-256 | RSASSA-PKCS1-v1_5 w/ SHA-256 |
+	| RS384 | -258  | SHA-384 | RSASSA-PKCS1-v1_5 w/ SHA-384 |
+	| RS512 | -259  | SHA-512 | RSASSA-PKCS1-v1_5 w/ SHA-512 |
+	+-------+-------+---------+------------------------------+
+*/
+const (
+	rs256AlgId int64 = -257
+	rs384AlgId int64 = -258
+	rs512AlgId int64 = -259
+)
+
+var (
+	rs256AlgIdCbor cbor.RawBytes
+	rs384AlgIdCbor cbor.RawBytes
+	rs512AlgIdCbor cbor.RawBytes
+)
+
+func init() {
+	var err error
+	rs256AlgIdCbor, err = cbor.Marshal(rs256AlgId)
+	if err != nil {
+		panic("error marshaling RS256 algorithm ID: " + err.Error())
+	}
+	rs384AlgIdCbor, err = cbor.Marshal(rs384AlgId)
+	if err != nil {
+		panic("error marshaling RS384 algorithm ID: " + err.Error())
+	}
+	rs512AlgIdCbor, err = cbor.Marshal(rs512AlgId)
+	if err != nil {
+		panic("error marshaling RS512 algorithm ID: " + err.Error())
+	}
+}
+
+/*
 RSASSA-PSS Algorithm Values from RFC 8230
 
 	+-------+-------+---------+-------------+-----------------------+
