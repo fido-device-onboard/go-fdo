@@ -5,7 +5,9 @@ package fdo
 
 import (
 	"crypto"
+	"crypto/ecdsa"
 	"crypto/hmac"
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/sha512"
 	"crypto/x509"
@@ -244,7 +246,15 @@ func (v *Voucher) VerifyEntries() error {
 	}
 
 	// For entry 0, the previous hash is computed on OVHeader||OVHeaderHMac
-	initialHash := sha512.New384()
+	var initialHash hash.Hash
+	switch alg := v.Entries[0].Payload.Val.PreviousHash.Algorithm; alg {
+	case Sha256Hash:
+		initialHash = sha256.New()
+	case Sha384Hash:
+		initialHash = sha512.New384()
+	default:
+		return fmt.Errorf("unsupported hash algorithm for hashing initial previous hash of entry list: %s", alg)
+	}
 	if err := cbor.NewEncoder(initialHash).Encode(v.Header.Val); err != nil {
 		return fmt.Errorf("error computing initial entry hash, writing encoded header: %w", err)
 	}
@@ -252,13 +262,21 @@ func (v *Voucher) VerifyEntries() error {
 		return fmt.Errorf("error computing initial entry hash, writing encoded header hmac: %w", err)
 	}
 
-	// Validate all entries
+	// Precompute SHA256/SHA384 checksum for header info
 	headerInfo := append(v.Header.Val.Guid[:], []byte(v.Header.Val.DeviceInfo)...)
-	return validateNextEntry(mfgKey, initialHash, headerInfo, 0, v.Entries)
+	headerInfo256Sum := sha256.Sum256(headerInfo)
+	headerInfo384Sum := sha512.Sum384(headerInfo)
+	headerInfoSums := map[HashAlg][]byte{
+		Sha256Hash: headerInfo256Sum[:],
+		Sha384Hash: headerInfo384Sum[:],
+	}
+
+	// Validate all entries
+	return validateNextEntry(mfgKey, initialHash, headerInfoSums, 0, v.Entries)
 }
 
 // Validate each entry recursively
-func validateNextEntry(prevOwnerKey crypto.PublicKey, prevHash hash.Hash, headerInfo []byte, i int, entries []cose.Sign1Tag[VoucherEntryPayload]) error {
+func validateNextEntry(prevOwnerKey crypto.PublicKey, prevHash hash.Hash, headerInfo map[HashAlg][]byte, i int, entries []cose.Sign1Tag[VoucherEntryPayload]) error {
 	entry := entries[0].Untag()
 
 	// Check payload has a valid COSE signature from the previous owner key
@@ -269,23 +287,8 @@ func validateNextEntry(prevOwnerKey crypto.PublicKey, prevHash hash.Hash, header
 	}
 
 	// Check payload's HeaderHash matches voucher header as hash[GUID||DeviceInfo]
-	//
-	// TODO: Memoize hash of header, since only the algorithm can change
-	// between entries
 	headerHash := entry.Payload.Val.HeaderHash
-	var headerDigest hash.Hash
-	switch alg := headerHash.Algorithm; alg {
-	case Sha256Hash:
-		headerDigest = sha256.New()
-	case Sha384Hash:
-		headerDigest = sha512.New384()
-	default:
-		return fmt.Errorf("unsupported hash algorithm for hashing voucher header info: %s", alg)
-	}
-	if _, err := headerDigest.Write(headerInfo); err != nil {
-		return fmt.Errorf("error computing hash of header info: %w", err)
-	}
-	if !hmac.Equal(headerDigest.Sum(nil), headerHash.Value) {
+	if !hmac.Equal(headerHash.Value, headerInfo[headerHash.Algorithm]) {
 		return fmt.Errorf("%w: voucher entry payload %d header hash did not match", ErrCryptoVerifyFailed, i-1)
 	}
 
@@ -412,7 +415,115 @@ type VoucherEntryPayload struct {
 
 type ExtraInfo map[int][]byte
 
-// TODO: ExtendVoucher adds a new signed voucher entry to the list and
-func ExtendVoucher(ov *Voucher, owner crypto.PrivateKey, nextOwner crypto.PublicKey, extra ExtraInfo) (*Voucher, error) {
-	return nil, nil
+// ExtendVoucher adds a new signed voucher entry to the list and returns the
+// new extended vouchers. Vouchers should be treated as immutable structures.
+//
+// The nextOwner parameter must either be of type *ecdsa.PublicKey or
+// []*x509.Certificate.
+func ExtendVoucher(v *Voucher, owner crypto.PrivateKey, nextOwner any, extra ExtraInfo) (*Voucher, error) {
+	// This performs a shallow clone, which allows arrays, maps, and pointers
+	// to have their contents modified and both the original and copied voucher
+	// will see the modification. However, this function does not perform a
+	// deep copy/clone of the voucher, because vouchers are generally not used
+	// as mutable entities. Every reference type in a voucher - keys, device
+	// certificate chain, etc. - is protected by some other signature or hash,
+	// so it doesn't make sense to modify.
+	xv := *v
+
+	// Each key in the Ownership Voucher must copy the public key type from the
+	// manufacturer’s key in OVHeader.OVPubKey, hash, and encoding (e.g., all
+	// RSA2048RESTR, all RSAPKCS 3072, all ECDSA secp256r1 or all ECDSA
+	// secp384r1). This restriction permits a Device with limited crypto
+	// capabilities to verify all the signatures.
+	ownerPub := owner.(interface{ Public() crypto.PublicKey }).Public()
+	switch ownerPub := ownerPub.(type) {
+	case *ecdsa.PublicKey:
+		if mfgKey, err := v.Header.Val.ManufacturerKey.Public(); err != nil {
+			return nil, fmt.Errorf("error parsing manufacturer key from header: %w", err)
+		} else if mfgPubKey, ok := mfgKey.(*ecdsa.PublicKey); !ok {
+			return nil, fmt.Errorf("owner key for voucher extension did not match the type of the manufacturer key")
+		} else if mfgPubKey.Curve != ownerPub.Curve {
+			return nil, fmt.Errorf("owner key for voucher extension did not match the type and size/curve of the manufacturer key")
+		}
+	case *rsa.PublicKey:
+		// TODO: Requires updates to the COSE API to allow specifying RSA PSS
+		// vs PKCS1 v1.5 when signing/verifying with an RSA key.
+		return nil, fmt.Errorf("RSA owner keys are not yet supported")
+	default:
+		return nil, fmt.Errorf("unsupported key type: %T", ownerPub)
+	}
+
+	// Create the next owner PublicKey structure
+	nextOwnerPublicKey := PublicKey{Type: v.Header.Val.ManufacturerKey.Type}
+	switch nextOwner := nextOwner.(type) {
+	case []*x509.Certificate:
+		chain := make([]*Certificate, len(nextOwner))
+		for i, cert := range nextOwner {
+			cert := cert
+			chain[i] = (*Certificate)(cert)
+		}
+		body, err := cbor.Marshal(chain)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling next owner public key with X5Chain encoding: %w", err)
+		}
+
+		nextOwnerPublicKey.Encoding = X5ChainKeyEnc
+		nextOwnerPublicKey.Body = body
+	case *ecdsa.PublicKey, *rsa.PublicKey:
+		body, err := x509.MarshalPKIXPublicKey(nextOwner)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling next owner public key with X509 encoding: %w", err)
+		}
+
+		nextOwnerPublicKey.Encoding = X509KeyEnc
+		nextOwnerPublicKey.Body = body
+
+	default:
+		return nil, fmt.Errorf("unsupported next owner public key: must be *ecdsa.PublicKey, *rsa.PublicKey, or []*x509.Certificate")
+	}
+
+	// Calculate the hash of the voucher header info
+	headerInfo := sha512.Sum384(append(v.Header.Val.Guid[:], []byte(v.Header.Val.DeviceInfo)...))
+	headerHash := Hash{Algorithm: Sha384Hash, Value: headerInfo[:]}
+
+	// Calculate the hash of the previous entry
+	digest := sha512.New384()
+	if len(v.Entries) == 0 {
+		// For entry 0, the previous hash is computed on OVHeader||OVHeaderHMac
+		if err := cbor.NewEncoder(digest).Encode(v.Header.Val); err != nil {
+			return nil, fmt.Errorf("error computing initial entry hash, writing encoded header: %w", err)
+		}
+		if err := cbor.NewEncoder(digest).Encode(v.Hmac); err != nil {
+			return nil, fmt.Errorf("error computing initial entry hash, writing encoded header hmac: %w", err)
+		}
+	} else {
+		if err := cbor.NewEncoder(digest).Encode(v.Entries[len(v.Entries)-1].Payload.Val); err != nil {
+			return nil, fmt.Errorf("error computing hash of voucher entry payload: %w", err)
+		}
+	}
+	prevHash := Hash{Algorithm: Sha384Hash, Value: digest.Sum(nil)}
+
+	// Create and sign next entry
+	entryHeader, err := cose.NewHeader(
+		map[cose.Label]any{},
+		map[cose.Label]any{},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("creating voucher entry payload header: %w", err)
+	}
+	entry := cose.Sign1[VoucherEntryPayload]{
+		Header: entryHeader,
+		Payload: cbor.NewBstrPtr(VoucherEntryPayload{
+			PreviousHash: prevHash,
+			HeaderHash:   headerHash,
+			Extra:        cbor.NewBstrPtr(extra),
+			PublicKey:    nextOwnerPublicKey,
+		}),
+	}
+	if err := entry.Sign(owner, nil); err != nil {
+		return nil, fmt.Errorf("error signing voucher entry payload: %w", err)
+	}
+
+	xv.Entries = append(xv.Entries, cose.Sign1Tag[VoucherEntryPayload](entry))
+	return &xv, nil
 }

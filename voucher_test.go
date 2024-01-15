@@ -5,6 +5,11 @@ package fdo_test
 
 import (
 	"bytes"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
 	"encoding/pem"
 	"os"
 	"path/filepath"
@@ -126,22 +131,61 @@ func TestVerifyUnextendedVoucher(t *testing.T) {
 	cred := readCredential(t)
 
 	if err := ov.VerifyHeader(cred); err != nil {
-		t.Error("error verifying voucher header", err)
+		t.Errorf("error verifying voucher header: %v", err)
 	}
 
 	if err := ov.VerifyCertChain(nil); err != nil {
-		t.Error("error verifying voucher cert chain (with implicit trusted root)", err)
+		t.Errorf("error verifying voucher cert chain (with implicit trusted root): %v", err)
 	}
 
 	if err := ov.VerifyCertChainHash(); err != nil {
-		t.Error("error verifying voucher cert chain hash", err)
+		t.Errorf("error verifying voucher cert chain hash: %v", err)
 	}
 
 	if err := ov.VerifyManufacturerKey(cred.PublicKeyHash); err != nil {
-		t.Error("error verifying voucher created by manufacturer key", err)
+		t.Errorf("error verifying voucher created by manufacturer key: %v", err)
 	}
 
 	if err := ov.VerifyEntries(); err != nil {
-		t.Error("error verifying voucher entries", err)
+		t.Errorf("error verifying voucher entries: %v", err)
+	}
+}
+
+func TestExtendAndVerify(t *testing.T) {
+	var ov fdo.Voucher
+	if err := cbor.Unmarshal(voucherBytes(t, "ov.pem"), &ov); err != nil {
+		t.Fatalf("error parsing voucher test data: %v", err)
+	}
+
+	var key crypto.PrivateKey
+	if data, err := os.ReadFile("testdata/mfg_key.pem"); err != nil {
+		t.Fatalf("error reading manufacturer key: %v", err)
+	} else if blk, _ := pem.Decode(data); blk == nil {
+		t.Fatal("unable to parse manufacturer key PEM")
+	} else if key, err = x509.ParseECPrivateKey(blk.Bytes); err != nil {
+		t.Fatalf("error parsing manufacturer key: %v", err)
+	}
+
+	nextKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("error generating key for next device owner: %v", err)
+	}
+
+	ov1, err := fdo.ExtendVoucher(&ov, key, nextKey.Public(), nil)
+	if err != nil {
+		t.Errorf("error extending voucher: %v", err)
+	}
+
+	ov1Owner, err := ov1.OwnerPublicKey()
+	if err != nil {
+		t.Fatalf("error getting extended voucher's owner public key: %v", err)
+	}
+
+	if pub, ok := ov1Owner.(interface{ Equal(crypto.PublicKey) bool }); !ok || !pub.Equal(nextKey.Public()) {
+		t.Error("extended voucher's owner public key did not match expected value")
+	}
+
+	if err := ov1.VerifyEntries(); err != nil {
+		t.Errorf("error verifying voucher entries: %v", err)
 	}
 }

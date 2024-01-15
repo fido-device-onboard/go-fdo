@@ -6,6 +6,7 @@ package fdo
 import (
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/rsa"
 	"crypto/x509"
 	"errors"
 	"fmt"
@@ -116,40 +117,54 @@ func (pub *PublicKey) Public() (crypto.PublicKey, error) {
 
 	switch pub.Encoding {
 	case X509KeyEnc:
+		key, err := x509.ParsePKIXPublicKey(pub.Body)
+		if err != nil {
+			return nil, err
+		}
+
 		switch pub.Type {
 		case Secp256r1KeyType, Secp384r1KeyType:
-			key, err := x509.ParsePKIXPublicKey(pub.Body)
-			if err != nil {
-				return nil, err
-			}
 			eckey, ok := key.(*ecdsa.PublicKey)
 			if !ok {
 				return nil, errors.New("public key must be an ECDSA public key")
 			}
 			pub.key = eckey
 			return eckey, nil
-
+		case RsaPssKeyType, RsaPkcsKeyType, Rsa2048RestrKeyType:
+			rsakey, ok := key.(*rsa.PublicKey)
+			if !ok {
+				return nil, errors.New("public key must be an RSA public key")
+			}
+			pub.key = rsakey
+			return rsakey, nil
 		default:
 			return nil, fmt.Errorf("unsupported key type: %s", pub.Type)
 		}
 
 	case X5ChainKeyEnc:
+		var certs []*Certificate
+		if err := cbor.Unmarshal(pub.Body, &certs); err != nil {
+			return nil, err
+		}
+		if len(certs) == 0 {
+			return nil, errors.New("X5CHAIN key cannot be an empty certificate chain")
+		}
+
 		switch pub.Type {
 		case Secp256r1KeyType, Secp384r1KeyType:
-			var certs []*Certificate
-			if err := cbor.Unmarshal(pub.Body, &certs); err != nil {
-				return nil, err
-			}
-			if len(certs) == 0 {
-				return nil, errors.New("X5CHAIN key cannot be an empty certificate chain")
-			}
 			eckey, ok := certs[len(certs)-1].PublicKey.(*ecdsa.PublicKey)
 			if !ok {
 				return nil, errors.New("public key must be an ECDSA public key")
 			}
 			pub.key = eckey
 			return eckey, nil
-
+		case RsaPssKeyType, RsaPkcsKeyType, Rsa2048RestrKeyType:
+			rsakey, ok := certs[len(certs)-1].PublicKey.(*rsa.PublicKey)
+			if !ok {
+				return nil, errors.New("public key must be an RSA public key")
+			}
+			pub.key = rsakey
+			return rsakey, nil
 		default:
 			return nil, fmt.Errorf("unsupported key type: %s", pub.Type)
 		}
