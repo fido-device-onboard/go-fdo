@@ -171,7 +171,7 @@ func TestExtendAndVerify(t *testing.T) {
 		t.Fatalf("error generating key for next device owner: %v", err)
 	}
 
-	ov1, err := fdo.ExtendVoucher(&ov, key, nextKey.Public(), nil)
+	ov1, err := fdo.ExtendVoucher(&ov, key, nextKey.Public().(*ecdsa.PublicKey), nil)
 	if err != nil {
 		t.Errorf("error extending voucher: %v", err)
 	}

@@ -417,10 +417,7 @@ type ExtraInfo map[int][]byte
 
 // ExtendVoucher adds a new signed voucher entry to the list and returns the
 // new extended vouchers. Vouchers should be treated as immutable structures.
-//
-// The nextOwner parameter must either be of type *ecdsa.PublicKey or
-// []*x509.Certificate.
-func ExtendVoucher(v *Voucher, owner crypto.PrivateKey, nextOwner any, extra ExtraInfo) (*Voucher, error) {
+func ExtendVoucher[T PublicKeyOrChain](v *Voucher, owner crypto.PrivateKey, nextOwner T, extra ExtraInfo) (*Voucher, error) {
 	// This performs a shallow clone, which allows arrays, maps, and pointers
 	// to have their contents modified and both the original and copied voucher
 	// will see the modification. However, this function does not perform a
@@ -459,7 +456,7 @@ func ExtendVoucher(v *Voucher, owner crypto.PrivateKey, nextOwner any, extra Ext
 
 	// Create the next owner PublicKey structure
 	nextOwnerPublicKey := PublicKey{Type: v.Header.Val.ManufacturerKey.Type}
-	switch nextOwner := nextOwner.(type) {
+	switch nextOwner := any(nextOwner).(type) {
 	case []*x509.Certificate:
 		chain := make([]*Certificate, len(nextOwner))
 		for i, cert := range nextOwner {
@@ -508,15 +505,8 @@ func ExtendVoucher(v *Voucher, owner crypto.PrivateKey, nextOwner any, extra Ext
 	prevHash := Hash{Algorithm: Sha384Hash, Value: digest.Sum(nil)}
 
 	// Create and sign next entry
-	entryHeader, err := cose.NewHeader(
-		map[cose.Label]any{},
-		map[cose.Label]any{},
-	)
-	if err != nil {
-		return nil, fmt.Errorf("creating voucher entry payload header: %w", err)
-	}
 	entry := cose.Sign1Tag[VoucherEntryPayload]{
-		Header: entryHeader,
+		Header: cose.Header{},
 		Payload: cbor.NewBstrPtr(VoucherEntryPayload{
 			PreviousHash: prevHash,
 			HeaderHash:   headerHash,

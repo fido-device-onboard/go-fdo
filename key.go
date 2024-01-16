@@ -65,6 +65,11 @@ const (
 	Secp384r1KeyType KeyType = 11
 )
 
+// PublicKeyOrChain is a constraint for supported FDO PublicKey types.
+type PublicKeyOrChain interface {
+	*ecdsa.PublicKey | *rsa.PublicKey | []*x509.Certificate
+}
+
 // KeyEncoding is an FDO pkEnc enum.
 //
 //	pkEnc = (
