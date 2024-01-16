@@ -64,7 +64,7 @@ func TestVoucherDeterministic(t *testing.T) {
 	}
 
 	// Try marshaling again to ensure determinism
-	if b1, err := cbor.Marshal(ov); err != nil {
+	if b1, err := cbor.Marshal(&ov); err != nil {
 		t.Fatalf("error marshaling voucher: %v", err)
 	} else if !bytes.Equal(b, b1) {
 		t.Fatalf("marshaled voucher does not equal original voucher data:\n\noriginal: %x\n\nmarshaled: %x", b, b1)
@@ -93,7 +93,7 @@ func TestVoucherHeaderDeterministic(t *testing.T) {
 	}
 
 	// Try marshaling again to ensure determinism
-	if h2, err := cbor.Marshal(ovh); err != nil {
+	if h2, err := cbor.Marshal(&ovh); err != nil {
 		t.Fatalf("error marshaling voucher: %v", err)
 	} else if !bytes.Equal(h1, h2) {
 		t.Fatalf("marshaled voucher does not equal original voucher data:\n\noriginal: %x\n\nmarshaled: %x", h1, h2)

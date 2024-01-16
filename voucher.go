@@ -134,10 +134,27 @@ type Voucher struct {
 	Entries   []cose.Sign1Tag[VoucherEntryPayload]
 }
 
+func (v *Voucher) shallowClone() *Voucher {
+	return &Voucher{
+		Version: v.Version,
+		Header: cbor.NewBstr(VoucherHeader{
+			Version:         v.Header.Val.Version,
+			Guid:            v.Header.Val.Guid,
+			RvInfo:          v.Header.Val.RvInfo,
+			DeviceInfo:      v.Header.Val.DeviceInfo,
+			ManufacturerKey: v.Header.Val.ManufacturerKey.clone(),
+			CertChainHash:   v.Header.Val.CertChainHash,
+		}),
+		Hmac:      v.Hmac,
+		CertChain: v.CertChain,
+		Entries:   v.Entries,
+	}
+}
+
 // VerifyHeader checks that the OVHeader was not modified by comparing the HMAC
 // generated using the secret from the device credentials.
 func (v *Voucher) VerifyHeader(deviceCredential Signer) error {
-	return deviceCredential.HmacVerify(v.Hmac, v.Header.Val)
+	return deviceCredential.HmacVerify(v.Hmac, &v.Header.Val)
 }
 
 // VerifyCertChain using trusted roots. If roots is nil then the last
@@ -223,7 +240,7 @@ func (v *Voucher) VerifyManufacturerKey(keyHash Hash) error {
 	default:
 		return fmt.Errorf("unsupported hash algorithm for hashing manufacturer public key: %s", keyHash.Algorithm)
 	}
-	if err := cbor.NewEncoder(digest).Encode(v.Header.Val.ManufacturerKey); err != nil {
+	if err := cbor.NewEncoder(digest).Encode(&v.Header.Val.ManufacturerKey); err != nil {
 		return fmt.Errorf("error computing hash of manufacturer public key: %w", err)
 	}
 	if !hmac.Equal(digest.Sum(nil), keyHash.Value) {
@@ -255,7 +272,7 @@ func (v *Voucher) VerifyEntries() error {
 	default:
 		return fmt.Errorf("unsupported hash algorithm for hashing initial previous hash of entry list: %s", alg)
 	}
-	if err := cbor.NewEncoder(initialHash).Encode(v.Header.Val); err != nil {
+	if err := cbor.NewEncoder(initialHash).Encode(&v.Header.Val); err != nil {
 		return fmt.Errorf("error computing initial entry hash, writing encoded header: %w", err)
 	}
 	if err := cbor.NewEncoder(initialHash).Encode(v.Hmac); err != nil {
@@ -318,7 +335,7 @@ func validateNextEntry(prevOwnerKey crypto.PublicKey, prevHash hash.Hash, header
 	default:
 		return fmt.Errorf("unsupported hash algorithm for hashing voucher entry payload: %s", alg)
 	}
-	if err := cbor.NewEncoder(payloadHash).Encode(entry.Payload.Val); err != nil {
+	if err := cbor.NewEncoder(payloadHash).Encode(&entry.Payload.Val); err != nil {
 		return fmt.Errorf("error computing hash of voucher entry payload: %w", err)
 	}
 
@@ -413,6 +430,11 @@ type VoucherEntryPayload struct {
 	PublicKey    PublicKey
 }
 
+// ExtraInfo may be used to pass additional supply-chain information along with
+// the Ownership Voucher. The Device implicitly verifies the plaintext of
+// OVEExtra along with the verification of the Ownership Voucher. An Owner
+// which trusts the Device' verification of the Ownership Voucher may also
+// choose to trust OVEExtra.
 type ExtraInfo map[int][]byte
 
 // ExtendVoucher adds a new signed voucher entry to the list and returns the
@@ -425,7 +447,7 @@ func ExtendVoucher[T PublicKeyOrChain](v *Voucher, owner crypto.PrivateKey, next
 	// as mutable entities. Every reference type in a voucher - keys, device
 	// certificate chain, etc. - is protected by some other signature or hash,
 	// so it doesn't make sense to modify.
-	xv := *v
+	xv := v.shallowClone()
 
 	// Each key in the Ownership Voucher must copy the public key type from the
 	// manufacturer’s key in OVHeader.OVPubKey, hash, and encoding (e.g., all
@@ -491,14 +513,14 @@ func ExtendVoucher[T PublicKeyOrChain](v *Voucher, owner crypto.PrivateKey, next
 	digest := sha512.New384()
 	if len(v.Entries) == 0 {
 		// For entry 0, the previous hash is computed on OVHeader||OVHeaderHMac
-		if err := cbor.NewEncoder(digest).Encode(v.Header.Val); err != nil {
+		if err := cbor.NewEncoder(digest).Encode(&v.Header.Val); err != nil {
 			return nil, fmt.Errorf("error computing initial entry hash, writing encoded header: %w", err)
 		}
 		if err := cbor.NewEncoder(digest).Encode(v.Hmac); err != nil {
 			return nil, fmt.Errorf("error computing initial entry hash, writing encoded header hmac: %w", err)
 		}
 	} else {
-		if err := cbor.NewEncoder(digest).Encode(v.Entries[len(v.Entries)-1].Payload.Val); err != nil {
+		if err := cbor.NewEncoder(digest).Encode(&v.Entries[len(v.Entries)-1].Payload.Val); err != nil {
 			return nil, fmt.Errorf("error computing hash of voucher entry payload: %w", err)
 		}
 	}
@@ -511,7 +533,7 @@ func ExtendVoucher[T PublicKeyOrChain](v *Voucher, owner crypto.PrivateKey, next
 			PreviousHash: prevHash,
 			HeaderHash:   headerHash,
 			Extra:        cbor.NewBstrPtr(extra),
-			PublicKey:    nextOwnerPublicKey,
+			PublicKey:    nextOwnerPublicKey.clone(),
 		}),
 	}
 	var signOpts crypto.SignerOpts
@@ -526,5 +548,5 @@ func ExtendVoucher[T PublicKeyOrChain](v *Voucher, owner crypto.PrivateKey, next
 	}
 
 	xv.Entries = append(xv.Entries, entry)
-	return &xv, nil
+	return xv, nil
 }
