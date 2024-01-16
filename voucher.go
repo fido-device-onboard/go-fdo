@@ -528,9 +528,14 @@ func ExtendVoucher[T PublicKeyOrChain](v *Voucher, owner crypto.PrivateKey, next
 	}
 	var signOpts crypto.SignerOpts
 	if v.Header.Val.ManufacturerKey.Type == RsaPssKeyType {
-		signOpts = &rsa.PSSOptions{
-			SaltLength: rsa.PSSSaltLengthEqualsHash,
-			Hash:       crypto.SHA384,
+		signOpts = &rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash}
+		switch keySize := ownerPub.(*rsa.PublicKey).Size(); keySize {
+		case 2048 / 8:
+			signOpts.(*rsa.PSSOptions).Hash = crypto.SHA256
+		case 3072 / 8:
+			signOpts.(*rsa.PSSOptions).Hash = crypto.SHA384
+		default:
+			return nil, fmt.Errorf("unsupported RSA key size: %d bits", keySize*8)
 		}
 	}
 	if err := entry.Sign(owner, nil, signOpts); err != nil {
