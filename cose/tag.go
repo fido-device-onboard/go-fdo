@@ -41,6 +41,9 @@ const (
 // SignTag encodes to a CBOR tag while ensuring the right tag number.
 type SignTag[T any] Sign[T]
 
+// Tag is a helper for accessing the tag value.
+func (t *Sign[T]) Tag() *SignTag[T] { return (*SignTag[T])(t) }
+
 // Untag is a helper for accessing the tag value.
 func (t *SignTag[T]) Untag() *Sign[T] { return (*Sign[T])(t) }
 
@@ -65,6 +68,9 @@ func (t *SignTag[T]) UnmarshalCBOR(data []byte) error {
 
 // Sign1Tag encodes to a CBOR tag while ensuring the right tag number.
 type Sign1Tag[T any] Sign1[T]
+
+// Tag is a helper for accessing the tag value.
+func (t *Sign1[T]) Tag() *Sign1Tag[T] { return (*Sign1Tag[T])(t) }
 
 // Untag is a helper for accessing the tag value.
 func (t *Sign1Tag[T]) Untag() *Sign1[T] { return (*Sign1[T])(t) }
@@ -103,6 +109,9 @@ func (s1 *Sign1Tag[T]) Verify(key crypto.PublicKey, payload []byte) (bool, error
 // EncryptTag encodes to a CBOR tag while ensuring the right tag number.
 type EncryptTag[T any] Encrypt[T]
 
+// Tag is a helper for accessing the tag value.
+func (t *Encrypt[T]) Tag() *EncryptTag[T] { return (*EncryptTag[T])(t) }
+
 // Untag is a helper for accessing the tag value.
 func (t *EncryptTag[T]) Untag() *Encrypt[T] { return (*Encrypt[T])(t) }
 
@@ -127,6 +136,9 @@ func (t *EncryptTag[T]) UnmarshalCBOR(data []byte) error {
 
 // Encrypt0Tag encodes to a CBOR tag while ensuring the right tag number.
 type Encrypt0Tag[T any] Encrypt0[T]
+
+// Tag is a helper for accessing the tag value.
+func (t *Encrypt0[T]) Tag() *Encrypt0Tag[T] { return (*Encrypt0Tag[T])(t) }
 
 // Untag is a helper for accessing the tag value.
 func (t *Encrypt0Tag[T]) Untag() *Encrypt0[T] { return (*Encrypt0[T])(t) }
@@ -153,6 +165,9 @@ func (t *Encrypt0Tag[T]) UnmarshalCBOR(data []byte) error {
 // MacTag encodes to a CBOR tag while ensuring the right tag number.
 type MacTag[T any] Mac[T]
 
+// Tag is a helper for accessing the tag value.
+func (t *Mac[T]) Tag() *MacTag[T] { return (*MacTag[T])(t) }
+
 // Untag is a helper for accessing the tag value.
 func (t *MacTag[T]) Untag() *Mac[T] { return (*Mac[T])(t) }
 
@@ -177,6 +192,9 @@ func (t *MacTag[T]) UnmarshalCBOR(data []byte) error {
 
 // Mac0Tag encodes to a CBOR tag while ensuring the right tag number.
 type Mac0Tag[T any] Mac0[T]
+
+// Tag is a helper for accessing the tag value.
+func (t *Mac0[T]) Tag() *Mac0Tag[T] { return (*Mac0Tag[T])(t) }
 
 // Untag is a helper for accessing the tag value.
 func (t *Mac0Tag[T]) Untag() *Mac0[T] { return (*Mac0[T])(t) }

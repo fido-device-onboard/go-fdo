@@ -35,7 +35,7 @@ type Encrypt0[T any] struct {
 type Mac[T any] struct {
 	Header
 	Payload    *cbor.Bstr[T] // byte string or null when transported separately
-	Tag        []byte        // non-empty byte string containing the MAC
+	Value      []byte        // non-empty byte string containing the MAC
 	Recipients []Recipient   // non-empty array of recipients
 }
 
@@ -45,7 +45,7 @@ type Mac[T any] struct {
 type Mac0[T any] struct {
 	Header
 	Payload *cbor.Bstr[T] // byte string or null when transported separately
-	Tag     []byte        // non-empty byte string containing the MAC
+	Value   []byte        // non-empty byte string containing the MAC
 }
 
 const (
