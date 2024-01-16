@@ -23,6 +23,8 @@ import (
 /*
 Test data was generated with https://github.com/fdo-rs/fido-device-onboard-rs
 
+See PR https://github.com/fdo-rs/fido-device-onboard-rs/pull/601
+
 	cargo build --release
 	mkdir tmp
 	cd tmp
@@ -134,7 +136,7 @@ func TestVerifyUnextendedVoucher(t *testing.T) {
 		t.Errorf("error verifying voucher header: %v", err)
 	}
 
-	if err := ov.VerifyCertChain(nil); err != nil {
+	if err := ov.VerifyDeviceCertChain(nil); err != nil {
 		t.Errorf("error verifying voucher cert chain (with implicit trusted root): %v", err)
 	}
 

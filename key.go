@@ -108,6 +108,59 @@ const (
 	CoseKeyEnc KeyEncoding = 3
 )
 
+// Certificate is a newtype for x509.Certificate implementing proper CBOR
+// encoding.
+type Certificate x509.Certificate
+
+func (c *Certificate) MarshalCBOR() ([]byte, error) {
+	if c == nil {
+		return cbor.Marshal(nil)
+	}
+	return cbor.Marshal(c.Raw)
+}
+
+func (c *Certificate) UnmarshalCBOR(data []byte) error {
+	if c == nil {
+		return errors.New("cannot unmarshal to a nil pointer")
+	}
+	var der []byte
+	if err := cbor.Unmarshal(data, &der); err != nil {
+		return err
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		return fmt.Errorf("error parsing x509 certificate DER-encoded bytes: %w", err)
+	}
+	*c = Certificate(*cert)
+	return nil
+}
+
+func verifyCertChain(chain []*x509.Certificate, roots *x509.CertPool) error {
+	// All all intermediates (if any) to a pool
+	intermediates := x509.NewCertPool()
+	if len(chain) > 2 {
+		for _, cert := range chain[1 : len(chain)-1] {
+			intermediates.AddCert(cert)
+		}
+	}
+
+	// Trust last certificate in chain if roots is nil
+	if roots == nil {
+		roots = x509.NewCertPool()
+		roots.AddCert(chain[len(chain)-1])
+	}
+
+	// Return the result of (*x509.Certificate).Verify
+	if _, err := chain[0].Verify(x509.VerifyOptions{
+		Roots:         roots,
+		Intermediates: intermediates,
+	}); err != nil {
+		return fmt.Errorf("%w: %w", ErrCryptoVerifyFailed, err)
+	}
+
+	return nil
+}
+
 // PublicKey encodes public key information in FDO messages and vouchers.
 type PublicKey struct {
 	Type     KeyType

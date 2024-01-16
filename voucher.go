@@ -21,94 +21,77 @@ import (
 
 // Rendezvous Variables
 const (
-	RVDevOnly    uint64 = 0
-	RVOwnerOnly  uint64 = 1
-	RVIPAddress  uint64 = 2
-	RVDevPort    uint64 = 3
-	RVOwnerPort  uint64 = 4
-	RVDns        uint64 = 5
-	RVSvCertHash uint64 = 6
-	RVClCertHash uint64 = 7
-	RVUserInput  uint64 = 8
-	RVWifiSsid   uint64 = 9
-	RVWifiPw     uint64 = 10
-	RVMedium     uint64 = 11
-	RVProtocol   uint64 = 12
-	RVDelaysec   uint64 = 13
-	RVBypass     uint64 = 14
-	RVExtRV      uint64 = 15
+	RVDevOnly    uint8 = 0
+	RVOwnerOnly  uint8 = 1
+	RVIPAddress  uint8 = 2
+	RVDevPort    uint8 = 3
+	RVOwnerPort  uint8 = 4
+	RVDns        uint8 = 5
+	RVSvCertHash uint8 = 6
+	RVClCertHash uint8 = 7
+	RVUserInput  uint8 = 8
+	RVWifiSsid   uint8 = 9
+	RVWifiPw     uint8 = 10
+	RVMedium     uint8 = 11
+	RVProtocol   uint8 = 12
+	RVDelaysec   uint8 = 13
+	RVBypass     uint8 = 14
+	RVExtRV      uint8 = 15
 )
 
 // Rendezvous Protocols
 const (
-	RVProtRest    uint64 = 0
-	RVProtHttp    uint64 = 1
-	RVProtHttps   uint64 = 2
-	RVProtTcp     uint64 = 3
-	RVProtTls     uint64 = 4
-	RVProtCoapTcp uint64 = 5
-	RVProtCoapUdp uint64 = 6
+	RVProtRest    uint8 = 0
+	RVProtHttp    uint8 = 1
+	RVProtHttps   uint8 = 2
+	RVProtTcp     uint8 = 3
+	RVProtTls     uint8 = 4
+	RVProtCoapTcp uint8 = 5
+	RVProtCoapUdp uint8 = 6
 )
 
 // Rendezvous Media
 const (
-	RVMedEth0    uint64 = 0
-	RVMedEth1    uint64 = 1
-	RVMedEth2    uint64 = 2
-	RVMedEth3    uint64 = 3
-	RVMedEth4    uint64 = 4
-	RVMedEth5    uint64 = 5
-	RVMedEth6    uint64 = 6
-	RVMedEth7    uint64 = 7
-	RVMedEth8    uint64 = 8
-	RVMedEth9    uint64 = 9
-	RVMedEthAll  uint64 = 20
-	RVMedWifi0   uint64 = 10
-	RVMedWifi1   uint64 = 11
-	RVMedWifi2   uint64 = 12
-	RVMedWifi3   uint64 = 13
-	RVMedWifi4   uint64 = 14
-	RVMedWifi5   uint64 = 15
-	RVMedWifi6   uint64 = 16
-	RVMedWifi7   uint64 = 17
-	RVMedWifi8   uint64 = 18
-	RVMedWifi9   uint64 = 19
-	RVMedWifiAll uint64 = 21
+	RVMedEth0    uint8 = 0
+	RVMedEth1    uint8 = 1
+	RVMedEth2    uint8 = 2
+	RVMedEth3    uint8 = 3
+	RVMedEth4    uint8 = 4
+	RVMedEth5    uint8 = 5
+	RVMedEth6    uint8 = 6
+	RVMedEth7    uint8 = 7
+	RVMedEth8    uint8 = 8
+	RVMedEth9    uint8 = 9
+	RVMedEthAll  uint8 = 20
+	RVMedWifi0   uint8 = 10
+	RVMedWifi1   uint8 = 11
+	RVMedWifi2   uint8 = 12
+	RVMedWifi3   uint8 = 13
+	RVMedWifi4   uint8 = 14
+	RVMedWifi5   uint8 = 15
+	RVMedWifi6   uint8 = 16
+	RVMedWifi7   uint8 = 17
+	RVMedWifi8   uint8 = 18
+	RVMedWifi9   uint8 = 19
+	RVMedWifiAll uint8 = 21
 )
 
 // ErrCryptoVerifyFailed indicates that the wrapping error originated from a
 // case of cryptographic verification failing rather than a broken invariant.
 var ErrCryptoVerifyFailed = errors.New("cryptographic verification failed")
 
-// Certificate is a newtype for x509.Certificate implementing proper CBOR
-// encoding.
-type Certificate x509.Certificate
-
-// X509 is a helper function for conversion.
-func (c *Certificate) X509() *x509.Certificate { return (*x509.Certificate)(c) }
-
-func (c *Certificate) MarshalCBOR() ([]byte, error) {
-	if c == nil {
-		return cbor.Marshal(nil)
-	}
-	return cbor.Marshal(c.Raw)
+// RvInstruction contains a paired rendezvous variable identifier and value.
+type RvInstruction struct {
+	Variable uint8
+	Value    []byte
 }
 
-func (c *Certificate) UnmarshalCBOR(data []byte) error {
-	if c == nil {
-		return errors.New("cannot unmarshal to a nil pointer")
-	}
-	var der []byte
-	if err := cbor.Unmarshal(data, &der); err != nil {
-		return err
-	}
-	cert, err := x509.ParseCertificate(der)
-	if err != nil {
-		return fmt.Errorf("error parsing x509 certificate DER-encoded bytes: %w", err)
-	}
-	*c = Certificate(*cert)
-	return nil
-}
+// ExtraInfo may be used to pass additional supply-chain information along with
+// the Ownership Voucher. The Device implicitly verifies the plaintext of
+// OVEExtra along with the verification of the Ownership Voucher. An Owner
+// which trusts the Device' verification of the Ownership Voucher may also
+// choose to trust OVEExtra.
+type ExtraInfo map[int][]byte
 
 // Voucher is the top level structure.
 //
@@ -134,6 +117,66 @@ type Voucher struct {
 	Entries   []cose.Sign1Tag[VoucherEntryPayload]
 }
 
+// VoucherHeader is the Ownership Voucher header, also used in TO1 protocol.
+//
+//	OVHeader = [
+//	    OVHProtVer:        protver,        ;; protocol version
+//	    OVGuid:            Guid,           ;; guid
+//	    OVRVInfo:          RendezvousInfo, ;; rendezvous instructions
+//	    OVDeviceInfo:      tstr,           ;; DeviceInfo
+//	    OVPubKey:          PublicKey,      ;; mfg public key
+//	    OVDevCertChainHash:OVDevCertChainHashOrNull
+//	]
+//
+//	;; Hash of Device certificate chain
+//	;; use null for Intel® EPID
+//	OVDevCertChainHashOrNull = Hash / null     ;; CBOR null for Intel® EPID device key
+type VoucherHeader struct {
+	Version         uint16
+	Guid            Guid
+	RvInfo          [][]RvInstruction
+	DeviceInfo      string
+	ManufacturerKey PublicKey
+	CertChainHash   *Hash
+}
+
+// VoucherEntryPayload is an entry in a voucher's list of recorded transfers.
+//
+// ;; ...each entry is a COSE Sign1 object with a payload
+// OVEntry = CoseSignature
+// $COSEProtectedHeaders //= (
+//
+//	1: OVSignType
+//
+// )
+// $COSEPayloads /= (
+//
+//	OVEntryPayload
+//
+// )
+// ;; ... each payload contains the hash of the previous entry
+// ;; and the signature of the public key to verify the next signature
+// ;; (or the Owner, in the last entry).
+// OVEntryPayload = [
+//
+//	OVEHashPrevEntry: Hash,
+//	OVEHashHdrInfo:   Hash,  ;; hash[GUID||DeviceInfo] in header
+//	OVEExtra:         null / bstr .cbor OVEExtraInfo
+//	OVEPubKey:        PublicKey
+//
+// ]
+//
+// OVEExtraInfo = { * OVEExtraInfoType: bstr }
+// OVEExtraInfoType = int
+//
+// ;;OVSignType = Supporting COSE signature types
+type VoucherEntryPayload struct {
+	PreviousHash Hash
+	HeaderHash   Hash
+	Extra        *cbor.Bstr[ExtraInfo]
+	PublicKey    PublicKey
+}
+
 func (v *Voucher) shallowClone() *Voucher {
 	return &Voucher{
 		Version: v.Version,
@@ -151,46 +194,49 @@ func (v *Voucher) shallowClone() *Voucher {
 	}
 }
 
+// DevicePublicKey extracts the device's public key from from the certificate
+// chain. Before calling this method, the voucher must be fully verified. For
+// certain key types, such as Intel EPID, the public key will be nil.
+func (v *Voucher) DevicePublicKey() (crypto.PublicKey, error) {
+	if v.CertChain == nil {
+		return nil, nil
+	}
+	if len(*v.CertChain) == 0 {
+		return nil, errors.New("empty cert chain")
+	}
+	return (*v.CertChain)[len(*v.CertChain)-1].PublicKey, nil
+}
+
+// OwnerPublicKey extracts the voucher owner's public key from either the
+// header or the entries list.
+func (v *Voucher) OwnerPublicKey() (crypto.PublicKey, error) {
+	if len(v.Entries) == 0 {
+		return v.Header.Val.ManufacturerKey.Public()
+	}
+	return v.Entries[len(v.Entries)-1].Payload.Val.PublicKey.Public()
+}
+
 // VerifyHeader checks that the OVHeader was not modified by comparing the HMAC
 // generated using the secret from the device credentials.
 func (v *Voucher) VerifyHeader(deviceCredential Signer) error {
 	return deviceCredential.HmacVerify(v.Hmac, &v.Header.Val)
 }
 
-// VerifyCertChain using trusted roots. If roots is nil then the last
+// VerifyDeviceCertChain using trusted roots. If roots is nil then the last
 // certificate in the chain will be implicitly trusted.
-func (v *Voucher) VerifyCertChain(roots *x509.CertPool) error {
+func (v *Voucher) VerifyDeviceCertChain(roots *x509.CertPool) error {
 	if v.CertChain == nil {
 		return nil
 	}
 	if len(*v.CertChain) == 0 {
 		return errors.New("empty cert chain")
 	}
-	chain := *v.CertChain
-
-	// All all intermediates (if any) to a pool
-	intermediates := x509.NewCertPool()
-	if len(chain) > 2 {
-		for _, cert := range chain[1 : len(chain)-1] {
-			intermediates.AddCert(cert.X509())
-		}
+	chain := make([]*x509.Certificate, len(*v.CertChain))
+	for i, cert := range *v.CertChain {
+		cert := cert
+		chain[i] = (*x509.Certificate)(cert)
 	}
-
-	// Trust last certificate in chain if roots is nil
-	if roots == nil {
-		roots = x509.NewCertPool()
-		roots.AddCert(chain[len(chain)-1].X509())
-	}
-
-	// Return the result of (*x509.Certificate).Verify
-	if _, err := chain[0].X509().Verify(x509.VerifyOptions{
-		Roots:         roots,
-		Intermediates: intermediates,
-	}); err != nil {
-		return fmt.Errorf("%w: %w", ErrCryptoVerifyFailed, err)
-	}
-
-	return nil
+	return verifyCertChain(chain, roots)
 }
 
 // VerifyCertChainHash uses the hash in the voucher header to verify that the
@@ -247,6 +293,25 @@ func (v *Voucher) VerifyManufacturerKey(keyHash Hash) error {
 		return fmt.Errorf("%w: manufacturer public key hash did not match", ErrCryptoVerifyFailed)
 	}
 	return nil
+}
+
+// VerifyManufacturerCertChain using trusted roots. If roots is nil then the
+// last certificate in the chain will be implicitly trusted.
+//
+// If the manufacturer public key is X509 encoded rather than X5Chain, then
+// this method will fail if a non-nil root certificate pool is given.
+func (v *Voucher) VerifyManufacturerCertChain(roots *x509.CertPool) error {
+	chain, err := v.Header.Val.ManufacturerKey.Chain()
+	if err != nil {
+		return fmt.Errorf("error parsing manufacturer public key: %w", err)
+	}
+	if chain == nil {
+		if roots == nil {
+			return nil
+		}
+		return fmt.Errorf("manufacturer public key could not be verified against given roots, because it was not an X5Chain")
+	}
+	return verifyCertChain(chain, roots)
 }
 
 // VerifyEntries checks the chain of signatures on each voucher entry payload.
@@ -343,99 +408,24 @@ func validateNextEntry(prevOwnerKey crypto.PublicKey, prevHash hash.Hash, header
 	return validateNextEntry(ownerKey, payloadHash, headerInfo, i+1, entries[1:])
 }
 
-// DevicePublicKey extracts the device's public key from from the certificate
-// chain. Before calling this method, the voucher must be fully verified. For
-// certain key types, such as Intel EPID, the public key will be nil.
-func (v *Voucher) DevicePublicKey() (crypto.PublicKey, error) {
-	if v.CertChain == nil {
-		return nil, nil
+// VerifyOwnerCertChain validates the certificate chain of the owner public key
+// using trusted roots. If roots is nil then the last certificate in the chain
+// will be implicitly trusted. If the public key is X509 encoded rather than
+// X5Chain, then this method will fail if a non-nil root certificate pool is
+// given.
+func (e *VoucherEntryPayload) VerifyOwnerCertChain(roots *x509.CertPool) error {
+	chain, err := e.PublicKey.Chain()
+	if err != nil {
+		return fmt.Errorf("error parsing voucher entry's owner public key: %w", err)
 	}
-	if len(*v.CertChain) == 0 {
-		return nil, errors.New("empty cert chain")
+	if chain == nil {
+		if roots == nil {
+			return nil
+		}
+		return fmt.Errorf("voucher entry's owner public key could not be verified against given roots, because it was not an X5Chain")
 	}
-	return (*v.CertChain)[len(*v.CertChain)-1].PublicKey, nil
+	return verifyCertChain(chain, roots)
 }
-
-// OwnerPublicKey extracts the voucher owner's public key from either the
-// header or the entries list.
-func (v *Voucher) OwnerPublicKey() (crypto.PublicKey, error) {
-	if len(v.Entries) == 0 {
-		return v.Header.Val.ManufacturerKey.Public()
-	}
-	return v.Entries[len(v.Entries)-1].Payload.Val.PublicKey.Public()
-}
-
-// VoucherHeader is the Ownership Voucher header, also used in TO1 protocol.
-//
-//	OVHeader = [
-//	    OVHProtVer:        protver,        ;; protocol version
-//	    OVGuid:            Guid,           ;; guid
-//	    OVRVInfo:          RendezvousInfo, ;; rendezvous instructions
-//	    OVDeviceInfo:      tstr,           ;; DeviceInfo
-//	    OVPubKey:          PublicKey,      ;; mfg public key
-//	    OVDevCertChainHash:OVDevCertChainHashOrNull
-//	]
-//
-//	;; Hash of Device certificate chain
-//	;; use null for Intel® EPID
-//	OVDevCertChainHashOrNull = Hash / null     ;; CBOR null for Intel® EPID device key
-type VoucherHeader struct {
-	Version         uint16
-	Guid            Guid
-	RvInfo          [][]RvVariable
-	DeviceInfo      string
-	ManufacturerKey PublicKey
-	CertChainHash   *Hash
-}
-
-type RvVariable struct {
-	Variable uint64
-	Value    []byte
-}
-
-// VoucherEntryPayload is an entry in a voucher's list of recorded transfers.
-//
-// ;; ...each entry is a COSE Sign1 object with a payload
-// OVEntry = CoseSignature
-// $COSEProtectedHeaders //= (
-//
-//	1: OVSignType
-//
-// )
-// $COSEPayloads /= (
-//
-//	OVEntryPayload
-//
-// )
-// ;; ... each payload contains the hash of the previous entry
-// ;; and the signature of the public key to verify the next signature
-// ;; (or the Owner, in the last entry).
-// OVEntryPayload = [
-//
-//	OVEHashPrevEntry: Hash,
-//	OVEHashHdrInfo:   Hash,  ;; hash[GUID||DeviceInfo] in header
-//	OVEExtra:         null / bstr .cbor OVEExtraInfo
-//	OVEPubKey:        PublicKey
-//
-// ]
-//
-// OVEExtraInfo = { * OVEExtraInfoType: bstr }
-// OVEExtraInfoType = int
-//
-// ;;OVSignType = Supporting COSE signature types
-type VoucherEntryPayload struct {
-	PreviousHash Hash
-	HeaderHash   Hash
-	Extra        *cbor.Bstr[ExtraInfo]
-	PublicKey    PublicKey
-}
-
-// ExtraInfo may be used to pass additional supply-chain information along with
-// the Ownership Voucher. The Device implicitly verifies the plaintext of
-// OVEExtra along with the verification of the Ownership Voucher. An Owner
-// which trusts the Device' verification of the Ownership Voucher may also
-// choose to trust OVEExtra.
-type ExtraInfo map[int][]byte
 
 // ExtendVoucher adds a new signed voucher entry to the list and returns the
 // new extended vouchers. Vouchers should be treated as immutable structures.

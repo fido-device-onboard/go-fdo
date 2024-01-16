@@ -32,7 +32,7 @@ type DeviceCredential struct {
 	Version       uint16
 	DeviceInfo    string
 	Guid          Guid
-	RvInfo        [][]RvVariable
+	RvInfo        [][]RvInstruction
 	PublicKeyHash Hash // expected to be a hash of the entire CBOR structure (not just pkBody) for Voucher.VerifyEntries to succeed
 }
 
