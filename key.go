@@ -6,6 +6,7 @@ package fdo
 import (
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rsa"
 	"crypto/x509"
 	"errors"
@@ -158,6 +159,54 @@ func verifyCertChain(chain []*x509.Certificate, roots *x509.CertPool) error {
 		return fmt.Errorf("%w: %w", ErrCryptoVerifyFailed, err)
 	}
 
+	return nil
+}
+
+// Pkcs8Key CBOR-encodes a private key to a byte string of PKCS8 DER content.
+type Pkcs8Key struct {
+	Key crypto.PrivateKey
+}
+
+// Public returns the public portion of the private key.
+func (p Pkcs8Key) Public() crypto.PublicKey {
+	return p.Key.(interface{ Public() crypto.PublicKey }).Public()
+}
+
+// IsValid checks whether the key is valid for FDO Device Credential use.
+func (p Pkcs8Key) IsValid() bool {
+	switch key := p.Key.(type) {
+	case *ecdsa.PrivateKey:
+		switch key.Curve {
+		case elliptic.P256(), elliptic.P384():
+			return true
+		}
+	case *rsa.PrivateKey:
+		switch key.Size() {
+		case 2048 / 8, 3072 / 8:
+			return true
+		}
+	}
+	return false
+}
+
+func (p Pkcs8Key) MarshalCBOR() ([]byte, error) {
+	der, err := x509.MarshalPKCS8PrivateKey(p.Key)
+	if err != nil {
+		return nil, err
+	}
+	return cbor.Marshal(der)
+}
+
+func (p *Pkcs8Key) UnmarshalCBOR(data []byte) error {
+	var der []byte
+	if err := cbor.Unmarshal(data, &der); err != nil {
+		return err
+	}
+	key, err := x509.ParsePKCS8PrivateKey(der)
+	if err != nil {
+		return err
+	}
+	p.Key = key
 	return nil
 }
 

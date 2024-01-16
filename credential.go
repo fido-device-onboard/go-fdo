@@ -4,11 +4,9 @@
 package fdo
 
 import (
+	"crypto"
 	"crypto/hmac"
-	"crypto/sha256"
-	"crypto/sha512"
 	"fmt"
-	"hash"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
@@ -44,7 +42,7 @@ type DeviceCredentialBlob struct {
 
 	// Secrets that would otherwise be stored inside a TPM or other enclave.
 	HmacSecret []byte
-	PrivateKey []byte // PKCS#8
+	PrivateKey Pkcs8Key
 }
 
 var _ Signer = (*DeviceCredentialBlob)(nil)
@@ -52,17 +50,21 @@ var _ Signer = (*DeviceCredentialBlob)(nil)
 // Hmac encodes the given value to CBOR and calculates the hashed MAC for the
 // given algorithm.
 func (dc *DeviceCredentialBlob) Hmac(alg HashAlg, payload any) (Hmac, error) {
-	var newHash func() hash.Hash
-	switch alg {
-	case HmacSha256Hash:
-		newHash = sha256.New
-	case HmacSha384Hash:
-		newHash = sha512.New384
-	default:
-		return Hmac{}, fmt.Errorf("unsupported hmac algorithm: %v", alg)
+	if !dc.PrivateKey.IsValid() {
+		return Hmac{}, fmt.Errorf("private key is invalid")
 	}
 
-	mac := hmac.New(newHash, dc.HmacSecret)
+	var hash crypto.Hash
+	switch alg {
+	case HmacSha256Hash:
+		hash = crypto.SHA256
+	case HmacSha384Hash:
+		hash = crypto.SHA384
+	default:
+		return Hmac{}, fmt.Errorf("unsupported hash algorithm: %s", alg)
+	}
+
+	mac := hmac.New(hash.New, dc.HmacSecret)
 	if err := cbor.NewEncoder(mac).Encode(payload); err != nil {
 		return Hmac{}, fmt.Errorf("error computing hmac: marshaling payload: %w", err)
 	}
@@ -72,21 +74,15 @@ func (dc *DeviceCredentialBlob) Hmac(alg HashAlg, payload any) (Hmac, error) {
 	}, nil
 }
 
-// HmacVerify encodes the given value to CBOR and verifies that the given HMAC
-// matches it.
-func (dc *DeviceCredentialBlob) HmacVerify(h Hmac, v any) error {
-	h1, err := dc.Hmac(h.Algorithm, v)
-	if err != nil {
-		return err
+// Sign encodes the given payload to CBOR and performs signing using the
+// inherent hash of the signer.
+func (dc *DeviceCredentialBlob) Sign(payload any) (*cose.Sign1[any], error) {
+	if !dc.PrivateKey.IsValid() {
+		return nil, fmt.Errorf("private key is invalid")
 	}
-	if !hmac.Equal(h.Value, h1.Value) {
-		return fmt.Errorf("%w: hmac did not match", ErrCryptoVerifyFailed)
+	s1 := cose.Sign1[any]{Payload: cbor.NewBstrPtr(payload)}
+	if err := s1.Sign(dc.PrivateKey.Key, nil, nil); err != nil {
+		return nil, err
 	}
-	return nil
-}
-
-// Sign encodes the given payload to CBOR and performs signs it as a COSE Sign1
-// signature structure.
-func (dc *DeviceCredentialBlob) Sign(payload any) (cose.Sign1[any], error) {
-	panic("unimplemented")
+	return &s1, nil
 }

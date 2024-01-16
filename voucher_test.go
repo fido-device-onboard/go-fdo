@@ -116,11 +116,15 @@ func readCredential(t *testing.T) *fdo.DeviceCredentialBlob {
 	if err := cbor.Unmarshal(b, &rustCred); err != nil {
 		t.Fatalf("error loading device credential blob: %v", err)
 	}
+	privateKey, err := x509.ParseECPrivateKey(rustCred.Secrets["Plain"]["private_key"])
+	if err != nil {
+		t.Fatalf("error parsing private key: %v", err)
+	}
 	return &fdo.DeviceCredentialBlob{
 		Active:           rustCred.Active,
 		DeviceCredential: rustCred.DeviceCredential,
 		HmacSecret:       rustCred.Secrets["Plain"]["hmac_secret"],
-		PrivateKey:       rustCred.Secrets["Plain"]["private_key"],
+		PrivateKey:       fdo.Pkcs8Key{Key: privateKey},
 	}
 }
 

@@ -3,7 +3,12 @@
 
 package fdo
 
-import "github.com/fido-device-onboard/go-fdo/cose"
+import (
+	"crypto/hmac"
+	"fmt"
+
+	"github.com/fido-device-onboard/go-fdo/cose"
+)
 
 // Guid is implemented as a 128-bit cryptographically strong random number.
 //
@@ -110,18 +115,27 @@ type SigInfo struct {
 	Info []byte
 }
 
-// Signer implements COSE sign and HMAC hash/verify functions.
+// Signer implements signing and hashing functions with some secret material.
 type Signer interface {
 	// Hmac encodes the given value to CBOR and calculates the hashed MAC for
 	// the given algorithm.
 	Hmac(HashAlg, any) (Hmac, error)
 
-	// HmacVerify encodes the given value to CBOR and verifies that the given
-	// HMAC matches it. If the cryptographic portion of verification fails,
-	// then ErrCryptoVerifyFailed should be wrapped.
-	HmacVerify(Hmac, any) error
+	// Sign encodes the given payload to CBOR and then signs it as a COSE Sign1
+	// signature structure.
+	Sign(any) (*cose.Sign1[any], error)
+}
 
-	// Sign encodes the given payload to CBOR and performs signs it as a COSE
-	// Sign1 signature structure.
-	Sign(any) (cose.Sign1[any], error)
+// HmacVerify encodes the given value to CBOR and verifies that the given HMAC
+// matches it. If the cryptographic portion of verification fails, then
+// ErrCryptoVerifyFailed is wrapped.
+func HmacVerify(dc Signer, h1 Hmac, v any) error {
+	h2, err := dc.Hmac(h1.Algorithm, v)
+	if err != nil {
+		return err
+	}
+	if !hmac.Equal(h1.Value, h2.Value) {
+		return fmt.Errorf("%w: hmac did not match", ErrCryptoVerifyFailed)
+	}
+	return nil
 }

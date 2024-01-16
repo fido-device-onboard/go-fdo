@@ -5,6 +5,7 @@ package tpm
 
 import (
 	"github.com/fido-device-onboard/go-fdo"
+	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
 )
 
@@ -40,16 +41,20 @@ func (dc *DeviceCredential) Hmac(alg fdo.HashAlg, payload any) (fdo.Hmac, error)
 	panic("unimplemented")
 }
 
-// HmacVerify encodes the given value to CBOR and verifies that the given HMAC
-// matches it.
-func (dc *DeviceCredential) HmacVerify(h fdo.Hmac, v any) error {
-	panic("unimplemented")
-}
-
-// Sign encodes the given payload to CBOR and performs signs it as a COSE Sign1
+// Sign encodes the given payload to CBOR and then signs it as a COSE Sign1
 // signature structure.
-func (dc *DeviceCredential) Sign(payload any) (cose.Sign1[any], error) {
-	panic("unimplemented")
+func (dc *DeviceCredential) Sign(payload any) (*cose.Sign1[any], error) {
+	s1 := cose.Sign1[any]{Payload: cbor.NewBstrPtr(payload)}
+	if err := s1.Sign(nil, nil, &cose.SignFuncOptions{
+		// TODO: Select real parameters
+		Algorithm: cose.ES256Alg,
+		Sign: func([]byte) ([]byte, error) {
+			panic("unimplemented")
+		},
+	}); err != nil {
+		return nil, err
+	}
+	return &s1, nil
 }
 
 // TODO: Helper methods for loading/storing to TPM

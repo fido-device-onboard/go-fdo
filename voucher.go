@@ -219,7 +219,7 @@ func (v *Voucher) OwnerPublicKey() (crypto.PublicKey, error) {
 // VerifyHeader checks that the OVHeader was not modified by comparing the HMAC
 // generated using the secret from the device credentials.
 func (v *Voucher) VerifyHeader(deviceCredential Signer) error {
-	return deviceCredential.HmacVerify(v.Hmac, &v.Header.Val)
+	return HmacVerify(deviceCredential, v.Hmac, &v.Header.Val)
 }
 
 // VerifyDeviceCertChain using trusted roots. If roots is nil then the last

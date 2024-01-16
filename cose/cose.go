@@ -11,6 +11,10 @@ import (
 	"github.com/fido-device-onboard/go-fdo/cbor"
 )
 
+// Algorithm is the ECDSA/RSASSA-PKCS1-v1_5/RSASSA-PKCS1-v1_5 signature type
+// and hash.
+type Algorithm int16
+
 /*
 ECDSA Algorithm Values
 
@@ -23,28 +27,28 @@ ECDSA Algorithm Values
 	+-------+-------+---------+------------------+
 */
 const (
-	es256AlgId int64 = -7
-	es384AlgId int64 = -35
-	es512AlgId int64 = -36
+	ES256Alg Algorithm = -7
+	ES384Alg Algorithm = -35
+	ES512Alg Algorithm = -36
 )
 
 var (
-	es256AlgIdCbor cbor.RawBytes
-	es384AlgIdCbor cbor.RawBytes
-	es512AlgIdCbor cbor.RawBytes
+	es256AlgCbor cbor.RawBytes
+	es384AlgCbor cbor.RawBytes
+	es512AlgCbor cbor.RawBytes
 )
 
 func init() {
 	var err error
-	es256AlgIdCbor, err = cbor.Marshal(es256AlgId)
+	es256AlgCbor, err = cbor.Marshal(ES256Alg)
 	if err != nil {
 		panic("error marshaling ES256 algorithm ID: " + err.Error())
 	}
-	es384AlgIdCbor, err = cbor.Marshal(es384AlgId)
+	es384AlgCbor, err = cbor.Marshal(ES384Alg)
 	if err != nil {
 		panic("error marshaling ES384 algorithm ID: " + err.Error())
 	}
-	es512AlgIdCbor, err = cbor.Marshal(es512AlgId)
+	es512AlgCbor, err = cbor.Marshal(ES512Alg)
 	if err != nil {
 		panic("error marshaling ES512 algorithm ID: " + err.Error())
 	}
@@ -62,28 +66,28 @@ RSASSA-PKCS1-v1_5 Algorithm Values
 	+-------+-------+---------+------------------------------+
 */
 const (
-	rs256AlgId int64 = -257
-	rs384AlgId int64 = -258
-	rs512AlgId int64 = -259
+	RS256Alg Algorithm = -257
+	RS384Alg Algorithm = -258
+	RS512Alg Algorithm = -259
 )
 
 var (
-	rs256AlgIdCbor cbor.RawBytes
-	rs384AlgIdCbor cbor.RawBytes
-	rs512AlgIdCbor cbor.RawBytes
+	rs256AlgCbor cbor.RawBytes
+	rs384AlgCbor cbor.RawBytes
+	rs512AlgCbor cbor.RawBytes
 )
 
 func init() {
 	var err error
-	rs256AlgIdCbor, err = cbor.Marshal(rs256AlgId)
+	rs256AlgCbor, err = cbor.Marshal(RS256Alg)
 	if err != nil {
 		panic("error marshaling RS256 algorithm ID: " + err.Error())
 	}
-	rs384AlgIdCbor, err = cbor.Marshal(rs384AlgId)
+	rs384AlgCbor, err = cbor.Marshal(RS384Alg)
 	if err != nil {
 		panic("error marshaling RS384 algorithm ID: " + err.Error())
 	}
-	rs512AlgIdCbor, err = cbor.Marshal(rs512AlgId)
+	rs512AlgCbor, err = cbor.Marshal(RS512Alg)
 	if err != nil {
 		panic("error marshaling RS512 algorithm ID: " + err.Error())
 	}
@@ -101,28 +105,28 @@ RSASSA-PSS Algorithm Values from RFC 8230
 	+-------+-------+---------+-------------+-----------------------+
 */
 const (
-	ps256AlgId int64 = -37
-	ps384AlgId int64 = -38
-	ps512AlgId int64 = -39
+	PS256Alg Algorithm = -37
+	PS384Alg Algorithm = -38
+	PS512Alg Algorithm = -39
 )
 
 var (
-	ps256AlgIdCbor cbor.RawBytes
-	ps384AlgIdCbor cbor.RawBytes
-	ps512AlgIdCbor cbor.RawBytes
+	ps256AlgCbor cbor.RawBytes
+	ps384AlgCbor cbor.RawBytes
+	ps512AlgCbor cbor.RawBytes
 )
 
 func init() {
 	var err error
-	ps256AlgIdCbor, err = cbor.Marshal(ps256AlgId)
+	ps256AlgCbor, err = cbor.Marshal(PS256Alg)
 	if err != nil {
 		panic("error marshaling PS256 algorithm ID: " + err.Error())
 	}
-	ps384AlgIdCbor, err = cbor.Marshal(ps384AlgId)
+	ps384AlgCbor, err = cbor.Marshal(PS384Alg)
 	if err != nil {
 		panic("error marshaling PS384 algorithm ID: " + err.Error())
 	}
-	ps512AlgIdCbor, err = cbor.Marshal(ps512AlgId)
+	ps512AlgCbor, err = cbor.Marshal(PS512Alg)
 	if err != nil {
 		panic("error marshaling PS512 algorithm ID: " + err.Error())
 	}
@@ -150,6 +154,20 @@ func NewHeader(protected, unprotected map[Label]any) (Header, error) {
 		Protected:   protectedHeader,
 		Unprotected: unprotectedHeader,
 	}, nil
+}
+
+// Algorithm returns the ID of the algorithm set in the protected headers. If
+// no algorithm is set or the value is not a number, then 0 is returned.
+func (hdr Header) Algorithm() Algorithm {
+	data, ok := mapGet(hdr.Protected, AlgLabel)
+	if !ok {
+		return 0
+	}
+	var alg Algorithm
+	if err := cbor.Unmarshal(data, &alg); err != nil {
+		return 0
+	}
+	return alg
 }
 
 /*
