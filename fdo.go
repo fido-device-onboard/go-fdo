@@ -110,7 +110,7 @@ type SigInfo struct {
 	Info []byte
 }
 
-// Signer implements COSE sign/verify and HMAC hash/verify functions.
+// Signer implements COSE sign and HMAC hash/verify functions.
 type Signer interface {
 	// Hmac encodes the given value to CBOR and calculates the hashed MAC for
 	// the given algorithm.
@@ -124,9 +124,4 @@ type Signer interface {
 	// Sign encodes the given payload to CBOR and performs signs it as a COSE
 	// Sign1 signature structure.
 	Sign(any) (cose.Sign1[any], error)
-
-	// Verify uses the same private material as Sign to verify the given COSE
-	// Sign1 signature structure. If the cryptographic portion of verification
-	// fails, then ErrCryptoVerifyFailed should be wrapped.
-	Verify(cose.Sign1[any]) error
 }

@@ -15,7 +15,7 @@ type Client struct {
 	// HTTP, CoAP, and others.
 	Transport Transport
 
-	// Signer performs COSE sign/verify and HMAC hash/verify functions.
+	// Signer performs COSE sign and HMAC hash/verify functions.
 	Signer Signer
 
 	// OwnerServiceBaseAddrs TO2 base address list

@@ -90,9 +90,3 @@ func (dc *DeviceCredentialBlob) HmacVerify(h Hmac, v any) error {
 func (dc *DeviceCredentialBlob) Sign(payload any) (cose.Sign1[any], error) {
 	panic("unimplemented")
 }
-
-// Verify uses the same private material as Sign to verify the given COSE Sign1
-// signature structure.
-func (dc *DeviceCredentialBlob) Verify(v cose.Sign1[any]) error {
-	panic("unimplemented")
-}
