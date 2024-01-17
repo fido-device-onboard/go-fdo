@@ -122,7 +122,7 @@ func readCredential(t *testing.T) *fdo.DeviceCredentialBlob {
 		Active:           rustCred.Active,
 		DeviceCredential: rustCred.DeviceCredential,
 		HmacSecret:       rustCred.Secrets["Plain"]["hmac_secret"],
-		PrivateKey:       fdo.Pkcs8Key{Key: privateKey},
+		PrivateKey:       fdo.Pkcs8Key{privateKey},
 	}
 }
 
@@ -161,7 +161,7 @@ func TestExtendAndVerify(t *testing.T) {
 		t.Fatalf("error parsing voucher test data: %v", err)
 	}
 
-	var key crypto.PrivateKey
+	var key crypto.Signer
 	if data, err := os.ReadFile("testdata/mfg_key.pem"); err != nil {
 		t.Fatalf("error reading manufacturer key: %v", err)
 	} else if blk, _ := pem.Decode(data); blk == nil {

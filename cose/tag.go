@@ -96,7 +96,7 @@ func (t *Sign1Tag[T]) UnmarshalCBOR(data []byte) error {
 
 // Sign using a single private key. Unless it was transported independently of
 // the signature, payload may be nil.
-func (s1 *Sign1Tag[T]) Sign(key crypto.PrivateKey, payload []byte, opts crypto.SignerOpts) error {
+func (s1 *Sign1Tag[T]) Sign(key crypto.Signer, payload []byte, opts crypto.SignerOpts) error {
 	return (*Sign1[T])(s1).Sign(key, payload, opts)
 }
 

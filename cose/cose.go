@@ -5,6 +5,7 @@
 package cose
 
 import (
+	"crypto"
 	"fmt"
 	"strconv"
 
@@ -14,6 +15,18 @@ import (
 // Algorithm is the ECDSA/RSASSA-PKCS1-v1_5/RSASSA-PKCS1-v1_5 signature type
 // and hash.
 type Algorithm int16
+
+func (alg Algorithm) HashFunc() crypto.Hash {
+	switch alg {
+	case ES256Alg, RS256Alg, PS256Alg:
+		return crypto.SHA256
+	case ES384Alg, RS384Alg, PS384Alg:
+		return crypto.SHA384
+	case ES512Alg, RS512Alg, PS512Alg:
+		return crypto.SHA512
+	}
+	panic("invalid algorithm option")
+}
 
 /*
 ECDSA Algorithm Values

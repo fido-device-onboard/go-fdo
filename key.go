@@ -164,17 +164,12 @@ func verifyCertChain(chain []*x509.Certificate, roots *x509.CertPool) error {
 
 // Pkcs8Key CBOR-encodes a private key to a byte string of PKCS8 DER content.
 type Pkcs8Key struct {
-	Key crypto.PrivateKey
-}
-
-// Public returns the public portion of the private key.
-func (p Pkcs8Key) Public() crypto.PublicKey {
-	return p.Key.(interface{ Public() crypto.PublicKey }).Public()
+	crypto.Signer
 }
 
 // IsValid checks whether the key is valid for FDO Device Credential use.
 func (p Pkcs8Key) IsValid() bool {
-	switch key := p.Key.(type) {
+	switch key := p.Signer.(type) {
 	case *ecdsa.PrivateKey:
 		switch key.Curve {
 		case elliptic.P256(), elliptic.P384():
@@ -190,7 +185,7 @@ func (p Pkcs8Key) IsValid() bool {
 }
 
 func (p Pkcs8Key) MarshalCBOR() ([]byte, error) {
-	der, err := x509.MarshalPKCS8PrivateKey(p.Key)
+	der, err := x509.MarshalPKCS8PrivateKey(p.Signer)
 	if err != nil {
 		return nil, err
 	}
@@ -206,7 +201,7 @@ func (p *Pkcs8Key) UnmarshalCBOR(data []byte) error {
 	if err != nil {
 		return err
 	}
-	p.Key = key
+	p.Signer = key.(crypto.Signer)
 	return nil
 }
 

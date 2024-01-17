@@ -5,6 +5,7 @@ package fdo
 
 import (
 	"context"
+	"crypto"
 	"time"
 )
 
@@ -15,8 +16,11 @@ type Client struct {
 	// HTTP, CoAP, and others.
 	Transport Transport
 
-	// Signer performs COSE sign and HMAC hash/verify functions.
-	Signer Signer
+	// Hmac performs hmac calculations with protected key material.
+	Hmac KeyedHasher
+
+	// Signer performs asymmetric key signing calculations.
+	Signer crypto.Signer
 
 	// OwnerServiceBaseAddrs TO2 base address list
 	OwnerServiceBaseAddrs func(context.Context) []string

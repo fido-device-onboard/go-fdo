@@ -4,9 +4,10 @@
 package tpm
 
 import (
+	"crypto"
+	"io"
+
 	"github.com/fido-device-onboard/go-fdo"
-	"github.com/fido-device-onboard/go-fdo/cbor"
-	"github.com/fido-device-onboard/go-fdo/cose"
 )
 
 type DeviceKeyType uint8
@@ -33,7 +34,7 @@ type DeviceCredential struct {
 	TpmRmPath string `cbor:"-"`
 }
 
-var _ fdo.Signer = (*DeviceCredential)(nil)
+var _ fdo.KeyedHasher = (*DeviceCredential)(nil)
 
 // Hmac encodes the given value to CBOR and calculates the hashed MAC for the
 // given algorithm.
@@ -41,20 +42,16 @@ func (dc *DeviceCredential) Hmac(alg fdo.HashAlg, payload any) (fdo.Hmac, error)
 	panic("unimplemented")
 }
 
-// Sign encodes the given payload to CBOR and then signs it as a COSE Sign1
-// signature structure.
-func (dc *DeviceCredential) Sign(payload any) (*cose.Sign1[any], error) {
-	s1 := cose.Sign1[any]{Payload: cbor.NewBstrPtr(payload)}
-	if err := s1.Sign(nil, nil, &cose.SignFuncOptions{
-		// TODO: Select real parameters
-		Algorithm: cose.ES256Alg,
-		Sign: func([]byte) ([]byte, error) {
-			panic("unimplemented")
-		},
-	}); err != nil {
-		return nil, err
-	}
-	return &s1, nil
+var _ crypto.Signer = (*DeviceCredential)(nil)
+
+// Public returns the corresponding public key.
+func (dc *DeviceCredential) Public() crypto.PublicKey {
+	panic("unimplemented")
+}
+
+// Sign signs digest with the private key.
+func (dc *DeviceCredential) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
+	panic("unimplemented")
 }
 
 // TODO: Helper methods for loading/storing to TPM

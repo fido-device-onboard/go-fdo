@@ -7,9 +7,9 @@ import (
 	"crypto"
 	"crypto/hmac"
 	"fmt"
+	"io"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
-	"github.com/fido-device-onboard/go-fdo/cose"
 )
 
 // DeviceCredential is non-normative, but the [TPM Draft Spec] proposes a CBOR
@@ -45,7 +45,7 @@ type DeviceCredentialBlob struct {
 	PrivateKey Pkcs8Key
 }
 
-var _ Signer = (*DeviceCredentialBlob)(nil)
+var _ KeyedHasher = (*DeviceCredentialBlob)(nil)
 
 // Hmac encodes the given value to CBOR and calculates the hashed MAC for the
 // given algorithm.
@@ -74,15 +74,15 @@ func (dc *DeviceCredentialBlob) Hmac(alg HashAlg, payload any) (Hmac, error) {
 	}, nil
 }
 
-// Sign encodes the given payload to CBOR and performs signing using the
-// inherent hash of the signer.
-func (dc *DeviceCredentialBlob) Sign(payload any) (*cose.Sign1[any], error) {
+var _ crypto.Signer = (*DeviceCredentialBlob)(nil)
+
+// Public returns the corresponding public key.
+func (dc *DeviceCredentialBlob) Public() crypto.PublicKey { return dc.PrivateKey.Public() }
+
+// Sign signs digest with the private key.
+func (dc *DeviceCredentialBlob) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
 	if !dc.PrivateKey.IsValid() {
-		return nil, fmt.Errorf("private key is invalid")
+		return nil, fmt.Errorf("private key is an invalid type or curve/size for FDO device credential usage")
 	}
-	s1 := cose.Sign1[any]{Payload: cbor.NewBstrPtr(payload)}
-	if err := s1.Sign(dc.PrivateKey.Key, nil, nil); err != nil {
-		return nil, err
-	}
-	return &s1, nil
+	return dc.PrivateKey.Sign(rand, digest, opts)
 }

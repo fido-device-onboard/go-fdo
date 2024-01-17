@@ -218,7 +218,7 @@ func (v *Voucher) OwnerPublicKey() (crypto.PublicKey, error) {
 
 // VerifyHeader checks that the OVHeader was not modified by comparing the HMAC
 // generated using the secret from the device credentials.
-func (v *Voucher) VerifyHeader(deviceCredential Signer) error {
+func (v *Voucher) VerifyHeader(deviceCredential KeyedHasher) error {
 	return HmacVerify(deviceCredential, v.Hmac, &v.Header.Val)
 }
 
@@ -429,7 +429,7 @@ func (e *VoucherEntryPayload) VerifyOwnerCertChain(roots *x509.CertPool) error {
 
 // ExtendVoucher adds a new signed voucher entry to the list and returns the
 // new extended vouchers. Vouchers should be treated as immutable structures.
-func ExtendVoucher[T PublicKeyOrChain](v *Voucher, owner crypto.PrivateKey, nextOwner T, extra ExtraInfo) (*Voucher, error) {
+func ExtendVoucher[T PublicKeyOrChain](v *Voucher, owner crypto.Signer, nextOwner T, extra ExtraInfo) (*Voucher, error) {
 	// This performs a shallow clone, which allows arrays, maps, and pointers
 	// to have their contents modified and both the original and copied voucher
 	// will see the modification. However, this function does not perform a
@@ -444,7 +444,7 @@ func ExtendVoucher[T PublicKeyOrChain](v *Voucher, owner crypto.PrivateKey, next
 	// RSA2048RESTR, all RSAPKCS 3072, all ECDSA secp256r1 or all ECDSA
 	// secp384r1). This restriction permits a Device with limited crypto
 	// capabilities to verify all the signatures.
-	ownerPub := owner.(interface{ Public() crypto.PublicKey }).Public()
+	ownerPub := owner.Public()
 	switch ownerPub := ownerPub.(type) {
 	case *ecdsa.PublicKey:
 		if mfgKey, err := v.Header.Val.ManufacturerKey.Public(); err != nil {
@@ -527,15 +527,21 @@ func ExtendVoucher[T PublicKeyOrChain](v *Voucher, owner crypto.PrivateKey, next
 		}),
 	}
 	var signOpts crypto.SignerOpts
-	if v.Header.Val.ManufacturerKey.Type == RsaPssKeyType {
-		signOpts = &rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash}
-		switch keySize := ownerPub.(*rsa.PublicKey).Size(); keySize {
+	if rsaPub, ok := ownerPub.(*rsa.PublicKey); ok {
+		switch rsaPub.Size() {
 		case 2048 / 8:
-			signOpts.(*rsa.PSSOptions).Hash = crypto.SHA256
+			signOpts = crypto.SHA256
 		case 3072 / 8:
-			signOpts.(*rsa.PSSOptions).Hash = crypto.SHA384
+			signOpts = crypto.SHA384
 		default:
-			return nil, fmt.Errorf("unsupported RSA key size: %d bits", keySize*8)
+			return nil, fmt.Errorf("unsupported RSA key size: %d bits", rsaPub.Size()*8)
+		}
+
+		if v.Header.Val.ManufacturerKey.Type == RsaPssKeyType {
+			signOpts = &rsa.PSSOptions{
+				SaltLength: rsa.PSSSaltLengthEqualsHash,
+				Hash:       signOpts.(crypto.Hash),
+			}
 		}
 	}
 	if err := entry.Sign(owner, nil, signOpts); err != nil {

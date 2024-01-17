@@ -13,36 +13,11 @@ import (
 	"crypto/sha512"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 )
-
-// SignFuncOptions implements crypto.SignerOpts to allow providing a signing
-// function without a key. This is helpful when the signing is done in a key
-// enclave, such as a TPM.
-type SignFuncOptions struct {
-	Algorithm Algorithm
-	Sign      func([]byte) ([]byte, error)
-}
-
-func (o *SignFuncOptions) HashFunc() crypto.Hash {
-	switch o.Algorithm {
-	case ES256Alg, RS256Alg, PS256Alg:
-		return crypto.SHA256
-	case ES384Alg, RS384Alg, PS384Alg:
-		return crypto.SHA384
-	case ES512Alg, RS512Alg, PS512Alg:
-		return crypto.SHA512
-	}
-	panic("invalid algorithm option")
-}
-
-// hashOpt implements crypto.SignerOpts trivially to explicitly select a hash
-// function.
-type hashOpt crypto.Hash
-
-func (o hashOpt) HashFunc() crypto.Hash { return crypto.Hash(o) }
 
 // Signature is a COSE_Signature, which carries the signature and information
 // about the signature.
@@ -133,82 +108,70 @@ type Sign1[T any] struct {
 // Sign using a single private key. Unless it was transported independently of
 // the signature, payload may be nil.
 //
-// For RSA keys, opts should be type *rsa.PSSOptions and SaltLength must be
-// PSSSaltLengthEqualsHash or equivalent. If opts is not provided, then PKCS1
-// v1.5 signing is used.
-//
-// When a key enclave is used for signing, key must be nil and opts must be
-// *SignFuncOptions.
-func (s1 *Sign1[T]) Sign(key crypto.PrivateKey, payload []byte, opts crypto.SignerOpts) error {
+// For RSA keys, opts must either be type *rsa.PSSOptions with a SaltLength
+// value of PSSSaltLengthEqualsHash or equivalent numerical value or a valid
+// hash function for PKCS1 v1.5 signing.
+func (s1 *Sign1[T]) Sign(key crypto.Signer, payload []byte, opts crypto.SignerOpts) error {
 	// Check that some payload was given
 	if s1.Payload == nil && len(payload) == 0 {
 		return errors.New("payload was transported independently but not given as an argument to Sign")
 	}
 
-	// Determine hash algorithm and signing function
+	// Determine hash and signing algorithm
 	var algID cbor.RawBytes
-	var signFn func([]byte) ([]byte, error)
-	switch key := key.(type) {
-	case nil:
-		signFnOpts, ok := opts.(*SignFuncOptions)
-		if !ok {
-			return fmt.Errorf("signing function options must be provided when key is nil")
-		}
-		alg, err := cbor.Marshal(signFnOpts.Algorithm)
-		if err != nil {
-			return fmt.Errorf("error marshaling algorithm: %w", err)
-		}
-		algID = cbor.RawBytes(alg)
-		signFn = signFnOpts.Sign
-
-	case *ecdsa.PrivateKey:
-		switch key.Curve {
+	switch pub := key.Public().(type) {
+	case *ecdsa.PublicKey:
+		switch pub.Curve {
 		case elliptic.P256():
 			algID = es256AlgCbor
-			opts = hashOpt(crypto.SHA256)
-			signFn = signEc(key)
+			opts = crypto.SHA256
 		case elliptic.P384():
 			algID = es384AlgCbor
-			opts = hashOpt(crypto.SHA384)
-			signFn = signEc(key)
+			opts = crypto.SHA384
 		case elliptic.P521():
 			algID = es512AlgCbor
-			opts = hashOpt(crypto.SHA512)
-			signFn = signEc(key)
+			opts = crypto.SHA512
 		default:
-			return fmt.Errorf("unsupported curve: %s", key.Params().Name)
+			return fmt.Errorf("unsupported curve: %s", pub.Params().Name)
 		}
 
-	case *rsa.PrivateKey:
-		_, usingPss := opts.(*rsa.PSSOptions)
-		switch opts.HashFunc().Size() {
-		case 32:
+		// When an *ecdsa.PrivateKey is used, override its Sign implementation
+		// to use RFC8152 signature encoding rather than ASN1.
+		if eckey, ok := key.(*ecdsa.PrivateKey); ok {
+			key = rfc8152ecSigner{eckey}
+		}
+
+	case *rsa.PublicKey:
+		// Ensure that a hash func was specified
+		if opts == nil {
+			return errors.New("required signer opts were missing; must specify hash type")
+		}
+
+		// When using RSASSA-PSS, salt length must equal hash length
+		pssOpts, usingPss := opts.(*rsa.PSSOptions)
+		if usingPss && pssOpts.SaltLength != rsa.PSSSaltLengthEqualsHash && pssOpts.SaltLength != pssOpts.Hash.Size() {
+			return fmt.Errorf("PSS salt length must match hash size")
+		}
+
+		switch {
+		case usingPss && opts.HashFunc().Size() == 32:
 			algID = ps256AlgCbor
-			if !usingPss {
-				algID = rs256AlgCbor
-				opts = hashOpt(crypto.SHA256)
-			}
-			signFn = signRsa(key, opts)
-		case 48:
+		case usingPss && opts.HashFunc().Size() == 48:
 			algID = ps384AlgCbor
-			if !usingPss {
-				algID = rs384AlgCbor
-				opts = hashOpt(crypto.SHA384)
-			}
-			signFn = signRsa(key, opts)
-		case 64:
+		case usingPss && opts.HashFunc().Size() == 64:
 			algID = ps512AlgCbor
-			if usingPss {
-				algID = rs512AlgCbor
-				opts = hashOpt(crypto.SHA512)
-			}
-			signFn = signRsa(key, opts)
+		case !usingPss && opts.HashFunc().Size() == 32:
+			algID = rs256AlgCbor
+		case !usingPss && opts.HashFunc().Size() == 48:
+			algID = rs384AlgCbor
+		case !usingPss && opts.HashFunc().Size() == 64:
+			algID = rs512AlgCbor
 		default:
 			return fmt.Errorf("unsupported hash size: %d bit", opts.HashFunc().Size()*8)
 		}
 
 	default:
-		return fmt.Errorf("unsupported key type: %T", key)
+		return fmt.Errorf("unsupported public key type: %T", pub)
 	}
 
 	// Sign contents of Sig_structure
@@ -230,7 +193,7 @@ func (s1 *Sign1[T]) Sign(key crypto.PrivateKey, payload []byte, opts crypto.Sign
 	if err := cbor.NewEncoder(digest).Encode(sig); err != nil {
 		return err
 	}
-	sigBytes, err := signFn(digest.Sum(nil)[:])
+	sigBytes, err := key.Sign(rand.Reader, digest.Sum(nil)[:], opts)
 	if err != nil {
 		return err
 	}
@@ -320,31 +283,20 @@ func (s1 *Sign1[T]) Verify(key crypto.PublicKey, payload []byte) (bool, error) {
 	}
 }
 
-func signEc(key *ecdsa.PrivateKey) func([]byte) ([]byte, error) {
-	return func(data []byte) ([]byte, error) {
-		r, s, err := ecdsa.Sign(rand.Reader, key, data)
-		if err != nil {
-			return nil, err
-		}
-
-		// Encode signature following RFC8152 8.1.
-		n := (key.Params().N.BitLen() + 7) / 8
-		sigBytes := make([]byte, n*2)
-		r.FillBytes(sigBytes[:n])
-		s.FillBytes(sigBytes[n:])
-		return sigBytes, nil
-	}
+type rfc8152ecSigner struct {
+	*ecdsa.PrivateKey
 }
 
-func signRsa(key *rsa.PrivateKey, opts crypto.SignerOpts) func([]byte) ([]byte, error) {
-	return func(data []byte) ([]byte, error) {
-		pssOpts, usingPss := opts.(*rsa.PSSOptions)
-		if usingPss && pssOpts.SaltLength != rsa.PSSSaltLengthEqualsHash && pssOpts.SaltLength != pssOpts.Hash.Size() {
-			return nil, fmt.Errorf("PSS salt length must match hash size")
-		}
-		if usingPss {
-			return rsa.SignPSS(rand.Reader, key, opts.HashFunc(), data, pssOpts)
-		}
-		return rsa.SignPKCS1v15(rand.Reader, key, opts.HashFunc(), data)
+func (key rfc8152ecSigner) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
+	r, s, err := ecdsa.Sign(rand, key.PrivateKey, digest)
+	if err != nil {
+		return nil, err
 	}
+
+	// Encode signature following RFC8152 8.1.
+	n := (key.Params().N.BitLen() + 7) / 8
+	sigBytes := make([]byte, n*2)
+	r.FillBytes(sigBytes[:n])
+	s.FillBytes(sigBytes[n:])
+	return sigBytes, nil
 }
