@@ -23,8 +23,6 @@ import (
 /*
 Test data was generated with https://github.com/fdo-rs/fido-device-onboard-rs
 
-See PR https://github.com/fdo-rs/fido-device-onboard-rs/pull/601
-
 	cargo build --release
 	mkdir tmp
 	cd tmp

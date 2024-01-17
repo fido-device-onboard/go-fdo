@@ -30,8 +30,8 @@ type Client struct {
 }
 
 // DeviceInitialization runs the DI protocol and has side effects of setting
-// device credentials.
-func (*Client) DeviceInitialization(ctx context.Context) (*DeviceCredential, error) {
+// device credentials and the voucher header.
+func (*Client) DeviceInitialization(ctx context.Context) (*DeviceCredential, *VoucherHeader, error) {
 	panic("unimplemented")
 }
 
