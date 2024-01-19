@@ -48,12 +48,15 @@ type Mac0[T any] struct {
 	Value   []byte        // non-empty byte string containing the MAC
 }
 
+//nolint:unused
 const (
 	macContext  = "MAC"
 	mac0Context = "MAC0"
 )
 
 // Underlying message authentication code struct
+//
+//nolint:unused
 type mac struct {
 	Context     string
 	Protected   serializedOrEmptyHeaderMap

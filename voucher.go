@@ -42,12 +42,12 @@ const (
 // Rendezvous Protocols
 const (
 	RVProtRest    uint8 = 0
-	RVProtHttp    uint8 = 1
-	RVProtHttps   uint8 = 2
-	RVProtTcp     uint8 = 3
-	RVProtTls     uint8 = 4
-	RVProtCoapTcp uint8 = 5
-	RVProtCoapUdp uint8 = 6
+	RVProtHTTP    uint8 = 1
+	RVProtHTTPS   uint8 = 2
+	RVProtTCP     uint8 = 3
+	RVProtTLS     uint8 = 4
+	RVProtCoapTCP uint8 = 5
+	RVProtCoapUDP uint8 = 6
 )
 
 // Rendezvous Media
@@ -133,7 +133,7 @@ type Voucher struct {
 //	OVDevCertChainHashOrNull = Hash / null     ;; CBOR null for Intel® EPID device key
 type VoucherHeader struct {
 	Version         uint16
-	Guid            Guid
+	GUID            GUID
 	RvInfo          [][]RvInstruction
 	DeviceInfo      string
 	ManufacturerKey PublicKey
@@ -182,7 +182,7 @@ func (v *Voucher) shallowClone() *Voucher {
 		Version: v.Version,
 		Header: cbor.NewBstr(VoucherHeader{
 			Version:         v.Header.Val.Version,
-			Guid:            v.Header.Val.Guid,
+			GUID:            v.Header.Val.GUID,
 			RvInfo:          v.Header.Val.RvInfo,
 			DeviceInfo:      v.Header.Val.DeviceInfo,
 			ManufacturerKey: v.Header.Val.ManufacturerKey.clone(),
@@ -233,7 +233,6 @@ func (v *Voucher) VerifyDeviceCertChain(roots *x509.CertPool) error {
 	}
 	chain := make([]*x509.Certificate, len(*v.CertChain))
 	for i, cert := range *v.CertChain {
-		cert := cert
 		chain[i] = (*x509.Certificate)(cert)
 	}
 	return verifyCertChain(chain, roots)
@@ -345,7 +344,7 @@ func (v *Voucher) VerifyEntries() error {
 	}
 
 	// Precompute SHA256/SHA384 checksum for header info
-	headerInfo := append(v.Header.Val.Guid[:], []byte(v.Header.Val.DeviceInfo)...)
+	headerInfo := append(v.Header.Val.GUID[:], []byte(v.Header.Val.DeviceInfo)...)
 	headerInfo256Sum := sha256.Sum256(headerInfo)
 	headerInfo384Sum := sha512.Sum384(headerInfo)
 	headerInfoSums := map[HashAlg][]byte{
@@ -472,7 +471,6 @@ func ExtendVoucher[T PublicKeyOrChain](v *Voucher, owner crypto.Signer, nextOwne
 	case []*x509.Certificate:
 		chain := make([]*Certificate, len(nextOwner))
 		for i, cert := range nextOwner {
-			cert := cert
 			chain[i] = (*Certificate)(cert)
 		}
 		body, err := cbor.Marshal(chain)
@@ -496,7 +494,7 @@ func ExtendVoucher[T PublicKeyOrChain](v *Voucher, owner crypto.Signer, nextOwne
 	}
 
 	// Calculate the hash of the voucher header info
-	headerInfo := sha512.Sum384(append(v.Header.Val.Guid[:], []byte(v.Header.Val.DeviceInfo)...))
+	headerInfo := sha512.Sum384(append(v.Header.Val.GUID[:], []byte(v.Header.Val.DeviceInfo)...))
 	headerHash := Hash{Algorithm: Sha384Hash, Value: headerInfo[:]}
 
 	// Calculate the hash of the previous entry

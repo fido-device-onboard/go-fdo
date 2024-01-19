@@ -284,17 +284,22 @@ func (s1 *Sign1[T]) Verify(key crypto.PublicKey, payload []byte) (bool, error) {
 }
 
 type rfc8152ecSigner struct {
-	*ecdsa.PrivateKey
+	PrivateKey *ecdsa.PrivateKey
 }
 
-func (key rfc8152ecSigner) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
+// Public returns the public key corresponding to the opaque,
+// private key.
+func (key rfc8152ecSigner) Public() crypto.PublicKey { return key.PrivateKey.Public() }
+
+// Sign implements crypto.Signer.
+func (key rfc8152ecSigner) Sign(rand io.Reader, digest []byte, _ crypto.SignerOpts) ([]byte, error) {
 	r, s, err := ecdsa.Sign(rand, key.PrivateKey, digest)
 	if err != nil {
 		return nil, err
 	}
 
 	// Encode signature following RFC8152 8.1.
-	n := (key.Params().N.BitLen() + 7) / 8
+	n := (key.PrivateKey.Params().N.BitLen() + 7) / 8
 	sigBytes := make([]byte, n*2)
 	r.FillBytes(sigBytes[:n])
 	s.FillBytes(sigBytes[n:])

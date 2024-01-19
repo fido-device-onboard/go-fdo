@@ -20,7 +20,7 @@ type Hash struct {
 	Value     []byte
 }
 
-// An HMAC - RFC2104 - is encoded as a hash.
+// Hmac - RFC2104 - is encoded as a hash.
 //
 //	HMac = Hash
 type Hmac = Hash

@@ -69,6 +69,7 @@ type ErrorMessage struct {
 //	TIMET  = #6.1(uint)
 type Timestamp time.Time
 
+// MarshalCBOR implements cbor.Marshaler.
 func (ts Timestamp) MarshalCBOR() ([]byte, error) {
 	if time.Time(ts).IsZero() {
 		return cbor.Marshal(nil)
@@ -79,6 +80,7 @@ func (ts Timestamp) MarshalCBOR() ([]byte, error) {
 	})
 }
 
+// UnmarshalCBOR implements cbor.Unmarshaler.
 func (ts *Timestamp) UnmarshalCBOR(data []byte) error {
 	// Parse into a null or tag structure
 	var tag *cbor.Tag[cbor.RawBytes]
@@ -119,8 +121,10 @@ func (ts *Timestamp) UnmarshalCBOR(data []byte) error {
 	return fmt.Errorf("unknown tag number %d", tag.Number())
 }
 
+//nolint:unused
 type neverRetry struct{}
 
+//nolint:unused
 func (neverRetry) ShouldRetry(ErrorMessage) <-chan time.Time { return nil }
 
 // Retrier implements RetryDecider by retrying up to a maximum number of times.
@@ -157,6 +161,10 @@ func Retry(n int64) *Retrier {
 	}
 }
 
+// ShouldRetry decides the appropriate backoff, if any for an error message.
+// The chan should not be unconditionally waited on, becauese a nil chan
+// indicates that it should not be retried and waiting on a nil chan results in
+// a deadlock.
 func (r *Retrier) ShouldRetry(em ErrorMessage) <-chan time.Time {
 	// Get the protocol counter, initializing it as needed
 	proto := ProtocolOf(em.PrevMsg)

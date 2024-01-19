@@ -1,6 +1,8 @@
 // Copyright 2023 Intel Corporation
 // SPDX-License-Identifier: Apache 2.0
 
+// Package tpm implements device credentials using the
+// [TPM Draft Spec](https://fidoalliance.org/specs/FDO/securing-fdo-in-tpm-v1.0-rd-20231010/securing-fdo-in-tpm-v1.0-rd-20231010.html).
 package tpm
 
 import (
@@ -10,6 +12,7 @@ import (
 	"github.com/fido-device-onboard/go-fdo"
 )
 
+// DeviceKeyType enumerates how DeviceKey is encoded and stored.
 type DeviceKeyType uint8
 
 // DeviceKeyType enum as defined in section 4.1
@@ -19,8 +22,8 @@ type DeviceKeyType uint8
 // 2: An LDevID in the TPM
 const (
 	FdoDeviceKey    DeviceKeyType = 0
-	IDevIdDeviceKey DeviceKeyType = 1
-	LDevIdDeviceKey DeviceKeyType = 2
+	IDevIDDeviceKey DeviceKeyType = 1
+	LDevIDDeviceKey DeviceKeyType = 2
 )
 
 // DeviceCredential implements the FDO Signer interface and conforms to the

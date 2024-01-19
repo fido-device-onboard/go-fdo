@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache 2.0
 
 /*
-cbor implements a basic encoding/decoding API for RFC 8949 Concise Binary
-Object Representation (CBOR).
+Package cbor implements a basic encoding/decoding API for RFC 8949 Concise
+Binary Object Representation (CBOR).
 
 Not supported:
 
@@ -274,8 +274,10 @@ type Unmarshaler interface {
 // valid CBOR.
 type RawBytes []byte
 
+// MarshalCBOR implements Marshaler.
 func (b RawBytes) MarshalCBOR() ([]byte, error) { return b, nil }
 
+// UnmarshalCBOR implements Unmarshaler.
 func (b *RawBytes) UnmarshalCBOR(p []byte) error { *b = p; return nil }
 
 // Tag is a tagged CBOR type.
@@ -284,9 +286,15 @@ type Tag[T any] struct {
 	Val T
 }
 
-func (Tag[T]) isTag()           {}
+func (Tag[T]) isTag() {}
+
+// Number returns the underlying Num field and is used to implement the TagData
+// interface.
 func (t Tag[T]) Number() uint64 { return t.Num }
-func (t Tag[T]) Value() any     { return t.Val }
+
+// Value returns the underlying Val field and is used to implement the TagData
+// interface.
+func (t Tag[T]) Value() any { return t.Val }
 
 // TagData allows read-only access to a Tag without value type information.
 type TagData interface {

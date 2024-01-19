@@ -1,13 +1,14 @@
 // Copyright 2023 Intel Corporation
 // SPDX-License-Identifier: Apache 2.0
 
+// Package fdo implements version 1.1 of the FDO protocol.
 package fdo
 
-// Guid is implemented as a 128-bit cryptographically strong random number.
+// GUID is implemented as a 128-bit cryptographically strong random number.
 //
-// The Guid type identifies a Device during onboarding, and is replaced each
+// The GUID type identifies a Device during onboarding, and is replaced each
 // time onboarding is successful in the Transfer Ownership 2 (TO2) protocol.
-type Guid [16]byte
+type GUID [16]byte
 
 // Nonce is a byte array with length (16 bytes) 128-bit Random number.
 //

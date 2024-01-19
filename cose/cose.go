@@ -1,7 +1,8 @@
 // Copyright 2023 Intel Corporation
 // SPDX-License-Identifier: Apache 2.0
 
-// CBOR Object Signing and Encryption (COSE) defined in RFC8152
+// Package cose implements CBOR Object Signing and Encryption (COSE) defined in
+// RFC8152.
 package cose
 
 import (
@@ -12,11 +13,12 @@ import (
 	"github.com/fido-device-onboard/go-fdo/cbor"
 )
 
-// Algorithm is the ECDSA/RSASSA-PKCS1-v1_5/RSASSA-PKCS1-v1_5 signature type
-// and hash.
-type Algorithm int16
+// SignatureAlgorithm is the ECDSA/RSASSA-PKCS1-v1_5/RSASSA-PKCS1-v1_5
+// signature type and hash.
+type SignatureAlgorithm int16
 
-func (alg Algorithm) HashFunc() crypto.Hash {
+// HashFunc implements crypto.SignerOpts.
+func (alg SignatureAlgorithm) HashFunc() crypto.Hash {
 	switch alg {
 	case ES256Alg, RS256Alg, PS256Alg:
 		return crypto.SHA256
@@ -40,9 +42,9 @@ ECDSA Algorithm Values
 	+-------+-------+---------+------------------+
 */
 const (
-	ES256Alg Algorithm = -7
-	ES384Alg Algorithm = -35
-	ES512Alg Algorithm = -36
+	ES256Alg SignatureAlgorithm = -7
+	ES384Alg SignatureAlgorithm = -35
+	ES512Alg SignatureAlgorithm = -36
 )
 
 var (
@@ -79,9 +81,9 @@ RSASSA-PKCS1-v1_5 Algorithm Values
 	+-------+-------+---------+------------------------------+
 */
 const (
-	RS256Alg Algorithm = -257
-	RS384Alg Algorithm = -258
-	RS512Alg Algorithm = -259
+	RS256Alg SignatureAlgorithm = -257
+	RS384Alg SignatureAlgorithm = -258
+	RS512Alg SignatureAlgorithm = -259
 )
 
 var (
@@ -118,9 +120,9 @@ RSASSA-PSS Algorithm Values from RFC 8230
 	+-------+-------+---------+-------------+-----------------------+
 */
 const (
-	PS256Alg Algorithm = -37
-	PS384Alg Algorithm = -38
-	PS512Alg Algorithm = -39
+	PS256Alg SignatureAlgorithm = -37
+	PS384Alg SignatureAlgorithm = -38
+	PS512Alg SignatureAlgorithm = -39
 )
 
 var (
@@ -171,12 +173,12 @@ func NewHeader(protected, unprotected map[Label]any) (Header, error) {
 
 // Algorithm returns the ID of the algorithm set in the protected headers. If
 // no algorithm is set or the value is not a number, then 0 is returned.
-func (hdr Header) Algorithm() Algorithm {
+func (hdr Header) Algorithm() SignatureAlgorithm {
 	data, ok := mapGet(hdr.Protected, AlgLabel)
 	if !ok {
 		return 0
 	}
-	var alg Algorithm
+	var alg SignatureAlgorithm
 	if err := cbor.Unmarshal(data, &alg); err != nil {
 		return 0
 	}
@@ -231,6 +233,7 @@ func (l Label) String() string {
 	return l.Str
 }
 
+// MarshalCBOR implements cbor.Marshaler.
 func (l Label) MarshalCBOR() ([]byte, error) {
 	// 0 is a reserved label
 	if l.Int64 != 0 {
@@ -239,6 +242,7 @@ func (l Label) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(l.String)
 }
 
+// UnmarshalCBOR implements cbor.Unmarshaler.
 func (l *Label) UnmarshalCBOR(b []byte) error {
 	var v any
 	if err := cbor.Unmarshal(b, &v); err != nil {

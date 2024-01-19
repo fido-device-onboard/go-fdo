@@ -73,7 +73,7 @@ func (t *Transport) Send(ctx context.Context, msgType uint8, msg any) (respType 
 
 	// Add request headers
 	req.Header.Add("Content-Type", "application/cbor")
-	if token := t.Auth.GetToken(ctx, msgType); token != "" {
+	if token := t.Auth.GetToken(ctx, fdo.ProtocolOf(msgType)); token != "" {
 		req.Header.Add("Authorization", token)
 	}
 
@@ -86,7 +86,7 @@ func (t *Transport) Send(ctx context.Context, msgType uint8, msg any) (respType 
 	return t.handleResponse(res)
 }
 
-func (c *Transport) handleResponse(resp *http.Response) (msgType uint8, _ io.ReadCloser, _ error) {
+func (t *Transport) handleResponse(resp *http.Response) (msgType uint8, _ io.ReadCloser, _ error) {
 	// Store token header in AuthorizationJar
 	if token := resp.Header.Get("Authorization"); token != "" {
 		reqType, err := strconv.ParseUint(path.Base(resp.Request.URL.Path), 10, 8)
@@ -94,7 +94,7 @@ func (c *Transport) handleResponse(resp *http.Response) (msgType uint8, _ io.Rea
 			_ = resp.Body.Close()
 			return 0, nil, fmt.Errorf("request contains invalid message type in path: %w", err)
 		}
-		c.Auth.StoreToken(resp.Request.Context(), uint8(reqType), token)
+		t.Auth.StoreToken(resp.Request.Context(), fdo.ProtocolOf(uint8(reqType)), token)
 	}
 
 	// Parse message type from headers (or implicit from response code)
@@ -114,7 +114,7 @@ func (c *Transport) handleResponse(resp *http.Response) (msgType uint8, _ io.Rea
 	}
 
 	// Validate content length
-	maxSize := c.MaxContentLength
+	maxSize := t.MaxContentLength
 	if maxSize == 0 {
 		maxSize = 65535
 	}
@@ -139,4 +139,9 @@ func (c *Transport) handleResponse(resp *http.Response) (msgType uint8, _ io.Rea
 		Closer: resp.Body,
 	}
 	return msgType, content, nil
+}
+
+// ResetContext clears the protocol state, e.g. the session authorization token.
+func (t *Transport) ResetContext(prot fdo.Protocol) {
+	t.Auth.Clear(context.Background(), prot)
 }

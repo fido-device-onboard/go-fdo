@@ -6,6 +6,7 @@ package fdo
 // Protocol is the FDO specification-defined protocol.
 type Protocol uint8
 
+// Protocol enumeration values
 const (
 	UnknownProtocol Protocol = iota
 	DIProtocol

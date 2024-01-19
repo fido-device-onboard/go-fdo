@@ -16,14 +16,16 @@ var (
 // HelloDevice is message type 60
 type HelloDevice struct {
 	MaxDeviceMessageSize uint64
-	Guid                 Guid
+	GUID                 GUID
 	NonceTO2ProveOV      Nonce
 	KexSuiteName         string
 	CipherSuiteName      int64
 	ASigInfo             *SigInfo
 }
 
-type To2ProveOwnerUprotectedHeader struct {
+// TO2ProveOVHdrUnprotectedHeaders is used in TO2.ProveDevice and TO2.Done as
+// COSE signature unprotected headers.
+type TO2ProveOVHdrUnprotectedHeaders struct {
 	Nonce          Nonce
 	OwnerPublicKey PublicKey
 }

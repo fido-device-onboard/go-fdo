@@ -47,6 +47,7 @@ func (t *Sign[T]) Tag() *SignTag[T] { return (*SignTag[T])(t) }
 // Untag is a helper for accessing the tag value.
 func (t *SignTag[T]) Untag() *Sign[T] { return (*Sign[T])(t) }
 
+// MarshalCBOR implements cbor.Marshaler.
 func (t SignTag[T]) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(cbor.Tag[Sign[T]]{
 		Num: signTag,
@@ -54,6 +55,7 @@ func (t SignTag[T]) MarshalCBOR() ([]byte, error) {
 	})
 }
 
+// UnmarshalCBOR implements cbor.Unmarshaler.
 func (t *SignTag[T]) UnmarshalCBOR(data []byte) error {
 	var tag cbor.Tag[Sign[T]]
 	if err := cbor.Unmarshal(data, &tag); err != nil {
@@ -75,6 +77,7 @@ func (t *Sign1[T]) Tag() *Sign1Tag[T] { return (*Sign1Tag[T])(t) }
 // Untag is a helper for accessing the tag value.
 func (t *Sign1Tag[T]) Untag() *Sign1[T] { return (*Sign1[T])(t) }
 
+// MarshalCBOR implements cbor.Marshaler.
 func (t Sign1Tag[T]) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(cbor.Tag[Sign1[T]]{
 		Num: sign1Tag,
@@ -82,6 +85,7 @@ func (t Sign1Tag[T]) MarshalCBOR() ([]byte, error) {
 	})
 }
 
+// UnmarshalCBOR implements cbor.Unmarshaler.
 func (t *Sign1Tag[T]) UnmarshalCBOR(data []byte) error {
 	var tag cbor.Tag[Sign1[T]]
 	if err := cbor.Unmarshal(data, &tag); err != nil {
@@ -96,14 +100,14 @@ func (t *Sign1Tag[T]) UnmarshalCBOR(data []byte) error {
 
 // Sign using a single private key. Unless it was transported independently of
 // the signature, payload may be nil.
-func (s1 *Sign1Tag[T]) Sign(key crypto.Signer, payload []byte, opts crypto.SignerOpts) error {
-	return (*Sign1[T])(s1).Sign(key, payload, opts)
+func (t *Sign1Tag[T]) Sign(key crypto.Signer, payload []byte, opts crypto.SignerOpts) error {
+	return (*Sign1[T])(t).Sign(key, payload, opts)
 }
 
 // Verify using a single public key. Unless it was transported independently of
 // the signature, payload may be nil.
-func (s1 *Sign1Tag[T]) Verify(key crypto.PublicKey, payload []byte) (bool, error) {
-	return (*Sign1[T])(s1).Verify(key, payload)
+func (t *Sign1Tag[T]) Verify(key crypto.PublicKey, payload []byte) (bool, error) {
+	return (*Sign1[T])(t).Verify(key, payload)
 }
 
 // EncryptTag encodes to a CBOR tag while ensuring the right tag number.
@@ -115,6 +119,7 @@ func (t *Encrypt[T]) Tag() *EncryptTag[T] { return (*EncryptTag[T])(t) }
 // Untag is a helper for accessing the tag value.
 func (t *EncryptTag[T]) Untag() *Encrypt[T] { return (*Encrypt[T])(t) }
 
+// MarshalCBOR implements cbor.Marshaler.
 func (t EncryptTag[T]) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(cbor.Tag[Encrypt[T]]{
 		Num: encryptTag,
@@ -122,6 +127,7 @@ func (t EncryptTag[T]) MarshalCBOR() ([]byte, error) {
 	})
 }
 
+// UnmarshalCBOR implements cbor.Unmarshaler.
 func (t *EncryptTag[T]) UnmarshalCBOR(data []byte) error {
 	var tag cbor.Tag[Encrypt[T]]
 	if err := cbor.Unmarshal(data, &tag); err != nil {
@@ -143,6 +149,7 @@ func (t *Encrypt0[T]) Tag() *Encrypt0Tag[T] { return (*Encrypt0Tag[T])(t) }
 // Untag is a helper for accessing the tag value.
 func (t *Encrypt0Tag[T]) Untag() *Encrypt0[T] { return (*Encrypt0[T])(t) }
 
+// MarshalCBOR implements cbor.Marshaler.
 func (t Encrypt0Tag[T]) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(cbor.Tag[Encrypt0[T]]{
 		Num: encrypt0Tag,
@@ -150,6 +157,7 @@ func (t Encrypt0Tag[T]) MarshalCBOR() ([]byte, error) {
 	})
 }
 
+// UnmarshalCBOR implements cbor.Unmarshaler.
 func (t *Encrypt0Tag[T]) UnmarshalCBOR(data []byte) error {
 	var tag cbor.Tag[Encrypt0[T]]
 	if err := cbor.Unmarshal(data, &tag); err != nil {
@@ -171,6 +179,7 @@ func (t *Mac[T]) Tag() *MacTag[T] { return (*MacTag[T])(t) }
 // Untag is a helper for accessing the tag value.
 func (t *MacTag[T]) Untag() *Mac[T] { return (*Mac[T])(t) }
 
+// MarshalCBOR implements cbor.Marshaler.
 func (t MacTag[T]) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(cbor.Tag[Mac[T]]{
 		Num: macTag,
@@ -178,6 +187,7 @@ func (t MacTag[T]) MarshalCBOR() ([]byte, error) {
 	})
 }
 
+// UnmarshalCBOR implements cbor.Unmarshaler.
 func (t *MacTag[T]) UnmarshalCBOR(data []byte) error {
 	var tag cbor.Tag[Mac[T]]
 	if err := cbor.Unmarshal(data, &tag); err != nil {
@@ -199,6 +209,7 @@ func (t *Mac0[T]) Tag() *Mac0Tag[T] { return (*Mac0Tag[T])(t) }
 // Untag is a helper for accessing the tag value.
 func (t *Mac0Tag[T]) Untag() *Mac0[T] { return (*Mac0[T])(t) }
 
+// MarshalCBOR implements cbor.Marshaler.
 func (t Mac0Tag[T]) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(cbor.Tag[Mac0[T]]{
 		Num: mac0Tag,
@@ -206,6 +217,7 @@ func (t Mac0Tag[T]) MarshalCBOR() ([]byte, error) {
 	})
 }
 
+// UnmarshalCBOR implements cbor.Unmarshaler.
 func (t *Mac0Tag[T]) UnmarshalCBOR(data []byte) error {
 	var tag cbor.Tag[Mac0[T]]
 	if err := cbor.Unmarshal(data, &tag); err != nil {

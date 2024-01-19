@@ -521,7 +521,7 @@ func TestEncodeUntypedNull(t *testing.T) {
 	}
 }
 
-func TestEncodeUndefined(t *testing.T) {
+func TestEncodeUndefined(_ *testing.T) {
 	// No way to encode undefined
 }
 

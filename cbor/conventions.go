@@ -25,6 +25,7 @@ func NewBstr[T any](v T) Bstr[T] { return Bstr[T]{Val: v} }
 // often does not require writing the type parameter.
 func NewBstrPtr[T any](v T) *Bstr[T] { return &Bstr[T]{Val: v} }
 
+// MarshalCBOR implements Marshaler.
 func (b Bstr[T]) MarshalCBOR() ([]byte, error) {
 	data, err := Marshal(b.Val)
 	if err != nil {
@@ -33,6 +34,7 @@ func (b Bstr[T]) MarshalCBOR() ([]byte, error) {
 	return Marshal(data)
 }
 
+// UnmarshalCBOR implements Unmarshaler.
 func (b *Bstr[T]) UnmarshalCBOR(p []byte) error {
 	var data []byte
 	if err := Unmarshal(p, &data); err != nil {

@@ -113,6 +113,7 @@ const (
 // encoding.
 type Certificate x509.Certificate
 
+// MarshalCBOR implements cbor.Marshaler interface.
 func (c *Certificate) MarshalCBOR() ([]byte, error) {
 	if c == nil {
 		return cbor.Marshal(nil)
@@ -120,6 +121,7 @@ func (c *Certificate) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(c.Raw)
 }
 
+// UnmarshalCBOR implements cbor.Unmarshaler interface.
 func (c *Certificate) UnmarshalCBOR(data []byte) error {
 	if c == nil {
 		return errors.New("cannot unmarshal to a nil pointer")
@@ -184,6 +186,7 @@ func (p Pkcs8Key) IsValid() bool {
 	return false
 }
 
+// MarshalCBOR implements cbor.Marshaler interface.
 func (p Pkcs8Key) MarshalCBOR() ([]byte, error) {
 	der, err := x509.MarshalPKCS8PrivateKey(p.Signer)
 	if err != nil {
@@ -192,6 +195,7 @@ func (p Pkcs8Key) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(der)
 }
 
+// UnmarshalCBOR implements cbor.Unmarshaler interface.
 func (p *Pkcs8Key) UnmarshalCBOR(data []byte) error {
 	var der []byte
 	if err := cbor.Unmarshal(data, &der); err != nil {
