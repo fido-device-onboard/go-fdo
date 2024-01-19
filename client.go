@@ -17,13 +17,6 @@ type Client struct {
 	// HTTP, CoAP, and others.
 	Transport Transport
 
-	// OwnerServiceBaseAddrs TO2 base address list
-	OwnerServiceBaseAddrs func(context.Context) []string
-
-	// ServiceInfoModulesForOwner returns a map of registered FDO Service Info
-	// Modules (FSIMs) for a given Owner Service.
-	ServiceInfoModulesForOwner func(RvTO2Addr) map[string]ServiceInfoModule
-
 	// Retry optionally sets a policy for retrying protocol messages.
 	Retry RetryDecider
 }
@@ -40,19 +33,28 @@ type Client struct {
 
 // DeviceInitialize runs the DI protocol and returns the voucher header and
 // manufacturer public key hash.
-func (c *Client) DeviceInitialize(ctx context.Context, id string, chain []*x509.Certificate, priv crypto.Signer, h KeyedHasher) (*VoucherHeader, *Hash, error) {
+//
+// The device is identified to the manufacturing component by the ID string,
+// which may be a device serial, MAC address, or similar. There is generally an
+// expectation of network trust for DI.
+//
+// The device certificate chain should be created before DI is performed,
+// because the manufacturing component signs the ownership voucher, but isn't
+// necessarily the root of trust for the device's identity and may or may not
+// validate the device's presented certificate chain.
+func (c *Client) DeviceInitialize(ctx context.Context, baseURL, id string, chain []*x509.Certificate, priv crypto.Signer, h KeyedHasher) (*VoucherHeader, *Hash, error) {
 	panic("unimplemented")
 }
 
 // TransferOwnership1 runs the TO1 protocol and has side effects of setting the
 // RV blob for TO2 addresses.
-func (*Client) TransferOwnership1(ctx context.Context, priv crypto.Signer) error {
+func (*Client) TransferOwnership1(ctx context.Context, baseURL string, priv crypto.Signer) ([]RvTO2Addr, error) {
 	panic("unimplemented")
 }
 
 // TransferOwnership2 runs the TO2 protocol and has side effects of performing
 // FSIMs.
-func (*Client) TransferOwnership2(ctx context.Context, priv crypto.Signer) error {
+func (*Client) TransferOwnership2(ctx context.Context, baseURL string, fsims map[string]ServiceInfoModule, priv crypto.Signer) error {
 	panic("unimplemented")
 }
 

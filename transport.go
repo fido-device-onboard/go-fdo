@@ -13,7 +13,7 @@ import (
 type Transport interface {
 	// Send a message and receive a response. The response reader should always
 	// be closed.
-	Send(ctx context.Context, msgType uint8, msg any) (respType uint8, _ io.ReadCloser, _ error)
+	Send(ctx context.Context, baseURL string, msgType uint8, msg any) (respType uint8, _ io.ReadCloser, _ error)
 
 	// ResetContext clears the protocol state, e.g. the session authorization
 	// token.

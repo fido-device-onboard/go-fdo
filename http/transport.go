@@ -26,9 +26,6 @@ type Transport struct {
 	// should be used.
 	Client *http.Client
 
-	// Base URL including scheme. e.g. https://example.com/something_or_not
-	Base string
-
 	// Auth stores Authorization headers much like a CookieJar in a standard
 	// *http.Client stores cookie headers. As specified in Section 4.3, each
 	// protocol (TO1, TO2, etc.) generally starts with a message containing no
@@ -48,7 +45,7 @@ type Transport struct {
 var _ fdo.Transport = (*Transport)(nil)
 
 // Send sends a single message and receives a single response message.
-func (t *Transport) Send(ctx context.Context, msgType uint8, msg any) (respType uint8, _ io.ReadCloser, _ error) {
+func (t *Transport) Send(ctx context.Context, base string, msgType uint8, msg any) (respType uint8, _ io.ReadCloser, _ error) {
 	// Initialize default values
 	if t.Client == nil {
 		t.Client = http.DefaultClient
@@ -58,7 +55,7 @@ func (t *Transport) Send(ctx context.Context, msgType uint8, msg any) (respType 
 	}
 
 	// Create request with URL and body
-	uri, err := url.JoinPath(t.Base, "fdo/101/msg", strconv.Itoa(int(msgType)))
+	uri, err := url.JoinPath(base, "fdo/101/msg", strconv.Itoa(int(msgType)))
 	if err != nil {
 		return 0, nil, fmt.Errorf("error parsing base URL: %w", err)
 	}
