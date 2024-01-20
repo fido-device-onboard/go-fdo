@@ -11,7 +11,6 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
-	"sync"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 )
@@ -215,10 +214,9 @@ type PublicKey struct {
 	Encoding KeyEncoding
 	Body     []byte
 
-	parseOnce sync.Once
-	key       crypto.PublicKey
-	chain     []*x509.Certificate
-	err       error
+	key   crypto.PublicKey
+	chain []*x509.Certificate
+	err   error
 }
 
 func newPublicKey(typ KeyType, pub any) (*PublicKey, error) {
@@ -254,25 +252,20 @@ func newPublicKey(typ KeyType, pub any) (*PublicKey, error) {
 	}
 }
 
-func (pub *PublicKey) clone() PublicKey {
-	return PublicKey{
-		Type:     pub.Type,
-		Encoding: pub.Encoding,
-		Body:     pub.Body,
-		// skip parse lock and memoized values
-	}
-}
-
 // Public returns the public key parsed from the X509 or X5CHAIN encoding.
 func (pub *PublicKey) Public() (crypto.PublicKey, error) {
-	pub.parseOnce.Do(func() { pub.err = pub.parse() })
+	if pub.key == nil && pub.err == nil {
+		pub.err = pub.parse()
+	}
 	return pub.key, pub.err
 }
 
 // Chain returns the certificate chain of the public key. If the key encoding
 // is not X5CHAIN then the certificate slice will be nil.
 func (pub *PublicKey) Chain() ([]*x509.Certificate, error) {
-	pub.parseOnce.Do(func() { pub.err = pub.parse() })
+	if pub.key == nil && pub.err == nil {
+		pub.err = pub.parse()
+	}
 	return pub.chain, pub.err
 }
 

@@ -122,7 +122,7 @@ func (v *Voucher) shallowClone() *Voucher {
 			GUID:            v.Header.Val.GUID,
 			RvInfo:          v.Header.Val.RvInfo,
 			DeviceInfo:      v.Header.Val.DeviceInfo,
-			ManufacturerKey: v.Header.Val.ManufacturerKey.clone(),
+			ManufacturerKey: v.Header.Val.ManufacturerKey,
 			CertChainHash:   v.Header.Val.CertChainHash,
 		}),
 		Hmac:      v.Hmac,
@@ -430,7 +430,13 @@ func ExtendVoucher[T PublicKeyOrChain](v *Voucher, owner crypto.Signer, nextOwne
 	prevHash := Hash{Algorithm: Sha384Hash, Value: digest.Sum(nil)}
 
 	// Create and sign next entry
-	entry, err := newSignedEntry(owner, nextOwnerPublicKey, v.Header.Val.ManufacturerKey.Type, prevHash, headerHash, extra)
+	usePSS := v.Header.Val.ManufacturerKey.Type == RsaPssKeyType
+	entry, err := newSignedEntry(owner, usePSS, VoucherEntryPayload{
+		PreviousHash: prevHash,
+		HeaderHash:   headerHash,
+		Extra:        cbor.NewBstrPtr(extra),
+		PublicKey:    *nextOwnerPublicKey,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -438,15 +444,10 @@ func ExtendVoucher[T PublicKeyOrChain](v *Voucher, owner crypto.Signer, nextOwne
 	return xv, nil
 }
 
-func newSignedEntry(owner crypto.Signer, nextOwner *PublicKey, keyType KeyType, prevHash, headerHash Hash, extra ExtraInfo) (*cose.Sign1Tag[VoucherEntryPayload], error) {
+func newSignedEntry(owner crypto.Signer, usePSS bool, payload VoucherEntryPayload) (*cose.Sign1Tag[VoucherEntryPayload], error) {
 	entry := cose.Sign1Tag[VoucherEntryPayload]{
-		Header: cose.Header{},
-		Payload: cbor.NewBstrPtr(VoucherEntryPayload{
-			PreviousHash: prevHash,
-			HeaderHash:   headerHash,
-			Extra:        cbor.NewBstrPtr(extra),
-			PublicKey:    nextOwner.clone(),
-		}),
+		Header:  cose.Header{},
+		Payload: cbor.NewBstrPtr(payload),
 	}
 
 	var signOpts crypto.SignerOpts
@@ -460,7 +461,7 @@ func newSignedEntry(owner crypto.Signer, nextOwner *PublicKey, keyType KeyType, 
 			return nil, fmt.Errorf("unsupported RSA key size: %d bits", rsaPub.Size()*8)
 		}
 
-		if keyType == RsaPssKeyType {
+		if usePSS {
 			signOpts = &rsa.PSSOptions{
 				SaltLength: rsa.PSSSaltLengthEqualsHash,
 				Hash:       signOpts.(crypto.Hash),
