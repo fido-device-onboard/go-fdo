@@ -118,60 +118,15 @@ func (s1 *Sign1[T]) Sign(key crypto.Signer, payload []byte, opts crypto.SignerOp
 	}
 
 	// Determine hash and signing algorithm
-	var algID cbor.RawBytes
-	switch pub := key.Public().(type) {
-	case *ecdsa.PublicKey:
-		switch pub.Curve {
-		case elliptic.P256():
-			algID = es256AlgCbor
-			opts = crypto.SHA256
-		case elliptic.P384():
-			algID = es384AlgCbor
-			opts = crypto.SHA384
-		case elliptic.P521():
-			algID = es512AlgCbor
-			opts = crypto.SHA512
-		default:
-			return fmt.Errorf("unsupported curve: %s", pub.Params().Name)
-		}
+	algID, opts, err := signAlg(key, opts)
+	if err != nil {
+		return err
+	}
 
-		// When an *ecdsa.PrivateKey is used, override its Sign implementation
-		// to use RFC8152 signature encoding rather than ASN1.
-		if eckey, ok := key.(*ecdsa.PrivateKey); ok {
-			key = rfc8152ecSigner{eckey}
-		}
-
-	case *rsa.PublicKey:
-		// Ensure that a hash func was specified
-		if opts == nil {
-			return errors.New("required signer opts were missing; must specify hash type")
-		}
-
-		// When using RSASSA-PSS, salt length must equal hash length
-		pssOpts, usingPss := opts.(*rsa.PSSOptions)
-		if usingPss && pssOpts.SaltLength != rsa.PSSSaltLengthEqualsHash && pssOpts.SaltLength != pssOpts.Hash.Size() {
-			return fmt.Errorf("PSS salt length must match hash size")
-		}
-
-		switch {
-		case usingPss && opts.HashFunc().Size() == 32:
-			algID = ps256AlgCbor
-		case usingPss && opts.HashFunc().Size() == 48:
-			algID = ps384AlgCbor
-		case usingPss && opts.HashFunc().Size() == 64:
-			algID = ps512AlgCbor
-		case !usingPss && opts.HashFunc().Size() == 32:
-			algID = rs256AlgCbor
-		case !usingPss && opts.HashFunc().Size() == 48:
-			algID = rs384AlgCbor
-		case !usingPss && opts.HashFunc().Size() == 64:
-			algID = rs512AlgCbor
-		default:
-			return fmt.Errorf("unsupported hash size: %d bit", opts.HashFunc().Size()*8)
-		}
-
-	default:
-		return fmt.Errorf("unsupported public key type: %T", pub)
+	// When an *ecdsa.PrivateKey is used, override its Sign implementation
+	// to use RFC8152 signature encoding rather than ASN1.
+	if eckey, ok := key.(*ecdsa.PrivateKey); ok {
+		key = rfc8152ecSigner{eckey}
 	}
 
 	// Sign contents of Sig_structure
@@ -283,6 +238,8 @@ func (s1 *Sign1[T]) Verify(key crypto.PublicKey, payload []byte) (bool, error) {
 	}
 }
 
+// This type wraps an ECDSA private key and uses the signature encoding
+// required by COSE.
 type rfc8152ecSigner struct {
 	PrivateKey *ecdsa.PrivateKey
 }
@@ -304,4 +261,59 @@ func (key rfc8152ecSigner) Sign(rand io.Reader, digest []byte, _ crypto.SignerOp
 	r.FillBytes(sigBytes[:n])
 	s.FillBytes(sigBytes[n:])
 	return sigBytes, nil
+}
+
+// signAlg returns the already marshaled algorithm ID and possibly modified
+// SignerOpts.
+//
+// This function has a high cyclomatic complexity, but should NOT be reduced
+// further, because indirection will only make the code harder to read.
+//
+//nolint:gocyclo
+func signAlg(key crypto.Signer, opts crypto.SignerOpts) (algID cbor.RawBytes, _ crypto.SignerOpts, _ error) {
+	switch pub := key.Public().(type) {
+	case *ecdsa.PublicKey:
+		switch pub.Curve {
+		case elliptic.P256():
+			return es256AlgCbor, crypto.SHA256, nil
+		case elliptic.P384():
+			return es384AlgCbor, crypto.SHA384, nil
+		case elliptic.P521():
+			return es512AlgCbor, crypto.SHA512, nil
+		default:
+			return nil, nil, fmt.Errorf("unsupported curve: %s", pub.Params().Name)
+		}
+
+	case *rsa.PublicKey:
+		// Ensure that a hash func was specified
+		if opts == nil {
+			return nil, nil, errors.New("required signer opts were missing; must specify hash type")
+		}
+
+		// When using RSASSA-PSS, salt length must equal hash length
+		pssOpts, usingPss := opts.(*rsa.PSSOptions)
+		if usingPss && pssOpts.SaltLength != rsa.PSSSaltLengthEqualsHash && pssOpts.SaltLength != pssOpts.Hash.Size() {
+			return nil, nil, fmt.Errorf("PSS salt length must match hash size")
+		}
+
+		switch {
+		case usingPss && opts.HashFunc().Size() == 32:
+			return ps256AlgCbor, opts, nil
+		case usingPss && opts.HashFunc().Size() == 48:
+			return ps384AlgCbor, opts, nil
+		case usingPss && opts.HashFunc().Size() == 64:
+			return ps512AlgCbor, opts, nil
+		case !usingPss && opts.HashFunc().Size() == 32:
+			return rs256AlgCbor, opts, nil
+		case !usingPss && opts.HashFunc().Size() == 48:
+			return rs384AlgCbor, opts, nil
+		case !usingPss && opts.HashFunc().Size() == 64:
+			return rs512AlgCbor, opts, nil
+		default:
+			return nil, nil, fmt.Errorf("unsupported hash size: %d bit", opts.HashFunc().Size()*8)
+		}
+
+	default:
+		return nil, nil, fmt.Errorf("unsupported public key type: %T", pub)
+	}
 }

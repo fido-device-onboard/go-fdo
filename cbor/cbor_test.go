@@ -594,7 +594,7 @@ func TestDecodeAny(t *testing.T) {
 		var got any
 		if err := cbor.Unmarshal(input, &got); err != nil {
 			t.Errorf("error unmarshaling % x: %v", input, err)
-		} else if !reflect.DeepEqual(got.([]interface{}), expect) {
+		} else if !reflect.DeepEqual(got.([]any), expect) {
 			t.Errorf("unmarshaling % x; expected %s, got %s", input, expect, got)
 		}
 	})

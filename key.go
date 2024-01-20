@@ -221,6 +221,39 @@ type PublicKey struct {
 	err       error
 }
 
+func newPublicKey(typ KeyType, pub any) (*PublicKey, error) {
+	switch pub := pub.(type) {
+	case []*x509.Certificate:
+		chain := make([]*Certificate, len(pub))
+		for i, cert := range pub {
+			chain[i] = (*Certificate)(cert)
+		}
+		body, err := cbor.Marshal(chain)
+		if err != nil {
+			return nil, fmt.Errorf("X5Chain encoding: %w", err)
+		}
+		return &PublicKey{
+			Type:     typ,
+			Encoding: X5ChainKeyEnc,
+			Body:     body,
+		}, nil
+
+	case *ecdsa.PublicKey, *rsa.PublicKey:
+		body, err := x509.MarshalPKIXPublicKey(pub)
+		if err != nil {
+			return nil, fmt.Errorf("X509 encoding: %w", err)
+		}
+		return &PublicKey{
+			Type:     typ,
+			Encoding: X509KeyEnc,
+			Body:     body,
+		}, nil
+
+	default:
+		return nil, fmt.Errorf("unsupported public key: must be *ecdsa.PublicKey, *rsa.PublicKey, or []*x509.Certificate")
+	}
+}
+
 func (pub *PublicKey) clone() PublicKey {
 	return PublicKey{
 		Type:     pub.Type,

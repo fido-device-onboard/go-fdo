@@ -403,31 +403,9 @@ func ExtendVoucher[T PublicKeyOrChain](v *Voucher, owner crypto.Signer, nextOwne
 	}
 
 	// Create the next owner PublicKey structure
-	nextOwnerPublicKey := PublicKey{Type: v.Header.Val.ManufacturerKey.Type}
-	switch nextOwner := any(nextOwner).(type) {
-	case []*x509.Certificate:
-		chain := make([]*Certificate, len(nextOwner))
-		for i, cert := range nextOwner {
-			chain[i] = (*Certificate)(cert)
-		}
-		body, err := cbor.Marshal(chain)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling next owner public key with X5Chain encoding: %w", err)
-		}
-
-		nextOwnerPublicKey.Encoding = X5ChainKeyEnc
-		nextOwnerPublicKey.Body = body
-	case *ecdsa.PublicKey, *rsa.PublicKey:
-		body, err := x509.MarshalPKIXPublicKey(nextOwner)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling next owner public key with X509 encoding: %w", err)
-		}
-
-		nextOwnerPublicKey.Encoding = X509KeyEnc
-		nextOwnerPublicKey.Body = body
-
-	default:
-		return nil, fmt.Errorf("unsupported next owner public key: must be *ecdsa.PublicKey, *rsa.PublicKey, or []*x509.Certificate")
+	nextOwnerPublicKey, err := newPublicKey(v.Header.Val.ManufacturerKey.Type, nextOwner)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling next owner public key: %w", err)
 	}
 
 	// Calculate the hash of the voucher header info
@@ -452,17 +430,27 @@ func ExtendVoucher[T PublicKeyOrChain](v *Voucher, owner crypto.Signer, nextOwne
 	prevHash := Hash{Algorithm: Sha384Hash, Value: digest.Sum(nil)}
 
 	// Create and sign next entry
+	entry, err := newSignedEntry(owner, nextOwnerPublicKey, v.Header.Val.ManufacturerKey.Type, prevHash, headerHash, extra)
+	if err != nil {
+		return nil, err
+	}
+	xv.Entries = append(xv.Entries, *entry)
+	return xv, nil
+}
+
+func newSignedEntry(owner crypto.Signer, nextOwner *PublicKey, keyType KeyType, prevHash, headerHash Hash, extra ExtraInfo) (*cose.Sign1Tag[VoucherEntryPayload], error) {
 	entry := cose.Sign1Tag[VoucherEntryPayload]{
 		Header: cose.Header{},
 		Payload: cbor.NewBstrPtr(VoucherEntryPayload{
 			PreviousHash: prevHash,
 			HeaderHash:   headerHash,
 			Extra:        cbor.NewBstrPtr(extra),
-			PublicKey:    nextOwnerPublicKey.clone(),
+			PublicKey:    nextOwner.clone(),
 		}),
 	}
+
 	var signOpts crypto.SignerOpts
-	if rsaPub, ok := ownerPub.(*rsa.PublicKey); ok {
+	if rsaPub, ok := owner.Public().(*rsa.PublicKey); ok {
 		switch rsaPub.Size() {
 		case 2048 / 8:
 			signOpts = crypto.SHA256
@@ -472,17 +460,17 @@ func ExtendVoucher[T PublicKeyOrChain](v *Voucher, owner crypto.Signer, nextOwne
 			return nil, fmt.Errorf("unsupported RSA key size: %d bits", rsaPub.Size()*8)
 		}
 
-		if v.Header.Val.ManufacturerKey.Type == RsaPssKeyType {
+		if keyType == RsaPssKeyType {
 			signOpts = &rsa.PSSOptions{
 				SaltLength: rsa.PSSSaltLengthEqualsHash,
 				Hash:       signOpts.(crypto.Hash),
 			}
 		}
 	}
+
 	if err := entry.Sign(owner, nil, signOpts); err != nil {
 		return nil, fmt.Errorf("error signing voucher entry payload: %w", err)
 	}
 
-	xv.Entries = append(xv.Entries, entry)
-	return xv, nil
+	return &entry, nil
 }

@@ -425,6 +425,8 @@ func (d *Decoder) decodeRawVal(highThreeBits, lowFiveBits byte, additional []byt
 }
 
 // Decode one item into a settable value
+//
+//nolint:gocyclo, Dispatch will always have naturally high complexity.
 func (d *Decoder) decodeVal(rv reflect.Value) error {
 	// Read initial bytes
 	highThreeBits, lowFiveBits, additional, err := d.typeInfo()
@@ -520,6 +522,7 @@ func allocateInterface(maybeUnsetVal reflect.Value, newType reflect.Type) {
 	}
 }
 
+//nolint:gocyclo, Dispatch will always have naturally high complexity.
 func (d *Decoder) decodePositive(rv reflect.Value, additional []byte) error {
 	u64 := toU64(additional)
 
@@ -937,6 +940,8 @@ func (e *Encoder) write(b []byte) error {
 }
 
 // Encode CBOR data to the underlying [io.Writer].
+//
+//nolint:gocyclo, Dispatch will always have naturally high complexity.
 func (e *Encoder) Encode(v any) error {
 	// Use reflection to dereference pointers, get concrete types out of
 	// interfaces, and unwrap named types
