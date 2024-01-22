@@ -14,6 +14,5 @@ type ServiceInfo struct {
 // ServiceInfoModule handles a single ServiceInfo key (format:
 // "moduleName:messageName").
 type ServiceInfoModule interface {
-	Match(key string) bool
 	HandleFSIM(val []byte) (any, error)
 }

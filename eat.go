@@ -63,19 +63,72 @@ const (
 // EAT claim tags
 var (
 	// EAT encrypt-then-MAC AES IV claim unprotected header
-	EatAesIvClaim = cose.Label{Int64: 5}
+	eatAesIvClaim = cose.Label{Int64: 5} //nolint:unused
 	// An EAT nonce
-	EatNonceClaim = cose.Label{Int64: 10}
+	eatNonceClaim = cose.Label{Int64: 10} //nolint:unused
 	// EatRand (0x01) followed by FDO GUID (128-bit)
-	EatUeidClaim = cose.Label{Int64: 256}
+	eatUeidClaim = cose.Label{Int64: 256} //nolint:unused
 )
 
 // FDO claim tags
 var (
 	// MAY be present to contain other claims specified for the specific FIDO Device Onboard message.
-	EatFdoClaim = cose.Label{Int64: -257}
+	eatFdoClaim = cose.Label{Int64: -257} //nolint:unused
 	// If needed for a given ROE, is an unprotected header item (not payload)
-	EatMaroePrefixClaim = cose.Label{Int64: -258}
+	eatMaroePrefixClaim = cose.Label{Int64: -258} //nolint:unused
 	// An unprotected header item
-	EatUnprotectedNonceClaim = cose.Label{Int64: -259}
+	eatUnprotectedNonceClaim = cose.Label{Int64: -259} //nolint:unused
 )
+
+// EAToken is used for the Device attestation. Entity Attestation Tokens in
+// FIDO Device Onboard require the COSE_Sign1 prefix. The EAT token follows the
+// EAT specification for all claims except as follows:
+//
+//   - The UEID claim MUST have EAT-RAND in the first byte and contain the FIDO
+//     Device Onboard Guid for the attesting Device in subsequent bytes
+//   - The EAT NONCE claim MUST contain the specified FIDO Device Onboard Nonce
+//     for the specific FIDO Device Onboard message in question (see below)
+//   - An additional claim, EAT-FDO, may be present to contain other claims
+//     specified for the specific FIDO Device Onboard message.
+//   - The MAROEPrefix, if needed for a given ROE, is an unprotected header
+//     item.
+//
+// EATOtherClaims indicates all other valid EAT claims, as defined in the EAT
+// specification [EAT].
+//
+// As a documentation convention, the affected FIDO Device Onboard messages are
+// defined to be the EAT token, with the following:
+//
+//   - Guid appears as above
+//   - `EAT-NONCE` is added to `$$EATPayloadBase` to indicate which Nonce to use
+//   - If needed, `$EATPayloads` contains the definition for the contents of
+//     the `EAT-FDO` tag.
+//   - `$$EATUnprotectedHeaders` gives unprotected headers to use for that
+//     message.
+//   - `$$EATProtectedHeaders` gives protected headers to use for that message.
+//
+// Relevant CDDL:
+//
+//	EATPayloadBaseMap = { EATPayloadBase }
+//	$$EATPayloadBase //= (
+//	    EAT-FDO => $EATPayloads,
+//	    EAT-NONCE => Nonce,
+//	    EAT-UEID  => EAT-GUID,
+//	    EATOtherClaims
+//	)
+//	$EATPayloads /= ()
+type EAToken map[cose.Label]any
+
+// NewEAToken creates an EAToken with the expected required and additional
+// claims.
+func NewEAToken(guid GUID, nonce Nonce, fdo any, other map[cose.Label]any) EAToken {
+	if other == nil {
+		other = make(map[cose.Label]any)
+	}
+	if fdo != nil {
+		other[eatFdoClaim] = fdo
+	}
+	other[eatNonceClaim] = append([]byte{0x50}, nonce[:]...)
+	other[eatUeidClaim] = append([]byte{0x50}, guid[:]...)
+	return other
+}
