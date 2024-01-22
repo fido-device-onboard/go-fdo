@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto"
 	"crypto/x509"
+
 	"time"
 )
 
@@ -19,6 +20,10 @@ type Client struct {
 
 	// Retry optionally sets a policy for retrying protocol messages.
 	Retry RetryDecider
+
+	// ServiceInfoModulesForOwner returns a map of registered FDO Service Info
+	// Modules (FSIMs) for a given Owner Service.
+	ServiceInfoModulesForOwner func(RvTO2Addr) map[string]ServiceInfoModule
 }
 
 // Generate a CSR
@@ -42,19 +47,19 @@ type Client struct {
 // because the manufacturing component signs the ownership voucher, but isn't
 // necessarily the root of trust for the device's identity and may or may not
 // validate the device's presented certificate chain.
-func (c *Client) DeviceInitialize(ctx context.Context, baseURL, id string, chain []*x509.Certificate, priv crypto.Signer, h KeyedHasher) (*VoucherHeader, *Hash, error) {
+func (c *Client) DeviceInitialize(ctx context.Context, baseURL, id string, chain []*x509.Certificate, h KeyedHasher, priv crypto.Signer) (*VoucherHeader, *Hash, error) {
 	panic("unimplemented")
 }
 
-// TransferOwnership1 runs the TO1 protocol and has side effects of setting the
-// RV blob for TO2 addresses.
+// TransferOwnership1 runs the TO1 protocol and returns the owner service (TO2)
+// addresses.
 func (*Client) TransferOwnership1(ctx context.Context, baseURL string, priv crypto.Signer) ([]RvTO2Addr, error) {
 	panic("unimplemented")
 }
 
 // TransferOwnership2 runs the TO2 protocol and has side effects of performing
 // FSIMs.
-func (*Client) TransferOwnership2(ctx context.Context, baseURL string, fsims map[string]ServiceInfoModule, priv crypto.Signer) error {
+func (*Client) TransferOwnership2(ctx context.Context, baseURL string, priv crypto.Signer) error {
 	panic("unimplemented")
 }
 

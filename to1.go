@@ -25,6 +25,6 @@ type RvRedirect struct {
 type RvTO2Addr struct {
 	IPAddress         []byte
 	DNSAddress        string
-	Port              uint64
-	TransportProtocol uint64
+	Port              uint16
+	TransportProtocol TransportProtocol
 }

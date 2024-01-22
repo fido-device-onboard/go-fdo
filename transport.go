@@ -8,6 +8,29 @@ import (
 	"io"
 )
 
+// TransportProtocol is used to indicate which protocol to use in the
+// Rendezvous blob.
+type TransportProtocol uint8
+
+// CDDL from spec:
+//
+//	TransportProtocol /= (
+//	   ProtTCP:    1,     ;; bare TCP stream
+//	   ProtTLS:    2,     ;; bare TLS stream
+//	   ProtHTTP:   3,
+//	   ProtCoAP:   4,
+//	   ProtHTTPS:  5,
+//	   ProtCoAPS:  6,
+//	)
+const (
+	TCPTransport   TransportProtocol = 1
+	TLSTransport   TransportProtocol = 2
+	HTTPTransport  TransportProtocol = 3
+	CoAPTransport  TransportProtocol = 4
+	HTTPSTransport TransportProtocol = 5
+	CoAPSTransport TransportProtocol = 6
+)
+
 // Transport abstracts the underlying TCP/HTTP/CoAP transport for sending a
 // message and receiving a response.
 type Transport interface {
