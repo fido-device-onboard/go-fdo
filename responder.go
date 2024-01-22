@@ -5,12 +5,15 @@ package fdo
 
 import (
 	"context"
+	"crypto/x509"
 )
 
 // Responder handles the business logic of responding to FDO messages,
 // regardless of the underlying server transport.
 type Responder struct {
-	// TODO
+	// DeviceForInfo correlates a device certificate chain to info provided in
+	// the DI.AppStart message.
+	DeviceForInfo func(info any) ([]*x509.Certificate, error)
 }
 
 // Respond validates a request and returns the appropriate response message.

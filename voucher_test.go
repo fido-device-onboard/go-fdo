@@ -78,7 +78,7 @@ func TestVoucherHeaderDeterministic(t *testing.T) {
 		Version   uint16
 		Header    cbor.Bstr[cbor.RawBytes]
 		Hmac      fdo.Hmac
-		CertChain *[]*fdo.Certificate
+		CertChain *[]*cbor.X509Certificate
 		Entries   []cose.Sign1Tag[fdo.VoucherEntryPayload]
 	}
 	if err := cbor.Unmarshal(b, &ov); err != nil {

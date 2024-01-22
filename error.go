@@ -10,6 +10,10 @@ import (
 	"github.com/fido-device-onboard/go-fdo/cbor"
 )
 
+// ErrorMsgType is the response type number associated with an ErrorMessage
+// response.
+const ErrorMsgType uint8 = 255
+
 // ErrorMessage indicates that the previous protocol message could not be
 // processed. The error message is a “catch-all” whenever processing cannot
 // continue. This includes protocol errors and any trust or security
@@ -54,10 +58,17 @@ import (
 //	correlationId = uint
 type ErrorMessage struct {
 	Code          uint16
-	PrevMsg       uint8
-	String        string
+	PrevMsgType   uint8
+	ErrString     string
 	Timestamp     Timestamp
 	CorrelationID uint
+}
+
+// String implements Stringer.
+func (e ErrorMessage) String() string {
+	return fmt.Sprintf("%s [code=%d,prevMsgType=%d,id=%d] %s",
+		time.Time(e.Timestamp), e.Code, e.PrevMsgType, e.CorrelationID, e.ErrString,
+	)
 }
 
 // Timestamp implements the timestamp CBOR format used in the FDO error message
@@ -167,7 +178,7 @@ func Retry(n int64) *Retrier {
 // a deadlock.
 func (r *Retrier) ShouldRetry(em ErrorMessage) <-chan time.Time {
 	// Get the protocol counter, initializing it as needed
-	proto := ProtocolOf(em.PrevMsg)
+	proto := ProtocolOf(em.PrevMsgType)
 	counter := r.counters[proto]
 	if counter == nil {
 		counter = new(retryCount)
@@ -175,13 +186,13 @@ func (r *Retrier) ShouldRetry(em ErrorMessage) <-chan time.Time {
 	}
 
 	// Reset the counter if the message type ID has gone backwards
-	if counter.prev >= em.PrevMsg {
+	if counter.prev >= em.PrevMsgType {
 		counter.count = 0
 	}
 
 	// Update the counter
 	counter.count++
-	counter.prev = em.PrevMsg
+	counter.prev = em.PrevMsgType
 
 	// Decide whether to retry
 	if counter.count > r.max {

@@ -6,7 +6,6 @@ package fdo
 import (
 	"context"
 	"crypto"
-	"crypto/x509"
 
 	"time"
 )
@@ -26,16 +25,6 @@ type Client struct {
 	ServiceInfoModulesForOwner func(RvTO2Addr) map[string]ServiceInfoModule
 }
 
-// Generate a CSR
-// var guid Guid
-// csr, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
-// 	Subject:            pkix.Name{CommonName: fmt.Sprintf("%x.device.fdo", guid)},
-// 	SignatureAlgorithm: x509.SHA256WithRSA,
-// }, priv)
-// if err != nil {
-// 	return nil, nil, fmt.Errorf("error generating certificate signing request: %w", err)
-// }
-
 // DeviceInitialize runs the DI protocol and returns the voucher header and
 // manufacturer public key hash.
 //
@@ -47,7 +36,13 @@ type Client struct {
 // because the manufacturing component signs the ownership voucher, but isn't
 // necessarily the root of trust for the device's identity and may or may not
 // validate the device's presented certificate chain.
-func (c *Client) DeviceInitialize(ctx context.Context, baseURL, id string, chain []*x509.Certificate, h KeyedHasher, priv crypto.Signer) (*VoucherHeader, *Hash, error) {
+func (c *Client) DeviceInitialize(ctx context.Context, baseURL string, info any, h KeyedHasher, priv crypto.Signer) (*VoucherHeader, *Hash, error) {
+	ovh, err := c.appStart(ctx, baseURL, info)
+	if err != nil {
+		return nil, nil, err
+	}
+	_ = ovh
+
 	panic("unimplemented")
 }
 

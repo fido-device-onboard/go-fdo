@@ -3,6 +3,12 @@
 
 package cbor
 
+import (
+	"crypto/x509"
+	"errors"
+	"fmt"
+)
+
 // Bstr marshals and unmarshals CBOR data that is a byte array of the CBOR
 // encoding of its underlying value.
 //
@@ -41,4 +47,33 @@ func (b *Bstr[T]) UnmarshalCBOR(p []byte) error {
 		return err
 	}
 	return Unmarshal(data, &b.Val)
+}
+
+// X509Certificate is a newtype for x509.X509Certificate implementing proper CBOR
+// encoding.
+type X509Certificate x509.Certificate
+
+// MarshalCBOR implements Marshaler interface.
+func (c *X509Certificate) MarshalCBOR() ([]byte, error) {
+	if c == nil {
+		return Marshal(nil)
+	}
+	return Marshal(c.Raw)
+}
+
+// UnmarshalCBOR implements Unmarshaler interface.
+func (c *X509Certificate) UnmarshalCBOR(data []byte) error {
+	if c == nil {
+		return errors.New("cannot unmarshal to a nil pointer")
+	}
+	var der []byte
+	if err := Unmarshal(data, &der); err != nil {
+		return err
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		return fmt.Errorf("error parsing x509 certificate DER-encoded bytes: %w", err)
+	}
+	*c = X509Certificate(*cert)
+	return nil
 }

@@ -43,7 +43,7 @@ type Voucher struct {
 	Version   uint16
 	Header    cbor.Bstr[VoucherHeader]
 	Hmac      Hmac
-	CertChain *[]*Certificate
+	CertChain *[]*cbor.X509Certificate
 	Entries   []cose.Sign1Tag[VoucherEntryPayload]
 }
 
@@ -361,6 +361,32 @@ func (e *VoucherEntryPayload) VerifyOwnerCertChain(roots *x509.CertPool) error {
 		return fmt.Errorf("voucher entry's owner public key could not be verified against given roots, because it was not an X5Chain")
 	}
 	return verifyCertChain(chain, roots)
+}
+
+func verifyCertChain(chain []*x509.Certificate, roots *x509.CertPool) error {
+	// All all intermediates (if any) to a pool
+	intermediates := x509.NewCertPool()
+	if len(chain) > 2 {
+		for _, cert := range chain[1 : len(chain)-1] {
+			intermediates.AddCert(cert)
+		}
+	}
+
+	// Trust last certificate in chain if roots is nil
+	if roots == nil {
+		roots = x509.NewCertPool()
+		roots.AddCert(chain[len(chain)-1])
+	}
+
+	// Return the result of (*x509.Certificate).Verify
+	if _, err := chain[0].Verify(x509.VerifyOptions{
+		Roots:         roots,
+		Intermediates: intermediates,
+	}); err != nil {
+		return fmt.Errorf("%w: %w", ErrCryptoVerifyFailed, err)
+	}
+
+	return nil
 }
 
 // ExtendVoucher adds a new signed voucher entry to the list and returns the
