@@ -5,63 +5,72 @@ package fdo
 
 // Rendezvous Variables
 const (
-	RVDevOnly    uint8 = 0
-	RVOwnerOnly  uint8 = 1
-	RVIPAddress  uint8 = 2
-	RVDevPort    uint8 = 3
-	RVOwnerPort  uint8 = 4
-	RVDns        uint8 = 5
-	RVSvCertHash uint8 = 6
-	RVClCertHash uint8 = 7
-	RVUserInput  uint8 = 8
-	RVWifiSsid   uint8 = 9
-	RVWifiPw     uint8 = 10
-	RVMedium     uint8 = 11
-	RVProtocol   uint8 = 12
-	RVDelaysec   uint8 = 13
-	RVBypass     uint8 = 14
-	RVExtRV      uint8 = 15
+	RVDevOnly    RvVar = 0
+	RVOwnerOnly  RvVar = 1
+	RVIPAddress  RvVar = 2
+	RVDevPort    RvVar = 3
+	RVOwnerPort  RvVar = 4
+	RVDns        RvVar = 5
+	RVSvCertHash RvVar = 6
+	RVClCertHash RvVar = 7
+	RVUserInput  RvVar = 8
+	RVWifiSsid   RvVar = 9
+	RVWifiPw     RvVar = 10
+	RVMedium     RvVar = 11
+	RVProtocol   RvVar = 12
+	RVDelaysec   RvVar = 13
+	RVBypass     RvVar = 14
+	RVExtRV      RvVar = 15
 )
+
+// RvVar is an FDO RVVariable.
+type RvVar uint8
 
 // Rendezvous Protocols
 const (
-	RVProtRest    uint8 = 0
-	RVProtHTTP    uint8 = 1
-	RVProtHTTPS   uint8 = 2
-	RVProtTCP     uint8 = 3
-	RVProtTLS     uint8 = 4
-	RVProtCoapTCP uint8 = 5
-	RVProtCoapUDP uint8 = 6
+	RVProtRest    RvProt = 0
+	RVProtHTTP    RvProt = 1
+	RVProtHTTPS   RvProt = 2
+	RVProtTCP     RvProt = 3
+	RVProtTLS     RvProt = 4
+	RVProtCoapTCP RvProt = 5
+	RVProtCoapUDP RvProt = 6
 )
+
+// RvProt is an RVProtocolValue.
+type RvProt uint8
 
 // Rendezvous Media
 const (
-	RVMedEth0    uint8 = 0
-	RVMedEth1    uint8 = 1
-	RVMedEth2    uint8 = 2
-	RVMedEth3    uint8 = 3
-	RVMedEth4    uint8 = 4
-	RVMedEth5    uint8 = 5
-	RVMedEth6    uint8 = 6
-	RVMedEth7    uint8 = 7
-	RVMedEth8    uint8 = 8
-	RVMedEth9    uint8 = 9
-	RVMedEthAll  uint8 = 20
-	RVMedWifi0   uint8 = 10
-	RVMedWifi1   uint8 = 11
-	RVMedWifi2   uint8 = 12
-	RVMedWifi3   uint8 = 13
-	RVMedWifi4   uint8 = 14
-	RVMedWifi5   uint8 = 15
-	RVMedWifi6   uint8 = 16
-	RVMedWifi7   uint8 = 17
-	RVMedWifi8   uint8 = 18
-	RVMedWifi9   uint8 = 19
-	RVMedWifiAll uint8 = 21
+	RVMedEth0    RvMedium = 0
+	RVMedEth1    RvMedium = 1
+	RVMedEth2    RvMedium = 2
+	RVMedEth3    RvMedium = 3
+	RVMedEth4    RvMedium = 4
+	RVMedEth5    RvMedium = 5
+	RVMedEth6    RvMedium = 6
+	RVMedEth7    RvMedium = 7
+	RVMedEth8    RvMedium = 8
+	RVMedEth9    RvMedium = 9
+	RVMedEthAll  RvMedium = 20
+	RVMedWifi0   RvMedium = 10
+	RVMedWifi1   RvMedium = 11
+	RVMedWifi2   RvMedium = 12
+	RVMedWifi3   RvMedium = 13
+	RVMedWifi4   RvMedium = 14
+	RVMedWifi5   RvMedium = 15
+	RVMedWifi6   RvMedium = 16
+	RVMedWifi7   RvMedium = 17
+	RVMedWifi8   RvMedium = 18
+	RVMedWifi9   RvMedium = 19
+	RVMedWifiAll RvMedium = 21
 )
+
+// RvMedium is an RVMediumValue.
+type RvMedium uint8
 
 // RvInstruction contains a paired rendezvous variable identifier and value.
 type RvInstruction struct {
-	Variable uint8
+	Variable RvVar
 	Value    []byte
 }
