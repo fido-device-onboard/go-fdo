@@ -6,6 +6,7 @@ package fdo
 import (
 	"context"
 	"crypto"
+	"fmt"
 
 	"time"
 )
@@ -36,14 +37,29 @@ type Client struct {
 // because the manufacturing component signs the ownership voucher, but isn't
 // necessarily the root of trust for the device's identity and may or may not
 // validate the device's presented certificate chain.
-func (c *Client) DeviceInitialize(ctx context.Context, baseURL string, info any, h KeyedHasher, priv crypto.Signer) (*VoucherHeader, *Hash, error) {
+//
+// However, the [Java server] implementation expects a certificate signing
+// request marshaled in the device info and performs certificate signing, so
+// PKI and voucher signing duties may be simultaneously handled by the
+// manufacturing component.
+//
+// [Java server]: https://github.com/fido-device-onboard/pri-fidoiot
+func (c *Client) DeviceInitialize(ctx context.Context, baseURL string, info any, h KeyedHasher) (*VoucherHeader, *Hash, error) {
 	ovh, err := c.appStart(ctx, baseURL, info)
 	if err != nil {
 		return nil, nil, err
 	}
-	_ = ovh
 
-	panic("unimplemented")
+	ovhHash, err := h.Hmac(HmacSha384Hash, ovh)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error computing HMAC of ownership voucher header: %w", err)
+	}
+
+	if err := c.setHmac(ctx, baseURL, ovhHash); err != nil {
+		return nil, nil, err
+	}
+
+	return ovh, &ovhHash, nil
 }
 
 // TransferOwnership1 runs the TO1 protocol and returns the owner service (TO2)

@@ -49,7 +49,7 @@ func (b *Bstr[T]) UnmarshalCBOR(p []byte) error {
 	return Unmarshal(data, &b.Val)
 }
 
-// X509Certificate is a newtype for x509.X509Certificate implementing proper CBOR
+// X509Certificate is a newtype for x509.Certificate implementing proper CBOR
 // encoding.
 type X509Certificate x509.Certificate
 
@@ -75,5 +75,34 @@ func (c *X509Certificate) UnmarshalCBOR(data []byte) error {
 		return fmt.Errorf("error parsing x509 certificate DER-encoded bytes: %w", err)
 	}
 	*c = X509Certificate(*cert)
+	return nil
+}
+
+// X509CertificateRequest is a newtype for x509.CertificateRequest implementing
+// proper CBOR encoding.
+type X509CertificateRequest x509.CertificateRequest
+
+// MarshalCBOR implements Marshaler interface.
+func (c *X509CertificateRequest) MarshalCBOR() ([]byte, error) {
+	if c == nil {
+		return Marshal(nil)
+	}
+	return Marshal(c.Raw)
+}
+
+// UnmarshalCBOR implements Unmarshaler interface.
+func (c *X509CertificateRequest) UnmarshalCBOR(data []byte) error {
+	if c == nil {
+		return errors.New("cannot unmarshal to a nil pointer")
+	}
+	var der []byte
+	if err := Unmarshal(data, &der); err != nil {
+		return err
+	}
+	csr, err := x509.ParseCertificateRequest(der)
+	if err != nil {
+		return fmt.Errorf("error parsing x509 certificate request DER-encoded bytes: %w", err)
+	}
+	*c = X509CertificateRequest(*csr)
 	return nil
 }

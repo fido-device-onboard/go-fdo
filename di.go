@@ -22,6 +22,21 @@ const (
 // is not part of the spec, but matches the [C client] and [Java client]
 // implementations.
 //
+// Type definition from C:
+//
+//	MfgInfo.cbor = [
+//	  pkType,                 // as per FDO spec
+//	  pkEnc,                  // as per FDO spec
+//	  serialNo,               // tstr
+//	  modelNo,                // tstr
+//	  CSR,                    // bstr
+//	  OnDie ECDSA cert chain, // bstr
+//	  test signature,         // bstr
+//	  MAROE prefix,           // bstr
+//	]
+//
+//	DeviceMfgInfo = bstr, MfgInfo.cbor (bstr-wrap MfgInfo CBOR bytes)
+//
 // [C client]: https://github.com/fido-device-onboard/client-sdk-fidoiot/
 // [Java client]: https://github.com/fido-device-onboard/pri-fidoiot
 type DeviceMfgInfo struct {
@@ -30,7 +45,7 @@ type DeviceMfgInfo struct {
 	KeyHashAlg         HashAlg
 	SerialNumber       string
 	DeviceInfo         string
-	CertInfo           any
+	CertInfo           cbor.X509CertificateRequest
 	ODCAChain          []byte
 	TestSig            []byte
 	TestSigMAROEPrefix []byte
@@ -73,5 +88,37 @@ func (c *Client) appStart(ctx context.Context, baseURL string, info any) (*Vouch
 
 	default:
 		return nil, fmt.Errorf("unexpected message type for response to DI.AppStart: %d", typ)
+	}
+}
+
+// SetHMAC(12) -> Done(13)
+func (c *Client) setHmac(ctx context.Context, baseURL string, ovhHash Hmac) error {
+	// Define request structure
+	var msg struct {
+		Hmac Hmac
+	}
+	msg.Hmac = ovhHash
+
+	// Make request
+	typ, resp, err := c.Transport.Send(ctx, baseURL, DISetHmacMsgType, msg)
+	if err != nil {
+		return fmt.Errorf("error sending DI.SetHMAC: %w", err)
+	}
+	defer func() { _ = resp.Close() }()
+
+	// Parse response
+	switch typ {
+	case DIDoneMsgType:
+		return nil
+
+	case ErrorMsgType:
+		var errMsg ErrorMessage
+		if err := cbor.NewDecoder(resp).Decode(&errMsg); err != nil {
+			return fmt.Errorf("error parsing error message contents of DI.SetHMAC response: %w", err)
+		}
+		return fmt.Errorf("error received from DI.SetHMAC request: %s", errMsg)
+
+	default:
+		return fmt.Errorf("unexpected message type for response to DI.SetHMAC: %d", typ)
 	}
 }
