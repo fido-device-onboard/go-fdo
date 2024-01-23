@@ -98,12 +98,12 @@ func (c *Client) TransferOwnership1(ctx context.Context, baseURL string) ([]RvTO
 // It has the side effect of performing FSIMs, which may include actions such
 // as downloading files.
 func (c *Client) TransferOwnership2(ctx context.Context, baseURL, deviceInfo string, certChainHash Hash) (*DeviceCredential, error) {
-	nonce, err := c.verifyOwner(ctx)
+	nonce, err := c.verifyOwner(ctx, baseURL)
 	if err != nil {
 		return nil, err
 	}
 
-	replaceGUID, replaceRVInfo, replaceOwnerKey, err := c.proveDevice(ctx, nonce)
+	replaceGUID, replaceRVInfo, replaceOwnerKey, err := c.proveDevice(ctx, baseURL, nonce)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +128,7 @@ func (c *Client) TransferOwnership2(ctx context.Context, baseURL, deviceInfo str
 		return nil, fmt.Errorf("error computing HMAC of ownership voucher header: %w", err)
 	}
 
-	if err := c.exchangeServiceInfo(ctx, replaceHmac); err != nil {
+	if err := c.exchangeServiceInfo(ctx, baseURL, replaceHmac); err != nil {
 		return nil, err
 	}
 
