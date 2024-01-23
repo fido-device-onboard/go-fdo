@@ -11,18 +11,18 @@ import (
 
 // TO2 Message Types
 const (
-	TO2HelloDeviceMsgType            uint8 = 60
-	TO2ProveOVHdrMsgType             uint8 = 61
-	TO2GetOVNextEntryMsgType         uint8 = 62
-	TO2OVNextEntryMsgType            uint8 = 63
-	TO2ProveDeviceMsgType            uint8 = 64
-	TO2SetupDeviceMsgType            uint8 = 65
-	TO2DeviceServiceInfoReadyMsgType uint8 = 66
-	TO2OwnerServiceInfoReadyMsgType  uint8 = 67
-	TO2DeviceServiceInfoMsgType      uint8 = 68
-	TO2OwnerServiceInfoMsgType       uint8 = 69
-	TO2DoneMsgType                   uint8 = 70
-	TO2Done2MsgType                  uint8 = 71
+	to2HelloDeviceMsgType            uint8 = 60
+	to2ProveOVHdrMsgType             uint8 = 61
+	to2GetOVNextEntryMsgType         uint8 = 62
+	to2OVNextEntryMsgType            uint8 = 63
+	to2ProveDeviceMsgType            uint8 = 64
+	to2SetupDeviceMsgType            uint8 = 65
+	to2DeviceServiceInfoReadyMsgType uint8 = 66
+	to2OwnerServiceInfoReadyMsgType  uint8 = 67
+	to2DeviceServiceInfoMsgType      uint8 = 68
+	to2OwnerServiceInfoMsgType       uint8 = 69
+	to2DoneMsgType                   uint8 = 70
+	to2Done2MsgType                  uint8 = 71
 )
 
 // COSE claims for TO2ProveOVHdrUnprotectedHeaders
@@ -200,21 +200,21 @@ const (
 
 // HelloDevice(60) -> ProveOVHdr(61)
 // loop[GetOVNextEntry(62) -> OVNextEntry(63)]
-func (c *Client) helloDevice(ctx context.Context, guid GUID) ([]VoucherEntryPayload, error) {
+func (c *Client) verifyOwner(ctx context.Context) (Nonce, error) {
 	type HelloDevice struct {
 		MaxDeviceMessageSize uint64
 		GUID                 GUID
 		NonceTO2ProveOV      Nonce
 		KexSuiteName         string
 		CipherSuiteName      int64
-		ASigInfo             *SigInfo
+		ASigInfo             *sigInfo
 	}
 
 	panic("unimplemented")
 }
 
 // ProveDevice(64) -> SetupDevice(65)
-func (c *Client) proveDevice(ctx context.Context, token EAToken) ([][]RvInstruction, GUID, PublicKey, error) {
+func (c *Client) proveDevice(ctx context.Context, nonce Nonce) (GUID, [][]RvInstruction, PublicKey, error) {
 	// TO2ProveOVHdrUnprotectedHeaders is used in TO2.ProveDevice and TO2.Done as
 	// COSE signature unprotected headers.
 	type TO2ProveOVHdrUnprotectedHeaders struct {
@@ -228,6 +228,6 @@ func (c *Client) proveDevice(ctx context.Context, token EAToken) ([][]RvInstruct
 // DeviceServiceInfoReady(66) -> OwnerServiceInfoReady(67)
 // loop[DeviceServiceInfo(68) -> OwnerServiceInfo(69)]
 // Done(70) -> Done2(71)
-func (c *Client) exchangeServiceInfo(ctx context.Context, nextHmac Hmac) error {
+func (c *Client) exchangeServiceInfo(ctx context.Context, replaceHmac Hmac) error {
 	panic("unimplemented")
 }

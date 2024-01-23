@@ -156,7 +156,7 @@ func (v *Voucher) OwnerPublicKey() (crypto.PublicKey, error) {
 // VerifyHeader checks that the OVHeader was not modified by comparing the HMAC
 // generated using the secret from the device credentials.
 func (v *Voucher) VerifyHeader(deviceCredential KeyedHasher) error {
-	return HmacVerify(deviceCredential, v.Hmac, &v.Header.Val)
+	return hmacVerify(deviceCredential, v.Hmac, &v.Header.Val)
 }
 
 // VerifyDeviceCertChain using trusted roots. If roots is nil then the last
@@ -476,23 +476,9 @@ func newSignedEntry(owner crypto.Signer, usePSS bool, payload VoucherEntryPayloa
 		Payload: cbor.NewBstrPtr(payload),
 	}
 
-	var signOpts crypto.SignerOpts
-	if rsaPub, ok := owner.Public().(*rsa.PublicKey); ok {
-		switch rsaPub.Size() {
-		case 2048 / 8:
-			signOpts = crypto.SHA256
-		case 3072 / 8:
-			signOpts = crypto.SHA384
-		default:
-			return nil, fmt.Errorf("unsupported RSA key size: %d bits", rsaPub.Size()*8)
-		}
-
-		if usePSS {
-			signOpts = &rsa.PSSOptions{
-				SaltLength: rsa.PSSSaltLengthEqualsHash,
-				Hash:       signOpts.(crypto.Hash),
-			}
-		}
+	signOpts, err := signOptsFor(owner, usePSS)
+	if err != nil {
+		return nil, err
 	}
 
 	if err := entry.Sign(owner, nil, signOpts); err != nil {

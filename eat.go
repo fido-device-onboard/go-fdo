@@ -57,7 +57,7 @@ import (
 //	|      |      | [ThreeGPP.IMEI].                                    |
 //	+------+------+-----------------------------------------------------+
 const (
-	RandUeid byte = 0x01
+	eatRandUeid byte = 0x01
 )
 
 // EAT claim tags
@@ -80,7 +80,7 @@ var (
 	eatUnprotectedNonceClaim = cose.Label{Int64: -259} //nolint:unused
 )
 
-// EAToken is used for the Device attestation. Entity Attestation Tokens in
+// eatoken is used for the Device attestation. Entity Attestation Tokens in
 // FIDO Device Onboard require the COSE_Sign1 prefix. The EAT token follows the
 // EAT specification for all claims except as follows:
 //
@@ -117,11 +117,11 @@ var (
 //	    EATOtherClaims
 //	)
 //	$EATPayloads /= ()
-type EAToken map[cose.Label]any
+type eatoken map[cose.Label]any
 
-// NewEAToken creates an EAToken with the expected required and additional
+// NewEAToken creates an eatoken with the expected required and additional
 // claims.
-func NewEAToken(guid GUID, nonce Nonce, fdo any, other map[cose.Label]any) EAToken {
+func newEAT(guid GUID, nonce Nonce, fdo any, other map[cose.Label]any) eatoken {
 	if other == nil {
 		other = make(map[cose.Label]any)
 	}
@@ -129,6 +129,6 @@ func NewEAToken(guid GUID, nonce Nonce, fdo any, other map[cose.Label]any) EATok
 		other[eatFdoClaim] = fdo
 	}
 	other[eatNonceClaim] = append([]byte{0x50}, nonce[:]...)
-	other[eatUeidClaim] = append([]byte{0x50}, guid[:]...)
+	other[eatUeidClaim] = append([]byte{0x51, eatRandUeid}, guid[:]...)
 	return other
 }

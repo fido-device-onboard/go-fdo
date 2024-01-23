@@ -71,6 +71,9 @@ func (e ErrorMessage) String() string {
 	)
 }
 
+// Error implements the standard error interface.
+func (e ErrorMessage) Error() string { return e.String() }
+
 // Timestamp implements the timestamp CBOR format used in the FDO error message
 // type. The expected string format, if used, is RFC3339.
 //

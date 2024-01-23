@@ -64,10 +64,10 @@ type KeyedHasher interface {
 	Hmac(HashAlg, any) (Hmac, error)
 }
 
-// HmacVerify encodes the given value to CBOR and verifies that the given HMAC
+// hmacVerify encodes the given value to CBOR and verifies that the given HMAC
 // matches it. If the cryptographic portion of verification fails, then
 // ErrCryptoVerifyFailed is wrapped.
-func HmacVerify(dc KeyedHasher, h1 Hmac, v any) error {
+func hmacVerify(dc KeyedHasher, h1 Hmac, v any) error {
 	h2, err := dc.Hmac(h1.Algorithm, v)
 	if err != nil {
 		return err

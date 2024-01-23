@@ -263,6 +263,20 @@ func (key rfc8152ecSigner) Sign(rand io.Reader, digest []byte, _ crypto.SignerOp
 	return sigBytes, nil
 }
 
+// SignatureAlgorithmFor returns the Signature Algorithm identifier for the
+// given key and options.
+func SignatureAlgorithmFor(key crypto.Signer, opts crypto.SignerOpts) (SignatureAlgorithm, error) {
+	raw, _, err := signAlg(key, opts)
+	if err != nil {
+		return 0, err
+	}
+	var algID SignatureAlgorithm
+	if err := cbor.Unmarshal([]byte(raw), &algID); err != nil {
+		return 0, err
+	}
+	return algID, nil
+}
+
 // signAlg returns the already marshaled algorithm ID and possibly modified
 // SignerOpts.
 //

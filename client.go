@@ -6,9 +6,10 @@ package fdo
 import (
 	"context"
 	"crypto"
+	"crypto/sha512"
 	"fmt"
 
-	"time"
+	"github.com/fido-device-onboard/go-fdo/cbor"
 )
 
 // Client implements methods for performing FDO protocols DI (non-normative),
@@ -18,8 +19,18 @@ type Client struct {
 	// HTTP, CoAP, and others.
 	Transport Transport
 
-	// Retry optionally sets a policy for retrying protocol messages.
-	Retry RetryDecider
+	// GUID of the device credential currently in use.
+	GUID GUID
+
+	// HMAC secret of the device credential currently in use.
+	Hmac KeyedHasher
+
+	// Private key of the device credential currently in use.
+	Key crypto.Signer
+
+	// When true and an RSA key is used as a crypto.Signer argument, RSA-SSAPSS
+	// will be used for signing.
+	PSS bool
 
 	// ServiceInfoModulesForOwner returns a map of registered FDO Service Info
 	// Modules (FSIMs) for a given Owner Service.
@@ -44,43 +55,88 @@ type Client struct {
 // manufacturing component.
 //
 // [Java server]: https://github.com/fido-device-onboard/pri-fidoiot
-func (c *Client) DeviceInitialize(ctx context.Context, baseURL string, info any, h KeyedHasher) (*VoucherHeader, *Hash, error) {
+func (c *Client) DeviceInitialize(ctx context.Context, baseURL string, info any) (*DeviceCredential, error) {
 	ovh, err := c.appStart(ctx, baseURL, info)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	ovhHash, err := h.Hmac(HmacSha384Hash, ovh)
-	if err != nil {
-		return nil, nil, fmt.Errorf("error computing HMAC of ownership voucher header: %w", err)
+	// Hash initial owner public key
+	ownerKeyDigest := sha512.New384()
+	if err := cbor.NewEncoder(ownerKeyDigest).Encode(ovh.ManufacturerKey); err != nil {
+		return nil, fmt.Errorf("error computing hash of initial owner (manufacturer) key: %w", err)
+	}
+	ownerKeyHash := Hash{Algorithm: Sha384Hash, Value: ownerKeyDigest.Sum(nil)[:]}
+
+	if err := c.setHmac(ctx, baseURL, ovh); err != nil {
+		return nil, err
 	}
 
-	if err := c.setHmac(ctx, baseURL, ovhHash); err != nil {
-		return nil, nil, err
-	}
-
-	return ovh, &ovhHash, nil
+	return &DeviceCredential{
+		Version:       ovh.Version,
+		DeviceInfo:    ovh.DeviceInfo,
+		GUID:          ovh.GUID,
+		RvInfo:        ovh.RvInfo,
+		PublicKeyHash: ownerKeyHash,
+	}, nil
 }
 
 // TransferOwnership1 runs the TO1 protocol and returns the owner service (TO2)
 // addresses.
-func (*Client) TransferOwnership1(ctx context.Context, baseURL string, priv crypto.Signer) ([]RvTO2Addr, error) {
-	panic("unimplemented")
+func (c *Client) TransferOwnership1(ctx context.Context, baseURL string) ([]RvTO2Addr, error) {
+	nonce, err := c.helloRv(ctx, baseURL)
+	if err != nil {
+		return nil, err
+	}
+
+	return c.proveToRv(ctx, baseURL, nonce)
 }
 
-// TransferOwnership2 runs the TO2 protocol and has side effects of performing
-// FSIMs.
-func (*Client) TransferOwnership2(ctx context.Context, baseURL string, priv crypto.Signer) error {
-	panic("unimplemented")
-}
+// TransferOwnership2 runs the TO2 protocol and returns replacement GUID,
+// rendezvous info, and owner public key.
+//
+// It has the side effect of performing FSIMs, which may include actions such
+// as downloading files.
+func (c *Client) TransferOwnership2(ctx context.Context, baseURL, deviceInfo string, certChainHash Hash) (*DeviceCredential, error) {
+	nonce, err := c.verifyOwner(ctx)
+	if err != nil {
+		return nil, err
+	}
 
-// RetryDecider allows for deciding whether a retry should occur, based on the
-// request's message type and the error response.
-type RetryDecider interface {
-	// ShouldRetry returns nil when a retry should not be attempted. Otherwise
-	// it returns a non-nil channel. The channel will have exactly one value
-	// sent on it and is not guaranteed to close.
-	//
-	// TODO: Return next set of options for RV?
-	ShouldRetry(ErrorMessage) <-chan time.Time
+	replaceGUID, replaceRVInfo, replaceOwnerKey, err := c.proveDevice(ctx, nonce)
+	if err != nil {
+		return nil, err
+	}
+
+	// Hash new initial owner public key
+	replaceKeyDigest := sha512.New384()
+	if err := cbor.NewEncoder(replaceKeyDigest).Encode(replaceOwnerKey); err != nil {
+		return nil, fmt.Errorf("error computing hash of replacement owner key: %w", err)
+	}
+	replaceKeyHash := Hash{Algorithm: Sha384Hash, Value: replaceKeyDigest.Sum(nil)[:]}
+
+	// Calculate the new OVH HMac similar to DI.SetHMAC
+	replaceHmac, err := c.Hmac.Hmac(HmacSha384Hash, VoucherHeader{
+		Version:         101,
+		GUID:            replaceGUID,
+		RvInfo:          replaceRVInfo,
+		DeviceInfo:      deviceInfo,
+		ManufacturerKey: replaceOwnerKey,
+		CertChainHash:   &certChainHash,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("error computing HMAC of ownership voucher header: %w", err)
+	}
+
+	if err := c.exchangeServiceInfo(ctx, replaceHmac); err != nil {
+		return nil, err
+	}
+
+	return &DeviceCredential{
+		Version:       101,
+		DeviceInfo:    deviceInfo,
+		GUID:          replaceGUID,
+		RvInfo:        replaceRVInfo,
+		PublicKeyHash: replaceKeyHash,
+	}, nil
 }

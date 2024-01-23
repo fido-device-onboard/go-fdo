@@ -12,10 +12,10 @@ import (
 
 // DI Message Types
 const (
-	DIAppStartMsgType       uint8 = 10
-	DISetCredentialsMsgType uint8 = 11
-	DISetHmacMsgType        uint8 = 12
-	DIDoneMsgType           uint8 = 13
+	diAppStartMsgType       uint8 = 10
+	diSetCredentialsMsgType uint8 = 11
+	diSetHmacMsgType        uint8 = 12
+	diDoneMsgType           uint8 = 13
 )
 
 // DeviceMfgInfo is an example structure for use in DI.AppStart. The structure
@@ -62,7 +62,7 @@ func (c *Client) appStart(ctx context.Context, baseURL string, info any) (*Vouch
 	}
 
 	// Make request
-	typ, resp, err := c.Transport.Send(ctx, baseURL, DIAppStartMsgType, msg)
+	typ, resp, err := c.Transport.Send(ctx, baseURL, diAppStartMsgType, msg)
 	if err != nil {
 		return nil, fmt.Errorf("error sending DI.AppStart: %w", err)
 	}
@@ -70,7 +70,7 @@ func (c *Client) appStart(ctx context.Context, baseURL string, info any) (*Vouch
 
 	// Parse response
 	switch typ {
-	case DISetCredentialsMsgType:
+	case diSetCredentialsMsgType:
 		var setCredentials struct {
 			OVHeader cbor.Bstr[VoucherHeader]
 		}
@@ -84,7 +84,7 @@ func (c *Client) appStart(ctx context.Context, baseURL string, info any) (*Vouch
 		if err := cbor.NewDecoder(resp).Decode(&errMsg); err != nil {
 			return nil, fmt.Errorf("error parsing error message contents of DI.AppStart response: %w", err)
 		}
-		return nil, fmt.Errorf("error received from DI.AppStart request: %s", errMsg)
+		return nil, fmt.Errorf("error received from DI.AppStart request: %w", errMsg)
 
 	default:
 		return nil, fmt.Errorf("unexpected message type for response to DI.AppStart: %d", typ)
@@ -92,7 +92,12 @@ func (c *Client) appStart(ctx context.Context, baseURL string, info any) (*Vouch
 }
 
 // SetHMAC(12) -> Done(13)
-func (c *Client) setHmac(ctx context.Context, baseURL string, ovhHash Hmac) error {
+func (c *Client) setHmac(ctx context.Context, baseURL string, ovh *VoucherHeader) error {
+	ovhHash, err := c.Hmac.Hmac(HmacSha384Hash, ovh)
+	if err != nil {
+		return fmt.Errorf("error computing HMAC of ownership voucher header: %w", err)
+	}
+
 	// Define request structure
 	var msg struct {
 		Hmac Hmac
@@ -100,7 +105,7 @@ func (c *Client) setHmac(ctx context.Context, baseURL string, ovhHash Hmac) erro
 	msg.Hmac = ovhHash
 
 	// Make request
-	typ, resp, err := c.Transport.Send(ctx, baseURL, DISetHmacMsgType, msg)
+	typ, resp, err := c.Transport.Send(ctx, baseURL, diSetHmacMsgType, msg)
 	if err != nil {
 		return fmt.Errorf("error sending DI.SetHMAC: %w", err)
 	}
@@ -108,7 +113,7 @@ func (c *Client) setHmac(ctx context.Context, baseURL string, ovhHash Hmac) erro
 
 	// Parse response
 	switch typ {
-	case DIDoneMsgType:
+	case diDoneMsgType:
 		return nil
 
 	case ErrorMsgType:
@@ -116,7 +121,7 @@ func (c *Client) setHmac(ctx context.Context, baseURL string, ovhHash Hmac) erro
 		if err := cbor.NewDecoder(resp).Decode(&errMsg); err != nil {
 			return fmt.Errorf("error parsing error message contents of DI.SetHMAC response: %w", err)
 		}
-		return fmt.Errorf("error received from DI.SetHMAC request: %s", errMsg)
+		return fmt.Errorf("error received from DI.SetHMAC request: %w", errMsg)
 
 	default:
 		return fmt.Errorf("unexpected message type for response to DI.SetHMAC: %d", typ)
