@@ -33,7 +33,8 @@ type Client struct {
 	PSS bool
 
 	// ServiceInfoModulesForOwner returns a map of registered FDO Service Info
-	// Modules (FSIMs) for a given Owner Service.
+	// Modules (FSIMs) for a given Owner Service. These are effectively
+	// handlers for service info sent from an owner service.
 	ServiceInfoModulesForOwner func(RvTO2Addr) map[string]ServiceInfoModule
 }
 
@@ -97,8 +98,8 @@ func (c *Client) TransferOwnership1(ctx context.Context, baseURL string) ([]RvTO
 //
 // It has the side effect of performing FSIMs, which may include actions such
 // as downloading files.
-func (c *Client) TransferOwnership2(ctx context.Context, baseURL, deviceInfo string, certChainHash Hash) (*DeviceCredential, error) {
-	nonce, err := c.verifyOwner(ctx, baseURL)
+func (c *Client) TransferOwnership2(ctx context.Context, baseURL, deviceInfo string, ovhHmac, certChainHash Hash, serviceInfos []ServiceInfo) (*DeviceCredential, error) {
+	nonce, err := c.verifyOwner(ctx, baseURL, ovhHmac)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +129,7 @@ func (c *Client) TransferOwnership2(ctx context.Context, baseURL, deviceInfo str
 		return nil, fmt.Errorf("error computing HMAC of ownership voucher header: %w", err)
 	}
 
-	if err := c.exchangeServiceInfo(ctx, baseURL, replaceHmac); err != nil {
+	if err := c.exchangeServiceInfo(ctx, baseURL, replaceHmac, serviceInfos); err != nil {
 		return nil, err
 	}
 

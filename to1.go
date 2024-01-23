@@ -77,13 +77,8 @@ func (c *Client) helloRv(ctx context.Context, baseURL string) (Nonce, error) {
 // ProveToRV(32) -> RVRedirect(33)
 func (c *Client) proveToRv(ctx context.Context, baseURL string, nonce Nonce) ([]RvTO2Addr, error) {
 	// Define request structure
-	// TODO: Header contents
-	tokenHeader, err := cose.NewHeader(nil, nil)
-	if err != nil {
-		return nil, fmt.Errorf("error creating EAT header: %w", err)
-	}
 	token := cose.Sign1[eatoken]{
-		Header:  tokenHeader,
+		Header:  cose.Header{},
 		Payload: cbor.NewBstrPtr(newEAT(c.GUID, nonce, nil, nil)),
 	}
 	opts, err := signOptsFor(c.Key, c.PSS)

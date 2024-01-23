@@ -14,5 +14,15 @@ type ServiceInfo struct {
 // ServiceInfoModule handles a single ServiceInfo key (format:
 // "moduleName:messageName").
 type ServiceInfoModule interface {
-	HandleFSIM(val []byte) (any, error)
+	HandleFSIM(key string, val []byte) (any, error)
+}
+
+// FSIMHandler implements ServiceInfoModule to handle incoming service infos.
+type FSIMHandler func(key string, val []byte) (any, error)
+
+var _ ServiceInfoModule = (FSIMHandler)(nil)
+
+// HandleFSIM handles a received service info.
+func (h FSIMHandler) HandleFSIM(key string, val []byte) (any, error) {
+	return h(key, val)
 }

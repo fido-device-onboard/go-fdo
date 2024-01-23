@@ -353,6 +353,6 @@ func (c *Client) proveDevice(ctx context.Context, baseURL string, nonce Nonce) (
 // DeviceServiceInfoReady(66) -> OwnerServiceInfoReady(67)
 // loop[DeviceServiceInfo(68) -> OwnerServiceInfo(69)]
 // Done(70) -> Done2(71)
-func (c *Client) exchangeServiceInfo(ctx context.Context, baseURL string, replaceHmac Hmac) error {
+func (c *Client) exchangeServiceInfo(ctx context.Context, baseURL string, replaceHmac Hmac, serviceInfos []ServiceInfo) error {
 	panic("unimplemented")
 }
