@@ -93,13 +93,13 @@ func (c *Client) TransferOwnership1(ctx context.Context, baseURL string) ([]RvTO
 	return c.proveToRv(ctx, baseURL, nonce)
 }
 
-// TransferOwnership2 runs the TO2 protocol and returns replacement GUID,
-// rendezvous info, and owner public key.
+// TransferOwnership2 runs the TO2 protocol and returns a DeviceCredential with
+// replaced GUID, rendezvous info, and owner public key.
 //
 // It has the side effect of performing FSIMs, which may include actions such
 // as downloading files.
-func (c *Client) TransferOwnership2(ctx context.Context, baseURL, deviceInfo string, ovhHmac, certChainHash Hash, serviceInfos []ServiceInfo) (*DeviceCredential, error) {
-	nonce, err := c.verifyOwner(ctx, baseURL, ovhHmac)
+func (c *Client) TransferOwnership2(ctx context.Context, baseURL, deviceInfo string, headerHmac, mfgHash, certChainHash Hash, serviceInfos []ServiceInfo) (*DeviceCredential, error) {
+	nonce, err := c.verifyOwner(ctx, baseURL, headerHmac, mfgHash)
 	if err != nil {
 		return nil, err
 	}

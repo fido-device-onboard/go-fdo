@@ -107,7 +107,6 @@ func (c *Client) proveToRv(ctx context.Context, baseURL string, nonce Nonce) ([]
 		if err := cbor.NewDecoder(resp).Decode(&redirect); err != nil {
 			return nil, fmt.Errorf("error parsing TO1.RVRedirect contents: %w", err)
 		}
-		// TODO: Use To1dTo0dHash?
 		return redirect.To1dRV, nil
 
 	case ErrorMsgType:

@@ -5,6 +5,7 @@ package fdo
 
 import (
 	"context"
+	"crypto"
 	"crypto/rand"
 	"fmt"
 
@@ -34,132 +35,18 @@ var (
 	to2OwnerPubKeyClaim = cose.Label{Int64: 257}
 )
 
-// Cipher suites
-//
-// 	┌────────────────────────┬──────────────────────────────────────┬─────────────────────────────────────┐
-// 	│Cipher Suite Name       │ Initialization Vector (IVData.iv in  │ Notes                               │
-// 	│(see TO2.HelloDevice)   │ "ct" message header)                 │                                     │
-// 	├────────────────────────┼──────────────────────────────────────┼─────────────────────────────────────┤
-// 	│ A128GCM                │ Defined as per COSE specification.   │ COSE encryption modes are preferred,│
-// 	│ A256GCM                │ Other COSE encryption modes are also │ where available.                    │
-// 	│ AES-CCM-64-128-128     │ supported.                           │                                     │
-// 	│ AES-CCM-64-128-256     │                                      │ KDF uses HMAC-SHA256                │
-// 	├────────────────────────┼──────────────────────────────────────┼─────────────────────────────────────┤
-// 	│ AES128/CTR/HMAC-SHA256 │ The IV for AES CTR Mode is 16 bytes  │ This is the preferred encrypt-then- │
-// 	│                        │ long in big-endian byte order, where:│ mac cipher suite for FIDO Device    │
-// 	│                        │                                      │ Onboard for 128-bit keys. Other     │
-// 	│                        │ - The first 12 bytes of IV (nonce)   │ suites are provided for situations  │
-// 	│                        │   are randomly generated at the      │ where Device implementations cannot │
-// 	│                        │   beginning of a session,            │ use this suite. AES in Counter Mode │
-// 	│                        │   independently by both sides.       │ [6] with 128 bit key using the SEK  │
-// 	│                        │ - The last 4 bytes of IV (counter)   │ from key exchange.                  │
-// 	│                        │   is initialized to 0 at the         │                                     │
-// 	│                        │   beginning of the session.          │ KDF uses HMAC-SHA256                │
-// 	│                        │ - The IV value must be maintained    │                                     │
-// 	│                        │   with the current session key.      │                                     │
-// 	│                        │   “Maintain” means that the IV will  │                                     │
-// 	│                        │   be changed by the underlying       │                                     │
-// 	│                        │   encryption mechanism and must be   │                                     │
-// 	│                        │   copied back to the current session │                                     │
-// 	│                        │   state for future encryption.       │                                     │
-// 	│                        │ - For decryption, the IV will come   │                                     │
-// 	│                        │   in the header of the received      │                                     │
-// 	│                        │   message.                           │                                     │
-// 	│                        │                                      │                                     │
-// 	│                        │ The random data source must be a     │                                     │
-// 	│                        │ cryptographically strong pseudo      │                                     │
-// 	│                        │ random number generator (CSPRNG) or  │                                     │
-// 	│                        │ a true random number generator       │                                     │
-// 	│                        │ (TNRG).                              │                                     │
-// 	├────────────────────────┼──────────────────────────────────────┼─────────────────────────────────────┤
-// 	│ AES128/CBC/HMAC-SHA256 │ IV is 16 bytes containing random     │ AES in Cipher Block Chaining (CBC)  │
-// 	│                        │ data, to use as initialization       │ Mode [3] with PKCS#7 [17] padding.  │
-// 	│                        │ vector for CBC mode. The random      │ The key is the SEK from key         │
-// 	│                        │ data must be freshly generated for   │ exchange.                           │
-// 	│                        │ every encrypted message. The random  │                                     │
-// 	│                        │ data source must be a                │ Implementation notes:               │
-// 	│                        │ cryptographically strong pseudo      │                                     │
-// 	│                        │ random number generator (CSPRNG) or  │ - Implementation may not return an  │
-// 	│                        │ a true random number generator       │   error that indicates a padding    │
-// 	│                        │ (TNRG).                              │   failure.                          │
-// 	│                        │                                      │ - The implementation must only      │
-// 	│                        │                                      │   return the decryption error after │
-// 	│                        │                                      │   the "expected" processing time    │
-// 	│                        │                                      │   for this message.                 │
-// 	│                        │                                      │                                     │
-// 	│                        │                                      │ It is recognized that the first     │
-// 	│                        │                                      │ item is hard to achieve in general, │
-// 	│                        │                                      │ but FIDO Device Onboard risk is low │
-// 	│                        │                                      │ in this area, because any           │
-// 	│                        │                                      │ decryption error will cause the     │
-// 	│                        │                                      │ connection to be torn down.         │
-// 	│                        │                                      │                                     │
-// 	│                        │                                      │ KDF uses HMAC-SHA256                │
-// 	┼────────────────────────┼──────────────────────────────────────┼─────────────────────────────────────┤
-// 	│ AES256/CTR/HMAC-SHA384 │ The IV for AES CTR Mode is 16 bytes  │ This is the preferred encrypt-then- │
-// 	│                        │ long in big-endian byte order,       │ mac cipher suite for FIDO Device    │
-// 	│                        │ where:                               │ Onboard for 256-bit keys. Other     │
-// 	│                        │                                      │ suites are provided for situations  │
-// 	│                        │ - The first 12 bytes of IV (nonce)   │ where Device implementations cannot │
-// 	│                        │   are randomly generated at the      │ use this suite. AES in Counter Mode │
-// 	│                        │   beginning of a session,            │ [6] with 256 bit key using the SEK  │
-// 	│                        │   independently by both sides.       │ from key exchange.                  │
-// 	│                        │ - The last 4 bytes of IV (counter)   │                                     │
-// 	│                        │   is initialized to 0 at the         │ KDF uses HMAC-SHA384                │
-// 	│                        │   beginning of the session.          │                                     │
-// 	│                        │ - The IV value must be maintained    │                                     │
-// 	│                        │   with the current session key.      │                                     │
-// 	│                        │   “Maintain” means that the IV will  │                                     │
-// 	│                        │   be changed by the underlying       │                                     │
-// 	│                        │   encryption mechanism and must be   │                                     │
-// 	│                        │   copied back to the current         │                                     │
-// 	│                        │   session state for future           │                                     │
-// 	│                        │   encryption.                        │                                     │
-// 	│                        │ - For decryption, the IV will come   │                                     │
-// 	│                        │   in the header of the received      │                                     │
-// 	│                        │   message.                           │                                     │
-// 	│                        │                                      │                                     │
-// 	│                        │ The random data source must be a     │                                     │
-// 	│                        │ cryptographically strong pseudo      │                                     │
-// 	│                        │ random number generator (CSPRNG) or  │                                     │
-// 	│                        │ a true random number generator       │                                     │
-// 	│                        │ (TNRG).                              │                                     │
-// 	├────────────────────────┼──────────────────────────────────────┼─────────────────────────────────────┤
-// 	│ AES256/CBC/HMAC-SHA384 │ IV is 16 bytes containing random     │ Implementation notes:               │
-// 	│                        │ data, to use as initialization       │                                     │
-// 	│                        │ vector for CBC mode. The random      │ - Implementation may not return an  │
-// 	│                        │ data must be freshly generated for   │   error that indicates a padding    │
-// 	│                        │ every encrypted message. The random  │   failure.                          │
-// 	│                        │ data source must be                  │ - The implementation must only      │
-// 	│                        │ cryptographically strong pseudo      │   return the decryption error after │
-// 	│                        │ random number generator (CSPRNG) or  │   the "expected" processing time    │
-// 	│                        │ a true random number generator       │   for this message.                 │
-// 	│                        │ (TNRG)	AES-256 in Cipher Block     │                                     │
-// 	│                        │ Chaining (CBC) Mode [15] with        │ It is recognized that the item is   │
-// 	│                        │ PKCS#7[16] padding. The key is the   │ hard to achieve in general, but     │
-// 	│                        │ SEK from key exchange.               │ FIDO Device Onboard risk is low in  │
-// 	│                        │                                      │ this area, because any decryption   │
-// 	│                        │                                      │ error causes the connection to be   │
-// 	│                        │                                      │ torn down.                          │
-// 	│                        │                                      │                                     │
-// 	│                        │                                      │ KDF uses HMAC-SHA384                │
-// 	└────────────────────────┴──────────────────────────────────────┴─────────────────────────────────────┘
-
 // Verify owner by sending HelloDevice and validating the response, as well as
 // all ownership voucher entries, which are retrieved iteratively with
 // subsequence requests.
-func (c *Client) verifyOwner(ctx context.Context, baseURL string, ovhHmac Hmac) (Nonce, error) {
+func (c *Client) verifyOwner(ctx context.Context, baseURL string, headerHmac, mfgHash Hash) (Nonce, error) {
+	// Construct ownership voucher from parts received from the owner service
 	info, err := c.helloDevice(ctx, baseURL)
 	if err != nil {
 		return Nonce{}, err
 	}
-
-	// Validate OV header HMAC
-	if err := hmacVerify(c.Hmac, ovhHmac, info.OVH); err != nil {
-		return Nonce{}, fmt.Errorf("bad ownership voucher header from TO2.ProveOVHdr: %w", err)
+	if info.NumVoucherEntries == 0 {
+		return Nonce{}, fmt.Errorf("ownership voucher cannot have zero entries")
 	}
-
-	// loop[GetOVNextEntry(62) -> OVNextEntry(63)]
 	var entries []cose.Sign1Tag[VoucherEntryPayload]
 	for i := 0; i < info.NumVoucherEntries; i++ {
 		entry, err := c.nextOVEntry(ctx, baseURL, i)
@@ -168,8 +55,35 @@ func (c *Client) verifyOwner(ctx context.Context, baseURL string, ovhHmac Hmac) 
 		}
 		entries = append(entries, *entry)
 	}
+	ov := Voucher{
+		Header:  cbor.NewBstr(info.OVH),
+		Hmac:    headerHmac,
+		Entries: entries,
+	}
 
-	// TODO: Verify OVEntry list and ensure it ends with given owner key
+	// Verify ownership voucher header
+	if err := ov.VerifyHeader(c.Hmac); err != nil {
+		return Nonce{}, fmt.Errorf("bad ownership voucher header from TO2.ProveOVHdr: %w", err)
+	}
+	if err := ov.VerifyManufacturerKey(mfgHash); err != nil {
+		return Nonce{}, fmt.Errorf("bad ownership voucher header from TO2.ProveOVHdr: %w", err)
+	}
+
+	// Verify OVEntry list and ensure it ends with given owner key
+	if err := ov.VerifyEntries(); err != nil {
+		return Nonce{}, fmt.Errorf("bad ownership voucher entries from TO2.ProveOVHdr: %w", err)
+	}
+	expectedOwnerPub, err := ov.Entries[len(ov.Entries)-1].Payload.Val.PublicKey.Public()
+	if err != nil {
+		return Nonce{}, fmt.Errorf("error parsing last public key of ownership voucher: %w", err)
+	}
+	ownerPub, err := info.PublicKey.Public()
+	if err != nil {
+		return Nonce{}, fmt.Errorf("error parsing public key of owner service: %w", err)
+	}
+	if !ownerPub.(interface{ Equal(crypto.PublicKey) bool }).Equal(expectedOwnerPub) {
+		return Nonce{}, fmt.Errorf("owner public key did not match last entry in ownership voucher")
+	}
 
 	return info.ProveDeviceNonce, nil
 }
@@ -301,7 +215,7 @@ func (c *Client) nextOVEntry(ctx context.Context, baseURL string, i int) (*cose.
 	msg := struct {
 		OVEntryNum int
 	}{
-		OVEntryNum: 1,
+		OVEntryNum: i,
 	}
 
 	// Make request

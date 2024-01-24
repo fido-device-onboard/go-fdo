@@ -12,17 +12,18 @@ type ServiceInfo struct {
 }
 
 // ServiceInfoModule handles a single ServiceInfo key (format:
-// "moduleName:messageName").
+// "moduleName:messageName"). Any service info structs returned should be added
+// to the send queue and processed before TO2 completes.
 type ServiceInfoModule interface {
-	HandleFSIM(key string, val []byte) (any, error)
+	HandleFSIM(key string, val []byte) (toSend []ServiceInfo, _ error)
 }
 
 // FSIMHandler implements ServiceInfoModule to handle incoming service infos.
-type FSIMHandler func(key string, val []byte) (any, error)
+type FSIMHandler func(key string, val []byte) ([]ServiceInfo, error)
 
 var _ ServiceInfoModule = (FSIMHandler)(nil)
 
 // HandleFSIM handles a received service info.
-func (h FSIMHandler) HandleFSIM(key string, val []byte) (any, error) {
+func (h FSIMHandler) HandleFSIM(key string, val []byte) ([]ServiceInfo, error) {
 	return h(key, val)
 }

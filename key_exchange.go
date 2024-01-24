@@ -3,20 +3,130 @@
 
 package fdo
 
+// Cipher suites
+//
+//	┌────────────────────────┬──────────────────────────────────────┬─────────────────────────────────────┐
+//	│Cipher Suite Name       │ Initialization Vector (IVData.iv in  │ Notes                               │
+//	│(see TO2.HelloDevice)   │ "ct" message header)                 │                                     │
+//	├────────────────────────┼──────────────────────────────────────┼─────────────────────────────────────┤
+//	│ A128GCM                │ Defined as per COSE specification.   │ COSE encryption modes are preferred,│
+//	│ A256GCM                │ Other COSE encryption modes are also │ where available.                    │
+//	│ AES-CCM-64-128-128     │ supported.                           │                                     │
+//	│ AES-CCM-64-128-256     │                                      │ KDF uses HMAC-SHA256                │
+//	├────────────────────────┼──────────────────────────────────────┼─────────────────────────────────────┤
+//	│ AES128/CTR/HMAC-SHA256 │ The IV for AES CTR Mode is 16 bytes  │ This is the preferred encrypt-then- │
+//	│                        │ long in big-endian byte order, where:│ mac cipher suite for FIDO Device    │
+//	│                        │                                      │ Onboard for 128-bit keys. Other     │
+//	│                        │ - The first 12 bytes of IV (nonce)   │ suites are provided for situations  │
+//	│                        │   are randomly generated at the      │ where Device implementations cannot │
+//	│                        │   beginning of a session,            │ use this suite. AES in Counter Mode │
+//	│                        │   independently by both sides.       │ [6] with 128 bit key using the SEK  │
+//	│                        │ - The last 4 bytes of IV (counter)   │ from key exchange.                  │
+//	│                        │   is initialized to 0 at the         │                                     │
+//	│                        │   beginning of the session.          │ KDF uses HMAC-SHA256                │
+//	│                        │ - The IV value must be maintained    │                                     │
+//	│                        │   with the current session key.      │                                     │
+//	│                        │   “Maintain” means that the IV will  │                                     │
+//	│                        │   be changed by the underlying       │                                     │
+//	│                        │   encryption mechanism and must be   │                                     │
+//	│                        │   copied back to the current session │                                     │
+//	│                        │   state for future encryption.       │                                     │
+//	│                        │ - For decryption, the IV will come   │                                     │
+//	│                        │   in the header of the received      │                                     │
+//	│                        │   message.                           │                                     │
+//	│                        │                                      │                                     │
+//	│                        │ The random data source must be a     │                                     │
+//	│                        │ cryptographically strong pseudo      │                                     │
+//	│                        │ random number generator (CSPRNG) or  │                                     │
+//	│                        │ a true random number generator       │                                     │
+//	│                        │ (TNRG).                              │                                     │
+//	├────────────────────────┼──────────────────────────────────────┼─────────────────────────────────────┤
+//	│ AES128/CBC/HMAC-SHA256 │ IV is 16 bytes containing random     │ AES in Cipher Block Chaining (CBC)  │
+//	│                        │ data, to use as initialization       │ Mode [3] with PKCS#7 [17] padding.  │
+//	│                        │ vector for CBC mode. The random      │ The key is the SEK from key         │
+//	│                        │ data must be freshly generated for   │ exchange.                           │
+//	│                        │ every encrypted message. The random  │                                     │
+//	│                        │ data source must be a                │ Implementation notes:               │
+//	│                        │ cryptographically strong pseudo      │                                     │
+//	│                        │ random number generator (CSPRNG) or  │ - Implementation may not return an  │
+//	│                        │ a true random number generator       │   error that indicates a padding    │
+//	│                        │ (TNRG).                              │   failure.                          │
+//	│                        │                                      │ - The implementation must only      │
+//	│                        │                                      │   return the decryption error after │
+//	│                        │                                      │   the "expected" processing time    │
+//	│                        │                                      │   for this message.                 │
+//	│                        │                                      │                                     │
+//	│                        │                                      │ It is recognized that the first     │
+//	│                        │                                      │ item is hard to achieve in general, │
+//	│                        │                                      │ but FIDO Device Onboard risk is low │
+//	│                        │                                      │ in this area, because any           │
+//	│                        │                                      │ decryption error will cause the     │
+//	│                        │                                      │ connection to be torn down.         │
+//	│                        │                                      │                                     │
+//	│                        │                                      │ KDF uses HMAC-SHA256                │
+//	┼────────────────────────┼──────────────────────────────────────┼─────────────────────────────────────┤
+//	│ AES256/CTR/HMAC-SHA384 │ The IV for AES CTR Mode is 16 bytes  │ This is the preferred encrypt-then- │
+//	│                        │ long in big-endian byte order,       │ mac cipher suite for FIDO Device    │
+//	│                        │ where:                               │ Onboard for 256-bit keys. Other     │
+//	│                        │                                      │ suites are provided for situations  │
+//	│                        │ - The first 12 bytes of IV (nonce)   │ where Device implementations cannot │
+//	│                        │   are randomly generated at the      │ use this suite. AES in Counter Mode │
+//	│                        │   beginning of a session,            │ [6] with 256 bit key using the SEK  │
+//	│                        │   independently by both sides.       │ from key exchange.                  │
+//	│                        │ - The last 4 bytes of IV (counter)   │                                     │
+//	│                        │   is initialized to 0 at the         │ KDF uses HMAC-SHA384                │
+//	│                        │   beginning of the session.          │                                     │
+//	│                        │ - The IV value must be maintained    │                                     │
+//	│                        │   with the current session key.      │                                     │
+//	│                        │   “Maintain” means that the IV will  │                                     │
+//	│                        │   be changed by the underlying       │                                     │
+//	│                        │   encryption mechanism and must be   │                                     │
+//	│                        │   copied back to the current         │                                     │
+//	│                        │   session state for future           │                                     │
+//	│                        │   encryption.                        │                                     │
+//	│                        │ - For decryption, the IV will come   │                                     │
+//	│                        │   in the header of the received      │                                     │
+//	│                        │   message.                           │                                     │
+//	│                        │                                      │                                     │
+//	│                        │ The random data source must be a     │                                     │
+//	│                        │ cryptographically strong pseudo      │                                     │
+//	│                        │ random number generator (CSPRNG) or  │                                     │
+//	│                        │ a true random number generator       │                                     │
+//	│                        │ (TNRG).                              │                                     │
+//	├────────────────────────┼──────────────────────────────────────┼─────────────────────────────────────┤
+//	│ AES256/CBC/HMAC-SHA384 │ IV is 16 bytes containing random     │ Implementation notes:               │
+//	│                        │ data, to use as initialization       │                                     │
+//	│                        │ vector for CBC mode. The random      │ - Implementation may not return an  │
+//	│                        │ data must be freshly generated for   │   error that indicates a padding    │
+//	│                        │ every encrypted message. The random  │   failure.                          │
+//	│                        │ data source must be                  │ - The implementation must only      │
+//	│                        │ cryptographically strong pseudo      │   return the decryption error after │
+//	│                        │ random number generator (CSPRNG) or  │   the "expected" processing time    │
+//	│                        │ a true random number generator       │   for this message.                 │
+//	│                        │ (TNRG)	AES-256 in Cipher Block     │                                     │
+//	│                        │ Chaining (CBC) Mode [15] with        │ It is recognized that the item is   │
+//	│                        │ PKCS#7[16] padding. The key is the   │ hard to achieve in general, but     │
+//	│                        │ SEK from key exchange.               │ FIDO Device Onboard risk is low in  │
+//	│                        │                                      │ this area, because any decryption   │
+//	│                        │                                      │ error causes the connection to be   │
+//	│                        │                                      │ torn down.                          │
+//	│                        │                                      │                                     │
+//	│                        │                                      │ KDF uses HMAC-SHA384                │
+//	└────────────────────────┴──────────────────────────────────────┴─────────────────────────────────────┘
 type cipherSuite int64
 
 // Cipher suite values
 const (
-	A128GCMCipher             cipherSuite = 1
-	A256GCMCipher             cipherSuite = 2
-	AES_CCM_16_128_128_Cipher cipherSuite = 30
-	AES_CCM_16_128_256_Cipher cipherSuite = 31
-	AES_CCM_64_128_128_Cipher cipherSuite = 32
-	AES_CCM_64_128_256_Cipher cipherSuite = 33
-	COSE_AES128_CBC_Cipher    cipherSuite = -17760703
-	COSE_AES128_CTR_Cipher    cipherSuite = -17760704
-	COSE_AES256_CBC_Cipher    cipherSuite = -17760705
-	COSE_AES256_CTR_Cipher    cipherSuite = -17760706
+	A128GcmCipher          cipherSuite = 1
+	A256GcmCipher          cipherSuite = 2
+	AesCcm16_128_128Cipher cipherSuite = 30
+	AesCcm16_128_256Cipher cipherSuite = 31
+	AesCcm64_128_128Cipher cipherSuite = 32
+	AesCcm64_128_256Cipher cipherSuite = 33
+	CoseAes128CbcCipher    cipherSuite = -17760703
+	CoseAes128CtrCipher    cipherSuite = -17760704
+	CoseAes256CbcCipher    cipherSuite = -17760705
+	CoseAes256CtrCipher    cipherSuite = -17760706
 )
 
 // Key exchange suites
