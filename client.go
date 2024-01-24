@@ -16,30 +16,26 @@ import (
 // TO1, and TO2.
 type Client struct {
 	// Transport performs message passing and may be implemented over TCP,
-	// HTTP, CoAP, and others.
+	// HTTP, CoAP, and others
 	Transport Transport
 
-	// GUID of the device credential currently in use.
-	GUID GUID
+	// DeviceCredential currently in use
+	Cred DeviceCredential
 
-	// HMAC secret of the device credential currently in use.
+	// HMAC secret of the device credential currently in use
 	Hmac KeyedHasher
 
-	// Private key of the device credential currently in use.
+	// Private key of the device credential currently in use
 	Key crypto.Signer
 
 	// When true and an RSA key is used as a crypto.Signer argument, RSA-SSAPSS
-	// will be used for signing.
+	// will be used for signing
 	PSS bool
-
-	// ServiceInfoModulesForOwner returns a map of registered FDO Service Info
-	// Modules (FSIMs) for a given Owner Service. These are effectively
-	// handlers for service info sent from an owner service.
-	ServiceInfoModulesForOwner func(RvTO2Addr) map[string]ServiceInfoModule
 }
 
 // DeviceInitialize runs the DI protocol and returns the voucher header and
-// manufacturer public key hash.
+// manufacturer public key hash. It requires that the client is configured with
+// an HMAC secret, but not necessarily a key.
 //
 // The device is identified to the manufacturing component by the ID string,
 // which may be a device serial, MAC address, or similar. There is generally an
@@ -83,7 +79,8 @@ func (c *Client) DeviceInitialize(ctx context.Context, baseURL string, info any)
 }
 
 // TransferOwnership1 runs the TO1 protocol and returns the owner service (TO2)
-// addresses.
+// addresses. It requires that a device credential, hmac secret, and key are
+// all configured on the client.
 func (c *Client) TransferOwnership1(ctx context.Context, baseURL string) ([]RvTO2Addr, error) {
 	nonce, err := c.helloRv(ctx, baseURL)
 	if err != nil {
@@ -94,50 +91,42 @@ func (c *Client) TransferOwnership1(ctx context.Context, baseURL string) ([]RvTO
 }
 
 // TransferOwnership2 runs the TO2 protocol and returns a DeviceCredential with
-// replaced GUID, rendezvous info, and owner public key.
+// replaced GUID, rendezvous info, and owner public key. It requires that a
+// device credential, hmac secret, and key are all configured on the client.
 //
 // It has the side effect of performing FSIMs, which may include actions such
 // as downloading files.
-func (c *Client) TransferOwnership2(ctx context.Context, baseURL, deviceInfo string, headerHmac, mfgHash, certChainHash Hash, serviceInfos []ServiceInfo) (*DeviceCredential, error) {
-	nonce, err := c.verifyOwner(ctx, baseURL, headerHmac, mfgHash)
+func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, serviceInfo []ServiceInfo, fsims map[string]ServiceInfoModule) (*DeviceCredential, error) {
+	ownerInfo, err := c.verifyOwner(ctx, baseURL)
 	if err != nil {
 		return nil, err
 	}
 
-	replaceGUID, replaceRVInfo, replaceOwnerKey, err := c.proveDevice(ctx, baseURL, nonce)
+	replacementOVH, err := c.proveDevice(ctx, baseURL, ownerInfo)
 	if err != nil {
 		return nil, err
 	}
 
 	// Hash new initial owner public key
-	replaceKeyDigest := sha512.New384()
-	if err := cbor.NewEncoder(replaceKeyDigest).Encode(replaceOwnerKey); err != nil {
+	replacementKeyDigest := sha512.New384()
+	if err := cbor.NewEncoder(replacementKeyDigest).Encode(replacementOVH.ManufacturerKey); err != nil {
 		return nil, fmt.Errorf("error computing hash of replacement owner key: %w", err)
 	}
-	replaceKeyHash := Hash{Algorithm: Sha384Hash, Value: replaceKeyDigest.Sum(nil)[:]}
+	replacementPublicKeyHash := Hash{Algorithm: Sha384Hash, Value: replacementKeyDigest.Sum(nil)[:]}
 
-	// Calculate the new OVH HMac similar to DI.SetHMAC
-	replaceHmac, err := c.Hmac.Hmac(HmacSha384Hash, VoucherHeader{
-		Version:         101,
-		GUID:            replaceGUID,
-		RvInfo:          replaceRVInfo,
-		DeviceInfo:      deviceInfo,
-		ManufacturerKey: replaceOwnerKey,
-		CertChainHash:   &certChainHash,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("error computing HMAC of ownership voucher header: %w", err)
+	if err := c.readyServiceInfo(ctx, baseURL, replacementOVH); err != nil {
+		return nil, err
 	}
 
-	if err := c.exchangeServiceInfo(ctx, baseURL, replaceHmac, serviceInfos); err != nil {
+	if err := c.exchangeServiceInfo(ctx, baseURL, serviceInfo, fsims); err != nil {
 		return nil, err
 	}
 
 	return &DeviceCredential{
-		Version:       101,
-		DeviceInfo:    deviceInfo,
-		GUID:          replaceGUID,
-		RvInfo:        replaceRVInfo,
-		PublicKeyHash: replaceKeyHash,
+		Version:       replacementOVH.Version,
+		DeviceInfo:    replacementOVH.DeviceInfo,
+		GUID:          replacementOVH.GUID,
+		RvInfo:        replacementOVH.RvInfo,
+		PublicKeyHash: replacementPublicKeyHash,
 	}, nil
 }

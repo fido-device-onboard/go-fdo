@@ -74,6 +74,16 @@ func (dc *DeviceCredentialBlob) Hmac(alg HashAlg, payload any) (Hmac, error) {
 	}, nil
 }
 
+// Supports returns whether a particular HashAlg is supported.
+func (dc *DeviceCredential) Supports(alg HashAlg) bool {
+	switch alg {
+	case HmacSha256Hash, HmacSha384Hash:
+		return true
+	default:
+		return false
+	}
+}
+
 var _ crypto.Signer = (*DeviceCredentialBlob)(nil)
 
 // Public returns the corresponding public key.

@@ -40,7 +40,7 @@ func (c *Client) helloRv(ctx context.Context, baseURL string) (Nonce, error) {
 		GUID     GUID
 		ASigInfo sigInfo
 	}
-	msg.GUID = c.GUID
+	msg.GUID = c.Cred.GUID
 	msg.ASigInfo = *eASigInfo
 
 	// Make request
@@ -79,7 +79,7 @@ func (c *Client) proveToRv(ctx context.Context, baseURL string, nonce Nonce) ([]
 	// Define request structure
 	token := cose.Sign1[eatoken]{
 		Header:  cose.Header{},
-		Payload: cbor.NewBstrPtr(newEAT(c.GUID, nonce, nil, nil)),
+		Payload: cbor.NewBstrPtr(newEAT(c.Cred.GUID, nonce, nil, nil)),
 	}
 	opts, err := signOptsFor(c.Key, c.PSS)
 	if err != nil {

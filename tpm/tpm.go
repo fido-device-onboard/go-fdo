@@ -45,6 +45,11 @@ func (dc *DeviceCredential) Hmac(alg fdo.HashAlg, payload any) (fdo.Hmac, error)
 	panic("unimplemented")
 }
 
+// Supports returns whether a particular HashAlg is supported.
+func (dc *DeviceCredential) Supports(alg fdo.HashAlg) bool {
+	panic("unimplemented")
+}
+
 var _ crypto.Signer = (*DeviceCredential)(nil)
 
 // Public returns the corresponding public key.

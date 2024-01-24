@@ -62,6 +62,9 @@ type KeyedHasher interface {
 	// Hmac encodes the given value to CBOR and calculates the hashed MAC for
 	// the given algorithm.
 	Hmac(HashAlg, any) (Hmac, error)
+
+	// Supports returns whether a particular HashAlg is supported.
+	Supports(HashAlg) bool
 }
 
 // hmacVerify encodes the given value to CBOR and verifies that the given HMAC

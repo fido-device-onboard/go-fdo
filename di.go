@@ -46,9 +46,9 @@ type DeviceMfgInfo struct {
 	SerialNumber       string
 	DeviceInfo         string
 	CertInfo           cbor.X509CertificateRequest
-	ODCAChain          []byte
-	TestSig            []byte
-	TestSigMAROEPrefix []byte
+	ODCAChain          []byte // deprecated
+	TestSig            []byte // deprecated
+	TestSigMAROEPrefix []byte // deprecated
 }
 
 // AppStart(10) -> SetCredential(11)

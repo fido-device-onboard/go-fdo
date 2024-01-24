@@ -35,71 +35,87 @@ var (
 	to2OwnerPubKeyClaim = cose.Label{Int64: 257}
 )
 
-// Verify owner by sending HelloDevice and validating the response, as well as
-// all ownership voucher entries, which are retrieved iteratively with
-// subsequence requests.
-func (c *Client) verifyOwner(ctx context.Context, baseURL string, headerHmac, mfgHash Hash) (Nonce, error) {
-	// Construct ownership voucher from parts received from the owner service
-	info, err := c.helloDevice(ctx, baseURL)
-	if err != nil {
-		return Nonce{}, err
-	}
-	if info.NumVoucherEntries == 0 {
-		return Nonce{}, fmt.Errorf("ownership voucher cannot have zero entries")
-	}
-	var entries []cose.Sign1Tag[VoucherEntryPayload]
-	for i := 0; i < info.NumVoucherEntries; i++ {
-		entry, err := c.nextOVEntry(ctx, baseURL, i)
-		if err != nil {
-			return Nonce{}, err
-		}
-		entries = append(entries, *entry)
-	}
-	ov := Voucher{
-		Header:  cbor.NewBstr(info.OVH),
-		Hmac:    headerHmac,
-		Entries: entries,
-	}
-
-	// Verify ownership voucher header
-	if err := ov.VerifyHeader(c.Hmac); err != nil {
-		return Nonce{}, fmt.Errorf("bad ownership voucher header from TO2.ProveOVHdr: %w", err)
-	}
-	if err := ov.VerifyManufacturerKey(mfgHash); err != nil {
-		return Nonce{}, fmt.Errorf("bad ownership voucher header from TO2.ProveOVHdr: %w", err)
-	}
-
-	// Verify OVEntry list and ensure it ends with given owner key
-	if err := ov.VerifyEntries(); err != nil {
-		return Nonce{}, fmt.Errorf("bad ownership voucher entries from TO2.ProveOVHdr: %w", err)
-	}
-	expectedOwnerPub, err := ov.Entries[len(ov.Entries)-1].Payload.Val.PublicKey.Public()
-	if err != nil {
-		return Nonce{}, fmt.Errorf("error parsing last public key of ownership voucher: %w", err)
-	}
-	ownerPub, err := info.PublicKey.Public()
-	if err != nil {
-		return Nonce{}, fmt.Errorf("error parsing public key of owner service: %w", err)
-	}
-	if !ownerPub.(interface{ Equal(crypto.PublicKey) bool }).Equal(expectedOwnerPub) {
-		return Nonce{}, fmt.Errorf("owner public key did not match last entry in ownership voucher")
-	}
-
-	return info.ProveDeviceNonce, nil
-}
-
 type ownerInfo struct {
 	// From ProveOVHdr headers
 	ProveDeviceNonce Nonce
 	PublicKey        PublicKey
 
 	// From ProveOVHdr body
-	OVH                 VoucherHeader
-	NumVoucherEntries   int
-	SigType             cose.SignatureAlgorithm
-	KexSuiteName        kexSuiteName
-	KeyExchangeA        []byte
+	OVH               VoucherHeader
+	OVHHmac           Hmac
+	NumVoucherEntries int
+
+	SigInfo      sigInfo
+	KexSuiteName kexSuiteName
+	KeyExchangeA []byte
+
 	MaxOwnerMessageSize uint64
+}
+
+// Verify owner by sending HelloDevice and validating the response, as well as
+// all ownership voucher entries, which are retrieved iteratively with
+// subsequence requests.
+func (c *Client) verifyOwner(ctx context.Context, baseURL string) (*ownerInfo, error) {
+	// Construct ownership voucher from parts received from the owner service
+	info, err := c.helloDevice(ctx, baseURL)
+	if err != nil {
+		return nil, err
+	}
+	if info.NumVoucherEntries == 0 {
+		return nil, fmt.Errorf("ownership voucher cannot have zero entries")
+	}
+	var entries []cose.Sign1Tag[VoucherEntryPayload]
+	for i := 0; i < info.NumVoucherEntries; i++ {
+		entry, err := c.nextOVEntry(ctx, baseURL, i)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, *entry)
+	}
+	ov := Voucher{
+		Header:  cbor.NewBstr(info.OVH),
+		Hmac:    info.OVHHmac,
+		Entries: entries,
+	}
+
+	// Verify ownership voucher header
+	if err := ov.VerifyHeader(c.Hmac); err != nil {
+		return nil, fmt.Errorf("bad ownership voucher header from TO2.ProveOVHdr: %w", err)
+	}
+
+	// Verify that the owner service corresponds to the most recent device
+	// initialization performed by checking that the voucher header has a GUID
+	// and/or manufacturer key corresponding to the stored device credentials.
+	if err := ov.VerifyManufacturerKey(c.Cred.PublicKeyHash); err != nil {
+		return nil, fmt.Errorf("bad ownership voucher header from TO2.ProveOVHdr: %w", err)
+	}
+
+	// Verify each entry in the voucher's list by performing iterative
+	// signature and hash (header and GUID/devInfo) checks.
+	if err := ov.VerifyEntries(); err != nil {
+		return nil, fmt.Errorf("bad ownership voucher entries from TO2.ProveOVHdr: %w", err)
+	}
+
+	// Ensure that the voucher entry chain ends with given owner key.
+	//
+	// Note that this check is REQUIRED in this case, because the the owner public
+	// key from the ProveOVHdr message's unprotected headers is used to
+	// validate its COSE signature. If the public key were not to match the
+	// last entry of the voucher, then it would not be known that ProveOVHdr
+	// was signed by the intended owner service.
+	expectedOwnerPub, err := ov.Entries[len(ov.Entries)-1].Payload.Val.PublicKey.Public()
+	if err != nil {
+		return nil, fmt.Errorf("error parsing last public key of ownership voucher: %w", err)
+	}
+	ownerPub, err := info.PublicKey.Public()
+	if err != nil {
+		return nil, fmt.Errorf("error parsing public key of owner service: %w", err)
+	}
+	if !ownerPub.(interface{ Equal(crypto.PublicKey) bool }).Equal(expectedOwnerPub) {
+		return nil, fmt.Errorf("owner public key did not match last entry in ownership voucher")
+	}
+
+	return info, nil
 }
 
 // HelloDevice(60) -> ProveOVHdr(61)
@@ -116,15 +132,22 @@ func (c *Client) helloDevice(ctx context.Context, baseURL string) (*ownerInfo, e
 		GUID                 GUID
 		NonceTO2ProveOV      Nonce
 		KexSuiteName         kexSuiteName
-		CipherSuiteName      cipherSuite
+		CipherSuite          cipherSuite
 		SigInfoA             sigInfo
 	}{
 		MaxDeviceMessageSize: 0, // Default size
-		GUID:                 c.GUID,
+		GUID:                 c.Cred.GUID,
 		NonceTO2ProveOV:      helloNonce,
-		KexSuiteName:         "",                           // TODO: How to decide?
-		CipherSuiteName:      0,                            // TODO: How to decide?
-		SigInfoA:             sigInfo{Type: cose.ES384Alg}, // TODO: How to decide?
+
+		// TODO: How to decide? Strongest available
+		KexSuiteName: "",
+
+		// TODO: Use strongest available. Always use GCM-256. Double check no
+		// TPM issues.
+		CipherSuite: 0,
+
+		// TODO: Use strongest available. Check c.Hmac.Supports?
+		SigInfoA: sigInfo{Type: cose.ES384Alg},
 	}
 
 	// Make a request
@@ -201,8 +224,9 @@ func (c *Client) helloDevice(ctx context.Context, baseURL string) (*ownerInfo, e
 		PublicKey:        ownerPubKey,
 
 		OVH:                 proveOVHdr.Payload.Val.OVH.Val,
+		OVHHmac:             proveOVHdr.Payload.Val.OVHHmac,
 		NumVoucherEntries:   int(proveOVHdr.Payload.Val.NumOVEntries),
-		SigType:             proveOVHdr.Payload.Val.SigInfoB.Type,
+		SigInfo:             proveOVHdr.Payload.Val.SigInfoB,
 		KexSuiteName:        helloDeviceMsg.KexSuiteName,
 		KeyExchangeA:        proveOVHdr.Payload.Val.KeyExchangeA,
 		MaxOwnerMessageSize: proveOVHdr.Payload.Val.MaxOwnerMessageSize,
@@ -253,7 +277,7 @@ func (c *Client) nextOVEntry(ctx context.Context, baseURL string, i int) (*cose.
 }
 
 // ProveDevice(64) -> SetupDevice(65)
-func (c *Client) proveDevice(ctx context.Context, baseURL string, nonce Nonce) (GUID, [][]RvInstruction, PublicKey, error) {
+func (c *Client) proveDevice(ctx context.Context, baseURL string, info *ownerInfo) (*VoucherHeader, error) {
 	// TO2ProveOVHdrUnprotectedHeaders is used in TO2.ProveDevice and TO2.Done as
 	// COSE signature unprotected headers.
 	// type TO2ProveOVHdrUnprotectedHeaders struct {
@@ -265,8 +289,95 @@ func (c *Client) proveDevice(ctx context.Context, baseURL string, nonce Nonce) (
 }
 
 // DeviceServiceInfoReady(66) -> OwnerServiceInfoReady(67)
+func (c *Client) readyServiceInfo(ctx context.Context, baseURL string, replacementOVH *VoucherHeader) (err error) {
+	// TODO: Track max service info size for chunking
+
+	// Calculate the new OVH HMac similar to DI.SetHMAC
+	var replacementHmac Hmac
+	if c.Hmac.Supports(HmacSha384Hash) {
+		replacementHmac, err = c.Hmac.Hmac(HmacSha384Hash, replacementOVH)
+	} else {
+		replacementHmac, err = c.Hmac.Hmac(HmacSha256Hash, replacementOVH)
+	}
+	if err != nil {
+		return fmt.Errorf("error computing HMAC of ownership voucher header: %w", err)
+	}
+
+	// Define request structure
+	var msg struct {
+		Hmac                    Hmac
+		MaxOwnerServiceInfoSize uint16
+	}
+	msg.Hmac = replacementHmac
+
+	// Make request
+	typ, resp, err := c.Transport.Send(ctx, baseURL, to2DeviceServiceInfoReadyMsgType, msg)
+	if err != nil {
+		return fmt.Errorf("error sending TO2.DeviceServiceInfoReady: %w", err)
+	}
+	defer func() { _ = resp.Close() }()
+
+	// Parse response
+	switch typ {
+	case to2OwnerServiceInfoReadyMsgType:
+		var ownerServiceInfoReady struct {
+			MaxOwnerServiceInfoSize uint16
+		}
+		if err := cbor.NewDecoder(resp).Decode(&ownerServiceInfoReady); err != nil {
+			return fmt.Errorf("error parsing TO2.OwnerServiceInfoReady contents: %w", err)
+		}
+		return nil
+
+	case ErrorMsgType:
+		var errMsg ErrorMessage
+		if err := cbor.NewDecoder(resp).Decode(&errMsg); err != nil {
+			return fmt.Errorf("error parsing error message contents of TO2.OwnerServiceInfoReady response: %w", err)
+		}
+		return fmt.Errorf("error received from TO2.DeviceServiceInfoReady request: %w", errMsg)
+
+	default:
+		return fmt.Errorf("unexpected message type for response to TO2.DeviceServiceInfoReady: %d", typ)
+	}
+}
+
 // loop[DeviceServiceInfo(68) -> OwnerServiceInfo(69)]
 // Done(70) -> Done2(71)
-func (c *Client) exchangeServiceInfo(ctx context.Context, baseURL string, replaceHmac Hmac, serviceInfos []ServiceInfo) error {
+func (c *Client) exchangeServiceInfo(ctx context.Context, baseURL string, serviceInfo []ServiceInfo, fsims map[string]ServiceInfoModule) error {
+	// TODO: Ensure that provided service info is chunked at correct MTU
+	// TODO: Use encryption context
+
+	/*
+		sendInfo := make(chan ServiceInfo, len(serviceInfo))
+		for _, info := range serviceInfo {
+			sendInfo <- info
+		}
+
+		recvInfo := make(chan ServiceInfo)
+		defer close(recvInfo)
+
+		go func() {
+			for info := range recvInfo {
+				fsim, ok := fsims[info.Key]
+				if !ok {
+					// TODO: Log missing FSIM
+					continue
+				}
+				moreInfo := fsim.HandleFSIM(info.Key, []byte(info.Val.Val))
+				for _, nextInfo := range moreInfo {
+					select {
+					case <-ctx.Done():
+						return
+					case sendInfo <- nextInfo:
+					}
+				}
+			}
+		}()
+	*/
+
+	// TODO: After all service info has been sent, if the owner service has not
+	// returned a service info with IsDone=true, send empty service info at a
+	// regular interval with IsMoreServiceInfo=false and wait until owner is
+	// done before moving on to sending TO2.Done.
+
 	panic("unimplemented")
 }
