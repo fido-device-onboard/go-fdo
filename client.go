@@ -10,6 +10,7 @@ import (
 	"fmt"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
 
 // Client implements methods for performing FDO protocols DI (non-normative),
@@ -31,6 +32,13 @@ type Client struct {
 	// When true and an RSA key is used as a crypto.Signer argument, RSA-SSAPSS
 	// will be used for signing
 	PSS bool
+
+	// Maximum transmission unit (MTU) to tell owner service to send with. If
+	// zero, the default of 1300 will be used. The value chosen can make a
+	// difference for performance when using service info to exchange large
+	// amounts of data, but choosing the best value depends on network
+	// configuration (e.g. jumbo packets) and transport (overhead size).
+	MaxServiceInfoSizeReceive uint16
 }
 
 // DeviceInitialize runs the DI protocol and returns the voucher header and
@@ -96,7 +104,7 @@ func (c *Client) TransferOwnership1(ctx context.Context, baseURL string) ([]RvTO
 //
 // It has the side effect of performing FSIMs, which may include actions such
 // as downloading files.
-func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, serviceInfo []ServiceInfo, fsims map[string]ServiceInfoModule) (*DeviceCredential, error) {
+func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, sendInfo func(*serviceinfo.UnchunkWriter), fsims map[string]serviceinfo.Module) (*DeviceCredential, error) {
 	ownerInfo, err := c.verifyOwner(ctx, baseURL)
 	if err != nil {
 		return nil, err
@@ -114,11 +122,15 @@ func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, service
 	}
 	replacementPublicKeyHash := Hash{Algorithm: Sha384Hash, Value: replacementKeyDigest.Sum(nil)[:]}
 
-	if err := c.readyServiceInfo(ctx, baseURL, replacementOVH); err != nil {
+	sendMTU, err := c.readyServiceInfo(ctx, baseURL, replacementOVH)
+	if err != nil {
 		return nil, err
 	}
 
-	if err := c.exchangeServiceInfo(ctx, baseURL, serviceInfo, fsims); err != nil {
+	serviceInfoReader, serviceInfoWriter := serviceinfo.NewChunkOutPipe()
+	sendInfo(serviceInfoWriter)
+
+	if err := c.exchangeServiceInfo(ctx, baseURL, sendMTU, serviceInfoReader, fsims); err != nil {
 		return nil, err
 	}
 
