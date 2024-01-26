@@ -279,8 +279,7 @@ func TestChunkIn(t *testing.T) {
 		if err := w.Close(); err != nil {
 			t.Error(err)
 		}
-		_, _, ok := r.NextServiceInfo()
-		if ok {
+		if _, _, ok := r.NextServiceInfo(); ok {
 			t.Error("expected NextServiceInfo ok=false")
 		}
 	})
@@ -326,6 +325,9 @@ func TestChunkIn(t *testing.T) {
 		if _, err := rval.Read(val); err != expectErr {
 			t.Errorf("expected err %v, got %v", expectErr, err)
 		}
+		if _, _, ok := r.NextServiceInfo(); ok {
+			t.Error("expected NextServiceInfo ok=false")
+		}
 	})
 
 	t.Run("one in", func(t *testing.T) {
@@ -368,13 +370,126 @@ func TestChunkIn(t *testing.T) {
 		if _, err := rval.Read(val); err != io.EOF {
 			t.Errorf("expected EOF, got %v", err)
 		}
+		if _, _, ok := r.NextServiceInfo(); ok {
+			t.Error("expected NextServiceInfo ok=false")
+		}
 	})
 
 	t.Run("two in (same)", func(t *testing.T) {
-		// TODO: Add test
+		r, w := serviceinfo.NewChunkInPipe()
+
+		expectKey := "moduleA:messageB"
+		expectVal := []byte("Hello World!")
+
+		go func() {
+			if err := w.WriteChunk(&serviceinfo.KV{
+				Key: expectKey,
+				Val: expectVal[:len(expectVal)/2],
+			}); err != nil {
+				t.Errorf("error writing chunk: %v", err)
+			}
+			if err := w.WriteChunk(&serviceinfo.KV{
+				Key: expectKey,
+				Val: expectVal[len(expectVal)/2:],
+			}); err != nil {
+				t.Errorf("error writing chunk: %v", err)
+			}
+			if err := w.Close(); err != nil {
+				t.Errorf("error closing: %v", err)
+			}
+		}()
+		key, rval, ok := r.NextServiceInfo()
+		if !ok {
+			t.Error("expected NextServiceInfo ok=true")
+		}
+		defer func() {
+			if err := rval.Close(); err != nil {
+				t.Error(err)
+			}
+		}()
+
+		if key != expectKey {
+			t.Errorf("expected key %s, got %s", expectKey, key)
+		}
+		val, err := io.ReadAll(rval)
+		if err != nil {
+			t.Errorf("unexpected error while reading unchunked data: %v", err)
+		}
+		if !bytes.Equal(val, expectVal) {
+			t.Errorf("expected val %s, got %s", expectVal, val)
+		}
+
+		if _, _, ok := r.NextServiceInfo(); ok {
+			t.Error("expected NextServiceInfo ok=false")
+		}
 	})
 
 	t.Run("two in (different)", func(t *testing.T) {
-		// TODO: Add test
+		r, w := serviceinfo.NewChunkInPipe()
+
+		expect1 := serviceinfo.KV{
+			Key: "moduleA:messageB",
+			Val: []byte("Hello World!"),
+		}
+		expect2 := serviceinfo.KV{
+			Key: "moduleC:messageD",
+			Val: []byte("Goodbye World!"),
+		}
+
+		go func() {
+			if err := w.WriteChunk(&expect1); err != nil {
+				t.Errorf("error writing chunk: %v", err)
+			}
+			if err := w.WriteChunk(&expect2); err != nil {
+				t.Errorf("error writing chunk: %v", err)
+			}
+			if err := w.Close(); err != nil {
+				t.Errorf("error closing: %v", err)
+			}
+		}()
+
+		key1, rval1, ok := r.NextServiceInfo()
+		if !ok {
+			t.Error("expected NextServiceInfo ok=true")
+		}
+		defer func() {
+			if err := rval1.Close(); err != nil {
+				t.Error(err)
+			}
+		}()
+		if key1 != expect1.Key {
+			t.Errorf("expected key %s, got %s", expect1.Key, key1)
+		}
+		val1, err := io.ReadAll(rval1)
+		if err != nil {
+			t.Errorf("unexpected error while reading unchunked data: %v", err)
+		}
+		if !bytes.Equal(val1, expect1.Val) {
+			t.Errorf("expected val %s, got %s", expect1.Val, val1)
+		}
+
+		key2, rval2, ok := r.NextServiceInfo()
+		if !ok {
+			t.Error("expected NextServiceInfo ok=true")
+		}
+		defer func() {
+			if err := rval2.Close(); err != nil {
+				t.Error(err)
+			}
+		}()
+		if key2 != expect2.Key {
+			t.Errorf("expected key %s, got %s", expect2.Key, key2)
+		}
+		val2, err := io.ReadAll(rval2)
+		if err != nil {
+			t.Errorf("unexpected error while reading unchunked data: %v", err)
+		}
+		if !bytes.Equal(val2, expect2.Val) {
+			t.Errorf("expected val %s, got %s", expect2.Val, val2)
+		}
+
+		if _, _, ok := r.NextServiceInfo(); ok {
+			t.Error("expected NextServiceInfo ok=false")
+		}
 	})
 }
