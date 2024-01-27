@@ -11,6 +11,10 @@ import (
 	"github.com/fido-device-onboard/go-fdo/cbor"
 )
 
+// ErrSizeTooSmall indicates that a chunk could not be read due to insufficient
+// max size.
+var ErrSizeTooSmall = errors.New("not enough size for chunk")
+
 // ChunkReader reads ServiceInfo chunked at some MTU.
 type ChunkReader struct {
 	readers <-chan *io.PipeReader
@@ -25,24 +29,24 @@ type ChunkReader struct {
 // an io.EOF error is returned.
 func (r *ChunkReader) ReadChunk(size uint16) (*KV, error) {
 	if r.r == nil {
+		// Get the next reader, which will be chunked into zero or more KVs
 		nextReader, open := <-r.readers
 		if !open {
 			return nil, io.EOF
 		}
 		r.r = nextReader
 
-		// Limit the max bytes read for the key to size - 10
-		// (See note on overhead further down)
-		keyReader := io.LimitReader(r.r, int64(size-10))
-		if err := cbor.NewDecoder(keyReader).Decode(&r.rkey); err != nil {
-			if errors.Is(err, io.EOF) {
-				return nil, io.EOF
-			}
+		// Limit the max bytes read for the key to size minus 7 (min overhead,
+		// see note below)
+		keyReader := io.LimitReader(r.r, int64(size-7))
 
+		// Read key as raw CBOR
+		if err := cbor.NewDecoder(keyReader).Decode(&r.rkey); err != nil {
 			_ = r.r.CloseWithError(err)
-			return nil, fmt.Errorf("read chunk failed: could not read service info key: %w", err)
+			return nil, fmt.Errorf("read chunk failed: could not read service info key: %w", ErrSizeTooSmall)
 		}
 
+		// Read key into a string
 		if err := cbor.Unmarshal([]byte(r.rkey), &r.key); err != nil {
 			_ = r.r.CloseWithError(err)
 			return nil, fmt.Errorf("read chunk failed: could not decode service info key: %w", err)
@@ -52,9 +56,10 @@ func (r *ChunkReader) ReadChunk(size uint16) (*KV, error) {
 	// Subtract overhead of ServiceInfo CBOR
 	//
 	// 	- 1 for first byte of ServiceInfo: 0x82
-	// 	- length of marshaled ServiceInfo key
+	// 	- length of marshaled ServiceInfo key (at least 4 bytes)
 	// 	- 1 for first byte of marshaled ServiceInfo value
-	//  - 0-2 bytes based on the length of value (unknown)
+	//  - 0-2 bytes based on the length of value (unknown at this point)
+	//  - value 1 or more bytes
 	//
 	// The size of the value that will be read is unknown, but its max is, so a
 	// max overhead can be calculated.
@@ -66,7 +71,7 @@ func (r *ChunkReader) ReadChunk(size uint16) (*KV, error) {
 		maxOverhead++
 	}
 	if size-maxOverhead <= 0 {
-		return nil, fmt.Errorf("chunk size not sufficiently large to read service info key and value")
+		return nil, ErrSizeTooSmall
 	}
 
 	// Grow buffer if not large enough

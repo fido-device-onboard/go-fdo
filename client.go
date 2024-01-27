@@ -130,7 +130,7 @@ func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, sendInf
 	serviceInfoReader, serviceInfoWriter := serviceinfo.NewChunkOutPipe()
 	sendInfo(serviceInfoWriter)
 
-	if err := c.exchangeServiceInfo(ctx, baseURL, sendMTU, serviceInfoReader, fsims); err != nil {
+	if err := c.exchangeServiceInfo(ctx, baseURL, ownerInfo.ProveDvNonce, ownerInfo.SetupDvNonce, sendMTU, serviceInfoReader, fsims); err != nil {
 		return nil, err
 	}
 

@@ -7,7 +7,11 @@ import (
 	"context"
 	"crypto"
 	"crypto/rand"
+	"errors"
 	"fmt"
+	"io"
+	"strings"
+	"time"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
@@ -36,12 +40,11 @@ var (
 	to2OwnerPubKeyClaim = cose.Label{Int64: 257}
 )
 
-type ownerInfo struct {
-	// From ProveOVHdr headers
-	ProveOVHdrNonce Nonce
-	PublicKey       PublicKey
+type to2Context struct {
+	ProveDvNonce Nonce
+	SetupDvNonce Nonce
+	PublicKey    PublicKey
 
-	// From ProveOVHdr body
 	OVH               VoucherHeader
 	OVHHmac           Hmac
 	NumVoucherEntries int
@@ -50,6 +53,7 @@ type ownerInfo struct {
 	KexSuiteName kexSuiteName
 	KeyExchangeA []byte
 
+	// TODO: Make use of message size maximums
 	MaxDeviceMessageSize uint16
 	MaxOwnerMessageSize  uint16
 }
@@ -57,7 +61,7 @@ type ownerInfo struct {
 // Verify owner by sending HelloDevice and validating the response, as well as
 // all ownership voucher entries, which are retrieved iteratively with
 // subsequence requests.
-func (c *Client) verifyOwner(ctx context.Context, baseURL string) (*ownerInfo, error) {
+func (c *Client) verifyOwner(ctx context.Context, baseURL string) (*to2Context, error) {
 	// Construct ownership voucher from parts received from the owner service
 	info, err := c.helloDevice(ctx, baseURL)
 	if err != nil {
@@ -121,7 +125,7 @@ func (c *Client) verifyOwner(ctx context.Context, baseURL string) (*ownerInfo, e
 }
 
 // HelloDevice(60) -> ProveOVHdr(61)
-func (c *Client) helloDevice(ctx context.Context, baseURL string) (*ownerInfo, error) {
+func (c *Client) helloDevice(ctx context.Context, baseURL string) (*to2Context, error) {
 	// Generate a new nonce
 	var helloNonce Nonce
 	if _, err := rand.Read(helloNonce[:]); err != nil {
@@ -221,9 +225,9 @@ func (c *Client) helloDevice(ctx context.Context, baseURL string) (*ownerInfo, e
 		return nil, fmt.Errorf("nonce in TO2.ProveOVHdr did not match nonce sent in TO2.HelloDevice")
 	}
 
-	return &ownerInfo{
-		ProveOVHdrNonce: cuphNonce,
-		PublicKey:       ownerPubKey,
+	return &to2Context{
+		ProveDvNonce: cuphNonce,
+		PublicKey:    ownerPubKey,
 
 		OVH:               proveOVHdr.Payload.Val.OVH.Val,
 		OVHHmac:           proveOVHdr.Payload.Val.OVHHmac,
@@ -282,20 +286,13 @@ func (c *Client) nextOVEntry(ctx context.Context, baseURL string, i int) (*cose.
 }
 
 // ProveDevice(64) -> SetupDevice(65)
-func (c *Client) proveDevice(ctx context.Context, baseURL string, info *ownerInfo) (*VoucherHeader, error) {
-	// TO2ProveOVHdrUnprotectedHeaders is used in TO2.ProveDevice and TO2.Done as
-	// COSE signature unprotected headers.
-	//
-	// type TO2ProveOVHdrUnprotectedHeaders struct {
-	// 	Nonce          Nonce
-	// 	OwnerPublicKey PublicKey
-	// }
-
+func (c *Client) proveDevice(ctx context.Context, baseURL string, info *to2Context) (*VoucherHeader, error) {
 	// Generate a new nonce
 	var setupDeviceNonce Nonce
 	if _, err := rand.Read(setupDeviceNonce[:]); err != nil {
 		return nil, fmt.Errorf("error generating new nonce for TO2.ProveDevice request: %w", err)
 	}
+	info.SetupDvNonce = setupDeviceNonce
 
 	// Define request structure
 	eatPayload := struct {
@@ -311,7 +308,7 @@ func (c *Client) proveDevice(ctx context.Context, baseURL string, info *ownerInf
 	}
 	token := cose.Sign1[eatoken]{
 		Header:  header,
-		Payload: cbor.NewBstrPtr(newEAT(c.Cred.GUID, info.ProveOVHdrNonce, eatPayload, nil)),
+		Payload: cbor.NewBstrPtr(newEAT(c.Cred.GUID, info.ProveDvNonce, eatPayload, nil)),
 	}
 	opts, err := signOptsFor(c.Key, c.PSS)
 	if err != nil {
@@ -424,42 +421,219 @@ func (c *Client) readyServiceInfo(ctx context.Context, baseURL string, replaceme
 
 // loop[DeviceServiceInfo(68) -> OwnerServiceInfo(69)]
 // Done(70) -> Done2(71)
-func (c *Client) exchangeServiceInfo(ctx context.Context, baseURL string, mtu uint16, r *serviceinfo.ChunkReader, fsims map[string]serviceinfo.Module) error {
-	// TODO: Ensure that provided service info is chunked at correct MTU
+func (c *Client) exchangeServiceInfo(ctx context.Context, baseURL string, proveDvNonce, setupDvNonce Nonce, mtu uint16, initInfo *serviceinfo.ChunkReader, fsims map[string]serviceinfo.Module) error {
 	// TODO: Use encryption context
 
-	/*
-		sendInfo := make(chan ServiceInfo, len(serviceInfo))
-		for _, info := range serviceInfo {
-			sendInfo <- info
+	// Shadow context to ensure that any goroutines still running after this
+	// function exits will shutdown
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	deviceServiceInfoOut := initInfo
+	for {
+		ownerServiceInfoOut, ownerServiceInfoIn := serviceinfo.NewChunkInPipe()
+		nextDeviceServiceInfoOut, deviceServiceInfoIn := serviceinfo.NewChunkOutPipe()
+
+		// The goroutine is started before sending DeviceServiceInfo, which
+		// writes to the owner service info (unbuffered) pipe.
+		go handleFSIMs(ctx, fsims, deviceServiceInfoIn, ownerServiceInfoOut)
+
+		// Send all device service info and get all owner service info
+		done, err := c.exchangeServiceInfoRound(ctx, baseURL, mtu, deviceServiceInfoOut, ownerServiceInfoIn)
+		if err != nil {
+			return err
 		}
 
-		recvInfo := make(chan ServiceInfo)
-		defer close(recvInfo)
+		// Stop loop only once owner indicates it is done
+		if done {
+			break
+		}
 
-		go func() {
-			for info := range recvInfo {
-				fsim, ok := fsims[info.Key]
-				if !ok {
-					// TODO: Log missing FSIM
-					continue
-				}
-				moreInfo := fsim.HandleFSIM(info.Key, []byte(info.Val.Val))
-				for _, nextInfo := range moreInfo {
-					select {
-					case <-ctx.Done():
-						return
-					case sendInfo <- nextInfo:
-					}
-				}
+		// Set the device service info to send on the next loop iteration
+		// (populated by the goroutine in this iteration)
+		deviceServiceInfoOut = nextDeviceServiceInfoOut
+	}
+
+	// Finalize TO2 by sending Done message
+	msg := struct {
+		NonceTO2ProveDv Nonce
+	}{
+		NonceTO2ProveDv: proveDvNonce,
+	}
+
+	// Make request
+	typ, resp, err := c.Transport.Send(ctx, baseURL, to2DoneMsgType, msg)
+	if err != nil {
+		return fmt.Errorf("error sending TO2.Done: %w", err)
+	}
+	defer func() { _ = resp.Close() }()
+
+	// Parse response
+	switch typ {
+	case to2OVNextEntryMsgType:
+		var done2 struct {
+			NonceTO2SetupDv Nonce
+		}
+		if err := cbor.NewDecoder(resp).Decode(&done2); err != nil {
+			return fmt.Errorf("error parsing TO2.Done2 contents: %w", err)
+		}
+		if done2.NonceTO2SetupDv != setupDvNonce {
+			return fmt.Errorf("nonce received in TO2.Done2 message did not match nonce received in TO2.SetupDevice")
+		}
+		return nil
+
+	case ErrorMsgType:
+		var errMsg ErrorMessage
+		if err := cbor.NewDecoder(resp).Decode(&errMsg); err != nil {
+			return fmt.Errorf("error parsing error message contents of TO2.Done response: %w", err)
+		}
+		return fmt.Errorf("error received from TO2.Done request: %w", errMsg)
+
+	default:
+		return fmt.Errorf("unexpected message type for response to TO2.Done: %d", typ)
+	}
+}
+
+// Handle owner service info with FSIMs. This must be run in a goroutine,
+// because the chunking/unchunking pipes are not buffered.
+func handleFSIMs(ctx context.Context, fsims map[string]serviceinfo.Module, send *serviceinfo.UnchunkWriter, recv *serviceinfo.UnchunkReader) {
+	defer func() { _ = send.Close() }()
+	for {
+		// Get next service info from the owner service
+		key, info, ok := recv.NextServiceInfo()
+		if !ok {
+			return
+		}
+
+		// Lookup FSIM to use for handling service info
+		fsim, ok := fsims[key]
+		if !ok {
+			// TODO: Log that no FSIM was found? Fail TO2?
+			continue
+		}
+
+		// Call FSIM, closing the pipe for the next device service info with
+		// error if the FSIM fatally errors
+		_, messageName, _ := strings.Cut(key, ":")
+		if err := fsim.HandleFSIM(ctx, messageName, info, func(moduleName, messageName string) io.WriteCloser {
+			if err := send.NextServiceInfo(moduleName, messageName); err != nil {
+				_ = send.CloseWithError(err)
 			}
-		}()
-	*/
+			return send
+		}); err != nil {
+			_ = send.CloseWithError(err)
+			return
+		}
+	}
+}
 
-	// TODO: After all service info has been sent, if the owner service has not
-	// returned a service info with IsDone=true, send empty service info at a
-	// regular interval with IsMoreServiceInfo=false and wait until owner is
-	// done before moving on to sending TO2.Done.
+type sendServiceInfo struct {
+	IsMoreServiceInfo bool
+	ServiceInfo       []*serviceinfo.KV
+}
 
-	panic("unimplemented")
+type recvServiceInfo struct {
+	IsMoreServiceInfo bool
+	IsDone            bool
+	ServiceInfo       []*serviceinfo.KV
+}
+
+// Perform one iteration of send all device service info (may be across
+// multiple FDO messages) and receive all owner service info (same applies).
+func (c *Client) exchangeServiceInfoRound(ctx context.Context, baseURL string, mtu uint16, r *serviceinfo.ChunkReader, w *serviceinfo.ChunkWriter) (bool, error) {
+	// Ensure w is always closed so that FSIM handling goroutine doesn't
+	// deadlock
+	defer func() { _ = w.Close() }()
+
+	// Create DeviceServiceInfo request structure
+	var msg sendServiceInfo
+	maxRead := mtu
+	for {
+		chunk, err := r.ReadChunk(maxRead)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if errors.Is(err, serviceinfo.ErrSizeTooSmall) {
+			msg.IsMoreServiceInfo = true
+			break
+		}
+		if err != nil {
+			return false, fmt.Errorf("error reading KV to send to owner: %w", err)
+		}
+		maxRead -= chunk.Size()
+		msg.ServiceInfo = append(msg.ServiceInfo, chunk)
+	}
+
+	// Send request
+	ownerServiceInfo, err := c.deviceServiceInfo(ctx, baseURL, msg)
+	if err != nil {
+		return false, err
+	}
+
+	// Receive all owner service info
+	for _, kv := range ownerServiceInfo.ServiceInfo {
+		if err := w.WriteChunk(kv); err != nil {
+			_ = w.CloseWithError(err)
+			return false, fmt.Errorf("error piping owner service info to FSIM: %w", err)
+		}
+	}
+
+	// If no more owner service info, close the pipe
+	if !ownerServiceInfo.IsMoreServiceInfo {
+		if err := w.Close(); err != nil {
+			return false, fmt.Errorf("error closing owner service info -> FSIM pipe: %w", err)
+		}
+	}
+
+	// Recurse when there's more service info to send from device or receive
+	// from owner
+	if msg.IsMoreServiceInfo || ownerServiceInfo.IsMoreServiceInfo {
+		return c.exchangeServiceInfoRound(ctx, baseURL, mtu, r, w)
+	}
+
+	return ownerServiceInfo.IsDone, nil
+}
+
+// DeviceServiceInfo(68) -> OwnerServiceInfo(69)
+func (c *Client) deviceServiceInfo(ctx context.Context, baseURL string, msg sendServiceInfo) (*recvServiceInfo, error) {
+	// If there is no ServiceInfo to send and the last owner response did not
+	// indicate IsMore, then this is just a regular interval check to see if
+	// owner IsDone. In this case, add a delay to avoid clobbering the owner
+	// service.
+	//
+	// TODO: Configurable delay
+	if len(msg.ServiceInfo) == 0 {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+	}
+
+	// Make request
+	typ, resp, err := c.Transport.Send(ctx, baseURL, to2DeviceServiceInfoMsgType, msg)
+	if err != nil {
+		return nil, fmt.Errorf("error sending TO2.DeviceServiceInfo: %w", err)
+	}
+	defer func() { _ = resp.Close() }()
+
+	// Parse response
+	switch typ {
+	case to2OwnerServiceInfoMsgType:
+		var ownerServiceInfo recvServiceInfo
+		if err := cbor.NewDecoder(resp).Decode(&ownerServiceInfo); err != nil {
+			return nil, fmt.Errorf("error parsing TO2.OwnerServiceInfo contents: %w", err)
+		}
+		return &ownerServiceInfo, nil
+
+	case ErrorMsgType:
+		var errMsg ErrorMessage
+		if err := cbor.NewDecoder(resp).Decode(&errMsg); err != nil {
+			return nil, fmt.Errorf("error parsing error message contents of TO2.OwnerServiceInfo response: %w", err)
+		}
+		return nil, fmt.Errorf("error received from TO2.DeviceServiceInfo request: %w", errMsg)
+
+	default:
+		return nil, fmt.Errorf("unexpected message type for response to TO2.DeviceServiceInfo: %d", typ)
+	}
 }

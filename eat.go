@@ -65,19 +65,19 @@ var (
 	// EAT encrypt-then-MAC AES IV claim unprotected header
 	eatAesIvClaim = cose.Label{Int64: 5} //nolint:unused
 	// An EAT nonce
-	eatNonceClaim = cose.Label{Int64: 10} //nolint:unused
+	eatNonceClaim = cose.Label{Int64: 10}
 	// EatRand (0x01) followed by FDO GUID (128-bit)
-	eatUeidClaim = cose.Label{Int64: 256} //nolint:unused
+	eatUeidClaim = cose.Label{Int64: 256}
 )
 
 // FDO claim tags
 var (
 	// MAY be present to contain other claims specified for the specific FIDO Device Onboard message.
-	eatFdoClaim = cose.Label{Int64: -257} //nolint:unused
+	eatFdoClaim = cose.Label{Int64: -257}
 	// If needed for a given ROE, is an unprotected header item (not payload)
 	eatMaroePrefixClaim = cose.Label{Int64: -258} //nolint:unused
 	// An unprotected header item
-	eatUnprotectedNonceClaim = cose.Label{Int64: -259} //nolint:unused
+	eatUnprotectedNonceClaim = cose.Label{Int64: -259}
 )
 
 // eatoken is used for the Device attestation. Entity Attestation Tokens in
