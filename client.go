@@ -8,6 +8,7 @@ import (
 	"crypto"
 	"crypto/sha512"
 	"fmt"
+	"time"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
@@ -61,19 +62,25 @@ type Client struct {
 //
 // [Java server]: https://github.com/fido-device-onboard/pri-fidoiot
 func (c *Client) DeviceInitialize(ctx context.Context, baseURL string, info any) (*DeviceCredential, error) {
+	ctx = contextWithErrMsg(ctx)
+
 	ovh, err := c.appStart(ctx, baseURL, info)
 	if err != nil {
+		c.errorMsg(ctx, baseURL, err)
 		return nil, err
 	}
 
 	// Hash initial owner public key
 	ownerKeyDigest := sha512.New384()
 	if err := cbor.NewEncoder(ownerKeyDigest).Encode(ovh.ManufacturerKey); err != nil {
-		return nil, fmt.Errorf("error computing hash of initial owner (manufacturer) key: %w", err)
+		err = fmt.Errorf("error computing hash of initial owner (manufacturer) key: %w", err)
+		c.errorMsg(ctx, baseURL, err)
+		return nil, err
 	}
 	ownerKeyHash := Hash{Algorithm: Sha384Hash, Value: ownerKeyDigest.Sum(nil)[:]}
 
 	if err := c.setHmac(ctx, baseURL, ovh); err != nil {
+		c.errorMsg(ctx, baseURL, err)
 		return nil, err
 	}
 
@@ -90,12 +97,21 @@ func (c *Client) DeviceInitialize(ctx context.Context, baseURL string, info any)
 // addresses. It requires that a device credential, hmac secret, and key are
 // all configured on the client.
 func (c *Client) TransferOwnership1(ctx context.Context, baseURL string) ([]RvTO2Addr, error) {
+	ctx = contextWithErrMsg(ctx)
+
 	nonce, err := c.helloRv(ctx, baseURL)
 	if err != nil {
+		c.errorMsg(ctx, baseURL, err)
 		return nil, err
 	}
 
-	return c.proveToRv(ctx, baseURL, nonce)
+	addrs, err := c.proveToRv(ctx, baseURL, nonce)
+	if err != nil {
+		c.errorMsg(ctx, baseURL, err)
+		return nil, err
+	}
+
+	return addrs, nil
 }
 
 // TransferOwnership2 runs the TO2 protocol and returns a DeviceCredential with
@@ -105,25 +121,32 @@ func (c *Client) TransferOwnership1(ctx context.Context, baseURL string) ([]RvTO
 // It has the side effect of performing FSIMs, which may include actions such
 // as downloading files.
 func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, sendInfo func(*serviceinfo.UnchunkWriter), fsims map[string]serviceinfo.Module) (*DeviceCredential, error) {
+	ctx = contextWithErrMsg(ctx)
+
 	ownerInfo, err := c.verifyOwner(ctx, baseURL)
 	if err != nil {
+		c.errorMsg(ctx, baseURL, err)
 		return nil, err
 	}
 
 	replacementOVH, err := c.proveDevice(ctx, baseURL, ownerInfo)
 	if err != nil {
+		c.errorMsg(ctx, baseURL, err)
 		return nil, err
 	}
 
 	// Hash new initial owner public key
 	replacementKeyDigest := sha512.New384()
 	if err := cbor.NewEncoder(replacementKeyDigest).Encode(replacementOVH.ManufacturerKey); err != nil {
-		return nil, fmt.Errorf("error computing hash of replacement owner key: %w", err)
+		err = fmt.Errorf("error computing hash of replacement owner key: %w", err)
+		c.errorMsg(ctx, baseURL, err)
+		return nil, err
 	}
 	replacementPublicKeyHash := Hash{Algorithm: Sha384Hash, Value: replacementKeyDigest.Sum(nil)[:]}
 
 	sendMTU, err := c.readyServiceInfo(ctx, baseURL, replacementOVH)
 	if err != nil {
+		c.errorMsg(ctx, baseURL, err)
 		return nil, err
 	}
 
@@ -131,6 +154,7 @@ func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, sendInf
 	sendInfo(serviceInfoWriter)
 
 	if err := c.exchangeServiceInfo(ctx, baseURL, ownerInfo.ProveDvNonce, ownerInfo.SetupDvNonce, sendMTU, serviceInfoReader, fsims); err != nil {
+		c.errorMsg(ctx, baseURL, err)
 		return nil, err
 	}
 
@@ -141,4 +165,38 @@ func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, sendInf
 		RvInfo:        replacementOVH.RvInfo,
 		PublicKeyHash: replacementPublicKeyHash,
 	}, nil
+}
+
+func (c *Client) errorMsg(ctx context.Context, baseURL string, err error) {
+	// If no previous message, then exit, because the protocol hasn't started
+	errMsg := errMsgFromContext(ctx)
+	if errMsg.PrevMsgType == 0 {
+		return
+	}
+
+	// Default to error code 500, error message of err parameter, and timestamp
+	// of the current time
+	if errMsg.Code == 0 {
+		errMsg.Code = internalServerErrCode
+	}
+	if errMsg.ErrString == "" {
+		errMsg.ErrString = err.Error()
+	}
+	if errMsg.Timestamp == (Timestamp{}) {
+		errMsg.Timestamp = Timestamp(time.Now())
+	}
+
+	// Create a new context, because the previous one may have expired, thus
+	// causing the protocol failure
+	//
+	// TODO: Make timeout configurable
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Send error, but ignore the response, only making sure to close the
+	// reader if one is returned
+	_, rc, err := c.Transport.Send(ctx, baseURL, errorMsgType, errMsg)
+	if err == nil {
+		_ = rc.Close()
+	}
 }

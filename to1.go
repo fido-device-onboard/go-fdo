@@ -53,16 +53,18 @@ func (c *Client) helloRv(ctx context.Context, baseURL string) (Nonce, error) {
 	// Parse response
 	switch typ {
 	case to1HelloRVAckMsgType:
+		captureMsgType(ctx, typ)
 		var ack struct {
 			NonceTO1Proof Nonce
 			BSigInfo      sigInfo
 		}
 		if err := cbor.NewDecoder(resp).Decode(&ack); err != nil {
+			captureErr(ctx, messageBodyErrCode, "")
 			return Nonce{}, fmt.Errorf("error parsing TO1.HelloRVAck contents: %w", err)
 		}
 		return ack.NonceTO1Proof, nil
 
-	case ErrorMsgType:
+	case errorMsgType:
 		var errMsg ErrorMessage
 		if err := cbor.NewDecoder(resp).Decode(&errMsg); err != nil {
 			return Nonce{}, fmt.Errorf("error parsing error message contents of TO1.HelloRV response: %w", err)
@@ -70,6 +72,7 @@ func (c *Client) helloRv(ctx context.Context, baseURL string) (Nonce, error) {
 		return Nonce{}, fmt.Errorf("error received from TO1.HelloRV request: %w", errMsg)
 
 	default:
+		captureErr(ctx, messageBodyErrCode, "")
 		return Nonce{}, fmt.Errorf("unexpected message type for response to TO1.HelloRV: %d", typ)
 	}
 }
@@ -100,16 +103,18 @@ func (c *Client) proveToRv(ctx context.Context, baseURL string, nonce Nonce) ([]
 	// Parse response
 	switch typ {
 	case to1RVRedirectMsgType:
+		captureMsgType(ctx, typ)
 		var redirect struct {
 			To1dRV       []RvTO2Addr
 			To1dTo0dHash Hash
 		}
 		if err := cbor.NewDecoder(resp).Decode(&redirect); err != nil {
+			captureErr(ctx, messageBodyErrCode, "")
 			return nil, fmt.Errorf("error parsing TO1.RVRedirect contents: %w", err)
 		}
 		return redirect.To1dRV, nil
 
-	case ErrorMsgType:
+	case errorMsgType:
 		var errMsg ErrorMessage
 		if err := cbor.NewDecoder(resp).Decode(&errMsg); err != nil {
 			return nil, fmt.Errorf("error parsing error message contents of TO1.ProveToRV response: %w", err)
@@ -117,6 +122,7 @@ func (c *Client) proveToRv(ctx context.Context, baseURL string, nonce Nonce) ([]
 		return nil, fmt.Errorf("error received from TO1.ProveToRV request: %w", errMsg)
 
 	default:
+		captureErr(ctx, messageBodyErrCode, "")
 		return nil, fmt.Errorf("unexpected message type for response to TO1.ProveToRV: %d", typ)
 	}
 }

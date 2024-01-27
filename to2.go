@@ -40,6 +40,10 @@ var (
 	to2OwnerPubKeyClaim = cose.Label{Int64: 257}
 )
 
+// TODO: This contains way too many unrelated things. There should be a way to
+// refactor the code to not have a giant blob of state being passed around
+// (albeit only through the latter half of TO2). Figuring out the refactor will
+// take fresh eyes. REVIEWERS take note!!!
 type to2Context struct {
 	ProveDvNonce Nonce
 	SetupDvNonce Nonce
@@ -86,6 +90,7 @@ func (c *Client) verifyOwner(ctx context.Context, baseURL string) (*to2Context, 
 
 	// Verify ownership voucher header
 	if err := ov.VerifyHeader(c.Hmac); err != nil {
+		captureErr(ctx, invalidMessageErrCode, "")
 		return nil, fmt.Errorf("bad ownership voucher header from TO2.ProveOVHdr: %w", err)
 	}
 
@@ -93,12 +98,14 @@ func (c *Client) verifyOwner(ctx context.Context, baseURL string) (*to2Context, 
 	// initialization performed by checking that the voucher header has a GUID
 	// and/or manufacturer key corresponding to the stored device credentials.
 	if err := ov.VerifyManufacturerKey(c.Cred.PublicKeyHash); err != nil {
+		captureErr(ctx, invalidMessageErrCode, "")
 		return nil, fmt.Errorf("bad ownership voucher header from TO2.ProveOVHdr: %w", err)
 	}
 
 	// Verify each entry in the voucher's list by performing iterative
 	// signature and hash (header and GUID/devInfo) checks.
 	if err := ov.VerifyEntries(); err != nil {
+		captureErr(ctx, invalidMessageErrCode, "")
 		return nil, fmt.Errorf("bad ownership voucher entries from TO2.ProveOVHdr: %w", err)
 	}
 
@@ -111,13 +118,16 @@ func (c *Client) verifyOwner(ctx context.Context, baseURL string) (*to2Context, 
 	// was signed by the intended owner service.
 	expectedOwnerPub, err := ov.Entries[len(ov.Entries)-1].Payload.Val.PublicKey.Public()
 	if err != nil {
+		captureErr(ctx, invalidMessageErrCode, "")
 		return nil, fmt.Errorf("error parsing last public key of ownership voucher: %w", err)
 	}
 	ownerPub, err := info.PublicKey.Public()
 	if err != nil {
+		captureErr(ctx, invalidMessageErrCode, "")
 		return nil, fmt.Errorf("error parsing public key of owner service: %w", err)
 	}
 	if !ownerPub.(interface{ Equal(crypto.PublicKey) bool }).Equal(expectedOwnerPub) {
+		captureErr(ctx, invalidMessageErrCode, "")
 		return nil, fmt.Errorf("owner public key did not match last entry in ownership voucher")
 	}
 
@@ -176,11 +186,13 @@ func (c *Client) helloDevice(ctx context.Context, baseURL string) (*to2Context, 
 	}]
 	switch typ {
 	case to2ProveOVHdrMsgType:
+		captureMsgType(ctx, typ)
 		if err := cbor.NewDecoder(resp).Decode(&proveOVHdr); err != nil {
+			captureErr(ctx, messageBodyErrCode, "")
 			return nil, fmt.Errorf("error parsing TO2.ProveOVHdr contents: %w", err)
 		}
 
-	case ErrorMsgType:
+	case errorMsgType:
 		var errMsg ErrorMessage
 		if err := cbor.NewDecoder(resp).Decode(&errMsg); err != nil {
 			return nil, fmt.Errorf("error parsing error message contents of TO2.HelloDevice response: %w", err)
@@ -188,14 +200,17 @@ func (c *Client) helloDevice(ctx context.Context, baseURL string) (*to2Context, 
 		return nil, fmt.Errorf("error received from TO2.HelloDevice request: %w", errMsg)
 
 	default:
+		captureErr(ctx, messageBodyErrCode, "")
 		return nil, fmt.Errorf("unexpected message type for response to TO2.HelloDevice: %d", typ)
 	}
 
 	// Parse nonce
 	var cuphNonce Nonce
 	if cuphNonceBytes := []byte(proveOVHdr.Unprotected[to2NonceClaim]); len(cuphNonceBytes) == 0 {
+		captureErr(ctx, invalidMessageErrCode, "")
 		return nil, fmt.Errorf("nonce unprotected header missing from TO2.ProveOVHdr response message")
 	} else if err := cbor.Unmarshal(cuphNonceBytes, &cuphNonce); err != nil {
+		captureErr(ctx, invalidMessageErrCode, "")
 		return nil, fmt.Errorf("nonce unprotected header from TO2.ProveOVHdr could not be unmarshaled: %w", err)
 	}
 
@@ -261,11 +276,13 @@ func (c *Client) nextOVEntry(ctx context.Context, baseURL string, i int) (*cose.
 	// Parse response
 	switch typ {
 	case to2OVNextEntryMsgType:
+		captureMsgType(ctx, typ)
 		var ovNextEntry struct {
 			OVEntryNum int
 			OVEntry    cose.Sign1Tag[VoucherEntryPayload]
 		}
 		if err := cbor.NewDecoder(resp).Decode(&ovNextEntry); err != nil {
+			captureErr(ctx, messageBodyErrCode, "")
 			return nil, fmt.Errorf("error parsing TO2.OVNextEntry contents: %w", err)
 		}
 		if j := ovNextEntry.OVEntryNum; j != i {
@@ -273,7 +290,7 @@ func (c *Client) nextOVEntry(ctx context.Context, baseURL string, i int) (*cose.
 		}
 		return &ovNextEntry.OVEntry, nil
 
-	case ErrorMsgType:
+	case errorMsgType:
 		var errMsg ErrorMessage
 		if err := cbor.NewDecoder(resp).Decode(&errMsg); err != nil {
 			return nil, fmt.Errorf("error parsing error message contents of TO2.GetOVNextEntry response: %w", err)
@@ -281,6 +298,7 @@ func (c *Client) nextOVEntry(ctx context.Context, baseURL string, i int) (*cose.
 		return nil, fmt.Errorf("error received from TO2.GetOVNextEntry request: %w", errMsg)
 
 	default:
+		captureErr(ctx, messageBodyErrCode, "")
 		return nil, fmt.Errorf("unexpected message type for response to TO2.GetOVNextEntry: %d", typ)
 	}
 }
@@ -329,6 +347,7 @@ func (c *Client) proveDevice(ctx context.Context, baseURL string, info *to2Conte
 	// Parse response
 	switch typ {
 	case to2SetupDeviceMsgType:
+		captureMsgType(ctx, typ)
 		var setupDevice cose.Sign1Tag[struct {
 			RendezvousInfo  [][]RvInstruction // RendezvousInfo replacement
 			GUID            GUID              // GUID replacement
@@ -336,9 +355,11 @@ func (c *Client) proveDevice(ctx context.Context, baseURL string, info *to2Conte
 			Owner2Key       PublicKey         // Replacement for Owner key
 		}]
 		if err := cbor.NewDecoder(resp).Decode(&setupDevice); err != nil {
+			captureErr(ctx, messageBodyErrCode, "")
 			return nil, fmt.Errorf("error parsing TO2.SetupDevice contents: %w", err)
 		}
 		if setupDevice.Payload.Val.NonceTO2SetupDv != setupDeviceNonce {
+			captureErr(ctx, invalidMessageErrCode, "")
 			return nil, fmt.Errorf("nonce in TO2.SetupDevice did not match nonce sent in TO2.ProveDevice")
 		}
 		return &VoucherHeader{
@@ -350,7 +371,7 @@ func (c *Client) proveDevice(ctx context.Context, baseURL string, info *to2Conte
 			CertChainHash:   info.OVH.CertChainHash,
 		}, nil
 
-	case ErrorMsgType:
+	case errorMsgType:
 		var errMsg ErrorMessage
 		if err := cbor.NewDecoder(resp).Decode(&errMsg); err != nil {
 			return nil, fmt.Errorf("error parsing error message contents of TO2.ProveDevice response: %w", err)
@@ -358,6 +379,7 @@ func (c *Client) proveDevice(ctx context.Context, baseURL string, info *to2Conte
 		return nil, fmt.Errorf("error received from TO2.ProveDevice request: %w", errMsg)
 
 	default:
+		captureErr(ctx, messageBodyErrCode, "")
 		return nil, fmt.Errorf("unexpected message type for response to TO2.ProveDevice: %d", typ)
 	}
 }
@@ -396,10 +418,12 @@ func (c *Client) readyServiceInfo(ctx context.Context, baseURL string, replaceme
 	// Parse response
 	switch typ {
 	case to2OwnerServiceInfoReadyMsgType:
+		captureMsgType(ctx, typ)
 		var ownerServiceInfoReady struct {
 			MaxDeviceServiceInfoSize *uint16 // maximum size service info that Owner can receive
 		}
 		if err := cbor.NewDecoder(resp).Decode(&ownerServiceInfoReady); err != nil {
+			captureErr(ctx, messageBodyErrCode, "")
 			return 0, fmt.Errorf("error parsing TO2.OwnerServiceInfoReady contents: %w", err)
 		}
 		if ownerServiceInfoReady.MaxDeviceServiceInfoSize == nil {
@@ -407,7 +431,7 @@ func (c *Client) readyServiceInfo(ctx context.Context, baseURL string, replaceme
 		}
 		return *ownerServiceInfoReady.MaxDeviceServiceInfoSize, nil
 
-	case ErrorMsgType:
+	case errorMsgType:
 		var errMsg ErrorMessage
 		if err := cbor.NewDecoder(resp).Decode(&errMsg); err != nil {
 			return 0, fmt.Errorf("error parsing error message contents of TO2.OwnerServiceInfoReady response: %w", err)
@@ -415,6 +439,7 @@ func (c *Client) readyServiceInfo(ctx context.Context, baseURL string, replaceme
 		return 0, fmt.Errorf("error received from TO2.DeviceServiceInfoReady request: %w", errMsg)
 
 	default:
+		captureErr(ctx, messageBodyErrCode, "")
 		return 0, fmt.Errorf("unexpected message type for response to TO2.DeviceServiceInfoReady: %d", typ)
 	}
 }
@@ -470,19 +495,22 @@ func (c *Client) exchangeServiceInfo(ctx context.Context, baseURL string, proveD
 
 	// Parse response
 	switch typ {
-	case to2OVNextEntryMsgType:
+	case to2Done2MsgType:
+		captureMsgType(ctx, typ)
 		var done2 struct {
 			NonceTO2SetupDv Nonce
 		}
 		if err := cbor.NewDecoder(resp).Decode(&done2); err != nil {
+			captureErr(ctx, messageBodyErrCode, "")
 			return fmt.Errorf("error parsing TO2.Done2 contents: %w", err)
 		}
 		if done2.NonceTO2SetupDv != setupDvNonce {
+			captureErr(ctx, invalidMessageErrCode, "")
 			return fmt.Errorf("nonce received in TO2.Done2 message did not match nonce received in TO2.SetupDevice")
 		}
 		return nil
 
-	case ErrorMsgType:
+	case errorMsgType:
 		var errMsg ErrorMessage
 		if err := cbor.NewDecoder(resp).Decode(&errMsg); err != nil {
 			return fmt.Errorf("error parsing error message contents of TO2.Done response: %w", err)
@@ -490,6 +518,7 @@ func (c *Client) exchangeServiceInfo(ctx context.Context, baseURL string, proveD
 		return fmt.Errorf("error received from TO2.Done request: %w", errMsg)
 
 	default:
+		captureErr(ctx, messageBodyErrCode, "")
 		return fmt.Errorf("unexpected message type for response to TO2.Done: %d", typ)
 	}
 }
@@ -506,9 +535,12 @@ func handleFSIMs(ctx context.Context, fsims map[string]serviceinfo.Module, send 
 		}
 
 		// Lookup FSIM to use for handling service info
+		//
+		// TODO: Support catch-all?
+		// TODO: Support wildcard message name?
 		fsim, ok := fsims[key]
 		if !ok {
-			// TODO: Log that no FSIM was found? Fail TO2?
+			// TODO: How to handle no match: Log that no FSIM was found? Fail TO2?
 			continue
 		}
 
@@ -601,7 +633,7 @@ func (c *Client) deviceServiceInfo(ctx context.Context, baseURL string, msg send
 	// owner IsDone. In this case, add a delay to avoid clobbering the owner
 	// service.
 	//
-	// TODO: Configurable delay
+	// TODO: Make delay configurable
 	if len(msg.ServiceInfo) == 0 {
 		select {
 		case <-ctx.Done():
@@ -620,13 +652,15 @@ func (c *Client) deviceServiceInfo(ctx context.Context, baseURL string, msg send
 	// Parse response
 	switch typ {
 	case to2OwnerServiceInfoMsgType:
+		captureMsgType(ctx, typ)
 		var ownerServiceInfo recvServiceInfo
 		if err := cbor.NewDecoder(resp).Decode(&ownerServiceInfo); err != nil {
+			captureErr(ctx, messageBodyErrCode, "")
 			return nil, fmt.Errorf("error parsing TO2.OwnerServiceInfo contents: %w", err)
 		}
 		return &ownerServiceInfo, nil
 
-	case ErrorMsgType:
+	case errorMsgType:
 		var errMsg ErrorMessage
 		if err := cbor.NewDecoder(resp).Decode(&errMsg); err != nil {
 			return nil, fmt.Errorf("error parsing error message contents of TO2.OwnerServiceInfo response: %w", err)
@@ -634,6 +668,7 @@ func (c *Client) deviceServiceInfo(ctx context.Context, baseURL string, msg send
 		return nil, fmt.Errorf("error received from TO2.DeviceServiceInfo request: %w", errMsg)
 
 	default:
+		captureErr(ctx, messageBodyErrCode, "")
 		return nil, fmt.Errorf("unexpected message type for response to TO2.DeviceServiceInfo: %d", typ)
 	}
 }

@@ -70,7 +70,16 @@ func (t *Transport) Send(ctx context.Context, base string, msgType uint8, msg an
 
 	// Add request headers
 	req.Header.Add("Content-Type", "application/cbor")
-	if token := t.Auth.GetToken(ctx, fdo.ProtocolOf(msgType)); token != "" {
+	prot := fdo.ProtocolOf(msgType)
+	if errMsg, ok := msg.(fdo.ErrorMessage); ok {
+		// Error messages use the authorization token for the protocol where
+		// failure occurred
+		prot = fdo.ProtocolOf(errMsg.PrevMsgType)
+	}
+	if prot == fdo.UnknownProtocol || prot == fdo.AnyProtocol {
+		return 0, nil, fmt.Errorf("invalid message type: unknown protocol or error message not using fdo.ErrorMessage type")
+	}
+	if token := t.Auth.GetToken(ctx, prot); token != "" {
 		req.Header.Add("Authorization", token)
 	}
 
@@ -136,9 +145,4 @@ func (t *Transport) handleResponse(resp *http.Response) (msgType uint8, _ io.Rea
 		Closer: resp.Body,
 	}
 	return msgType, content, nil
-}
-
-// ResetContext clears the protocol state, e.g. the session authorization token.
-func (t *Transport) ResetContext(prot fdo.Protocol) {
-	t.Auth.Clear(context.Background(), prot)
 }

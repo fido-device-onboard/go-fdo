@@ -71,15 +71,17 @@ func (c *Client) appStart(ctx context.Context, baseURL string, info any) (*Vouch
 	// Parse response
 	switch typ {
 	case diSetCredentialsMsgType:
+		captureMsgType(ctx, typ)
 		var setCredentials struct {
 			OVHeader cbor.Bstr[VoucherHeader]
 		}
 		if err := cbor.NewDecoder(resp).Decode(&setCredentials); err != nil {
+			captureErr(ctx, messageBodyErrCode, "")
 			return nil, fmt.Errorf("error parsing DI.SetCredentials contents: %w", err)
 		}
 		return &setCredentials.OVHeader.Val, nil
 
-	case ErrorMsgType:
+	case errorMsgType:
 		var errMsg ErrorMessage
 		if err := cbor.NewDecoder(resp).Decode(&errMsg); err != nil {
 			return nil, fmt.Errorf("error parsing error message contents of DI.AppStart response: %w", err)
@@ -87,6 +89,7 @@ func (c *Client) appStart(ctx context.Context, baseURL string, info any) (*Vouch
 		return nil, fmt.Errorf("error received from DI.AppStart request: %w", errMsg)
 
 	default:
+		captureErr(ctx, messageBodyErrCode, "")
 		return nil, fmt.Errorf("unexpected message type for response to DI.AppStart: %d", typ)
 	}
 }
@@ -114,16 +117,19 @@ func (c *Client) setHmac(ctx context.Context, baseURL string, ovh *VoucherHeader
 	// Parse response
 	switch typ {
 	case diDoneMsgType:
+		captureMsgType(ctx, typ)
 		return nil
 
-	case ErrorMsgType:
+	case errorMsgType:
 		var errMsg ErrorMessage
 		if err := cbor.NewDecoder(resp).Decode(&errMsg); err != nil {
+			captureErr(ctx, messageBodyErrCode, "")
 			return fmt.Errorf("error parsing error message contents of DI.SetHMAC response: %w", err)
 		}
 		return fmt.Errorf("error received from DI.SetHMAC request: %w", errMsg)
 
 	default:
+		captureErr(ctx, messageBodyErrCode, "")
 		return fmt.Errorf("unexpected message type for response to DI.SetHMAC: %d", typ)
 	}
 }

@@ -10,9 +10,90 @@ import (
 	"github.com/fido-device-onboard/go-fdo/cbor"
 )
 
-// ErrorMsgType is the response type number associated with an ErrorMessage
+// Error codes
+//
+//nolint:unused
+const (
+	// JWT token is missing or invalid. Each token has its own validity period,
+	// server rejects expired tokens. Server failed to parse JWT token or JWT
+	// signature did not verify correctly. The JWT token refers to the token
+	// mentioned in section 4.3 (which is not required by protocol to be a JWT
+	// token). The error message applies to non-JWT tokens, as well.
+	//
+	// Messages: DI.SetHMAC, TO0.OwnerSign, TO1.ProveToRV, TO2.GetOVNextEntry,
+	//           TO2.ProveDevice, TO2.NextDeviceServiceInfo, TO2.Done
+	invalidJwtTokenCode = 1
+
+	// Ownership Voucher is invalid: One of Ownership Voucher verification
+	// checks has failed. Precise information is not returned to the client but
+	// saved only in service logs.
+	//
+	// Messages: TO0.OwnerSign
+	invalidOwnershipVoucherCode = 2
+
+	// Verification of signature of owner message failed. TO0.OwnerSign message
+	// is signed by the final owner (using key signed by the last Ownership
+	// Voucher entry). This error is returned in case that signature is
+	// invalid.
+	//
+	// Messages: TO0.OwnerSign
+	invalidOwnerSignBodyCode = 3
+
+	// IP address is invalid. Bytes that are provided in the request do not
+	// represent a valid IPv4/IPv6 address.
+	//
+	// Messages: TO0.OwnerSign
+	invalidIPAddrCode = 4
+
+	// GUID is invalid. Bytes that are provided in the request do not represent
+	// a proper GUID.
+	//
+	// Messages: TO0.OwnerSign
+	invalidGUID = 5
+
+	// The owner connection info for GUID is not found. TO0 Protocol wasn’t
+	// properly executed for the specified GUID or information that was stored
+	// in database has expired and/or has been removed.
+	//
+	// Messages: TO1.HelloRV, TO2.HelloDevice
+	resourceNotFound = 6
+
+	// Message Body is structurally unsound: JSON parse error, or valid JSON,
+	// but is not mapping to the expected Secure Device Onboard type (see 4.6)
+	//
+	// Messages: DI.AppStart, DI.SetHMAC, TO0.Hello, TO0.OwnerSign,
+	//           TO1.HelloRV, TO1.ProveToRV, TO2.HelloDevice,
+	//           TO2.GetOVNextEntry, TO2.ProveDevice,
+	//           TO2.DeviceServiceInfo, TO2.OwnerServiceInfo, TO2.Done
+	messageBodyErrCode = 100
+
+	// Message structurally sound, but failed validation tests. The nonce
+	// didn’t match, signature didn’t verify, hash, or mac didn’t verify, index
+	// out of bounds, etc...
+	//
+	// Messages: TO0.OwnerSign, TO1.HelloRV, TO1.ProveToRV, TO2.HelloDevice,
+	//           TO2.GetOVNextEntry, TO2.ProveDevice,
+	//           TO2.DeviceServiceInfo, TO2.OwnerServiceInfo,
+	invalidMessageErrCode = 101
+
+	// Credential reuse rejected.
+	//
+	// Messages: TO2.SetupDevice
+	credReuseErrCode = 102
+
+	// Something went wrong which couldn’t be classified otherwise.  (This was
+	// chosen to match the HTTP 500 error code.)
+	//
+	// Messages: DI.AppStart, DI.SetHMAC, TO0.Hello, TO0.OwnerSign,
+	//           TO1.HelloRV, TO1.ProveToRV, TO2.HelloDevice,
+	//           TO2.GetOVNextEntry, TO2.ProveDevice,
+	//           TO2.DeviceServiceInfo, TO2.OwnerServiceInfo, TO2.Done
+	internalServerErrCode = 500
+)
+
+// errorMsgType is the response type number associated with an ErrorMessage
 // response.
-const ErrorMsgType uint8 = 255
+const errorMsgType uint8 = 255
 
 // ErrorMessage indicates that the previous protocol message could not be
 // processed. The error message is a “catch-all” whenever processing cannot
@@ -61,7 +142,7 @@ type ErrorMessage struct {
 	PrevMsgType   uint8
 	ErrString     string
 	Timestamp     Timestamp
-	CorrelationID uint
+	CorrelationID *uint
 }
 
 // String implements Stringer.
