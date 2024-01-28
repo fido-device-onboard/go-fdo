@@ -123,13 +123,13 @@ func (c *Client) TransferOwnership1(ctx context.Context, baseURL string) ([]RvTO
 func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, sendInfo func(*serviceinfo.UnchunkWriter), fsims map[string]serviceinfo.Module) (*DeviceCredential, error) {
 	ctx = contextWithErrMsg(ctx)
 
-	ownerInfo, err := c.verifyOwner(ctx, baseURL)
+	proveDeviceNonce, ownerInfo, err := c.verifyOwner(ctx, baseURL)
 	if err != nil {
 		c.errorMsg(ctx, baseURL, err)
 		return nil, err
 	}
 
-	replacementOVH, err := c.proveDevice(ctx, baseURL, ownerInfo)
+	setupDeviceNonce, replacementOVH, err := c.proveDevice(ctx, baseURL, proveDeviceNonce, ownerInfo)
 	if err != nil {
 		c.errorMsg(ctx, baseURL, err)
 		return nil, err
@@ -153,7 +153,7 @@ func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, sendInf
 	serviceInfoReader, serviceInfoWriter := serviceinfo.NewChunkOutPipe()
 	sendInfo(serviceInfoWriter)
 
-	if err := c.exchangeServiceInfo(ctx, baseURL, ownerInfo.ProveDvNonce, ownerInfo.SetupDvNonce, sendMTU, serviceInfoReader, fsims); err != nil {
+	if err := c.exchangeServiceInfo(ctx, baseURL, proveDeviceNonce, setupDeviceNonce, sendMTU, serviceInfoReader, fsims); err != nil {
 		c.errorMsg(ctx, baseURL, err)
 		return nil, err
 	}

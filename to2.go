@@ -45,18 +45,18 @@ var (
 // (albeit only through the latter half of TO2). Figuring out the refactor will
 // take fresh eyes. REVIEWERS take note!!!
 type to2Context struct {
-	ProveDvNonce Nonce
-	SetupDvNonce Nonce
-	PublicKey    PublicKey
-
+	// Owner info
+	PublicKey         PublicKey
 	OVH               VoucherHeader
 	OVHHmac           Hmac
 	NumVoucherEntries int
 
+	// Encryption and signature info
 	SigInfo      sigInfo
 	KexSuiteName kexSuiteName
 	KeyExchangeA []byte
 
+	// Message size options
 	// TODO: Make use of message size maximums
 	MaxDeviceMessageSize uint16
 	MaxOwnerMessageSize  uint16
@@ -65,20 +65,20 @@ type to2Context struct {
 // Verify owner by sending HelloDevice and validating the response, as well as
 // all ownership voucher entries, which are retrieved iteratively with
 // subsequence requests.
-func (c *Client) verifyOwner(ctx context.Context, baseURL string) (*to2Context, error) {
+func (c *Client) verifyOwner(ctx context.Context, baseURL string) (Nonce, *to2Context, error) {
 	// Construct ownership voucher from parts received from the owner service
-	info, err := c.helloDevice(ctx, baseURL)
+	proveDeviceNonce, info, err := c.helloDevice(ctx, baseURL)
 	if err != nil {
-		return nil, err
+		return Nonce{}, nil, err
 	}
 	if info.NumVoucherEntries == 0 {
-		return nil, fmt.Errorf("ownership voucher cannot have zero entries")
+		return Nonce{}, nil, fmt.Errorf("ownership voucher cannot have zero entries")
 	}
 	var entries []cose.Sign1Tag[VoucherEntryPayload]
 	for i := 0; i < info.NumVoucherEntries; i++ {
 		entry, err := c.nextOVEntry(ctx, baseURL, i)
 		if err != nil {
-			return nil, err
+			return Nonce{}, nil, err
 		}
 		entries = append(entries, *entry)
 	}
@@ -91,7 +91,7 @@ func (c *Client) verifyOwner(ctx context.Context, baseURL string) (*to2Context, 
 	// Verify ownership voucher header
 	if err := ov.VerifyHeader(c.Hmac); err != nil {
 		captureErr(ctx, invalidMessageErrCode, "")
-		return nil, fmt.Errorf("bad ownership voucher header from TO2.ProveOVHdr: %w", err)
+		return Nonce{}, nil, fmt.Errorf("bad ownership voucher header from TO2.ProveOVHdr: %w", err)
 	}
 
 	// Verify that the owner service corresponds to the most recent device
@@ -99,14 +99,14 @@ func (c *Client) verifyOwner(ctx context.Context, baseURL string) (*to2Context, 
 	// and/or manufacturer key corresponding to the stored device credentials.
 	if err := ov.VerifyManufacturerKey(c.Cred.PublicKeyHash); err != nil {
 		captureErr(ctx, invalidMessageErrCode, "")
-		return nil, fmt.Errorf("bad ownership voucher header from TO2.ProveOVHdr: %w", err)
+		return Nonce{}, nil, fmt.Errorf("bad ownership voucher header from TO2.ProveOVHdr: %w", err)
 	}
 
 	// Verify each entry in the voucher's list by performing iterative
 	// signature and hash (header and GUID/devInfo) checks.
 	if err := ov.VerifyEntries(); err != nil {
 		captureErr(ctx, invalidMessageErrCode, "")
-		return nil, fmt.Errorf("bad ownership voucher entries from TO2.ProveOVHdr: %w", err)
+		return Nonce{}, nil, fmt.Errorf("bad ownership voucher entries from TO2.ProveOVHdr: %w", err)
 	}
 
 	// Ensure that the voucher entry chain ends with given owner key.
@@ -119,27 +119,27 @@ func (c *Client) verifyOwner(ctx context.Context, baseURL string) (*to2Context, 
 	expectedOwnerPub, err := ov.Entries[len(ov.Entries)-1].Payload.Val.PublicKey.Public()
 	if err != nil {
 		captureErr(ctx, invalidMessageErrCode, "")
-		return nil, fmt.Errorf("error parsing last public key of ownership voucher: %w", err)
+		return Nonce{}, nil, fmt.Errorf("error parsing last public key of ownership voucher: %w", err)
 	}
 	ownerPub, err := info.PublicKey.Public()
 	if err != nil {
 		captureErr(ctx, invalidMessageErrCode, "")
-		return nil, fmt.Errorf("error parsing public key of owner service: %w", err)
+		return Nonce{}, nil, fmt.Errorf("error parsing public key of owner service: %w", err)
 	}
 	if !ownerPub.(interface{ Equal(crypto.PublicKey) bool }).Equal(expectedOwnerPub) {
 		captureErr(ctx, invalidMessageErrCode, "")
-		return nil, fmt.Errorf("owner public key did not match last entry in ownership voucher")
+		return Nonce{}, nil, fmt.Errorf("owner public key did not match last entry in ownership voucher")
 	}
 
-	return info, nil
+	return proveDeviceNonce, info, nil
 }
 
 // HelloDevice(60) -> ProveOVHdr(61)
-func (c *Client) helloDevice(ctx context.Context, baseURL string) (*to2Context, error) {
+func (c *Client) helloDevice(ctx context.Context, baseURL string) (Nonce, *to2Context, error) {
 	// Generate a new nonce
-	var helloNonce Nonce
-	if _, err := rand.Read(helloNonce[:]); err != nil {
-		return nil, fmt.Errorf("error generating new nonce for TO2.HelloDevice request: %w", err)
+	var proveOVNonce Nonce
+	if _, err := rand.Read(proveOVNonce[:]); err != nil {
+		return Nonce{}, nil, fmt.Errorf("error generating new nonce for TO2.HelloDevice request: %w", err)
 	}
 
 	// Create a request structure
@@ -153,7 +153,7 @@ func (c *Client) helloDevice(ctx context.Context, baseURL string) (*to2Context, 
 	}{
 		MaxDeviceMessageSize: 0, // Default size
 		GUID:                 c.Cred.GUID,
-		NonceTO2ProveOV:      helloNonce,
+		NonceTO2ProveOV:      proveOVNonce,
 
 		// TODO: How to decide? Strongest available
 		KexSuiteName: "",
@@ -169,7 +169,7 @@ func (c *Client) helloDevice(ctx context.Context, baseURL string) (*to2Context, 
 	// Make a request
 	typ, resp, err := c.Transport.Send(ctx, baseURL, to2HelloDeviceMsgType, helloDeviceMsg)
 	if err != nil {
-		return nil, err
+		return Nonce{}, nil, err
 	}
 	defer func() { _ = resp.Close() }()
 
@@ -189,37 +189,39 @@ func (c *Client) helloDevice(ctx context.Context, baseURL string) (*to2Context, 
 		captureMsgType(ctx, typ)
 		if err := cbor.NewDecoder(resp).Decode(&proveOVHdr); err != nil {
 			captureErr(ctx, messageBodyErrCode, "")
-			return nil, fmt.Errorf("error parsing TO2.ProveOVHdr contents: %w", err)
+			return Nonce{}, nil, fmt.Errorf("error parsing TO2.ProveOVHdr contents: %w", err)
 		}
 
 	case errorMsgType:
 		var errMsg ErrorMessage
 		if err := cbor.NewDecoder(resp).Decode(&errMsg); err != nil {
-			return nil, fmt.Errorf("error parsing error message contents of TO2.HelloDevice response: %w", err)
+			return Nonce{}, nil, fmt.Errorf("error parsing error message contents of TO2.HelloDevice response: %w", err)
 		}
-		return nil, fmt.Errorf("error received from TO2.HelloDevice request: %w", errMsg)
+		return Nonce{}, nil, fmt.Errorf("error received from TO2.HelloDevice request: %w", errMsg)
 
 	default:
 		captureErr(ctx, messageBodyErrCode, "")
-		return nil, fmt.Errorf("unexpected message type for response to TO2.HelloDevice: %d", typ)
+		return Nonce{}, nil, fmt.Errorf("unexpected message type for response to TO2.HelloDevice: %d", typ)
 	}
 
 	// Parse nonce
 	var cuphNonce Nonce
 	if cuphNonceBytes := []byte(proveOVHdr.Unprotected[to2NonceClaim]); len(cuphNonceBytes) == 0 {
 		captureErr(ctx, invalidMessageErrCode, "")
-		return nil, fmt.Errorf("nonce unprotected header missing from TO2.ProveOVHdr response message")
+		return Nonce{}, nil, fmt.Errorf("nonce unprotected header missing from TO2.ProveOVHdr response message")
 	} else if err := cbor.Unmarshal(cuphNonceBytes, &cuphNonce); err != nil {
 		captureErr(ctx, invalidMessageErrCode, "")
-		return nil, fmt.Errorf("nonce unprotected header from TO2.ProveOVHdr could not be unmarshaled: %w", err)
+		return Nonce{}, nil, fmt.Errorf("nonce unprotected header from TO2.ProveOVHdr could not be unmarshaled: %w", err)
 	}
 
 	// Parse owner public key
 	var ownerPubKey PublicKey
 	if ownerPubKeyBytes := []byte(proveOVHdr.Unprotected[to2OwnerPubKeyClaim]); len(ownerPubKeyBytes) == 0 {
-		return nil, fmt.Errorf("owner pubkey unprotected header missing from TO2.ProveOVHdr response message")
+		captureErr(ctx, invalidMessageErrCode, "")
+		return Nonce{}, nil, fmt.Errorf("owner pubkey unprotected header missing from TO2.ProveOVHdr response message")
 	} else if err := cbor.Unmarshal(ownerPubKeyBytes, &ownerPubKey); err != nil {
-		return nil, fmt.Errorf("owner pubkey unprotected header from TO2.ProveOVHdr could not be unmarshaled: %w", err)
+		captureErr(ctx, invalidMessageErrCode, "")
+		return Nonce{}, nil, fmt.Errorf("owner pubkey unprotected header from TO2.ProveOVHdr could not be unmarshaled: %w", err)
 	}
 
 	// Validate response signature and nonce. While the payload signature
@@ -229,21 +231,23 @@ func (c *Client) helloDevice(ctx context.Context, baseURL string) (*to2Context, 
 	// verified.
 	key, err := ownerPubKey.Public()
 	if err != nil {
-		return nil, fmt.Errorf("error parsing owner public key to verify TO2.ProveOVHdr payload signature: %w", err)
+		captureErr(ctx, invalidMessageErrCode, "")
+		return Nonce{}, nil, fmt.Errorf("error parsing owner public key to verify TO2.ProveOVHdr payload signature: %w", err)
 	}
 	if ok, err := proveOVHdr.Verify(key, nil); err != nil {
-		return nil, fmt.Errorf("error verifying TO2.ProveOVHdr payload signature: %w", err)
+		captureErr(ctx, invalidMessageErrCode, "")
+		return Nonce{}, nil, fmt.Errorf("error verifying TO2.ProveOVHdr payload signature: %w", err)
 	} else if !ok {
-		return nil, fmt.Errorf("%w: TO2.ProveOVHdr payload signature verification failed", ErrCryptoVerifyFailed)
+		captureErr(ctx, invalidMessageErrCode, "")
+		return Nonce{}, nil, fmt.Errorf("%w: TO2.ProveOVHdr payload signature verification failed", ErrCryptoVerifyFailed)
 	}
-	if proveOVHdr.Payload.Val.NonceTO2ProveOV != helloNonce {
-		return nil, fmt.Errorf("nonce in TO2.ProveOVHdr did not match nonce sent in TO2.HelloDevice")
+	if proveOVHdr.Payload.Val.NonceTO2ProveOV != proveOVNonce {
+		captureErr(ctx, invalidMessageErrCode, "")
+		return Nonce{}, nil, fmt.Errorf("nonce in TO2.ProveOVHdr did not match nonce sent in TO2.HelloDevice")
 	}
 
-	return &to2Context{
-		ProveDvNonce: cuphNonce,
-		PublicKey:    ownerPubKey,
-
+	return cuphNonce, &to2Context{
+		PublicKey:         ownerPubKey,
 		OVH:               proveOVHdr.Payload.Val.OVH.Val,
 		OVHHmac:           proveOVHdr.Payload.Val.OVHHmac,
 		NumVoucherEntries: int(proveOVHdr.Payload.Val.NumOVEntries),
@@ -304,13 +308,12 @@ func (c *Client) nextOVEntry(ctx context.Context, baseURL string, i int) (*cose.
 }
 
 // ProveDevice(64) -> SetupDevice(65)
-func (c *Client) proveDevice(ctx context.Context, baseURL string, info *to2Context) (*VoucherHeader, error) {
+func (c *Client) proveDevice(ctx context.Context, baseURL string, proveDeviceNonce Nonce, info *to2Context) (Nonce, *VoucherHeader, error) {
 	// Generate a new nonce
 	var setupDeviceNonce Nonce
 	if _, err := rand.Read(setupDeviceNonce[:]); err != nil {
-		return nil, fmt.Errorf("error generating new nonce for TO2.ProveDevice request: %w", err)
+		return Nonce{}, nil, fmt.Errorf("error generating new nonce for TO2.ProveDevice request: %w", err)
 	}
-	info.SetupDvNonce = setupDeviceNonce
 
 	// Define request structure
 	eatPayload := struct {
@@ -322,25 +325,25 @@ func (c *Client) proveDevice(ctx context.Context, baseURL string, info *to2Conte
 		eatUnprotectedNonceClaim: setupDeviceNonce,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("error creating header for EAT int TO2.ProveDevice: %w", err)
+		return Nonce{}, nil, fmt.Errorf("error creating header for EAT int TO2.ProveDevice: %w", err)
 	}
 	token := cose.Sign1[eatoken]{
 		Header:  header,
-		Payload: cbor.NewBstrPtr(newEAT(c.Cred.GUID, info.ProveDvNonce, eatPayload, nil)),
+		Payload: cbor.NewBstrPtr(newEAT(c.Cred.GUID, proveDeviceNonce, eatPayload, nil)),
 	}
 	opts, err := signOptsFor(c.Key, c.PSS)
 	if err != nil {
-		return nil, fmt.Errorf("error determining signing options for TO2.ProveDevice: %w", err)
+		return Nonce{}, nil, fmt.Errorf("error determining signing options for TO2.ProveDevice: %w", err)
 	}
 	if err := token.Sign(c.Key, nil, opts); err != nil {
-		return nil, fmt.Errorf("error signing EAT payload for TO2.ProveDevice: %w", err)
+		return Nonce{}, nil, fmt.Errorf("error signing EAT payload for TO2.ProveDevice: %w", err)
 	}
 	msg := token.Tag()
 
 	// Make request
 	typ, resp, err := c.Transport.Send(ctx, baseURL, to2ProveDeviceMsgType, msg)
 	if err != nil {
-		return nil, fmt.Errorf("error sending TO2.ProveDevice: %w", err)
+		return Nonce{}, nil, fmt.Errorf("error sending TO2.ProveDevice: %w", err)
 	}
 	defer func() { _ = resp.Close() }()
 
@@ -356,13 +359,13 @@ func (c *Client) proveDevice(ctx context.Context, baseURL string, info *to2Conte
 		}]
 		if err := cbor.NewDecoder(resp).Decode(&setupDevice); err != nil {
 			captureErr(ctx, messageBodyErrCode, "")
-			return nil, fmt.Errorf("error parsing TO2.SetupDevice contents: %w", err)
+			return Nonce{}, nil, fmt.Errorf("error parsing TO2.SetupDevice contents: %w", err)
 		}
 		if setupDevice.Payload.Val.NonceTO2SetupDv != setupDeviceNonce {
 			captureErr(ctx, invalidMessageErrCode, "")
-			return nil, fmt.Errorf("nonce in TO2.SetupDevice did not match nonce sent in TO2.ProveDevice")
+			return Nonce{}, nil, fmt.Errorf("nonce in TO2.SetupDevice did not match nonce sent in TO2.ProveDevice")
 		}
-		return &VoucherHeader{
+		return setupDeviceNonce, &VoucherHeader{
 			Version:         info.OVH.Version,
 			GUID:            setupDevice.Payload.Val.GUID,
 			RvInfo:          setupDevice.Payload.Val.RendezvousInfo,
@@ -374,13 +377,13 @@ func (c *Client) proveDevice(ctx context.Context, baseURL string, info *to2Conte
 	case errorMsgType:
 		var errMsg ErrorMessage
 		if err := cbor.NewDecoder(resp).Decode(&errMsg); err != nil {
-			return nil, fmt.Errorf("error parsing error message contents of TO2.ProveDevice response: %w", err)
+			return Nonce{}, nil, fmt.Errorf("error parsing error message contents of TO2.ProveDevice response: %w", err)
 		}
-		return nil, fmt.Errorf("error received from TO2.ProveDevice request: %w", errMsg)
+		return Nonce{}, nil, fmt.Errorf("error received from TO2.ProveDevice request: %w", errMsg)
 
 	default:
 		captureErr(ctx, messageBodyErrCode, "")
-		return nil, fmt.Errorf("unexpected message type for response to TO2.ProveDevice: %d", typ)
+		return Nonce{}, nil, fmt.Errorf("unexpected message type for response to TO2.ProveDevice: %d", typ)
 	}
 }
 
