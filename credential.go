@@ -54,20 +54,11 @@ func (dc *DeviceCredentialBlob) Hmac(alg HashAlg, payload any) (Hmac, error) {
 		return Hmac{}, fmt.Errorf("private key is invalid")
 	}
 
-	var hash crypto.Hash
-	switch alg {
-	case HmacSha256Hash:
-		hash = crypto.SHA256
-	case HmacSha384Hash:
-		hash = crypto.SHA384
-	default:
-		return Hmac{}, fmt.Errorf("unsupported hash algorithm: %s", alg)
-	}
-
-	mac := hmac.New(hash.New, dc.HmacSecret)
+	mac := hmac.New(alg.HashFunc().New, dc.HmacSecret)
 	if err := cbor.NewEncoder(mac).Encode(payload); err != nil {
 		return Hmac{}, fmt.Errorf("error computing hmac: marshaling payload: %w", err)
 	}
+
 	return Hmac{
 		Algorithm: alg,
 		Value:     mac.Sum(nil),

@@ -123,6 +123,10 @@ func (c *Client) TransferOwnership1(ctx context.Context, baseURL string) ([]RvTO
 func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, sendInfo func(*serviceinfo.UnchunkWriter), fsims map[string]serviceinfo.Module) (*DeviceCredential, error) {
 	ctx = contextWithErrMsg(ctx)
 
+	if c.MaxServiceInfoSizeReceive == 0 {
+		c.MaxServiceInfoSizeReceive = serviceinfo.DefaultMTU
+	}
+
 	proveDeviceNonce, ownerInfo, err := c.verifyOwner(ctx, baseURL)
 	if err != nil {
 		c.errorMsg(ctx, baseURL, err)

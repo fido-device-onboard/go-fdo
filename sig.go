@@ -47,6 +47,42 @@ type sigInfo struct {
 	Info []byte
 }
 
+/*
+// This function is not used because HMAC support is implicitly required in FDO
+// by the rules: RSA2048->SHA256, RSA3072->SHA384, secp256r1->SHA256,
+// secp384r1->SHA384.
+
+func sigInfoFor(key crypto.Signer, usePSS bool, hmac KeyedHasher) sigInfo {
+	switch _, isECDSA := key.Public().(*ecdsa.PublicKey); {
+	case isECDSA && hmac.Supports(HmacSha384Hash):
+		return sigInfo{Type: cose.ES384Alg}
+	case isECDSA && !hmac.Supports(HmacSha384Hash):
+		return sigInfo{Type: cose.ES256Alg}
+	case !isECDSA && usePSS && hmac.Supports(HmacSha384Hash):
+		return sigInfo{Type: cose.PS384Alg}
+	case !isECDSA && !usePSS && hmac.Supports(HmacSha384Hash):
+		return sigInfo{Type: cose.RS384Alg}
+	case !isECDSA && usePSS && !hmac.Supports(HmacSha384Hash):
+		return sigInfo{Type: cose.PS384Alg}
+	case !isECDSA && !usePSS && !hmac.Supports(HmacSha384Hash):
+		return sigInfo{Type: cose.RS256Alg}
+	}
+	panic("unreachable")
+}
+*/
+
+func sigInfoFor(key crypto.Signer, usePSS bool) (*sigInfo, error) {
+	opts, err := signOptsFor(key, usePSS)
+	if err != nil {
+		return nil, err
+	}
+	algID, err := cose.SignatureAlgorithmFor(key, opts)
+	if err != nil {
+		return nil, err
+	}
+	return &sigInfo{Type: algID}, nil
+}
+
 func signOptsFor(key crypto.Signer, usePSS bool) (crypto.SignerOpts, error) {
 	var opts crypto.SignerOpts
 	if rsaPub, ok := key.Public().(*rsa.PublicKey); ok {

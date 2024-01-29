@@ -4,6 +4,7 @@
 package fdo
 
 import (
+	"crypto"
 	"crypto/hmac"
 	"fmt"
 )
@@ -53,6 +54,18 @@ func (alg HashAlg) String() string {
 		return "HmacSha256Hash"
 	case HmacSha384Hash:
 		return "HmacSha384Hash"
+	}
+	panic("HashAlg missing switch case(s)")
+}
+
+// HashFunc implements crypto.SignerOpts, but is mainly intended as a simple
+// helper function.
+func (alg HashAlg) HashFunc() crypto.Hash {
+	switch alg {
+	case Sha256Hash, HmacSha256Hash:
+		return crypto.SHA256
+	case Sha384Hash, HmacSha384Hash:
+		return crypto.SHA384
 	}
 	panic("HashAlg missing switch case(s)")
 }

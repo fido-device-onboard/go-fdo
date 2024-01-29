@@ -5,7 +5,6 @@ package fdo
 
 import (
 	"context"
-	"crypto"
 	"fmt"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
@@ -125,16 +124,4 @@ func (c *Client) proveToRv(ctx context.Context, baseURL string, nonce Nonce) ([]
 		captureErr(ctx, messageBodyErrCode, "")
 		return nil, fmt.Errorf("unexpected message type for response to TO1.ProveToRV: %d", typ)
 	}
-}
-
-func sigInfoFor(key crypto.Signer, usePSS bool) (*sigInfo, error) {
-	opts, err := signOptsFor(key, usePSS)
-	if err != nil {
-		return nil, err
-	}
-	algID, err := cose.SignatureAlgorithmFor(key, opts)
-	if err != nil {
-		return nil, err
-	}
-	return &sigInfo{Type: algID}, nil
 }

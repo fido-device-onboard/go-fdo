@@ -4,6 +4,7 @@
 package fdo
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/rand"
@@ -40,26 +41,16 @@ var (
 	to2OwnerPubKeyClaim = cose.Label{Int64: 257}
 )
 
-// TODO: This contains way too many unrelated things. There should be a way to
-// refactor the code to not have a giant blob of state being passed around
-// (albeit only through the latter half of TO2). Figuring out the refactor will
-// take fresh eyes. REVIEWERS take note!!!
 type to2Context struct {
-	// Owner info
-	PublicKey         PublicKey
-	OVH               VoucherHeader
-	OVHHmac           Hmac
-	NumVoucherEntries int
+	// Voucher data
+	OVH                 VoucherHeader
+	OVHHmac             Hmac
+	NumVoucherEntries   int
+	PublicKeyToValidate crypto.PublicKey
 
-	// Encryption and signature info
-	SigInfo      sigInfo
+	// Encryption info
 	KexSuiteName kexSuiteName
 	KeyExchangeA []byte
-
-	// Message size options
-	// TODO: Make use of message size maximums
-	MaxDeviceMessageSize uint16
-	MaxOwnerMessageSize  uint16
 }
 
 // Verify owner by sending HelloDevice and validating the response, as well as
@@ -118,15 +109,9 @@ func (c *Client) verifyOwner(ctx context.Context, baseURL string) (Nonce, *to2Co
 	// was signed by the intended owner service.
 	expectedOwnerPub, err := ov.Entries[len(ov.Entries)-1].Payload.Val.PublicKey.Public()
 	if err != nil {
-		captureErr(ctx, invalidMessageErrCode, "")
 		return Nonce{}, nil, fmt.Errorf("error parsing last public key of ownership voucher: %w", err)
 	}
-	ownerPub, err := info.PublicKey.Public()
-	if err != nil {
-		captureErr(ctx, invalidMessageErrCode, "")
-		return Nonce{}, nil, fmt.Errorf("error parsing public key of owner service: %w", err)
-	}
-	if !ownerPub.(interface{ Equal(crypto.PublicKey) bool }).Equal(expectedOwnerPub) {
+	if !info.PublicKeyToValidate.(interface{ Equal(crypto.PublicKey) bool }).Equal(expectedOwnerPub) {
 		captureErr(ctx, invalidMessageErrCode, "")
 		return Nonce{}, nil, fmt.Errorf("owner public key did not match last entry in ownership voucher")
 	}
@@ -135,11 +120,19 @@ func (c *Client) verifyOwner(ctx context.Context, baseURL string) (Nonce, *to2Co
 }
 
 // HelloDevice(60) -> ProveOVHdr(61)
+//
+//nolint:gocyclo, This is very complex validation that is better understood linearly
 func (c *Client) helloDevice(ctx context.Context, baseURL string) (Nonce, *to2Context, error) {
 	// Generate a new nonce
 	var proveOVNonce Nonce
 	if _, err := rand.Read(proveOVNonce[:]); err != nil {
 		return Nonce{}, nil, fmt.Errorf("error generating new nonce for TO2.HelloDevice request: %w", err)
+	}
+
+	// Select SigInfo using SHA384 when available
+	aSigInfo, err := sigInfoFor(c.Key, c.PSS)
+	if err != nil {
+		return Nonce{}, nil, fmt.Errorf("error select aSigInfo for TO2.HelloDevice request: %w", err)
 	}
 
 	// Create a request structure
@@ -151,19 +144,12 @@ func (c *Client) helloDevice(ctx context.Context, baseURL string) (Nonce, *to2Co
 		CipherSuite          cipherSuite
 		SigInfoA             sigInfo
 	}{
-		MaxDeviceMessageSize: 0, // Default size
+		MaxDeviceMessageSize: c.MaxServiceInfoSizeReceive, // TODO: Should this be separately configurable?
 		GUID:                 c.Cred.GUID,
 		NonceTO2ProveOV:      proveOVNonce,
-
-		// TODO: How to decide? Strongest available
-		KexSuiteName: "",
-
-		// TODO: Use strongest available. Always use GCM-256. Double check no
-		// TPM issues.
-		CipherSuite: 0,
-
-		// TODO: Use strongest available. Check c.Hmac.Supports?
-		SigInfoA: sigInfo{Type: cose.ES384Alg},
+		KexSuiteName:         "", // TODO: How to decide? Strongest available
+		CipherSuite:          0,  // TODO: Use strongest available. Always use GCM-256. Double check no TPM issues.
+		SigInfoA:             *aSigInfo,
 	}
 
 	// Make a request
@@ -172,6 +158,15 @@ func (c *Client) helloDevice(ctx context.Context, baseURL string) (Nonce, *to2Co
 		return Nonce{}, nil, err
 	}
 	defer func() { _ = resp.Close() }()
+
+	// Enforce MaxDeviceMessageSize
+	resp = struct {
+		io.Reader
+		io.Closer
+	}{
+		Reader: io.LimitReader(resp, int64(c.MaxServiceInfoSizeReceive)),
+		Closer: resp,
+	}
 
 	// Parse response
 	var proveOVHdr cose.Sign1Tag[struct {
@@ -204,14 +199,14 @@ func (c *Client) helloDevice(ctx context.Context, baseURL string) (Nonce, *to2Co
 		return Nonce{}, nil, fmt.Errorf("unexpected message type for response to TO2.HelloDevice: %d", typ)
 	}
 
-	// Parse nonce
-	var cuphNonce Nonce
-	if cuphNonceBytes := []byte(proveOVHdr.Unprotected[to2NonceClaim]); len(cuphNonceBytes) == 0 {
+	// Validate the HelloDeviceHash
+	helloDeviceHash := proveOVHdr.Payload.Val.HelloDeviceHash.Algorithm.HashFunc().New()
+	if err := cbor.NewEncoder(helloDeviceHash).Encode(helloDeviceMsg); err != nil {
+		return Nonce{}, nil, fmt.Errorf("error hashing HelloDevice message to verify against TO2.ProveOVHdr payload's hash: %w", err)
+	}
+	if !bytes.Equal(proveOVHdr.Payload.Val.HelloDeviceHash.Value, helloDeviceHash.Sum(nil)) {
 		captureErr(ctx, invalidMessageErrCode, "")
-		return Nonce{}, nil, fmt.Errorf("nonce unprotected header missing from TO2.ProveOVHdr response message")
-	} else if err := cbor.Unmarshal(cuphNonceBytes, &cuphNonce); err != nil {
-		captureErr(ctx, invalidMessageErrCode, "")
-		return Nonce{}, nil, fmt.Errorf("nonce unprotected header from TO2.ProveOVHdr could not be unmarshaled: %w", err)
+		return Nonce{}, nil, fmt.Errorf("hash of HelloDevice message TO2.ProveOVHdr did not match the message sent")
 	}
 
 	// Parse owner public key
@@ -246,18 +241,34 @@ func (c *Client) helloDevice(ctx context.Context, baseURL string) (Nonce, *to2Co
 		return Nonce{}, nil, fmt.Errorf("nonce in TO2.ProveOVHdr did not match nonce sent in TO2.HelloDevice")
 	}
 
-	return cuphNonce, &to2Context{
-		PublicKey:         ownerPubKey,
-		OVH:               proveOVHdr.Payload.Val.OVH.Val,
-		OVHHmac:           proveOVHdr.Payload.Val.OVHHmac,
-		NumVoucherEntries: int(proveOVHdr.Payload.Val.NumOVEntries),
+	// proveOVHdr.Payload.Val.SigInfoB does not need to be validated. It is
+	// just a formality for ECDSA/RSA keys, left over from EPID support.
 
-		SigInfo:      proveOVHdr.Payload.Val.SigInfoB,
+	// TODO: Track proveOVHdr.Payload.Val.MaxOwnerMessageSize and later
+	// calculate MTU=min(MaxOwnerMessageSize, MaxOwnerServiceInfoSize) for
+	// better spec compliance, but honestly MaxOwnerMessageSize doesn't make
+	// that much sense. What can you do with it that you can't with service
+	// info max - fail early if TO2.ProveDevice is necessarily too large to be
+	// received?
+
+	// Parse nonce
+	var cuphNonce Nonce
+	if cuphNonceBytes := []byte(proveOVHdr.Unprotected[to2NonceClaim]); len(cuphNonceBytes) == 0 {
+		captureErr(ctx, invalidMessageErrCode, "")
+		return Nonce{}, nil, fmt.Errorf("nonce unprotected header missing from TO2.ProveOVHdr response message")
+	} else if err := cbor.Unmarshal(cuphNonceBytes, &cuphNonce); err != nil {
+		captureErr(ctx, invalidMessageErrCode, "")
+		return Nonce{}, nil, fmt.Errorf("nonce unprotected header from TO2.ProveOVHdr could not be unmarshaled: %w", err)
+	}
+
+	return cuphNonce, &to2Context{
+		OVH:                 proveOVHdr.Payload.Val.OVH.Val,
+		OVHHmac:             proveOVHdr.Payload.Val.OVHHmac,
+		NumVoucherEntries:   int(proveOVHdr.Payload.Val.NumOVEntries),
+		PublicKeyToValidate: key,
+
 		KexSuiteName: helloDeviceMsg.KexSuiteName,
 		KeyExchangeA: proveOVHdr.Payload.Val.KeyExchangeA,
-
-		MaxDeviceMessageSize: helloDeviceMsg.MaxDeviceMessageSize,
-		MaxOwnerMessageSize:  proveOVHdr.Payload.Val.MaxOwnerMessageSize,
 	}, nil
 }
 
@@ -276,6 +287,15 @@ func (c *Client) nextOVEntry(ctx context.Context, baseURL string, i int) (*cose.
 		return nil, fmt.Errorf("error sending TO2.GetOVNextEntry: %w", err)
 	}
 	defer func() { _ = resp.Close() }()
+
+	// Enforce MaxDeviceMessageSize
+	resp = struct {
+		io.Reader
+		io.Closer
+	}{
+		Reader: io.LimitReader(resp, int64(c.MaxServiceInfoSizeReceive)),
+		Closer: resp,
+	}
 
 	// Parse response
 	switch typ {
@@ -347,6 +367,15 @@ func (c *Client) proveDevice(ctx context.Context, baseURL string, proveDeviceNon
 	}
 	defer func() { _ = resp.Close() }()
 
+	// Enforce MaxDeviceMessageSize
+	resp = struct {
+		io.Reader
+		io.Closer
+	}{
+		Reader: io.LimitReader(resp, int64(c.MaxServiceInfoSizeReceive)),
+		Closer: resp,
+	}
+
 	// Parse response
 	switch typ {
 	case to2SetupDeviceMsgType:
@@ -417,6 +446,15 @@ func (c *Client) readyServiceInfo(ctx context.Context, baseURL string, replaceme
 		return 0, fmt.Errorf("error sending TO2.DeviceServiceInfoReady: %w", err)
 	}
 	defer func() { _ = resp.Close() }()
+
+	// Enforce MaxDeviceMessageSize
+	resp = struct {
+		io.Reader
+		io.Closer
+	}{
+		Reader: io.LimitReader(resp, int64(c.MaxServiceInfoSizeReceive)),
+		Closer: resp,
+	}
 
 	// Parse response
 	switch typ {
@@ -495,6 +533,15 @@ func (c *Client) exchangeServiceInfo(ctx context.Context, baseURL string, proveD
 		return fmt.Errorf("error sending TO2.Done: %w", err)
 	}
 	defer func() { _ = resp.Close() }()
+
+	// Enforce MaxDeviceMessageSize
+	resp = struct {
+		io.Reader
+		io.Closer
+	}{
+		Reader: io.LimitReader(resp, int64(c.MaxServiceInfoSizeReceive)),
+		Closer: resp,
+	}
 
 	// Parse response
 	switch typ {
@@ -651,6 +698,15 @@ func (c *Client) deviceServiceInfo(ctx context.Context, baseURL string, msg send
 		return nil, fmt.Errorf("error sending TO2.DeviceServiceInfo: %w", err)
 	}
 	defer func() { _ = resp.Close() }()
+
+	// Enforce MaxDeviceMessageSize
+	resp = struct {
+		io.Reader
+		io.Closer
+	}{
+		Reader: io.LimitReader(resp, int64(c.MaxServiceInfoSizeReceive)),
+		Closer: resp,
+	}
 
 	// Parse response
 	switch typ {
