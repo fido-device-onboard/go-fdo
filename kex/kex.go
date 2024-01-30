@@ -5,6 +5,7 @@
 package kex
 
 import (
+	"encoding"
 	"io"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
@@ -218,4 +219,8 @@ type Session interface {
 
 	// Decrypt a tagged COSE Encrypt0 or Mac0 object.
 	Decrypt(rand io.Reader, data cbor.TagData) ([]byte, error)
+
+	// Implement binary marshaling for persistence
+	encoding.BinaryMarshaler
+	encoding.BinaryUnmarshaler
 }
