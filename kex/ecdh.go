@@ -31,20 +31,22 @@ func init() {
 }
 
 type ecdhSession struct {
-	Curve elliptic.Curve
+	Curve  elliptic.Curve
+	Cipher CipherSuite
 
-	cipher CipherSuite
-
-	xA []byte
-	xB []byte
-
+	// Key exchange data
+	xA   []byte
+	xB   []byte
 	priv *ecdsa.PrivateKey
-	shse []byte
+
+	// Session encrypt/decrypt data
+	sek []byte
+	svk []byte
 }
 
 func (s *ecdhSession) new(xA []byte, cipher CipherSuite) Session {
 	s.xA = xA
-	s.cipher = cipher
+	s.Cipher = cipher
 	return s
 }
 
@@ -81,7 +83,14 @@ func (s *ecdhSession) Parameter(rand io.Reader) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error computing shared secret: %w", err)
 	}
-	s.shse = shse
+
+	// Derive a symmetric key
+	keySize, macSize := s.Cipher.KeySize(), s.Cipher.MacSize()
+	symKey, err := kdf(s.Cipher.HashFunc(), shse, []byte{}, (keySize+macSize)*8)
+	if err != nil {
+		return nil, fmt.Errorf("error deriving symmetric key: %w", err)
+	}
+	s.sek, s.svk = symKey[:keySize], symKey[keySize:]
 
 	// Marshal and store param
 	xX, err := param.MarshalBinary()
@@ -111,7 +120,13 @@ func (s *ecdhSession) SetParameter(xA []byte) error {
 	if err != nil {
 		return fmt.Errorf("error computing shared secret: %w", err)
 	}
-	s.shse = shse
+
+	keySize, macSize := s.Cipher.KeySize(), s.Cipher.MacSize()
+	symKey, err := kdf(s.Cipher.HashFunc(), shse, []byte{}, (keySize+macSize)*8)
+	if err != nil {
+		return fmt.Errorf("error deriving symmetric key: %w", err)
+	}
+	s.sek, s.svk = symKey[:keySize], symKey[keySize:]
 
 	return nil
 }

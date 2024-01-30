@@ -67,7 +67,7 @@ func kdf(hash crypto.Hash, shSe, contextRand []byte, bits uint16) ([]byte, error
 	input = append(input, context...)
 	input = binary.BigEndian.AppendUint16(input, L)
 	digest := hmac.New(hash.New, kIn)
-	for i := uint8(0); i < n; i++ { // 4
+	for i := uint8(0); i < n; i++ {
 		// a.
 		digest.Reset()
 		input[0] = i

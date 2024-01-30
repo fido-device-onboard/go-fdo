@@ -5,6 +5,7 @@
 package kex
 
 import (
+	"crypto"
 	"encoding"
 	"io"
 
@@ -125,17 +126,59 @@ type CipherSuite int64
 
 // Cipher suite values
 const (
-	A128GcmCipher          CipherSuite = 1
-	A256GcmCipher          CipherSuite = 2
-	AesCcm16_128_128Cipher CipherSuite = 30
-	AesCcm16_128_256Cipher CipherSuite = 31
+	// Authenticated encryption ciphers
+	A128GcmCipher CipherSuite = 1
+	A256GcmCipher CipherSuite = 2
+	//AesCcm16_128_128Cipher CipherSuite = 30 // deprecated
+	//AesCcm16_128_256Cipher CipherSuite = 31 // deprecated
 	AesCcm64_128_128Cipher CipherSuite = 32
 	AesCcm64_128_256Cipher CipherSuite = 33
-	CoseAes128CbcCipher    CipherSuite = -17760703
-	CoseAes128CtrCipher    CipherSuite = -17760704
-	CoseAes256CbcCipher    CipherSuite = -17760705
-	CoseAes256CtrCipher    CipherSuite = -17760706
+
+	// Encrypt-then-MAC ciphers
+	CoseAes128CbcCipher CipherSuite = -17760703
+	CoseAes128CtrCipher CipherSuite = -17760704
+	CoseAes256CbcCipher CipherSuite = -17760705
+	CoseAes256CtrCipher CipherSuite = -17760706
 )
+
+// HashFunc returns the hash to use with the suite.
+func (c CipherSuite) HashFunc() crypto.Hash {
+	switch c {
+	case A128GcmCipher, A256GcmCipher, AesCcm64_128_128Cipher, AesCcm64_128_256Cipher:
+		// All authenticated encryption uses SHA256
+		return crypto.SHA256
+	case CoseAes128CbcCipher, CoseAes128CtrCipher:
+		return crypto.SHA256
+	case CoseAes256CbcCipher, CoseAes256CtrCipher:
+		return crypto.SHA384
+	}
+	panic("unknown cipher suite")
+}
+
+// MacSize returns the size of the suite's SVK in bytes.
+func (c CipherSuite) MacSize() uint16 {
+	switch c {
+	case A128GcmCipher, A256GcmCipher, AesCcm64_128_128Cipher, AesCcm64_128_256Cipher:
+		// Authenticated encryption do not use a MAC
+		return 0
+	case CoseAes128CbcCipher, CoseAes128CtrCipher:
+		return 32
+	case CoseAes256CbcCipher, CoseAes256CtrCipher:
+		return 64
+	}
+	panic("unknown cipher suite")
+}
+
+// KeySize returns the size of the suite's SEVK or SEK in bytes.
+func (c CipherSuite) KeySize() uint16 {
+	switch c {
+	case A128GcmCipher, AesCcm64_128_128Cipher, CoseAes128CbcCipher, CoseAes128CtrCipher:
+		return 16
+	case A256GcmCipher, AesCcm64_128_256Cipher, CoseAes256CbcCipher, CoseAes256CtrCipher:
+		return 32
+	}
+	panic("unknown cipher suite")
+}
 
 // Suite name of each key exchange suite
 //
