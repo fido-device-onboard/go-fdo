@@ -91,9 +91,9 @@ const (
 	internalServerErrCode = 500
 )
 
-// errorMsgType is the response type number associated with an ErrorMessage
+// ErrorMsgType is the response type number associated with an ErrorMessage
 // response.
-const errorMsgType uint8 = 255
+const ErrorMsgType uint8 = 255
 
 // ErrorMessage indicates that the previous protocol message could not be
 // processed. The error message is a “catch-all” whenever processing cannot

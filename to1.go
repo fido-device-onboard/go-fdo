@@ -43,7 +43,7 @@ func (c *Client) helloRv(ctx context.Context, baseURL string) (Nonce, error) {
 	msg.ASigInfo = *eASigInfo
 
 	// Make request
-	typ, resp, err := c.Transport.Send(ctx, baseURL, to1HelloRVMsgType, msg)
+	typ, resp, err := c.Transport.Send(ctx, baseURL, to1HelloRVMsgType, msg, nil)
 	if err != nil {
 		return Nonce{}, fmt.Errorf("error sending TO1.HelloRV: %w", err)
 	}
@@ -63,7 +63,7 @@ func (c *Client) helloRv(ctx context.Context, baseURL string) (Nonce, error) {
 		}
 		return ack.NonceTO1Proof, nil
 
-	case errorMsgType:
+	case ErrorMsgType:
 		var errMsg ErrorMessage
 		if err := cbor.NewDecoder(resp).Decode(&errMsg); err != nil {
 			return Nonce{}, fmt.Errorf("error parsing error message contents of TO1.HelloRV response: %w", err)
@@ -93,7 +93,7 @@ func (c *Client) proveToRv(ctx context.Context, baseURL string, nonce Nonce) ([]
 	msg := token.Tag()
 
 	// Make request
-	typ, resp, err := c.Transport.Send(ctx, baseURL, to1ProveToRVMsgType, msg)
+	typ, resp, err := c.Transport.Send(ctx, baseURL, to1ProveToRVMsgType, msg, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error sending TO1.ProveToRV: %w", err)
 	}
@@ -113,7 +113,7 @@ func (c *Client) proveToRv(ctx context.Context, baseURL string, nonce Nonce) ([]
 		}
 		return redirect.To1dRV, nil
 
-	case errorMsgType:
+	case ErrorMsgType:
 		var errMsg ErrorMessage
 		if err := cbor.NewDecoder(resp).Decode(&errMsg); err != nil {
 			return nil, fmt.Errorf("error parsing error message contents of TO1.ProveToRV response: %w", err)

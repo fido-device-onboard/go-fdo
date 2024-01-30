@@ -62,7 +62,7 @@ func (c *Client) appStart(ctx context.Context, baseURL string, info any) (*Vouch
 	}
 
 	// Make request
-	typ, resp, err := c.Transport.Send(ctx, baseURL, diAppStartMsgType, msg)
+	typ, resp, err := c.Transport.Send(ctx, baseURL, diAppStartMsgType, msg, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error sending DI.AppStart: %w", err)
 	}
@@ -81,7 +81,7 @@ func (c *Client) appStart(ctx context.Context, baseURL string, info any) (*Vouch
 		}
 		return &setCredentials.OVHeader.Val, nil
 
-	case errorMsgType:
+	case ErrorMsgType:
 		var errMsg ErrorMessage
 		if err := cbor.NewDecoder(resp).Decode(&errMsg); err != nil {
 			return nil, fmt.Errorf("error parsing error message contents of DI.AppStart response: %w", err)
@@ -108,7 +108,7 @@ func (c *Client) setHmac(ctx context.Context, baseURL string, ovh *VoucherHeader
 	msg.Hmac = ovhHash
 
 	// Make request
-	typ, resp, err := c.Transport.Send(ctx, baseURL, diSetHmacMsgType, msg)
+	typ, resp, err := c.Transport.Send(ctx, baseURL, diSetHmacMsgType, msg, nil)
 	if err != nil {
 		return fmt.Errorf("error sending DI.SetHMAC: %w", err)
 	}
@@ -120,7 +120,7 @@ func (c *Client) setHmac(ctx context.Context, baseURL string, ovh *VoucherHeader
 		captureMsgType(ctx, typ)
 		return nil
 
-	case errorMsgType:
+	case ErrorMsgType:
 		var errMsg ErrorMessage
 		if err := cbor.NewDecoder(resp).Decode(&errMsg); err != nil {
 			captureErr(ctx, messageBodyErrCode, "")

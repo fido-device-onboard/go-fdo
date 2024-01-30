@@ -6,6 +6,8 @@ package fdo
 import (
 	"context"
 	"io"
+
+	"github.com/fido-device-onboard/go-fdo/kex"
 )
 
 // TransportProtocol is used to indicate which protocol to use in the
@@ -36,7 +38,7 @@ const (
 type Transport interface {
 	// Send a message and receive a response. The response reader should always
 	// be closed.
-	Send(ctx context.Context, baseURL string, msgType uint8, msg any) (respType uint8, _ io.ReadCloser, _ error)
+	Send(ctx context.Context, baseURL string, msgType uint8, msg any, sess kex.Session) (respType uint8, _ io.ReadCloser, _ error)
 }
 
 // ServerTransport abstracts the underlying TCP/HTTP/CoAP transport for

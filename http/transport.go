@@ -6,6 +6,7 @@ package http
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/kex"
 )
 
 // Transport implements FDO message sending capabilities over HTTP. Send may be
@@ -45,13 +47,22 @@ type Transport struct {
 var _ fdo.Transport = (*Transport)(nil)
 
 // Send sends a single message and receives a single response message.
-func (t *Transport) Send(ctx context.Context, base string, msgType uint8, msg any) (respType uint8, _ io.ReadCloser, _ error) {
+func (t *Transport) Send(ctx context.Context, base string, msgType uint8, msg any, sess kex.Session) (respType uint8, _ io.ReadCloser, _ error) {
 	// Initialize default values
 	if t.Client == nil {
 		t.Client = http.DefaultClient
 	}
 	if t.Auth == nil {
 		t.Auth = make(jar)
+	}
+
+	// Encrypt if a key exchange session is provided
+	if sess != nil {
+		var err error
+		msg, err = sess.Encrypt(rand.Reader, msg)
+		if err != nil {
+			return 0, nil, fmt.Errorf("error encrypting message %d: %w", msgType, err)
+		}
 	}
 
 	// Create request with URL and body
@@ -84,15 +95,16 @@ func (t *Transport) Send(ctx context.Context, base string, msgType uint8, msg an
 	}
 
 	// Perform HTTP request
-	res, err := t.Client.Do(req)
+	resp, err := t.Client.Do(req)
 	if err != nil {
 		return 0, nil, fmt.Errorf("error making HTTP request for message %d: %w", msgType, err)
 	}
 
-	return t.handleResponse(res)
+	return t.handleResponse(resp, sess)
 }
 
-func (t *Transport) handleResponse(resp *http.Response) (msgType uint8, _ io.ReadCloser, _ error) {
+//nolint:gocyclo
+func (t *Transport) handleResponse(resp *http.Response, sess kex.Session) (msgType uint8, _ io.ReadCloser, _ error) {
 	// Store token header in AuthorizationJar
 	if token := resp.Header.Get("Authorization"); token != "" {
 		reqType, err := strconv.ParseUint(path.Base(resp.Request.URL.Path), 10, 8)
@@ -137,12 +149,30 @@ func (t *Transport) handleResponse(resp *http.Response) (msgType uint8, _ io.Rea
 	}
 
 	// Allow reading up to expected content length
-	content := struct {
+	content := io.ReadCloser(struct {
 		io.Reader
 		io.Closer
 	}{
 		Reader: io.LimitReader(resp.Body, resp.ContentLength),
 		Closer: resp.Body,
+	})
+
+	// Decrypt if a key exchange session is provided for types other than error
+	if sess != nil && msgType != fdo.ErrorMsgType {
+		defer func() { _ = resp.Body.Close() }()
+
+		var data cbor.Tag[cbor.RawBytes]
+		if err := cbor.NewDecoder(content).Decode(&data); err != nil {
+			return 0, nil, fmt.Errorf("error decoding encrypted data into a CBOR tag: %w", err)
+		}
+
+		decrypted, err := sess.Decrypt(rand.Reader, data)
+		if err != nil {
+			return 0, nil, fmt.Errorf("error decrypting message %d: %w", msgType, err)
+		}
+
+		content = io.NopCloser(bytes.NewBuffer(decrypted))
 	}
+
 	return msgType, content, nil
 }

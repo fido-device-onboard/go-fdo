@@ -217,5 +217,5 @@ type Session interface {
 	Encrypt(rand io.Reader, payload any) (cbor.TagData, error)
 
 	// Decrypt a tagged COSE Encrypt0 or Mac0 object.
-	Decrypt(rand io.Reader, data cbor.TagData) (any, error)
+	Decrypt(rand io.Reader, data cbor.TagData) ([]byte, error)
 }

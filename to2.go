@@ -149,7 +149,7 @@ func (c *Client) helloDevice(ctx context.Context, baseURL string) (Nonce, *ovhVa
 	}
 
 	// Make a request
-	typ, resp, err := c.Transport.Send(ctx, baseURL, to2HelloDeviceMsgType, helloDeviceMsg)
+	typ, resp, err := c.Transport.Send(ctx, baseURL, to2HelloDeviceMsgType, helloDeviceMsg, nil)
 	if err != nil {
 		return Nonce{}, nil, nil, err
 	}
@@ -183,7 +183,7 @@ func (c *Client) helloDevice(ctx context.Context, baseURL string) (Nonce, *ovhVa
 			return Nonce{}, nil, nil, fmt.Errorf("error parsing TO2.ProveOVHdr contents: %w", err)
 		}
 
-	case errorMsgType:
+	case ErrorMsgType:
 		var errMsg ErrorMessage
 		if err := cbor.NewDecoder(resp).Decode(&errMsg); err != nil {
 			return Nonce{}, nil, nil, fmt.Errorf("error parsing error message contents of TO2.HelloDevice response: %w", err)
@@ -279,7 +279,7 @@ func (c *Client) nextOVEntry(ctx context.Context, baseURL string, i int) (*cose.
 	}
 
 	// Make request
-	typ, resp, err := c.Transport.Send(ctx, baseURL, to2GetOVNextEntryMsgType, msg)
+	typ, resp, err := c.Transport.Send(ctx, baseURL, to2GetOVNextEntryMsgType, msg, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error sending TO2.GetOVNextEntry: %w", err)
 	}
@@ -311,7 +311,7 @@ func (c *Client) nextOVEntry(ctx context.Context, baseURL string, i int) (*cose.
 		}
 		return &ovNextEntry.OVEntry, nil
 
-	case errorMsgType:
+	case ErrorMsgType:
 		var errMsg ErrorMessage
 		if err := cbor.NewDecoder(resp).Decode(&errMsg); err != nil {
 			return nil, fmt.Errorf("error parsing error message contents of TO2.GetOVNextEntry response: %w", err)
@@ -362,7 +362,7 @@ func (c *Client) proveDevice(ctx context.Context, baseURL string, proveDeviceNon
 	msg := token.Tag()
 
 	// Make request
-	typ, resp, err := c.Transport.Send(ctx, baseURL, to2ProveDeviceMsgType, msg)
+	typ, resp, err := c.Transport.Send(ctx, baseURL, to2ProveDeviceMsgType, msg, session)
 	if err != nil {
 		return Nonce{}, nil, fmt.Errorf("error sending TO2.ProveDevice: %w", err)
 	}
@@ -376,8 +376,6 @@ func (c *Client) proveDevice(ctx context.Context, baseURL string, proveDeviceNon
 		Reader: io.LimitReader(resp, int64(c.MaxServiceInfoSizeReceive)),
 		Closer: resp,
 	}
-
-	// FIXME: Decrypt
 
 	// Parse response
 	switch typ {
@@ -403,7 +401,7 @@ func (c *Client) proveDevice(ctx context.Context, baseURL string, proveDeviceNon
 			ManufacturerKey: setupDevice.Payload.Val.Owner2Key,
 		}, nil
 
-	case errorMsgType:
+	case ErrorMsgType:
 		var errMsg ErrorMessage
 		if err := cbor.NewDecoder(resp).Decode(&errMsg); err != nil {
 			return Nonce{}, nil, fmt.Errorf("error parsing error message contents of TO2.ProveDevice response: %w", err)
@@ -436,14 +434,9 @@ func (c *Client) readyServiceInfo(ctx context.Context, baseURL string, replaceme
 	}
 	msg.Hmac = replacementHmac
 	msg.MaxOwnerServiceInfoSize = c.MaxServiceInfoSizeReceive
-	if msg.MaxOwnerServiceInfoSize == 0 {
-		msg.MaxOwnerServiceInfoSize = serviceinfo.DefaultMTU
-	}
-
-	// FIXME: encrypt
 
 	// Make request
-	typ, resp, err := c.Transport.Send(ctx, baseURL, to2DeviceServiceInfoReadyMsgType, msg)
+	typ, resp, err := c.Transport.Send(ctx, baseURL, to2DeviceServiceInfoReadyMsgType, msg, session)
 	if err != nil {
 		return 0, fmt.Errorf("error sending TO2.DeviceServiceInfoReady: %w", err)
 	}
@@ -457,8 +450,6 @@ func (c *Client) readyServiceInfo(ctx context.Context, baseURL string, replaceme
 		Reader: io.LimitReader(resp, int64(c.MaxServiceInfoSizeReceive)),
 		Closer: resp,
 	}
-
-	// FIXME: decrypt
 
 	// Parse response
 	switch typ {
@@ -476,7 +467,7 @@ func (c *Client) readyServiceInfo(ctx context.Context, baseURL string, replaceme
 		}
 		return *ownerServiceInfoReady.MaxDeviceServiceInfoSize, nil
 
-	case errorMsgType:
+	case ErrorMsgType:
 		var errMsg ErrorMessage
 		if err := cbor.NewDecoder(resp).Decode(&errMsg); err != nil {
 			return 0, fmt.Errorf("error parsing error message contents of TO2.OwnerServiceInfoReady response: %w", err)
@@ -538,10 +529,8 @@ func (c *Client) exchangeServiceInfo(ctx context.Context,
 		NonceTO2ProveDv: proveDvNonce,
 	}
 
-	// FIXME: encrypt
-
 	// Make request
-	typ, resp, err := c.Transport.Send(ctx, baseURL, to2DoneMsgType, msg)
+	typ, resp, err := c.Transport.Send(ctx, baseURL, to2DoneMsgType, msg, session)
 	if err != nil {
 		return fmt.Errorf("error sending TO2.Done: %w", err)
 	}
@@ -555,8 +544,6 @@ func (c *Client) exchangeServiceInfo(ctx context.Context,
 		Reader: io.LimitReader(resp, int64(c.MaxServiceInfoSizeReceive)),
 		Closer: resp,
 	}
-
-	// FIXME: decrypt
 
 	// Parse response
 	switch typ {
@@ -575,7 +562,7 @@ func (c *Client) exchangeServiceInfo(ctx context.Context,
 		}
 		return nil
 
-	case errorMsgType:
+	case ErrorMsgType:
 		var errMsg ErrorMessage
 		if err := cbor.NewDecoder(resp).Decode(&errMsg); err != nil {
 			return fmt.Errorf("error parsing error message contents of TO2.Done response: %w", err)
@@ -717,10 +704,8 @@ func (c *Client) deviceServiceInfo(ctx context.Context, baseURL string, msg send
 		}
 	}
 
-	// FIXME: encrypt
-
 	// Make request
-	typ, resp, err := c.Transport.Send(ctx, baseURL, to2DeviceServiceInfoMsgType, msg)
+	typ, resp, err := c.Transport.Send(ctx, baseURL, to2DeviceServiceInfoMsgType, msg, session)
 	if err != nil {
 		return nil, fmt.Errorf("error sending TO2.DeviceServiceInfo: %w", err)
 	}
@@ -735,8 +720,6 @@ func (c *Client) deviceServiceInfo(ctx context.Context, baseURL string, msg send
 		Closer: resp,
 	}
 
-	// FIXME: decrypt
-
 	// Parse response
 	switch typ {
 	case to2OwnerServiceInfoMsgType:
@@ -748,7 +731,7 @@ func (c *Client) deviceServiceInfo(ctx context.Context, baseURL string, msg send
 		}
 		return &ownerServiceInfo, nil
 
-	case errorMsgType:
+	case ErrorMsgType:
 		var errMsg ErrorMessage
 		if err := cbor.NewDecoder(resp).Decode(&errMsg); err != nil {
 			return nil, fmt.Errorf("error parsing error message contents of TO2.OwnerServiceInfo response: %w", err)

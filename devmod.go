@@ -4,6 +4,8 @@
 package fdo
 
 import (
+	"runtime"
+
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
@@ -78,10 +80,10 @@ func devMod(modules []string, w *serviceinfo.UnchunkWriter) {
 	check(enc.Encode(true))
 
 	check(w.NextServiceInfo(devmodModuleName, "os"))
-	check(enc.Encode("")) // TODO: GOOS
+	check(enc.Encode(runtime.GOOS))
 
 	check(w.NextServiceInfo(devmodModuleName, "arch"))
-	check(enc.Encode("")) // TODO: GOARCH
+	check(enc.Encode(runtime.GOARCH))
 
 	check(w.NextServiceInfo(devmodModuleName, "version"))
 	check(enc.Encode("")) // TODO: os-release?
