@@ -6,7 +6,6 @@ package kex
 
 import (
 	"crypto"
-	"encoding"
 	"io"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
@@ -252,7 +251,13 @@ func (s Suite) New(xA []byte, c CipherSuite) Session {
 	return f(xA, c)
 }
 
-// Session implements encryption/decryption for a single session.
+// Session implements encryption/decryption for a single session. It is
+// suggested that Session implementations also implement binary.Marshaler and
+// binary.Unmarshaler so that owner service implementations can load balance on
+// a per-message basis without any affinity.
+//
+// All Sessions from Suites in this package implement binary.Marshaler and
+// binary.Unmarshaler.
 type Session interface {
 	// Parameter generates the private key and exchange parameter to send to
 	// its peer. This function will generate a new key every time it is called.
@@ -269,8 +274,4 @@ type Session interface {
 
 	// Decrypt a tagged COSE Encrypt0 or Mac0 object.
 	Decrypt(rand io.Reader, data cbor.Tag[cbor.RawBytes]) ([]byte, error)
-
-	// Implement binary marshaling for persistence.
-	encoding.BinaryMarshaler
-	encoding.BinaryUnmarshaler
 }

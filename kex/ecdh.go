@@ -6,6 +6,7 @@ package kex
 import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/x509"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -188,16 +189,27 @@ func (s *ecdhSession) Decrypt(rand io.Reader, data cbor.Tag[cbor.RawBytes]) ([]b
 	panic("unimplemented")
 }
 
-// Only persist encrypt/decrypt-related data. Key exchange requires server
-// affinity.
 type ecdhPersist struct {
+	Is384  bool
+	ParamA []byte
+	ParamB []byte
+	Key    []byte
+
 	Cipher CipherSuite
 	SEK    []byte
 	SVK    []byte
 }
 
 func (s *ecdhSession) MarshalBinary() ([]byte, error) {
+	key, err := x509.MarshalECPrivateKey(s.priv)
+	if err != nil {
+		return nil, err
+	}
 	return cbor.Marshal(ecdhPersist{
+		Is384:  s.Curve == elliptic.P384(),
+		ParamA: s.xA,
+		ParamB: s.xB,
+		Key:    key,
 		Cipher: s.Cipher,
 		SEK:    s.sek,
 		SVK:    s.svk,
@@ -210,7 +222,22 @@ func (s *ecdhSession) UnmarshalBinary(data []byte) error {
 		return err
 	}
 
+	curve := elliptic.P256()
+	if persist.Is384 {
+		curve = elliptic.P384()
+	}
+
+	key, err := x509.ParseECPrivateKey(persist.Key)
+	if err != nil && len(persist.Key) > 0 {
+		return fmt.Errorf("error parsing EC key: %w", err)
+	}
+
 	*s = ecdhSession{
+		Curve: curve,
+		xA:    persist.ParamA,
+		xB:    persist.ParamB,
+		priv:  key,
+
 		Cipher: persist.Cipher,
 		sek:    persist.SEK,
 		svk:    persist.SVK,
