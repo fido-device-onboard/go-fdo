@@ -168,12 +168,45 @@ func (s *ecdhSession) Decrypt(rand io.Reader, data cbor.Tag[cbor.RawBytes]) ([]b
 	panic("unimplemented")
 }
 
+type ecdhPersist struct {
+	CurveName string
+	Cipher    CipherSuite
+	SEK       []byte
+	SVK       []byte
+}
+
 func (s *ecdhSession) MarshalBinary() ([]byte, error) {
-	panic("unimplemented")
+	return cbor.Marshal(ecdhPersist{
+		CurveName: s.Curve.Params().Name,
+		Cipher:    s.Cipher,
+		SEK:       s.sek,
+		SVK:       s.svk,
+	})
 }
 
 func (s *ecdhSession) UnmarshalBinary(data []byte) error {
-	panic("unimplemented")
+	var persist ecdhPersist
+	if err := cbor.Unmarshal(data, &persist); err != nil {
+		return err
+	}
+
+	var curve elliptic.Curve
+	switch persist.CurveName {
+	case elliptic.P256().Params().Name:
+		curve = elliptic.P256()
+	case elliptic.P384().Params().Name:
+		curve = elliptic.P384()
+	default:
+		return fmt.Errorf("unknown curve")
+	}
+
+	*s = ecdhSession{
+		Curve:  curve,
+		Cipher: persist.Cipher,
+		sek:    persist.SEK,
+		svk:    persist.SVK,
+	}
+	return nil
 }
 
 type ecdhParam struct {
