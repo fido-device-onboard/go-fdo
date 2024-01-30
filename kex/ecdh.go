@@ -72,27 +72,12 @@ func (s *ecdhSession) Parameter(rand io.Reader) ([]byte, error) {
 		return nil, err
 	}
 
-	// Compute shared secret
-	param := ecdhParam{
+	// Marshal and store param
+	xX, err := ecdhParam{
 		X:    ecKey.PublicKey.X,
 		Y:    ecKey.PublicKey.Y,
 		Rand: r,
-	}
-	shse, err := sharedSecret(ecKey, param)
-	if err != nil {
-		return nil, fmt.Errorf("error computing shared secret: %w", err)
-	}
-
-	// Derive a symmetric key
-	keySize, macSize := s.Cipher.KeySize(), s.Cipher.MacSize()
-	symKey, err := kdf(s.Cipher.HashFunc(), shse, []byte{}, (keySize+macSize)*8)
-	if err != nil {
-		return nil, fmt.Errorf("error deriving symmetric key: %w", err)
-	}
-	s.sek, s.svk = symKey[:keySize], symKey[keySize:]
-
-	// Marshal and store param
-	xX, err := param.MarshalBinary()
+	}.MarshalBinary()
 	if err != nil {
 		return nil, err
 	}
@@ -102,41 +87,77 @@ func (s *ecdhSession) Parameter(rand io.Reader) ([]byte, error) {
 	}
 	s.xB = xX
 
+	// Compute session keys
+	sek, svk, err := computeSymmetricKeys(ecKey, s.xA, s.xB, s.Cipher)
+	if err != nil {
+		return nil, fmt.Errorf("error computing symmetric keys: %w", err)
+	}
+	s.sek, s.svk = sek, svk
+
 	return xX, nil
 }
 
 // SetParameter sets the received parameter from the client. This method is
 // only called by a server.
-func (s *ecdhSession) SetParameter(xA []byte) error {
-	s.xA = xA
+func (s *ecdhSession) SetParameter(xB []byte) error {
+	s.xB = xB
 
-	var param ecdhParam
-	if err := new(ecdhParam).UnmarshalBinary(xA); err != nil {
-		return fmt.Errorf("error parsing xA param: %w", err)
-	}
-
-	shse, err := sharedSecret(s.priv, param)
+	// Compute session keys
+	sek, svk, err := computeSymmetricKeys(s.priv, s.xA, s.xB, s.Cipher)
 	if err != nil {
-		return fmt.Errorf("error computing shared secret: %w", err)
+		return fmt.Errorf("error computing symmetric keys: %w", err)
 	}
-
-	keySize, macSize := s.Cipher.KeySize(), s.Cipher.MacSize()
-	symKey, err := kdf(s.Cipher.HashFunc(), shse, []byte{}, (keySize+macSize)*8)
-	if err != nil {
-		return fmt.Errorf("error deriving symmetric key: %w", err)
-	}
-	s.sek, s.svk = symKey[:keySize], symKey[keySize:]
+	s.sek, s.svk = sek, svk
 
 	return nil
 }
 
+func computeSymmetricKeys(ecKey *ecdsa.PrivateKey, xA, xB []byte, cipher CipherSuite) (sek, svk []byte, err error) {
+	// Decode parameters
+	var paramA, paramB ecdhParam
+	if err := paramA.UnmarshalBinary(xA); err != nil {
+		return nil, nil, fmt.Errorf("error parsing xA param: %w", err)
+	}
+	if err := paramB.UnmarshalBinary(xB); err != nil {
+		return nil, nil, fmt.Errorf("error parsing xB param: %w", err)
+	}
+
+	// Compute shared secret
+	shse, err := sharedSecret(ecKey, paramA, paramB)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error computing shared secret: %w", err)
+	}
+
+	// Derive a symmetric key
+	keySize, macSize := cipher.KeySize(), cipher.MacSize()
+	symKey, err := kdf(cipher.HashFunc(), shse, []byte{}, (keySize+macSize)*8)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error deriving symmetric key: %w", err)
+	}
+
+	return symKey[:keySize], symKey[keySize:], nil
+}
+
 // Compute the ECDH shared secret
-func sharedSecret(key *ecdsa.PrivateKey, p ecdhParam) ([]byte, error) {
+func sharedSecret(key *ecdsa.PrivateKey, paramA, paramB ecdhParam) ([]byte, error) {
+	// Determine which param is "other"
+	var other ecdhParam
+	switch {
+	case paramA.X.Cmp(key.PublicKey.X) == 0 &&
+		paramA.Y.Cmp(key.PublicKey.Y) == 0:
+		other = paramB
+	case paramB.X.Cmp(key.PublicKey.X) == 0 &&
+		paramB.Y.Cmp(key.PublicKey.Y) == 0:
+		other = paramA
+	default:
+		return nil, fmt.Errorf("neither parameter for the shared secret matched the session private key")
+	}
+
 	// Create ECDH public key from parameter
 	ecdhPub, err := (&ecdsa.PublicKey{
 		Curve: key.Curve,
-		X:     p.X,
-		Y:     p.Y,
+		X:     other.X,
+		Y:     other.Y,
 	}).ECDH()
 	if err != nil {
 		return nil, fmt.Errorf("error converting public key from param to ECDH: %w", err)
@@ -152,8 +173,8 @@ func sharedSecret(key *ecdsa.PrivateKey, p ecdhParam) ([]byte, error) {
 		return nil, err
 	}
 
-	// Combine ECDH shared secret with rand from parameter
-	return append(shx, p.Rand...), nil
+	// Combine ECDH shared secret with rand from parameters
+	return append(append(shx, paramA.Rand...), paramB.Rand...), nil
 }
 
 // Encrypt uses a session key to encrypt a payload. Depending on the suite,
