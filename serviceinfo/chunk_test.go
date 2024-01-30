@@ -493,3 +493,68 @@ func TestChunkIn(t *testing.T) {
 		}
 	})
 }
+
+func TestForceNewMessage(t *testing.T) {
+	r, w := serviceinfo.NewChunkOutPipe()
+	defer func() {
+		if err := r.Close(); err != nil {
+			t.Errorf("error closing reader: %v", err)
+		}
+	}()
+
+	expect := serviceinfo.KV{
+		Key: "moduleA:messageB",
+		Val: bytes.Repeat([]byte("Hi"), 100),
+	}
+
+	go func() {
+		if err := w.NextServiceInfo("moduleA", "messageB"); err != nil {
+			t.Errorf("unexpected error calling NextServiceInfo: %v", err)
+		}
+		if _, err := w.Write(expect.Val); err != nil {
+			t.Errorf("unexpected error writing value: %v", err)
+		}
+		if err := w.ForceNewMessage(); err != nil {
+			t.Errorf("unexpected error forcing new message: %v", err)
+		}
+		if err := w.NextServiceInfo("moduleA", "messageB"); err != nil {
+			t.Errorf("unexpected error calling NextServiceInfo: %v", err)
+		}
+		if _, err := w.Write(expect.Val); err != nil {
+			t.Errorf("unexpected error writing value: %v", err)
+		}
+		if err := w.Close(); err != nil {
+			t.Errorf("unexpected error closing writer: %v", err)
+		}
+	}()
+
+	chunk1, err := r.ReadChunk(1024)
+	if err != nil {
+		t.Fatalf("unxpected error reading chunk: %v", err)
+	}
+	if chunk1.Key != expect.Key {
+		t.Fatalf("chunk key %s did not match expected chunk key: %s", chunk1.Key, expect.Key)
+	}
+	if !bytes.Equal(chunk1.Val, expect.Val) {
+		t.Fatalf("chunk val [len=%d] did not match expected val", len(chunk1.Val))
+	}
+
+	if _, err := r.ReadChunk(1024); !errors.Is(err, serviceinfo.ErrSizeTooSmall) {
+		t.Fatalf("unxpected error reading chunk: %v", err)
+	}
+
+	chunk2, err := r.ReadChunk(1024)
+	if err != nil {
+		t.Fatalf("unxpected error reading chunk: %v", err)
+	}
+	if chunk2.Key != expect.Key {
+		t.Fatalf("chunk key %s did not match expected chunk key: %s", chunk2.Key, expect.Key)
+	}
+	if !bytes.Equal(chunk2.Val, expect.Val) {
+		t.Fatalf("chunk val [len=%d] did not match expected val", len(chunk2.Val))
+	}
+
+	if _, err := r.ReadChunk(1024); !errors.Is(err, io.EOF) {
+		t.Fatalf("expected EOF upon reading third chunk, got: %v", err)
+	}
+}

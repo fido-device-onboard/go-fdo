@@ -333,7 +333,7 @@ func (c *Client) proveDevice(ctx context.Context, baseURL string, proveDeviceNon
 	}
 
 	// Define request structure
-	paramB, err := session.Parameters(rand.Reader)
+	paramB, err := session.Parameter(rand.Reader)
 	if err != nil {
 		return Nonce{}, nil, fmt.Errorf("error generating key exchange session parameters: %w", err)
 	}
@@ -639,6 +639,10 @@ func (c *Client) exchangeServiceInfoRound(ctx context.Context, baseURL string, m
 	// deadlock
 	defer func() { _ = w.Close() }()
 
+	// Subtract 3 bytes from MTU to account for a CBOR header indicating "array
+	// of 256-65535 items"
+	mtu -= 3
+
 	// Create DeviceServiceInfo request structure
 	var msg sendServiceInfo
 	maxRead := mtu
@@ -648,6 +652,9 @@ func (c *Client) exchangeServiceInfoRound(ctx context.Context, baseURL string, m
 			break
 		}
 		if errors.Is(err, serviceinfo.ErrSizeTooSmall) {
+			if maxRead == mtu {
+				return false, fmt.Errorf("MTU too small to send ServiceInfo: malicious large key string?")
+			}
 			msg.IsMoreServiceInfo = true
 			break
 		}

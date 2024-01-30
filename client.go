@@ -37,6 +37,9 @@ type Client struct {
 	// will be used for signing
 	PSS bool
 
+	// Devmod contains all required and any number of optional messages.
+	Devmod Devmod
+
 	// Key exchange options, default to the strongest implemented for the Owner
 	// Key type
 	KeyExchange kex.Suite
@@ -128,7 +131,7 @@ func (c *Client) TransferOwnership1(ctx context.Context, baseURL string) ([]RvTO
 //
 // It has the side effect of performing FSIMs, which may include actions such
 // as downloading files.
-func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, sendInfo func(*serviceinfo.UnchunkWriter), fsims map[string]serviceinfo.Module) (*DeviceCredential, error) {
+func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, fsims map[string]serviceinfo.Module) (*DeviceCredential, error) {
 	ctx = contextWithErrMsg(ctx)
 
 	// Client configuraiton defaults
@@ -174,36 +177,33 @@ func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, sendInf
 		return nil, err
 	}
 
-	// Ensure that FSIMs include devmod at a minimum
-	if fsims == nil {
-		fsims = make(map[string]serviceinfo.Module)
-	}
-	var modules []string
-	for key := range fsims {
-		module, _, _ := strings.Cut(key, ":")
-		modules = append(modules, module)
-	}
-	if fsims[devmodModuleName] == nil {
-		fsims[devmodModuleName] = serviceinfo.Handler(
-			func(context.Context, string, io.Reader, func(string, string) io.WriteCloser) error {
-				// Send-only module
-				return nil
-			},
-		)
-	}
-
 	// Start synchronously writing the initial device service info. This occurs
 	// in a goroutine because the pipe is unbuffered and needs to be
 	// concurrently read by the send/receive service info loop.
 	serviceInfoReader, serviceInfoWriter := serviceinfo.NewChunkOutPipe()
 	defer func() { _ = serviceInfoWriter.Close() }()
-	go func() {
-		// Send module list in initial set of ServiceInfo
-		devMod(modules, serviceInfoWriter)
 
-		// Send service info provided as a parameter
-		sendInfo(serviceInfoWriter)
-	}()
+	// Ensure that FSIMs include devmod at a minimum
+	if fsims == nil {
+		fsims = make(map[string]serviceinfo.Module)
+	}
+	if fsims[devmodModuleName] == nil {
+		fsims[devmodModuleName] = serviceinfo.Handler(
+			func(context.Context, string, io.Reader, func(string, string) io.WriteCloser) error {
+				// Empty handler to cause active=true to be sent and to include
+				// devmod in the modules list
+				return nil
+			},
+		)
+	}
+
+	// Send devmod KVs in initial ServiceInfo
+	var modules []string
+	for key := range fsims {
+		module, _, _ := strings.Cut(key, ":")
+		modules = append(modules, module)
+	}
+	go c.Devmod.Write(modules, sendMTU, serviceInfoWriter)
 
 	// Loop, sending and receiving service info until done
 	if err := c.exchangeServiceInfo(ctx, baseURL, proveDeviceNonce, setupDeviceNonce, sendMTU, serviceInfoReader, fsims, session); err != nil {

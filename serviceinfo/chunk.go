@@ -43,12 +43,14 @@ func (r *ChunkReader) ReadChunk(size uint16) (*KV, error) {
 		// Read key as raw CBOR
 		if err := cbor.NewDecoder(keyReader).Decode(&r.rkey); err != nil {
 			_ = r.r.CloseWithError(err)
+			r.r = nil
 			return nil, fmt.Errorf("read chunk failed: could not read service info key: %w", ErrSizeTooSmall)
 		}
 
 		// Read key into a string
 		if err := cbor.Unmarshal([]byte(r.rkey), &r.key); err != nil {
 			_ = r.r.CloseWithError(err)
+			r.r = nil
 			return nil, fmt.Errorf("read chunk failed: could not decode service info key: %w", err)
 		}
 	}
@@ -189,6 +191,24 @@ type UnchunkWriter struct {
 
 // NextServiceInfo must be called once before each logical ServiceInfo.
 func (w *UnchunkWriter) NextServiceInfo(moduleName, messageName string) error {
+	if err := w.nextPipe(false); err != nil {
+		return err
+	}
+	return cbor.NewEncoder(w.w).Encode(moduleName + ":" + messageName)
+}
+
+// ForceNewMessage causes the next (*ChunkReader).ReadChunk to return
+// ErrSizeTooSmall. This in turn forces the next KV to be put into a new
+// ServiceInfo message.
+//
+// This method facilitates implementing custom chunking conventions, provided
+// that the MTU used for automatic chunking at the client level is known to the
+// implementer.
+func (w *UnchunkWriter) ForceNewMessage() error {
+	return w.nextPipe(true)
+}
+
+func (w *UnchunkWriter) nextPipe(forceNewMessage bool) error {
 	if w.closed {
 		return fmt.Errorf("writer already closed")
 	}
@@ -197,8 +217,11 @@ func (w *UnchunkWriter) NextServiceInfo(moduleName, messageName string) error {
 	}
 	pr, pw := io.Pipe()
 	w.readers <- pr
+	if forceNewMessage {
+		_ = pw.Close()
+	}
 	w.w = pw
-	return cbor.NewEncoder(pw).Encode(moduleName + ":" + messageName)
+	return nil
 }
 
 // Write may be called any number of times to write the contents of a

@@ -199,6 +199,8 @@ func RegisterNewSuite(name string, f func([]byte, CipherSuite) Session) { constr
 
 // New returns a Session for the given key exchange suite. If no session
 // constructor is registered for the suite, then the return value is nil.
+//
+// For the server, xA will be nil.
 func (s Suite) New(xA []byte, c CipherSuite) Session {
 	f := constructors[string(s)]
 	if f == nil {
@@ -209,18 +211,23 @@ func (s Suite) New(xA []byte, c CipherSuite) Session {
 
 // Session implements encryption/decryption for a single session.
 type Session interface {
-	// Parameters generates a session key, precomputes the SEK/SVK or SEVK, and
-	// returns the peer parameter to exchange.
-	Parameters(rand io.Reader) ([]byte, error)
+	// Parameter generates the private key and exchange parameter to send to
+	// its peer. This function will generate a new key every time it is called.
+	// This method is used by both the client and server.
+	Parameter(rand io.Reader) ([]byte, error)
+
+	// SetParameter sets the received parameter from the client. This method is
+	// only called by a server.
+	SetParameter([]byte) error
 
 	// Encrypt uses a session key to encrypt a payload. Depending on the suite,
 	// the result may be a plain COSE_Encrypt0 or one wrapped by COSE_Mac0.
 	Encrypt(rand io.Reader, payload any) (cbor.TagData, error)
 
 	// Decrypt a tagged COSE Encrypt0 or Mac0 object.
-	Decrypt(rand io.Reader, data cbor.TagData) ([]byte, error)
+	Decrypt(rand io.Reader, data cbor.Tag[cbor.RawBytes]) ([]byte, error)
 
-	// Implement binary marshaling for persistence
+	// Implement binary marshaling for persistence.
 	encoding.BinaryMarshaler
 	encoding.BinaryUnmarshaler
 }

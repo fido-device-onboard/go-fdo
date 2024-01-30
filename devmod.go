@@ -4,7 +4,9 @@
 package fdo
 
 import (
-	"runtime"
+	"fmt"
+	"reflect"
+	"strings"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
@@ -13,7 +15,7 @@ import (
 const devmodModuleName = "devmod"
 
 /*
-devMod implements the one required FDO ServiceInfo Module
+Devmod implements the one required FDO ServiceInfo Module
 
 ┌─────────────────┬───────────┬───────────────┬─────────────────────────────────────────────────────────────┐
 │devmod:active    │ Required  │ bool          │ Indicates the module is active. Devmod is required on       │
@@ -72,31 +74,79 @@ devMod implements the one required FDO ServiceInfo Module
 │                 │           │               │ ServiceInfo message.                                        │
 └─────────────────┴───────────┴───────────────┴─────────────────────────────────────────────────────────────┘
 */
-func devMod(modules []string, w *serviceinfo.UnchunkWriter) {
-	check := func(err error) { _ = w.CloseWithError(err) }
+type Devmod struct {
+	Os      string `devmod:"os,required"`
+	Arch    string `devmod:"arch,required"`
+	Version string `devmod:"version,required"`
+	Device  string `devmod:"device,required"`
+	Serial  []byte `devmod:"sn"`
+	PathSep string `devmod:"pathsep"`
+	FileSep string `devmod:"sep,required"`
+	Newline string `devmod:"nl"`
+	Temp    string `devmod:"tmp"`
+	Dir     string `devmod:"dir"`
+	ProgEnv string `devmod:"progenv"`
+	Bin     string `devmod:"bin,required"`
+	MudURL  string `devmod:"mudurl"`
+}
+
+// Write the devmod messages.
+func (d *Devmod) Write(modules []string, mtu uint16, w *serviceinfo.UnchunkWriter) {
 	enc := cbor.NewEncoder(w)
 
-	check(w.NextServiceInfo(devmodModuleName, "active"))
-	check(enc.Encode(true))
+	// Active must always be true
+	if err := w.NextServiceInfo(devmodModuleName, "active"); err != nil {
+		_ = w.CloseWithError(err)
+		return
+	}
+	if err := enc.Encode(true); err != nil {
+		_ = w.CloseWithError(err)
+		return
+	}
 
-	check(w.NextServiceInfo(devmodModuleName, "os"))
-	check(enc.Encode(runtime.GOOS))
+	// Use reflection to get each field and check required fields are not empty
+	dm := reflect.ValueOf(d).Elem()
+	for i := 0; i < dm.NumField(); i++ {
+		tag := dm.Type().Field(i).Tag.Get("devmod")
+		messageName, opt, _ := strings.Cut(tag, ",")
+		if opt == "required" && dm.Field(i).IsZero() {
+			_ = w.CloseWithError(fmt.Errorf("missing required devmod field: %s", messageName))
+			return
+		}
+		if err := w.NextServiceInfo(devmodModuleName, messageName); err != nil {
+			_ = w.CloseWithError(err)
+			return
+		}
+		if err := enc.Encode(dm.Field(i).Interface()); err != nil {
+			_ = w.CloseWithError(err)
+			return
+		}
+	}
 
-	check(w.NextServiceInfo(devmodModuleName, "arch"))
-	check(enc.Encode(runtime.GOARCH))
+	if err := d.writeModuleMessages(modules, mtu, w); err != nil {
+		_ = w.CloseWithError(err)
+		return
+	}
+}
 
-	check(w.NextServiceInfo(devmodModuleName, "version"))
-	check(enc.Encode("")) // TODO: os-release?
+func (d *Devmod) writeModuleMessages(modules []string, mtu uint16, w *serviceinfo.UnchunkWriter) error {
+	enc := cbor.NewEncoder(w)
 
-	check(w.NextServiceInfo(devmodModuleName, "device"))
-	check(enc.Encode("")) // TODO: ?
+	if err := w.NextServiceInfo(devmodModuleName, "nummodules"); err != nil {
+		return err
+	}
+	if err := enc.Encode(len(modules)); err != nil {
+		return err
+	}
 
-	check(w.NextServiceInfo(devmodModuleName, "bin"))
-	check(enc.Encode("")) // TODO: ?
+	// Start a new message so that full MTU is available
+	if err := w.ForceNewMessage(); err != nil {
+		return err
+	}
 
-	check(w.NextServiceInfo(devmodModuleName, "nummodules"))
-	check(enc.Encode(len(modules)))
+	// FIXME: Write modules
 
-	check(w.NextServiceInfo(devmodModuleName, "modules"))
-	check(enc.Encode(modules)) // FIXME: How to do custom chunking? Must know MTU.
+	// w.NextServiceInfo(devmodModuleName, "modules")
+	// enc.Encode(modules)
+	panic("unimplemented")
 }
