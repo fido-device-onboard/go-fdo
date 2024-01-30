@@ -31,17 +31,16 @@ func init() {
 }
 
 type ecdhSession struct {
-	Curve  elliptic.Curve
-	Cipher CipherSuite
-
 	// Key exchange data
-	xA   []byte
-	xB   []byte
-	priv *ecdsa.PrivateKey
+	Curve elliptic.Curve
+	xA    []byte
+	xB    []byte
+	priv  *ecdsa.PrivateKey
 
 	// Session encrypt/decrypt data
-	sek []byte
-	svk []byte
+	Cipher CipherSuite
+	sek    []byte
+	svk    []byte
 }
 
 func (s *ecdhSession) new(xA []byte, cipher CipherSuite) Session {
@@ -168,19 +167,19 @@ func (s *ecdhSession) Decrypt(rand io.Reader, data cbor.Tag[cbor.RawBytes]) ([]b
 	panic("unimplemented")
 }
 
+// Only persist encrypt/decrypt-related data. Key exchange requires server
+// affinity.
 type ecdhPersist struct {
-	CurveName string
-	Cipher    CipherSuite
-	SEK       []byte
-	SVK       []byte
+	Cipher CipherSuite
+	SEK    []byte
+	SVK    []byte
 }
 
 func (s *ecdhSession) MarshalBinary() ([]byte, error) {
 	return cbor.Marshal(ecdhPersist{
-		CurveName: s.Curve.Params().Name,
-		Cipher:    s.Cipher,
-		SEK:       s.sek,
-		SVK:       s.svk,
+		Cipher: s.Cipher,
+		SEK:    s.sek,
+		SVK:    s.svk,
 	})
 }
 
@@ -190,18 +189,7 @@ func (s *ecdhSession) UnmarshalBinary(data []byte) error {
 		return err
 	}
 
-	var curve elliptic.Curve
-	switch persist.CurveName {
-	case elliptic.P256().Params().Name:
-		curve = elliptic.P256()
-	case elliptic.P384().Params().Name:
-		curve = elliptic.P384()
-	default:
-		return fmt.Errorf("unknown curve")
-	}
-
 	*s = ecdhSession{
-		Curve:  curve,
 		Cipher: persist.Cipher,
 		sek:    persist.SEK,
 		svk:    persist.SVK,
