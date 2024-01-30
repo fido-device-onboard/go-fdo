@@ -26,7 +26,7 @@ const (
 	LDevIDDeviceKey DeviceKeyType = 2
 )
 
-// DeviceCredential implements the FDO Signer interface and conforms to the
+// DeviceCredential implements the signing and hmac interfaces and conforms to the
 // [TPM Draft Spec](https://fidoalliance.org/specs/FDO/securing-fdo-in-tpm-v1.0-rd-20231010/securing-fdo-in-tpm-v1.0-rd-20231010.html).
 type DeviceCredential struct {
 	fdo.DeviceCredential
