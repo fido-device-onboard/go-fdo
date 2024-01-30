@@ -7,9 +7,8 @@ import (
 	"crypto"
 	"crypto/hmac"
 	"fmt"
+	"hash"
 	"io"
-
-	"github.com/fido-device-onboard/go-fdo/cbor"
 )
 
 // DeviceCredential is non-normative, but the [TPM Draft Spec] proposes a CBOR
@@ -47,22 +46,10 @@ type DeviceCredentialBlob struct {
 
 var _ KeyedHasher = (*DeviceCredentialBlob)(nil)
 
-// Hmac encodes the given value to CBOR and calculates the hashed MAC for the
-// given algorithm.
-func (dc *DeviceCredentialBlob) Hmac(alg HashAlg, payload any) (Hmac, error) {
-	if !dc.PrivateKey.IsValid() {
-		return Hmac{}, fmt.Errorf("private key is invalid")
-	}
-
-	mac := hmac.New(alg.HashFunc().New, dc.HmacSecret)
-	if err := cbor.NewEncoder(mac).Encode(payload); err != nil {
-		return Hmac{}, fmt.Errorf("error computing hmac: marshaling payload: %w", err)
-	}
-
-	return Hmac{
-		Algorithm: alg,
-		Value:     mac.Sum(nil),
-	}, nil
+// NewHmac returns a key-based hash (Hmac) using the given hash function some
+// secret.
+func (dc *DeviceCredentialBlob) NewHmac(alg HashAlg) hash.Hash {
+	return hmac.New(alg.HashFunc().New, dc.HmacSecret)
 }
 
 // Supports returns whether a particular HashAlg is supported.

@@ -7,6 +7,9 @@ import (
 	"crypto"
 	"crypto/hmac"
 	"fmt"
+	"hash"
+
+	"github.com/fido-device-onboard/go-fdo/cbor"
 )
 
 // Hash is a crypto hash, with length in bytes preceding. Hashes are computed
@@ -72,23 +75,38 @@ func (alg HashAlg) HashFunc() crypto.Hash {
 
 // KeyedHasher implements HMAC functionality
 type KeyedHasher interface {
-	// Hmac encodes the given value to CBOR and calculates the hashed MAC for
-	// the given algorithm.
-	Hmac(HashAlg, any) (Hmac, error)
+	// NewHmac returns a key-based hash (Hmac) using the given hash function
+	// some secret.
+	NewHmac(HashAlg) hash.Hash
 
 	// Supports returns whether a particular HashAlg is supported.
 	Supports(HashAlg) bool
+}
+
+// Compute an hmac. This function panics if the given HashAlg is not supported.
+func hmacHash(dc KeyedHasher, alg HashAlg, v any) (Hmac, error) {
+	if !dc.Supports(alg) {
+		panic("unsupported algorithm " + alg.String())
+	}
+	mac := dc.NewHmac(alg)
+	if err := cbor.NewEncoder(mac).Encode(v); err != nil {
+		return Hmac{}, fmt.Errorf("error computing hmac: marshaling payload: %w", err)
+	}
+	return Hmac{
+		Algorithm: alg,
+		Value:     mac.Sum(nil),
+	}, nil
 }
 
 // hmacVerify encodes the given value to CBOR and verifies that the given HMAC
 // matches it. If the cryptographic portion of verification fails, then
 // ErrCryptoVerifyFailed is wrapped.
 func hmacVerify(dc KeyedHasher, h1 Hmac, v any) error {
-	h2, err := dc.Hmac(h1.Algorithm, v)
-	if err != nil {
+	h2 := dc.NewHmac(h1.Algorithm)
+	if err := cbor.NewEncoder(h2).Encode(v); err != nil {
 		return err
 	}
-	if !hmac.Equal(h1.Value, h2.Value) {
+	if !hmac.Equal(h1.Value, h2.Sum(nil)) {
 		return fmt.Errorf("%w: hmac did not match", ErrCryptoVerifyFailed)
 	}
 	return nil

@@ -96,7 +96,7 @@ func (c *Client) appStart(ctx context.Context, baseURL string, info any) (*Vouch
 
 // SetHMAC(12) -> Done(13)
 func (c *Client) setHmac(ctx context.Context, baseURL string, ovh *VoucherHeader) error {
-	ovhHash, err := c.Hmac.Hmac(HmacSha384Hash, ovh)
+	ovhHash, err := hmacHash(c.Hmac, HmacSha384Hash, ovh)
 	if err != nil {
 		return fmt.Errorf("error computing HMAC of ownership voucher header: %w", err)
 	}

@@ -7,6 +7,7 @@ package tpm
 
 import (
 	"crypto"
+	"hash"
 	"io"
 
 	"github.com/fido-device-onboard/go-fdo"
@@ -39,9 +40,9 @@ type DeviceCredential struct {
 
 var _ fdo.KeyedHasher = (*DeviceCredential)(nil)
 
-// Hmac encodes the given value to CBOR and calculates the hashed MAC for the
-// given algorithm.
-func (dc *DeviceCredential) Hmac(alg fdo.HashAlg, payload any) (fdo.Hmac, error) {
+// NewHmac returns a key-based hash (Hmac) using the given hash function some
+// secret.
+func (dc *DeviceCredential) NewHmac(alg fdo.HashAlg) hash.Hash {
 	panic("unimplemented")
 }
 
