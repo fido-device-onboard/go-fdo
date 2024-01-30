@@ -1,9 +1,16 @@
 // Copyright 2023 Intel Corporation
 // SPDX-License-Identifier: Apache 2.0
 
-package fdo
+// Package kex implements the Key Exchange subprotocol of FDO.
+package kex
 
-// Cipher suites
+import (
+	"io"
+
+	"github.com/fido-device-onboard/go-fdo/cbor"
+)
+
+// CipherSuite enumeration
 //
 //	┌────────────────────────┬──────────────────────────────────────┬─────────────────────────────────────┐
 //	│Cipher Suite Name       │ Initialization Vector (IVData.iv in  │ Notes                               │
@@ -113,23 +120,23 @@ package fdo
 //	│                        │                                      │                                     │
 //	│                        │                                      │ KDF uses HMAC-SHA384                │
 //	└────────────────────────┴──────────────────────────────────────┴─────────────────────────────────────┘
-type cipherSuite int64
+type CipherSuite int64
 
 // Cipher suite values
 const (
-	A128GcmCipher          cipherSuite = 1
-	A256GcmCipher          cipherSuite = 2
-	AesCcm16_128_128Cipher cipherSuite = 30
-	AesCcm16_128_256Cipher cipherSuite = 31
-	AesCcm64_128_128Cipher cipherSuite = 32
-	AesCcm64_128_256Cipher cipherSuite = 33
-	CoseAes128CbcCipher    cipherSuite = -17760703
-	CoseAes128CtrCipher    cipherSuite = -17760704
-	CoseAes256CbcCipher    cipherSuite = -17760705
-	CoseAes256CtrCipher    cipherSuite = -17760706
+	A128GcmCipher          CipherSuite = 1
+	A256GcmCipher          CipherSuite = 2
+	AesCcm16_128_128Cipher CipherSuite = 30
+	AesCcm16_128_256Cipher CipherSuite = 31
+	AesCcm64_128_128Cipher CipherSuite = 32
+	AesCcm64_128_256Cipher CipherSuite = 33
+	CoseAes128CbcCipher    CipherSuite = -17760703
+	CoseAes128CtrCipher    CipherSuite = -17760704
+	CoseAes256CbcCipher    CipherSuite = -17760705
+	CoseAes256CtrCipher    CipherSuite = -17760706
 )
 
-// Key exchange suites
+// Suite name of each key exchange suite
 //
 // When the Owner Key is RSA:
 //
@@ -160,13 +167,13 @@ const (
 //     The ECC keys follow NIST P-256 (SECP256R1)
 //   - “ECDH384”:
 //     Standard Diffie-Hellman mechanism ECC NIST P-384 (SECP384R1)
-type kexSuiteName string
+type Suite string
 
 // Key exchange suites
 //
 // CDDL
 //
-//	KexSuitNames /= (
+//	KexSuiteNames /= (
 //	    "DHKEXid14",
 //	    "DHKEXid15",
 //	    "ASYMKEX2048",
@@ -174,13 +181,41 @@ type kexSuiteName string
 //	    "ECDH256",
 //	    "ECDH384"
 //	)
-//
-//nolint:unused
 const (
-	kexDHKEXid14   kexSuiteName = "DHKEXid14"
-	kexDHKEXid15   kexSuiteName = "DHKEXid15"
-	kexASYMKEX2048 kexSuiteName = "ASYMKEX2048"
-	kexASYMKEX3072 kexSuiteName = "ASYMKEX3072"
-	kexECDH256     kexSuiteName = "ECDH256"
-	kexECDH38      kexSuiteName = "ECDH384"
+	DHKEXid14Suite   Suite = "DHKEXid14"
+	DHKEXid15Suite   Suite = "DHKEXid15"
+	ASYMKEX2048Suite Suite = "ASYMKEX2048"
+	ASYMKEX3072Suite Suite = "ASYMKEX3072"
+	ECDH256Suite     Suite = "ECDH256"
+	ECDH384Suite     Suite = "ECDH384"
 )
+
+var constructors = make(map[string]func([]byte, CipherSuite) Session)
+
+// RegisterNewSuite sets a constructor for a Session using a given key
+// exchange suite.
+func RegisterNewSuite(name string, f func([]byte, CipherSuite) Session) { constructors[name] = f }
+
+// New returns a Session for the given key exchange suite. If no session
+// constructor is registered for the suite, then the return value is nil.
+func (s Suite) New(xA []byte, c CipherSuite) Session {
+	f := constructors[string(s)]
+	if f == nil {
+		return nil
+	}
+	return f(xA, c)
+}
+
+// Session implements encryption/decryption for a single session.
+type Session interface {
+	// Parameters generates a session key, precomputes the SEK/SVK or SEVK, and
+	// returns the peer parameter to exchange.
+	Parameters(rand io.Reader) ([]byte, error)
+
+	// Encrypt uses a session key to encrypt a payload. Depending on the suite,
+	// the result may be a plain COSE_Encrypt0 or one wrapped by COSE_Mac0.
+	Encrypt(rand io.Reader, payload any) (cbor.TagData, error)
+
+	// Decrypt a tagged COSE Encrypt0 or Mac0 object.
+	Decrypt(rand io.Reader, data cbor.TagData) (any, error)
+}

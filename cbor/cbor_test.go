@@ -7,6 +7,7 @@ package cbor_test
 import (
 	"bytes"
 	"errors"
+	"io"
 	"reflect"
 	"testing"
 
@@ -1808,4 +1809,36 @@ func TestDecodeArrayOfArray(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestDecodeStream(t *testing.T) {
+	for _, test := range [][]any{
+		{},
+		{int64(1)},
+		{"a", "b"},
+	} {
+		var buf bytes.Buffer
+		for _, obj := range test {
+			if err := cbor.NewEncoder(&buf).Encode(obj); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got := []any{}
+		objsInStream := 0
+		for ; ; objsInStream++ {
+			var obj any
+			if err := cbor.NewDecoder(&buf).Decode(&obj); errors.Is(err, io.EOF) {
+				break
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			got = append(got, obj)
+		}
+		if objsInStream != len(test) {
+			t.Errorf("expected to decode %d objects, got %d", len(test), objsInStream)
+		}
+		if !reflect.DeepEqual(got, test) {
+			t.Errorf("expected %#v, got %#v", test, got)
+		}
+	}
 }

@@ -8,9 +8,12 @@ import (
 	"crypto"
 	"crypto/sha512"
 	"fmt"
+	"io"
+	"strings"
 	"time"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/kex"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
 
@@ -33,6 +36,11 @@ type Client struct {
 	// When true and an RSA key is used as a crypto.Signer argument, RSA-SSAPSS
 	// will be used for signing
 	PSS bool
+
+	// Key exchange options, default to the strongest implemented for the Owner
+	// Key type
+	KeyExchange kex.Suite
+	CipherSuite kex.CipherSuite
 
 	// Maximum transmission unit (MTU) to tell owner service to send with. If
 	// zero, the default of 1300 will be used. The value chosen can make a
@@ -123,23 +131,88 @@ func (c *Client) TransferOwnership1(ctx context.Context, baseURL string) ([]RvTO
 func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, sendInfo func(*serviceinfo.UnchunkWriter), fsims map[string]serviceinfo.Module) (*DeviceCredential, error) {
 	ctx = contextWithErrMsg(ctx)
 
+	// Client configuraiton defaults
+	if c.KeyExchange == "" {
+		c.KeyExchange = kex.ECDH384Suite
+	}
+	if c.CipherSuite == 0 {
+		c.CipherSuite = kex.A256GcmCipher
+	}
 	if c.MaxServiceInfoSizeReceive == 0 {
 		c.MaxServiceInfoSizeReceive = serviceinfo.DefaultMTU
 	}
 
-	proveDeviceNonce, ownerInfo, err := c.verifyOwner(ctx, baseURL)
+	// TODO: Validate key exchange options using table in 3.6.5
+
+	// Mutually attest the device and owner service
+	//
+	// Results: Replacement ownership voucher, nonces to be retransmitted in
+	// Done/Done2 messages
+	proveDeviceNonce, originalOVH, session, err := c.verifyOwner(ctx, baseURL)
+	if err != nil {
+		c.errorMsg(ctx, baseURL, err)
+		return nil, err
+	}
+	setupDeviceNonce, partialOVH, err := c.proveDevice(ctx, baseURL, proveDeviceNonce, session)
+	if err != nil {
+		c.errorMsg(ctx, baseURL, err)
+		return nil, err
+	}
+	replacementOVH := &VoucherHeader{
+		Version:         originalOVH.Version,
+		GUID:            partialOVH.GUID,
+		RvInfo:          partialOVH.RvInfo,
+		DeviceInfo:      originalOVH.DeviceInfo,
+		ManufacturerKey: partialOVH.ManufacturerKey,
+		CertChainHash:   originalOVH.CertChainHash,
+	}
+
+	// Prepare to send and receive service info, determining the transmit MTU
+	sendMTU, err := c.readyServiceInfo(ctx, baseURL, replacementOVH, session)
 	if err != nil {
 		c.errorMsg(ctx, baseURL, err)
 		return nil, err
 	}
 
-	setupDeviceNonce, replacementOVH, err := c.proveDevice(ctx, baseURL, proveDeviceNonce, ownerInfo)
-	if err != nil {
+	// Ensure that FSIMs include devmod at a minimum
+	if fsims == nil {
+		fsims = make(map[string]serviceinfo.Module)
+	}
+	var modules []string
+	for key := range fsims {
+		module, _, _ := strings.Cut(key, ":")
+		modules = append(modules, module)
+	}
+	if fsims[devmodModuleName] == nil {
+		fsims[devmodModuleName] = serviceinfo.Handler(
+			func(context.Context, string, io.Reader, func(string, string) io.WriteCloser) error {
+				// Send-only module
+				return nil
+			},
+		)
+	}
+
+	// Start synchronously writing the initial device service info. This occurs
+	// in a goroutine because the pipe is unbuffered and needs to be
+	// concurrently read by the send/receive service info loop.
+	serviceInfoReader, serviceInfoWriter := serviceinfo.NewChunkOutPipe()
+	defer func() { _ = serviceInfoWriter.Close() }()
+	go func() {
+		// Send module list in initial set of ServiceInfo
+		devMod(modules, serviceInfoWriter)
+
+		// Send service info provided as a parameter
+		sendInfo(serviceInfoWriter)
+	}()
+
+	// Loop, sending and receiving service info until done
+	if err := c.exchangeServiceInfo(ctx, baseURL, proveDeviceNonce, setupDeviceNonce, sendMTU, serviceInfoReader, fsims, session); err != nil {
 		c.errorMsg(ctx, baseURL, err)
 		return nil, err
 	}
 
-	// Hash new initial owner public key
+	// Hash new initial owner public key and return replacement device
+	// credential
 	replacementKeyDigest := sha512.New384()
 	if err := cbor.NewEncoder(replacementKeyDigest).Encode(replacementOVH.ManufacturerKey); err != nil {
 		err = fmt.Errorf("error computing hash of replacement owner key: %w", err)
@@ -147,20 +220,6 @@ func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, sendInf
 		return nil, err
 	}
 	replacementPublicKeyHash := Hash{Algorithm: Sha384Hash, Value: replacementKeyDigest.Sum(nil)[:]}
-
-	sendMTU, err := c.readyServiceInfo(ctx, baseURL, replacementOVH)
-	if err != nil {
-		c.errorMsg(ctx, baseURL, err)
-		return nil, err
-	}
-
-	serviceInfoReader, serviceInfoWriter := serviceinfo.NewChunkOutPipe()
-	sendInfo(serviceInfoWriter)
-
-	if err := c.exchangeServiceInfo(ctx, baseURL, proveDeviceNonce, setupDeviceNonce, sendMTU, serviceInfoReader, fsims); err != nil {
-		c.errorMsg(ctx, baseURL, err)
-		return nil, err
-	}
 
 	return &DeviceCredential{
 		Version:       replacementOVH.Version,
