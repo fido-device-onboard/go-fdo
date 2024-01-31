@@ -21,15 +21,15 @@ type Module interface {
 	// from a single io.Reader. For repetitive discrete objects, a CBOR decoder
 	// should be applied to the io.Reader and a stream of objects can be read.
 	// The stream ends when Decode returns an error wrapping io.EOF.
-	HandleFSIM(ctx context.Context, messageName string, info io.Reader, newInfo func(module, message string) io.WriteCloser) error
+	HandleFSIM(ctx context.Context, messageName string, info io.Reader, newInfo func(module, message string) io.Writer) error
 }
 
 // Handler implements Module to handle incoming service infos.
-type Handler func(context.Context, string, io.Reader, func(string, string) io.WriteCloser) error
+type Handler func(context.Context, string, io.Reader, func(string, string) io.Writer) error
 
 var _ Module = (Handler)(nil)
 
 // HandleFSIM handles a received service info.
-func (h Handler) HandleFSIM(ctx context.Context, messageName string, r io.Reader, newInfo func(module, message string) io.WriteCloser) error {
+func (h Handler) HandleFSIM(ctx context.Context, messageName string, r io.Reader, newInfo func(module, message string) io.Writer) error {
 	return h(ctx, messageName, r, newInfo)
 }

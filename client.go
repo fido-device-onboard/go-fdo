@@ -189,7 +189,7 @@ func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, fsims m
 	}
 	if fsims[devmodModuleName] == nil {
 		fsims[devmodModuleName] = serviceinfo.Handler(
-			func(context.Context, string, io.Reader, func(string, string) io.WriteCloser) error {
+			func(context.Context, string, io.Reader, func(string, string) io.Writer) error {
 				// Empty handler to cause active=true to be sent and to include
 				// devmod in the modules list
 				return nil

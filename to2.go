@@ -4,6 +4,7 @@
 package fdo
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto"
@@ -504,7 +505,7 @@ func (c *Client) exchangeServiceInfo(ctx context.Context,
 
 		// The goroutine is started before sending DeviceServiceInfo, which
 		// writes to the owner service info (unbuffered) pipe.
-		go handleFSIMs(ctx, fsims, deviceServiceInfoIn, ownerServiceInfoOut)
+		go handleFSIMs(ctx, mtu, fsims, deviceServiceInfoIn, ownerServiceInfoOut)
 
 		// Send all device service info and get all owner service info
 		done, err := c.exchangeServiceInfoRound(ctx, baseURL, mtu, deviceServiceInfoOut, ownerServiceInfoIn, session)
@@ -577,7 +578,7 @@ func (c *Client) exchangeServiceInfo(ctx context.Context,
 
 // Handle owner service info with FSIMs. This must be run in a goroutine,
 // because the chunking/unchunking pipes are not buffered.
-func handleFSIMs(ctx context.Context, fsims map[string]serviceinfo.Module, send *serviceinfo.UnchunkWriter, recv *serviceinfo.UnchunkReader) {
+func handleFSIMs(ctx context.Context, mtu uint16, fsims map[string]serviceinfo.Module, send *serviceinfo.UnchunkWriter, recv *serviceinfo.UnchunkReader) {
 	defer func() { _ = send.Close() }()
 	for {
 		// Get next service info from the owner service
@@ -607,12 +608,20 @@ func handleFSIMs(ctx context.Context, fsims map[string]serviceinfo.Module, send 
 
 		// Call FSIM, closing the pipe for the next device service info with
 		// error if the FSIM fatally errors
-		if err := fsim.HandleFSIM(ctx, messageName, info, func(moduleName, messageName string) io.WriteCloser {
+		buf := bufio.NewWriterSize(send, int(mtu))
+		if err := fsim.HandleFSIM(ctx, messageName, info, func(moduleName, messageName string) io.Writer {
+			if err := buf.Flush(); err != nil {
+				_ = send.CloseWithError(err)
+			}
 			if err := send.NextServiceInfo(moduleName, messageName); err != nil {
 				_ = send.CloseWithError(err)
 			}
-			return send
+			return buf
 		}); err != nil {
+			_ = send.CloseWithError(err)
+			return
+		}
+		if err := buf.Flush(); err != nil {
 			_ = send.CloseWithError(err)
 			return
 		}
