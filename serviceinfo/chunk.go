@@ -78,7 +78,7 @@ func (r *ChunkReader) ReadChunk(size uint16) (*KV, error) {
 
 	// Grow buffer if not large enough
 	if len(r.buffer) < int(size-maxOverhead) {
-		r.buffer = make([]byte, size)
+		r.buffer = make([]byte, size-maxOverhead)
 	}
 
 	// Read data, ensuring ServiceInfo will not be larger than size once

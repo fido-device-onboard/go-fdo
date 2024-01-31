@@ -5,6 +5,8 @@
 // (FSIMs).
 package serviceinfo
 
+import "fmt"
+
 // DefaultMTU for service info when Max(Owner|Device)ServiceInfoSz is null.
 const DefaultMTU = 1300
 
@@ -14,26 +16,28 @@ type KV struct {
 	Val []byte
 }
 
+func (kv *KV) String() string {
+	return fmt.Sprintf("[Key=%q,Val=% x]", kv.Key, kv.Val)
+}
+
 // Size calculates the number of bytes once marshaled to CBOR.
 func (kv *KV) Size() uint16 {
 	size := 1 // header for overall KV structure
-	size += headerLen([]byte(kv.Key))
-	size += len(kv.Key)
-	size += headerLen(kv.Val)
-	size += len(kv.Val)
+	size += cborEncodedLen([]byte(kv.Key))
+	size += cborEncodedLen([]byte(kv.Val))
 	return uint16(size)
 }
 
-func headerLen(bs []byte) int {
-	if len(bs) > 65535 {
+func cborEncodedLen(b []byte) int {
+	if len(b) > 65535 {
 		panic("KV cannot have length > max uint16")
 	}
 	switch {
-	case len(bs) < 24:
-		return 1
-	case len(bs) < 256:
-		return 2
+	case len(b) < 24:
+		return 1 + len(b)
+	case len(b) < 256:
+		return 2 + len(b)
 	default:
-		return 3
+		return 3 + len(b)
 	}
 }

@@ -4,6 +4,7 @@
 package fdo
 
 import (
+	"bufio"
 	"fmt"
 	"reflect"
 	"strings"
@@ -92,7 +93,9 @@ type Devmod struct {
 
 // Write the devmod messages.
 func (d *Devmod) Write(modules []string, mtu uint16, w *serviceinfo.UnchunkWriter) {
-	enc := cbor.NewEncoder(w)
+	defer func() { _ = w.Close() }()
+	buf := bufio.NewWriterSize(w, int(mtu))
+	enc := cbor.NewEncoder(buf)
 
 	// Active must always be true
 	if err := w.NextServiceInfo(devmodModuleName, "active"); err != nil {
@@ -113,11 +116,18 @@ func (d *Devmod) Write(modules []string, mtu uint16, w *serviceinfo.UnchunkWrite
 			_ = w.CloseWithError(fmt.Errorf("missing required devmod field: %s", messageName))
 			return
 		}
+		if dm.Field(i).Len() == 0 {
+			continue
+		}
 		if err := w.NextServiceInfo(devmodModuleName, messageName); err != nil {
 			_ = w.CloseWithError(err)
 			return
 		}
 		if err := enc.Encode(dm.Field(i).Interface()); err != nil {
+			_ = w.CloseWithError(err)
+			return
+		}
+		if err := buf.Flush(); err != nil {
 			_ = w.CloseWithError(err)
 			return
 		}
@@ -129,13 +139,33 @@ func (d *Devmod) Write(modules []string, mtu uint16, w *serviceinfo.UnchunkWrite
 	}
 }
 
+type devmodModulesChunk struct {
+	Start   int
+	Len     int
+	Modules []string
+}
+
 func (d *Devmod) writeModuleMessages(modules []string, mtu uint16, w *serviceinfo.UnchunkWriter) error {
-	enc := cbor.NewEncoder(w)
+	buf := bufio.NewWriterSize(w, int(mtu))
+	enc := cbor.NewEncoder(buf)
+
+	writeChunk := func(chunk devmodModulesChunk) error {
+		if err := w.NextServiceInfo(devmodModuleName, "modules"); err != nil {
+			return err
+		}
+		if err := enc.Encode(chunk); err != nil {
+			return err
+		}
+		return buf.Flush()
+	}
 
 	if err := w.NextServiceInfo(devmodModuleName, "nummodules"); err != nil {
 		return err
 	}
 	if err := enc.Encode(len(modules)); err != nil {
+		return err
+	}
+	if err := buf.Flush(); err != nil {
 		return err
 	}
 
@@ -144,9 +174,44 @@ func (d *Devmod) writeModuleMessages(modules []string, mtu uint16, w *serviceinf
 		return err
 	}
 
-	// FIXME: Write modules
+	// Build chunks iteratively until MTU is exceeded, back out the last
+	// module, write chunk, and continue until the last chunk is encoded.
+	const key = devmodModuleName + ":" + "modules"
+	var chunk devmodModulesChunk
+	for len(modules) > 0 {
+		// Add module to chunk
+		chunk.Len++
+		chunk.Modules = append(chunk.Modules, modules[0])
 
-	// w.NextServiceInfo(devmodModuleName, "modules")
-	// enc.Encode(modules)
-	panic("unimplemented")
+		// Brute force computing the encoded size by actually encoding it
+		var size sizewriter
+		if err := cbor.NewEncoder(&size).Encode([][]any{{key, chunk}}); err != nil {
+			return fmt.Errorf("error calculating size of devmod:modules ServiceInfo: %w", err)
+		}
+
+		// Continue if MTU is not exceeded
+		if uint16(size) <= mtu {
+			modules = modules[1:]
+			continue
+		}
+
+		// Back out last module and encode chunk
+		if len(chunk.Modules) == 1 {
+			return fmt.Errorf("MTU too small to send devmod module name alone")
+		}
+		chunk.Len--
+		chunk.Modules = chunk.Modules[:len(chunk.Modules)-1]
+		if err := writeChunk(chunk); err != nil {
+			return err
+		}
+
+		// Reset chunk
+		chunk = devmodModulesChunk{Start: chunk.Start + chunk.Len}
+	}
+
+	return writeChunk(chunk)
 }
+
+type sizewriter int
+
+func (w *sizewriter) Write(p []byte) (int, error) { *w += sizewriter(len(p)); return len(p), nil }
