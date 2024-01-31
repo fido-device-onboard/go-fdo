@@ -73,7 +73,7 @@ func kdf(hash crypto.Hash, shSe, contextRand []byte, bits uint16) ([]byte, error
 	for i := uint8(0); i < n; i++ {
 		// a.
 		digest.Reset()
-		input[0] = i
+		input[0] = i + 1
 		if _, err := digest.Write(input); err != nil {
 			return nil, err
 		}
