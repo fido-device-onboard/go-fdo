@@ -54,6 +54,9 @@ func kdf(hash crypto.Hash, shSe, contextRand []byte, bits uint16) ([]byte, error
 	// Process
 	// 1.
 	n := uint8(L / h)
+	if L%h != 0 {
+		n++
+	}
 	// 2.
 	if float64(n) > math.Pow(2, float64(r))-1 {
 		return nil, fmt.Errorf("n too large")
