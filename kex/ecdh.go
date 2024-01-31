@@ -40,8 +40,8 @@ type ecdhSession struct {
 
 	// Session encrypt/decrypt data
 	Cipher CipherSuite
-	sek    []byte
-	svk    []byte
+	SEK    []byte
+	SVK    []byte
 }
 
 func (s *ecdhSession) new(xA []byte, cipher CipherSuite) Session {
@@ -93,7 +93,7 @@ func (s *ecdhSession) Parameter(rand io.Reader) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error computing symmetric keys: %w", err)
 	}
-	s.sek, s.svk = sek, svk
+	s.SEK, s.SVK = sek, svk
 
 	return xX, nil
 }
@@ -108,7 +108,7 @@ func (s *ecdhSession) SetParameter(xB []byte) error {
 	if err != nil {
 		return fmt.Errorf("error computing symmetric keys: %w", err)
 	}
-	s.sek, s.svk = sek, svk
+	s.SEK, s.SVK = sek, svk
 
 	return nil
 }
@@ -161,7 +161,7 @@ func sharedSecret(key *ecdsa.PrivateKey, paramA, paramB ecdhParam) ([]byte, erro
 		Y:     other.Y,
 	}).ECDH()
 	if err != nil {
-		return nil, fmt.Errorf("error converting public key from param to ECDH: %w", err)
+		return nil, fmt.Errorf("error converting public key from param to ECDH (mismatched curves?): %w", err)
 	}
 
 	// Perform ECDH to get shared secret
@@ -211,8 +211,8 @@ func (s *ecdhSession) MarshalBinary() ([]byte, error) {
 		ParamB: s.xB,
 		Key:    key,
 		Cipher: s.Cipher,
-		SEK:    s.sek,
-		SVK:    s.svk,
+		SEK:    s.SEK,
+		SVK:    s.SVK,
 	})
 }
 
@@ -239,8 +239,8 @@ func (s *ecdhSession) UnmarshalBinary(data []byte) error {
 		priv:  key,
 
 		Cipher: persist.Cipher,
-		sek:    persist.SEK,
-		svk:    persist.SVK,
+		SEK:    persist.SEK,
+		SVK:    persist.SVK,
 	}
 	return nil
 }
