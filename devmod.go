@@ -94,17 +94,31 @@ type Devmod struct {
 // Write the devmod messages.
 func (d *Devmod) Write(modules []string, mtu uint16, w *serviceinfo.UnchunkWriter) {
 	defer func() { _ = w.Close() }()
-	buf := bufio.NewWriterSize(w, int(mtu))
+
+	if err := d.writeDescriptorMessages(w); err != nil {
+		_ = w.CloseWithError(err)
+		return
+	}
+
+	if err := d.writeModuleMessages(modules, mtu, w); err != nil {
+		_ = w.CloseWithError(err)
+		return
+	}
+}
+
+func (d *Devmod) writeDescriptorMessages(w *serviceinfo.UnchunkWriter) error {
+	buf := bufio.NewWriter(w)
 	enc := cbor.NewEncoder(buf)
 
 	// Active must always be true
 	if err := w.NextServiceInfo(devmodModuleName, "active"); err != nil {
-		_ = w.CloseWithError(err)
-		return
+		return err
 	}
 	if err := enc.Encode(true); err != nil {
-		_ = w.CloseWithError(err)
-		return
+		return err
+	}
+	if err := buf.Flush(); err != nil {
+		return err
 	}
 
 	// Use reflection to get each field and check required fields are not empty
@@ -113,30 +127,23 @@ func (d *Devmod) Write(modules []string, mtu uint16, w *serviceinfo.UnchunkWrite
 		tag := dm.Type().Field(i).Tag.Get("devmod")
 		messageName, opt, _ := strings.Cut(tag, ",")
 		if opt == "required" && dm.Field(i).IsZero() {
-			_ = w.CloseWithError(fmt.Errorf("missing required devmod field: %s", messageName))
-			return
+			return fmt.Errorf("missing required devmod field: %s", messageName)
 		}
 		if dm.Field(i).Len() == 0 {
 			continue
 		}
 		if err := w.NextServiceInfo(devmodModuleName, messageName); err != nil {
-			_ = w.CloseWithError(err)
-			return
+			return err
 		}
 		if err := enc.Encode(dm.Field(i).Interface()); err != nil {
-			_ = w.CloseWithError(err)
-			return
+			return err
 		}
 		if err := buf.Flush(); err != nil {
-			_ = w.CloseWithError(err)
-			return
+			return err
 		}
 	}
 
-	if err := d.writeModuleMessages(modules, mtu, w); err != nil {
-		_ = w.CloseWithError(err)
-		return
-	}
+	return nil
 }
 
 type devmodModulesChunk struct {

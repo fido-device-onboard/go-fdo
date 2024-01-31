@@ -75,6 +75,8 @@ func TestDevmod(t *testing.T) {
 			break
 		}
 		if errors.Is(err, serviceinfo.ErrSizeTooSmall) {
+			// Indicates to ServiceInfo auto-chunker to start a new ServiceInfo
+			// for grouping KVs
 			continue
 		}
 		if err != nil {
@@ -82,21 +84,22 @@ func TestDevmod(t *testing.T) {
 		}
 		chunks = append(chunks, chunk)
 
-		// Chunk 1:  [Key="devmod:os",Val=f5 65 6c 69 6e 75 78]
-		// Chunk 2:  [Key="devmod:arch",Val=65 61 6d 64 36 34]
-		// Chunk 3:  [Key="devmod:version",Val=66 54 65 73 74 4f 53]
-		// Chunk 4:  [Key="devmod:device",Val=6e 55 6e 69 74 4d 63 55 6e 69 74 46 61 63 65]
-		// Chunk 5:  [Key="devmod:sep",Val=61 3b]
-		// Chunk 6:  [Key="devmod:bin",Val=65 61 6d 64 36 34]
-		// Chunk 7:  [Key="devmod:nummodules",Val=04]
-		// Chunk 8:  [Key="devmod:modules",Val=83 00 02 82 66 64 65 76 6d 6f 64 6a 75 6e 69 74 2d 74 65 73 74 31]
-		// Chunk 9:  [Key="devmod:modules",Val=83 02 01 81 6a 75 6e 69 74 2d 74 65 73 74 32]
-		// Chunk 10: [Key="devmod:modules",Val=83 03 01 81 6a 75 6e 69 74 2d 74 65 73 74 33]
+		// Chunk 1: [Key="devmod:active",Val=f5]
+		// Chunk 2: [Key="devmod:os",Val=65 6c 69 6e 75 78]
+		// Chunk 3: [Key="devmod:arch",Val=65 61 6d 64 36 34]
+		// Chunk 4: [Key="devmod:version",Val=66 54 65 73 74 4f 53]
+		// Chunk 5: [Key="devmod:device",Val=6e 55 6e 69 74 4d 63 55 6e 69 74 46 61 63 65]
+		// Chunk 6: [Key="devmod:sep",Val=61 3b]
+		// Chunk 7: [Key="devmod:bin",Val=65 61 6d 64 36 34]
+		// Chunk 8: [Key="devmod:nummodules",Val=04]
+		// Chunk 9: [Key="devmod:modules",Val=83 00 02 82 66 64 65 76 6d 6f 64 6a 75 6e 69 74 2d 74 65 73 74 31]
+		// Chunk 10: [Key="devmod:modules",Val=83 02 01 81 6a 75 6e 69 74 2d 74 65 73 74 32]
+		// Chunk 11: [Key="devmod:modules",Val=83 03 01 81 6a 75 6e 69 74 2d 74 65 73 74 33]
 		t.Logf("Chunk %d: %+v\n", len(chunks), chunk)
 	}
 
-	// 7 chunks + # of module chunks
-	if modChunks := len(chunks) - 7; modChunks != 3 {
+	// 8 chunks + # of module chunks
+	if modChunks := len(chunks) - 8; modChunks != 3 {
 		t.Errorf("expected devmod:modules to be written in 3 chunks, got %d", modChunks)
 	}
 }
