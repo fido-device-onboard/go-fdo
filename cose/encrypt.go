@@ -7,6 +7,11 @@ import (
 	"github.com/fido-device-onboard/go-fdo/cbor"
 )
 
+type Crypter interface {
+	Encrypt()
+	Decrypt()
+}
+
 // Encrypt holds the encrypted content of an enveloped structure. It contains a
 // list of [Recipient]s to hold the encrypted keys for recipients.
 //

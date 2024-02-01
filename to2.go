@@ -138,7 +138,7 @@ func (c *Client) helloDevice(ctx context.Context, baseURL string) (Nonce, *ovhVa
 		GUID                 GUID
 		NonceTO2ProveOV      Nonce
 		KexSuiteName         kex.Suite
-		CipherSuite          kex.CipherSuite
+		CipherSuite          kex.CipherSuiteID
 		SigInfoA             sigInfo
 	}{
 		MaxDeviceMessageSize: c.MaxServiceInfoSizeReceive, // TODO: Should this be separately configurable?
@@ -498,6 +498,7 @@ func (c *Client) exchangeServiceInfo(ctx context.Context,
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	// TODO: Limit to 1e6 (1 million) rounds and fail TO2 if exceeded
 	deviceServiceInfoOut := initInfo
 	for {
 		ownerServiceInfoOut, ownerServiceInfoIn := serviceinfo.NewChunkInPipe()

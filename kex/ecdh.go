@@ -21,11 +21,11 @@ const (
 )
 
 func init() {
-	RegisterNewSuite(
+	RegisterKeyExchangeSuite(
 		string(ECDH256Suite),
 		(&ECDHSession{Curve: elliptic.P256()}).new,
 	)
-	RegisterNewSuite(
+	RegisterKeyExchangeSuite(
 		string(ECDH384Suite),
 		(&ECDHSession{Curve: elliptic.P384()}).new,
 	)
@@ -41,14 +41,13 @@ type ECDHSession struct {
 	priv  *ecdsa.PrivateKey
 
 	// Session encrypt/decrypt data
-	Cipher CipherSuite
-	SEK    []byte
-	SVK    []byte
+	SessionCrypter
 }
 
-func (s *ECDHSession) new(xA []byte, cipher CipherSuite) Session {
+func (s *ECDHSession) new(xA []byte, cipher CipherSuiteID) Session {
 	s.xA = xA
-	s.Cipher = cipher
+	s.ID = cipher
+	s.Cipher = cipher.New()
 	return s
 }
 
@@ -115,7 +114,47 @@ func (s *ECDHSession) SetParameter(xB []byte) error {
 	return nil
 }
 
-func computeSymmetricKeys(ecKey *ecdsa.PrivateKey, xA, xB []byte, cipher CipherSuite) (sek, svk []byte, err error) {
+type ecdhParam struct {
+	X, Y *big.Int
+	Rand []byte
+}
+
+func (p ecdhParam) MarshalBinary() ([]byte, error) {
+	xb, yb := p.X.Bytes(), p.Y.Bytes()
+
+	var b []byte
+	b = binary.BigEndian.AppendUint16(b, uint16(len(xb)))
+	b = append(b, xb...)
+	b = binary.BigEndian.AppendUint16(b, uint16(len(yb)))
+	b = append(b, yb...)
+	b = binary.BigEndian.AppendUint16(b, uint16(len(p.Rand)))
+	b = append(b, p.Rand...)
+	return b, nil
+}
+
+func (p *ecdhParam) UnmarshalBinary(b []byte) error {
+	var xb, yb, rb []byte
+	for _, bb := range []*[]byte{&xb, &yb, &rb} {
+		if len(b) < 2 {
+			return io.ErrUnexpectedEOF
+		}
+		bLen := binary.BigEndian.Uint16(b)
+		b = b[2:]
+		if len(b) < int(bLen) {
+			return io.ErrUnexpectedEOF
+		}
+		*bb = b[:bLen]
+		b = b[bLen:]
+	}
+
+	p.X = new(big.Int).SetBytes(xb)
+	p.Y = new(big.Int).SetBytes(yb)
+	p.Rand = rb
+
+	return nil
+}
+
+func computeSymmetricKeys(ecKey *ecdsa.PrivateKey, xA, xB []byte, cipher *CipherSuite) (sek, svk []byte, err error) {
 	// Decode parameters
 	var paramA, paramB ecdhParam
 	if err := paramA.UnmarshalBinary(xA); err != nil {
@@ -132,13 +171,12 @@ func computeSymmetricKeys(ecKey *ecdsa.PrivateKey, xA, xB []byte, cipher CipherS
 	}
 
 	// Derive a symmetric key
-	keySize, macSize := cipher.KeySize(), cipher.MacSize()
-	symKey, err := kdf(cipher.HashFunc(), shse, []byte{}, (keySize+macSize)*8)
+	symKey, err := kdf(cipher.Hash, shse, []byte{}, (cipher.SEKSize+cipher.SVKSize)*8)
 	if err != nil {
 		return nil, nil, fmt.Errorf("error deriving symmetric key: %w", err)
 	}
 
-	return symKey[:keySize], symKey[keySize:], nil
+	return symKey[:cipher.SEKSize], symKey[cipher.SEKSize:], nil
 }
 
 // Compute the ECDH shared secret
@@ -180,24 +218,13 @@ func sharedSecret(key *ecdsa.PrivateKey, paramA, paramB ecdhParam) ([]byte, erro
 	return append(append(shx, paramA.Rand...), paramB.Rand...), nil
 }
 
-// Encrypt uses a session key to encrypt a payload. Depending on the suite,
-// the result may be a plain COSE_Encrypt0 or one wrapped by COSE_Mac0.
-func (s *ECDHSession) Encrypt(rand io.Reader, payload any) (cbor.TagData, error) {
-	panic("unimplemented")
-}
-
-// Decrypt a tagged COSE Encrypt0 or Mac0 object.
-func (s *ECDHSession) Decrypt(rand io.Reader, data cbor.Tag[cbor.RawBytes]) ([]byte, error) {
-	panic("unimplemented")
-}
-
 type ecdhPersist struct {
 	Is384  bool
 	ParamA []byte
 	ParamB []byte
 	Key    []byte
 
-	Cipher CipherSuite
+	Cipher CipherSuiteID
 	SEK    []byte
 	SVK    []byte
 }
@@ -213,7 +240,7 @@ func (s *ECDHSession) MarshalBinary() ([]byte, error) {
 		ParamA: s.xA,
 		ParamB: s.xB,
 		Key:    key,
-		Cipher: s.Cipher,
+		Cipher: s.ID,
 		SEK:    s.SEK,
 		SVK:    s.SVK,
 	})
@@ -242,49 +269,12 @@ func (s *ECDHSession) UnmarshalBinary(data []byte) error {
 		xB:    persist.ParamB,
 		priv:  key,
 
-		Cipher: persist.Cipher,
-		SEK:    persist.SEK,
-		SVK:    persist.SVK,
+		SessionCrypter: SessionCrypter{
+			ID:     persist.Cipher,
+			Cipher: persist.Cipher.New(),
+			SEK:    persist.SEK,
+			SVK:    persist.SVK,
+		},
 	}
-	return nil
-}
-
-type ecdhParam struct {
-	X, Y *big.Int
-	Rand []byte
-}
-
-func (p ecdhParam) MarshalBinary() ([]byte, error) {
-	xb, yb := p.X.Bytes(), p.Y.Bytes()
-
-	var b []byte
-	b = binary.BigEndian.AppendUint16(b, uint16(len(xb)))
-	b = append(b, xb...)
-	b = binary.BigEndian.AppendUint16(b, uint16(len(yb)))
-	b = append(b, yb...)
-	b = binary.BigEndian.AppendUint16(b, uint16(len(p.Rand)))
-	b = append(b, p.Rand...)
-	return b, nil
-}
-
-func (p *ecdhParam) UnmarshalBinary(b []byte) error {
-	var xb, yb, rb []byte
-	for _, bb := range []*[]byte{&xb, &yb, &rb} {
-		if len(b) < 2 {
-			return io.ErrUnexpectedEOF
-		}
-		bLen := binary.BigEndian.Uint16(b)
-		b = b[2:]
-		if len(b) < int(bLen) {
-			return io.ErrUnexpectedEOF
-		}
-		*bb = b[:bLen]
-		b = b[bLen:]
-	}
-
-	p.X = new(big.Int).SetBytes(xb)
-	p.Y = new(big.Int).SetBytes(yb)
-	p.Rand = rb
-
 	return nil
 }

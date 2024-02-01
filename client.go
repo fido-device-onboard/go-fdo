@@ -43,7 +43,7 @@ type Client struct {
 	// Key exchange options, default to the strongest implemented for the Owner
 	// Key type
 	KeyExchange kex.Suite
-	CipherSuite kex.CipherSuite
+	CipherSuite kex.CipherSuiteID
 
 	// Maximum transmission unit (MTU) to tell owner service to send with. If
 	// zero, the default of 1300 will be used. The value chosen can make a
