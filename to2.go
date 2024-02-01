@@ -606,8 +606,16 @@ func handleFSIMs(ctx context.Context, mtu uint16, fsims map[string]serviceinfo.M
 			continue
 		}
 
-		// Call FSIM, closing the pipe for the next device service info with
-		// error if the FSIM fatally errors
+		// Use FSIM handler and provide it a function which can be used to send
+		// zero or more service info KVs. If the FSIM handler returns an error
+		// then the pipe will be closed with an error, causing the error to
+		// propagate to the chunk reader, which is used in the ServiceInfo send
+		// loop.
+		//
+		// The function provided to each FSIM handler returns a writer to write
+		// the value part of the service info KV. This writer is buffered and
+		// automatically flushed when the handler returns or another service
+		// info is to be sent.
 		buf := bufio.NewWriterSize(send, int(mtu))
 		if err := fsim.HandleFSIM(ctx, messageName, info, func(moduleName, messageName string) io.Writer {
 			if err := buf.Flush(); err != nil {

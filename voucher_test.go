@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/fido-device-onboard/go-fdo"
+	"github.com/fido-device-onboard/go-fdo/blob"
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
 )
@@ -100,7 +101,7 @@ func TestVoucherHeaderDeterministic(t *testing.T) {
 	}
 }
 
-func readCredential(t *testing.T) *fdo.DeviceCredentialBlob {
+func readCredential(t *testing.T) *blob.DeviceCredential {
 	b, err := os.ReadFile("testdata/dc.bin")
 	if err != nil {
 		t.Fatalf("error opening device credential test data: %v", err)
@@ -118,11 +119,11 @@ func readCredential(t *testing.T) *fdo.DeviceCredentialBlob {
 	if err != nil {
 		t.Fatalf("error parsing private key: %v", err)
 	}
-	return &fdo.DeviceCredentialBlob{
+	return &blob.DeviceCredential{
 		Active:           rustCred.Active,
 		DeviceCredential: rustCred.DeviceCredential,
 		HmacSecret:       rustCred.Secrets["Plain"]["hmac_secret"],
-		PrivateKey:       fdo.Pkcs8Key{privateKey},
+		PrivateKey:       blob.Pkcs8Key{Signer: privateKey},
 	}
 }
 
