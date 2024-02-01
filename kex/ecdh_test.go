@@ -29,14 +29,14 @@ func TestECDH256Exchange(t *testing.T) {
 	}
 
 	if !bytes.Equal(
-		serverSess.(*kex.EcdhSession).SEK,
-		clientSess.(*kex.EcdhSession).SEK,
+		serverSess.(*kex.ECDHSession).SEK,
+		clientSess.(*kex.ECDHSession).SEK,
 	) {
 		t.Fatal("expected client and server sessions to have matching symmetric keys")
 	}
 
-	if len(serverSess.(*kex.EcdhSession).SVK) > 0 ||
-		len(clientSess.(*kex.EcdhSession).SVK) > 0 {
+	if len(serverSess.(*kex.ECDHSession).SVK) > 0 ||
+		len(clientSess.(*kex.ECDHSession).SVK) > 0 {
 		t.Fatal("expected client and server sessions to have no SVK")
 	}
 }

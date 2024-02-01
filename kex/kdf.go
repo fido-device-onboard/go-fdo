@@ -1,7 +1,6 @@
 // Copyright 2023 Intel Corporation
 // SPDX-License-Identifier: Apache 2.0
 
-// Package kex implements the Key Exchange subprotocol of FDO.
 package kex
 
 import (

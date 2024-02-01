@@ -23,15 +23,17 @@ const (
 func init() {
 	RegisterNewSuite(
 		string(ECDH256Suite),
-		(&ecdhSession{Curve: elliptic.P256()}).new,
+		(&ECDHSession{Curve: elliptic.P256()}).new,
 	)
 	RegisterNewSuite(
 		string(ECDH384Suite),
-		(&ecdhSession{Curve: elliptic.P384()}).new,
+		(&ECDHSession{Curve: elliptic.P384()}).new,
 	)
 }
 
-type ecdhSession struct {
+// ECDHSession implements a Session using elliptic curve cryptography. Sessions
+// are created using [Suite.New].
+type ECDHSession struct {
 	// Key exchange data
 	Curve elliptic.Curve
 	xA    []byte
@@ -44,7 +46,7 @@ type ecdhSession struct {
 	SVK    []byte
 }
 
-func (s *ecdhSession) new(xA []byte, cipher CipherSuite) Session {
+func (s *ECDHSession) new(xA []byte, cipher CipherSuite) Session {
 	s.xA = xA
 	s.Cipher = cipher
 	return s
@@ -53,7 +55,7 @@ func (s *ecdhSession) new(xA []byte, cipher CipherSuite) Session {
 // Parameter generates the private key and exchange parameter to send to
 // its peer. This function will generate a new key every time it is called.
 // This method is used by both the client and server.
-func (s *ecdhSession) Parameter(rand io.Reader) ([]byte, error) {
+func (s *ECDHSession) Parameter(rand io.Reader) ([]byte, error) {
 	// Generate a new key
 	ecKey, err := ecdsa.GenerateKey(s.Curve, rand)
 	if err != nil {
@@ -100,7 +102,7 @@ func (s *ecdhSession) Parameter(rand io.Reader) ([]byte, error) {
 
 // SetParameter sets the received parameter from the client. This method is
 // only called by a server.
-func (s *ecdhSession) SetParameter(xB []byte) error {
+func (s *ECDHSession) SetParameter(xB []byte) error {
 	s.xB = xB
 
 	// Compute session keys
@@ -180,12 +182,12 @@ func sharedSecret(key *ecdsa.PrivateKey, paramA, paramB ecdhParam) ([]byte, erro
 
 // Encrypt uses a session key to encrypt a payload. Depending on the suite,
 // the result may be a plain COSE_Encrypt0 or one wrapped by COSE_Mac0.
-func (s *ecdhSession) Encrypt(rand io.Reader, payload any) (cbor.TagData, error) {
+func (s *ECDHSession) Encrypt(rand io.Reader, payload any) (cbor.TagData, error) {
 	panic("unimplemented")
 }
 
 // Decrypt a tagged COSE Encrypt0 or Mac0 object.
-func (s *ecdhSession) Decrypt(rand io.Reader, data cbor.Tag[cbor.RawBytes]) ([]byte, error) {
+func (s *ECDHSession) Decrypt(rand io.Reader, data cbor.Tag[cbor.RawBytes]) ([]byte, error) {
 	panic("unimplemented")
 }
 
@@ -200,7 +202,8 @@ type ecdhPersist struct {
 	SVK    []byte
 }
 
-func (s *ecdhSession) MarshalBinary() ([]byte, error) {
+// MarshalBinary implements [encoding.BinaryMarshaler].
+func (s *ECDHSession) MarshalBinary() ([]byte, error) {
 	key, err := x509.MarshalECPrivateKey(s.priv)
 	if err != nil {
 		return nil, err
@@ -216,7 +219,8 @@ func (s *ecdhSession) MarshalBinary() ([]byte, error) {
 	})
 }
 
-func (s *ecdhSession) UnmarshalBinary(data []byte) error {
+// UnmarshalBinary implements [encoding.BinaryUnmarshaler].
+func (s *ECDHSession) UnmarshalBinary(data []byte) error {
 	var persist ecdhPersist
 	if err := cbor.Unmarshal(data, &persist); err != nil {
 		return err
@@ -232,7 +236,7 @@ func (s *ecdhSession) UnmarshalBinary(data []byte) error {
 		return fmt.Errorf("error parsing EC key: %w", err)
 	}
 
-	*s = ecdhSession{
+	*s = ECDHSession{
 		Curve: curve,
 		xA:    persist.ParamA,
 		xB:    persist.ParamB,

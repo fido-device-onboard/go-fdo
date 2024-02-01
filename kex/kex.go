@@ -111,7 +111,7 @@ import (
 //	│                        │ cryptographically strong pseudo      │   return the decryption error after │
 //	│                        │ random number generator (CSPRNG) or  │   the "expected" processing time    │
 //	│                        │ a true random number generator       │   for this message.                 │
-//	│                        │ (TNRG)	AES-256 in Cipher Block     │                                     │
+//	│                        │ (TNRG) AES-256 in Cipher Block       │                                     │
 //	│                        │ Chaining (CBC) Mode [15] with        │ It is recognized that the item is   │
 //	│                        │ PKCS#7[16] padding. The key is the   │ hard to achieve in general, but     │
 //	│                        │ SEK from key exchange.               │ FIDO Device Onboard risk is low in  │
