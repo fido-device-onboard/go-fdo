@@ -25,11 +25,7 @@ type Bstr[T any] struct{ Val T }
 
 // NewBstr is shorthand for struct initialization and is useful, because it
 // often does not require writing the type parameter.
-func NewBstr[T any](v T) Bstr[T] { return Bstr[T]{Val: v} }
-
-// NewBstrPtr is shorthand for struct initialization and is useful, because it
-// often does not require writing the type parameter.
-func NewBstrPtr[T any](v T) *Bstr[T] { return &Bstr[T]{Val: v} }
+func NewBstr[T any](v T) *Bstr[T] { return &Bstr[T]{Val: v} }
 
 // MarshalCBOR implements Marshaler.
 func (b Bstr[T]) MarshalCBOR() ([]byte, error) {

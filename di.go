@@ -58,7 +58,7 @@ func (c *Client) appStart(ctx context.Context, baseURL string, info any) (*Vouch
 		DeviceMfgInfo *cbor.Bstr[any]
 	}
 	if info != nil {
-		msg.DeviceMfgInfo = cbor.NewBstrPtr(info)
+		msg.DeviceMfgInfo = cbor.NewBstr(info)
 	}
 
 	// Make request

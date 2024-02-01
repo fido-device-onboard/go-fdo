@@ -32,11 +32,9 @@ func TestSignAndVerify(t *testing.T) {
 		return
 	}
 
-	payload := cbor.NewBstr[any]([]byte("Hello world"))
-
 	s1 := cose.Sign1[any]{
 		Header:  header,
-		Payload: &payload,
+		Payload: cbor.NewBstr[any]([]byte("Hello world")),
 	}
 
 	t.Run("es256", func(t *testing.T) {

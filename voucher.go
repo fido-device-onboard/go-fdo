@@ -117,7 +117,7 @@ type ExtraInfo map[int][]byte
 func (v *Voucher) shallowClone() *Voucher {
 	return &Voucher{
 		Version: v.Version,
-		Header: cbor.NewBstr(VoucherHeader{
+		Header: *cbor.NewBstr(VoucherHeader{
 			Version:         v.Header.Val.Version,
 			GUID:            v.Header.Val.GUID,
 			RvInfo:          v.Header.Val.RvInfo,
@@ -460,7 +460,7 @@ func ExtendVoucher[T PublicKeyOrChain](v *Voucher, owner crypto.Signer, nextOwne
 	entry, err := newSignedEntry(owner, usePSS, VoucherEntryPayload{
 		PreviousHash: prevHash,
 		HeaderHash:   headerHash,
-		Extra:        cbor.NewBstrPtr(extra),
+		Extra:        cbor.NewBstr(extra),
 		PublicKey:    *nextOwnerPublicKey,
 	})
 	if err != nil {
@@ -473,7 +473,7 @@ func ExtendVoucher[T PublicKeyOrChain](v *Voucher, owner crypto.Signer, nextOwne
 func newSignedEntry(owner crypto.Signer, usePSS bool, payload VoucherEntryPayload) (*cose.Sign1Tag[VoucherEntryPayload], error) {
 	entry := cose.Sign1Tag[VoucherEntryPayload]{
 		Header:  cose.Header{},
-		Payload: cbor.NewBstrPtr(payload),
+		Payload: cbor.NewBstr(payload),
 	}
 
 	signOpts, err := signOptsFor(owner, usePSS)

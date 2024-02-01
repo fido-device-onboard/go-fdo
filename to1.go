@@ -81,7 +81,7 @@ func (c *Client) proveToRv(ctx context.Context, baseURL string, nonce Nonce) ([]
 	// Define request structure
 	token := cose.Sign1[eatoken]{
 		Header:  cose.Header{},
-		Payload: cbor.NewBstrPtr(newEAT(c.Cred.GUID, nonce, nil, nil)),
+		Payload: cbor.NewBstr(newEAT(c.Cred.GUID, nonce, nil, nil)),
 	}
 	opts, err := signOptsFor(c.Key, c.PSS)
 	if err != nil {

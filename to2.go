@@ -71,7 +71,7 @@ func (c *Client) verifyOwner(ctx context.Context, baseURL string) (Nonce, *Vouch
 		entries = append(entries, *entry)
 	}
 	ov := Voucher{
-		Header:  cbor.NewBstr(info.OVH),
+		Header:  *cbor.NewBstr(info.OVH),
 		Hmac:    info.OVHHmac,
 		Entries: entries,
 	}
@@ -351,7 +351,7 @@ func (c *Client) proveDevice(ctx context.Context, baseURL string, proveDeviceNon
 	}
 	token := cose.Sign1[eatoken]{
 		Header:  header,
-		Payload: cbor.NewBstrPtr(newEAT(c.Cred.GUID, proveDeviceNonce, eatPayload, nil)),
+		Payload: cbor.NewBstr(newEAT(c.Cred.GUID, proveDeviceNonce, eatPayload, nil)),
 	}
 	opts, err := signOptsFor(c.Key, c.PSS)
 	if err != nil {
