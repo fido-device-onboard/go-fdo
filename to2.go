@@ -208,10 +208,10 @@ func (c *Client) helloDevice(ctx context.Context, baseURL string) (Nonce, *ovhVa
 
 	// Parse owner public key
 	var ownerPubKey PublicKey
-	if ownerPubKeyBytes := []byte(proveOVHdr.Unprotected[to2OwnerPubKeyClaim]); len(ownerPubKeyBytes) == 0 {
+	if found, err := proveOVHdr.Unprotected.Parse(to2OwnerPubKeyClaim, &ownerPubKey); !found {
 		captureErr(ctx, invalidMessageErrCode, "")
 		return Nonce{}, nil, nil, fmt.Errorf("owner pubkey unprotected header missing from TO2.ProveOVHdr response message")
-	} else if err := cbor.Unmarshal(ownerPubKeyBytes, &ownerPubKey); err != nil {
+	} else if err != nil {
 		captureErr(ctx, invalidMessageErrCode, "")
 		return Nonce{}, nil, nil, fmt.Errorf("owner pubkey unprotected header from TO2.ProveOVHdr could not be unmarshaled: %w", err)
 	}
@@ -250,10 +250,10 @@ func (c *Client) helloDevice(ctx context.Context, baseURL string) (Nonce, *ovhVa
 
 	// Parse nonce
 	var cuphNonce Nonce
-	if cuphNonceBytes := []byte(proveOVHdr.Unprotected[to2NonceClaim]); len(cuphNonceBytes) == 0 {
+	if found, err := proveOVHdr.Unprotected.Parse(to2NonceClaim, &cuphNonce); !found {
 		captureErr(ctx, invalidMessageErrCode, "")
 		return Nonce{}, nil, nil, fmt.Errorf("nonce unprotected header missing from TO2.ProveOVHdr response message")
-	} else if err := cbor.Unmarshal(cuphNonceBytes, &cuphNonce); err != nil {
+	} else if err != nil {
 		captureErr(ctx, invalidMessageErrCode, "")
 		return Nonce{}, nil, nil, fmt.Errorf("nonce unprotected header from TO2.ProveOVHdr could not be unmarshaled: %w", err)
 	}
@@ -343,14 +343,15 @@ func (c *Client) proveDevice(ctx context.Context, baseURL string, proveDeviceNon
 	}{
 		KeyExchangeB: paramB,
 	}
-	header, err := cose.NewHeader(nil, map[cose.Label]any{
-		eatUnprotectedNonceClaim: setupDeviceNonce,
-	})
 	if err != nil {
 		return Nonce{}, nil, fmt.Errorf("error creating header for EAT int TO2.ProveDevice: %w", err)
 	}
 	token := cose.Sign1[eatoken]{
-		Header:  header,
+		Header: cose.Header{
+			Unprotected: map[cose.Label]any{
+				eatUnprotectedNonceClaim: setupDeviceNonce,
+			},
+		},
 		Payload: cbor.NewBstr(newEAT(c.Cred.GUID, proveDeviceNonce, eatPayload, nil)),
 	}
 	opts, err := signOptsFor(c.Key, c.PSS)

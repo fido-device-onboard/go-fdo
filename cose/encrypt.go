@@ -4,75 +4,192 @@
 package cose
 
 import (
+	"crypto/rand"
+	"fmt"
+	"io"
+
 	"github.com/fido-device-onboard/go-fdo/cbor"
 )
 
+// Crypter uses a given key and cipher to encypt and decrypt data.
 type Crypter interface {
-	Encrypt()
-	Decrypt()
-}
+	// Encrypt converts plaintext and additional authenticated data to
+	// ciphertext using the implementer's key and cipher. The unprotected
+	// headers of the outgoing structure are provided in order for data such as
+	// IVs for block mode ciphers to be added.
+	//
+	// The value of externalAAD will be nil if no AAD was provided and be
+	// non-nil (and non-zero length, due to additional data COSE adds) if it
+	// was provided.
+	Encrypt(rand io.Reader, plaintext, externalAAD []byte, unprotected HeaderMap) (ciphertext []byte, err error)
 
-// Encrypt holds the encrypted content of an enveloped structure. It contains a
-// list of [Recipient]s to hold the encrypted keys for recipients.
-//
-// TODO: Implement Encrypt/Decrypt
-type Encrypt[T any] struct {
-	Header
-	Ciphertext *cbor.Bstr[T] // byte string or null when transported separately
-	Recipients []Recipient   // non-empty array of recipients
+	// Decrypt converts ciphertext and additional authenticated data to
+	// plaintext using the implementer's key and cipher. the unprotected
+	// headers of the incoming structure are provided for optionally reading in
+	// unprotected data, such as an IV, which the cipher may need as input.
+	//
+	// The value of externalAAD will be nil if no AAD was provided and be
+	// non-nil (and non-zero length, due to additional data COSE adds) if it
+	// was provided.
+	Decrypt(rand io.Reader, ciphertext, externalAAD []byte, unprotected HeaderMap) (plaintext []byte, err error)
 }
 
 // Encrypt0 holds the encrypted content of an enveloped structure. It assumes
-// contains no recipient information adn therefore assumes that the recipient
+// contains no recipient information and therefore assumes that the recipient
 // of the object will already know the identity of the key to be used in order
-// to decrypt the message
+// to decrypt the message.
+type Encrypt0[T, E any] struct {
+	Header
+	Ciphertext *[]byte // byte string or null when transported separately
+}
+
+// Encrypt a payload, setting the Chiphertext field value.
 //
-// TODO: Implement Encrypt/Decrypt
-type Encrypt0[T any] struct {
-	Header
-	Ciphertext *cbor.Bstr[T] // byte string or null when transported separately
+// The payload accepted is any type T, which will be marshaled to CBOR and if
+// not already a CBOR byte string, then wrapped in one. The external AAD will
+// be type E and the same marshaling rules apply.
+//
+// For encryption algorithms that do not take external additional authenticated
+// data, aad must be nil. Otherwise, they must NOT be nil. To pass no AAD to an
+// AEAD, E should be []byte and aad should be a pointer to an empty byte slice.
+func (e0 Encrypt0[T, E]) Encrypt(alg EncryptAlgorithm, key []byte, payload T, aad *E) error {
+	// Get Crypter to perform encryption/decryption
+	c, err := alg.NewCrypter(key)
+	if err != nil {
+		return fmt.Errorf("error intializing crypter for alg %d: %w", alg, err)
+	}
+
+	// Encode payload to plaintext
+	plaintext, err := cbor.Marshal(cbor.NewByteWrap(payload))
+	if err != nil {
+		return fmt.Errorf("error marshaling payload to plaintext: %w", err)
+	}
+
+	// Encode additional authenticated data
+	externalAAD, err := e0.externalAAD(aad)
+	if err != nil {
+		return err
+	}
+
+	// Perform encryption to ciphertext
+	ciphertext, err := c.Encrypt(rand.Reader, plaintext, externalAAD, e0.Unprotected)
+	if err != nil {
+		return fmt.Errorf("error encrypting plaintext: %w", err)
+	}
+	e0.Ciphertext = &ciphertext
+
+	return nil
 }
 
-// Mac is a message authentication code structure that is used when the key to
-// use is not implicitly known. These include a requirement for multiple
-// recipients, the key being unknown, and a recipient algorithm of other than
-// direct.
-type Mac[T any] struct {
-	Header
-	Payload    *cbor.Bstr[T] // byte string or null when transported separately
-	Value      []byte        // non-empty byte string containing the MAC
-	Recipients []Recipient   // non-empty array of recipients
+// Decrypt a payload from the Ciphertext field, automatically unmarshaling it
+// to type T.
+//
+// For encryption algorithms that do not take external additional authenticated
+// data, aad must be nil. Otherwise, they must NOT be nil. To pass no AAD to an
+// AEAD, E should be []byte and aad should be a pointer to an empty byte slice.
+func (e0 Encrypt0[T, E]) Decrypt(alg EncryptAlgorithm, key []byte, aad *E) (*T, error) {
+	// Get Crypter to perform encryption/decryption
+	c, err := alg.NewCrypter(key)
+	if err != nil {
+		return nil, fmt.Errorf("error intializing crypter for alg %d: %w", alg, err)
+	}
+
+	// Encode additional authenticated data
+	var externalAAD []byte
+	if alg.SupportsAD() {
+		var err error
+		externalAAD, err = e0.externalAAD(aad)
+		if err != nil {
+			return nil, err
+		}
+	} else if aad != nil {
+		return nil, fmt.Errorf("additional data provided, but the encryption algorithm does not support it")
+	}
+
+	// Perform decryption to plaintext
+	if e0.Ciphertext == nil {
+		return nil, fmt.Errorf("nil ciphertext")
+	}
+	plaintext, err := c.Decrypt(rand.Reader, *e0.Ciphertext, externalAAD, e0.Unprotected)
+	if err != nil {
+		return nil, fmt.Errorf("error decrypting ciphertext: %w", err)
+	}
+
+	// Decode plaintext into type T
+	var val T
+	if err := cbor.Unmarshal(plaintext, &val); err != nil {
+		return nil, fmt.Errorf("error unmarshaling plaintext to %T: %w", val, err)
+	}
+	return &val, nil
 }
 
-// Mac0 is a message authentication code structure that is used when the
-// recipient structure is not needed, because the key to be used is implicitly
-// known.
-type Mac0[T any] struct {
-	Header
-	Payload *cbor.Bstr[T] // byte string or null when transported separately
-	Value   []byte        // non-empty byte string containing the MAC
+// Build and encode Enc_structure
+func (e0 Encrypt0[T, E]) externalAAD(aad *E) ([]byte, error) {
+	protected, err := newEmptyOrSerializedMap(e0.Protected)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling protected header map: %w", err)
+	}
+	var eaad []byte
+	if aad != nil {
+		var err error
+		eaad, err = cbor.Marshal(cbor.NewByteWrap(*aad))
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling AAD: %w", err)
+		}
+	}
+	enc, err := cbor.Marshal(encStruct{
+		Context:     enc0Context,
+		Protected:   protected,
+		ExternalAAD: eaad,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling Enc_structure: %w", err)
+	}
+
+	return enc, nil
 }
 
-//nolint:unused
 const (
-	macContext  = "MAC"
-	mac0Context = "MAC0"
+	encContext          = "Encrypt"
+	enc0Context         = "Encrypt0"
+	encRecipientContext = "Enc_Recipient"
+	macRecipientContext = "Mac_Recipient"
+	recRecipientContext = "Rec_Recipient"
 )
 
-// Underlying message authentication code struct
-//
-//nolint:unused
-type mac struct {
+// COSE Enc_structure
+type encStruct struct {
 	Context     string
-	Protected   serializedOrEmptyHeaderMap
-	ExternalAad []byte
-	Payload     []byte
+	Protected   emptyOrSerializedMap
+	ExternalAAD []byte
 }
 
-// Recipient contains the recipient information for use when the key to be used
-// for encryption is not implicitly known.
-type Recipient struct {
-	Header
-	Ciphertext *[]byte     // byte string or null
-	Recipients []Recipient `cbor:",omitempty"` // array of one or more recipients
+// Encrypt0Tag encodes to a CBOR tag while ensuring the right tag number.
+type Encrypt0Tag[T, E any] Encrypt0[T, E]
+
+// Tag is a helper for accessing the tag value.
+func (e0 *Encrypt0[T, E]) Tag() *Encrypt0Tag[T, E] { return (*Encrypt0Tag[T, E])(e0) }
+
+// Untag is a helper for accessing the tag value.
+func (t *Encrypt0Tag[T, E]) Untag() *Encrypt0[T, E] { return (*Encrypt0[T, E])(t) }
+
+// MarshalCBOR implements cbor.Marshaler.
+func (t Encrypt0Tag[T, E]) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(cbor.Tag[Encrypt0[T, E]]{
+		Num: Encrypt0TagNum,
+		Val: Encrypt0[T, E](t),
+	})
+}
+
+// UnmarshalCBOR implements cbor.Unmarshaler.
+func (t *Encrypt0Tag[T, E]) UnmarshalCBOR(data []byte) error {
+	var tag cbor.Tag[Encrypt0[T, E]]
+	if err := cbor.Unmarshal(data, &tag); err != nil {
+		return err
+	}
+	if tag.Num != Encrypt0TagNum {
+		return fmt.Errorf("mismatched tag number %d for Encrypt0, expected %d", tag.Num, Encrypt0TagNum)
+	}
+	*t = Encrypt0Tag[T, E](tag.Val)
+	return nil
 }

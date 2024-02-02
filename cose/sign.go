@@ -9,8 +9,6 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha256"
-	"crypto/sha512"
 	"errors"
 	"fmt"
 	"io"
@@ -18,84 +16,6 @@ import (
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 )
-
-// Signature is a COSE_Signature, which carries the signature and information
-// about the signature.
-type Signature struct {
-	Header
-	Signature []byte // non-empty byte string
-}
-
-const (
-	sigContext     = "Signature"
-	sig1Context    = "Signature1"
-	sigCtrContext  = "CounterSignature"
-	sigCtr0Context = "CounterSignature0"
-)
-
-// Underlying signature struct
-type signature struct {
-	Context       string
-	BodyProtected serializedOrEmptyHeaderMap
-	SignProtected serializedOrEmptyHeaderMap
-	ExternalAad   []byte
-	Payload       []byte
-}
-
-// Omit SignProtected field when using Signature1 or CounterSignature0.
-func (sig signature) MarshalCBOR() ([]byte, error) {
-	switch sig.Context {
-	case sigContext, sigCtrContext:
-		return cbor.Marshal(struct {
-			Context       string
-			BodyProtected serializedOrEmptyHeaderMap
-			SignProtected serializedOrEmptyHeaderMap
-			ExternalAad   []byte
-			Payload       []byte
-		}(sig))
-	case sig1Context, sigCtr0Context:
-		return cbor.Marshal(struct {
-			Context       string
-			BodyProtected serializedOrEmptyHeaderMap
-			ExternalAad   []byte
-			Payload       []byte
-		}{
-			Context:       sig.Context,
-			BodyProtected: sig.BodyProtected,
-			ExternalAad:   sig.ExternalAad,
-			Payload:       sig.Payload,
-		})
-	default:
-		return nil, fmt.Errorf("unknown signature context: %s", sig.Context)
-	}
-}
-
-// SignProtected field may be omitted when context is Signature1 or
-// CounterSignature0.
-func (sig *signature) UnmarshalCBOR(b []byte) error {
-	var ss struct {
-		Context       string
-		BodyProtected serializedOrEmptyHeaderMap
-		SignProtected serializedOrEmptyHeaderMap `cbor:",omitempty"`
-		ExternalAad   []byte
-		Payload       []byte
-	}
-	if err := cbor.Unmarshal(b, &ss); err != nil {
-		return err
-	}
-	*sig = signature(ss)
-	return nil
-}
-
-// Sign is a COSE_Sign signature structure, which is used for multi-signature
-// messages.
-//
-// TODO: Implement Sign/Verify
-type Sign[T any] struct {
-	Header
-	Payload    *cbor.Bstr[T] // byte string or null
-	Signatures []Signature   // non-empty array of Signature
-}
 
 // Sign1 is a COSE_Sign1 signature structure, which is used when only one
 // signature is being placed on a message.
@@ -129,6 +49,16 @@ func (s1 *Sign1[T]) Sign(key crypto.Signer, payload []byte, opts crypto.SignerOp
 		key = rfc8152ecSigner{eckey}
 	}
 
+	// Put algorithm ID in the signature protected header before signing
+	if s1.Protected == nil {
+		s1.Protected = make(map[Label]any)
+	}
+	s1.Protected[AlgLabel] = algID
+	body, err := newEmptyOrSerializedMap(s1.Protected)
+	if err != nil {
+		return fmt.Errorf("error marshaling signature protected body: %W", err)
+	}
+
 	// Sign contents of Sig_structure
 	if len(payload) == 0 {
 		var err error
@@ -139,11 +69,9 @@ func (s1 *Sign1[T]) Sign(key crypto.Signer, payload []byte, opts crypto.SignerOp
 	}
 	sig := signature{
 		Context:       sig1Context,
-		BodyProtected: s1.Protected,
+		BodyProtected: body,
 		Payload:       payload,
 	}
-	// Put algorithm ID in the signature protected header before signing
-	mapSet(&sig.BodyProtected, AlgLabel, algID)
 	digest := opts.HashFunc().New()
 	if err := cbor.NewEncoder(digest).Encode(sig); err != nil {
 		return err
@@ -152,9 +80,6 @@ func (s1 *Sign1[T]) Sign(key crypto.Signer, payload []byte, opts crypto.SignerOp
 	if err != nil {
 		return err
 	}
-
-	// Set signature and algorithm ID for top-level signing structure
-	mapSet(&s1.Protected, AlgLabel, algID)
 	s1.Signature = sigBytes
 
 	return nil
@@ -182,9 +107,13 @@ func (s1 *Sign1[T]) Verify(key crypto.PublicKey, payload []byte) (bool, error) {
 	}
 
 	// Marshal signature to bytes
+	body, err := newEmptyOrSerializedMap(s1.Protected)
+	if err != nil {
+		return false, fmt.Errorf("error marshaling signature protected body: %W", err)
+	}
 	data, err := cbor.Marshal(signature{
 		Context:       sig1Context,
-		BodyProtected: s1.Protected,
+		BodyProtected: body,
 		ExternalAad:   []byte{},
 		Payload:       payload,
 	})
@@ -193,24 +122,15 @@ func (s1 *Sign1[T]) Verify(key crypto.PublicKey, payload []byte) (bool, error) {
 	}
 
 	// Hash and verify
-	var hash []byte
-	var hashAlg crypto.Hash
-	switch s1.Algorithm() {
-	case ES256Alg, RS256Alg, PS256Alg:
-		hashBytes := sha256.Sum256(data)
-		hash = hashBytes[:]
-		hashAlg = crypto.SHA256
-	case ES384Alg, RS384Alg, PS384Alg:
-		hashBytes := sha512.Sum384(data)
-		hash = hashBytes[:]
-		hashAlg = crypto.SHA384
-	case ES512Alg, RS512Alg, PS512Alg:
-		hashBytes := sha512.Sum512(data)
-		hash = hashBytes[:]
-		hashAlg = crypto.SHA512
-	default:
+	hashAlg := SignatureAlgorithm(s1.Algorithm()).HashFunc()
+	if !hashAlg.Available() {
 		return false, errors.New("unsupported algorithm")
 	}
+	digest := hashAlg.New()
+	if _, err := digest.Write(data); err != nil {
+		return false, err
+	}
+	hash := digest.Sum(nil)
 
 	switch pub := key.(type) {
 	case *ecdsa.PublicKey:
@@ -222,7 +142,7 @@ func (s1 *Sign1[T]) Verify(key crypto.PublicKey, payload []byte) (bool, error) {
 
 	case *rsa.PublicKey:
 		var err error
-		switch s1.Algorithm() {
+		switch SignatureAlgorithm(s1.Algorithm()) {
 		case RS256Alg, RS384Alg, RS512Alg:
 			err = rsa.VerifyPKCS1v15(pub, hashAlg, hash, s1.Signature)
 		case PS256Alg, PS384Alg, PS512Alg:
@@ -236,6 +156,67 @@ func (s1 *Sign1[T]) Verify(key crypto.PublicKey, payload []byte) (bool, error) {
 	default:
 		return false, fmt.Errorf("")
 	}
+}
+
+const (
+	sigContext     = "Signature"
+	sig1Context    = "Signature1"
+	sigCtrContext  = "CounterSignature"
+	sigCtr0Context = "CounterSignature0"
+)
+
+// Underlying signature struct
+type signature struct {
+	Context       string
+	BodyProtected emptyOrSerializedMap
+	SignProtected emptyOrSerializedMap
+	ExternalAad   []byte
+	Payload       []byte
+}
+
+// Omit SignProtected field when using Signature1 or CounterSignature0.
+func (sig signature) MarshalCBOR() ([]byte, error) {
+	switch sig.Context {
+	case sigContext, sigCtrContext:
+		return cbor.Marshal(struct {
+			Context       string
+			BodyProtected emptyOrSerializedMap
+			SignProtected emptyOrSerializedMap
+			ExternalAad   []byte
+			Payload       []byte
+		}(sig))
+	case sig1Context, sigCtr0Context:
+		return cbor.Marshal(struct {
+			Context       string
+			BodyProtected emptyOrSerializedMap
+			ExternalAad   []byte
+			Payload       []byte
+		}{
+			Context:       sig.Context,
+			BodyProtected: sig.BodyProtected,
+			ExternalAad:   sig.ExternalAad,
+			Payload:       sig.Payload,
+		})
+	default:
+		return nil, fmt.Errorf("unknown signature context: %s", sig.Context)
+	}
+}
+
+// SignProtected field may be omitted when context is Signature1 or
+// CounterSignature0.
+func (sig *signature) UnmarshalCBOR(b []byte) error {
+	var ss struct {
+		Context       string
+		BodyProtected emptyOrSerializedMap
+		SignProtected emptyOrSerializedMap `cbor:",omitempty"`
+		ExternalAad   []byte
+		Payload       []byte
+	}
+	if err := cbor.Unmarshal(b, &ss); err != nil {
+		return err
+	}
+	*sig = signature(ss)
+	return nil
 }
 
 // This type wraps an ECDSA private key and uses the signature encoding
@@ -266,15 +247,8 @@ func (key rfc8152ecSigner) Sign(rand io.Reader, digest []byte, _ crypto.SignerOp
 // SignatureAlgorithmFor returns the Signature Algorithm identifier for the
 // given key and options.
 func SignatureAlgorithmFor(key crypto.Signer, opts crypto.SignerOpts) (SignatureAlgorithm, error) {
-	raw, _, err := signAlg(key, opts)
-	if err != nil {
-		return 0, err
-	}
-	var algID SignatureAlgorithm
-	if err := cbor.Unmarshal([]byte(raw), &algID); err != nil {
-		return 0, err
-	}
-	return algID, nil
+	id, _, err := signAlg(key, opts)
+	return id, err
 }
 
 // signAlg returns the already marshaled algorithm ID and possibly modified
@@ -284,50 +258,92 @@ func SignatureAlgorithmFor(key crypto.Signer, opts crypto.SignerOpts) (Signature
 // further, because indirection will only make the code harder to read.
 //
 //nolint:gocyclo
-func signAlg(key crypto.Signer, opts crypto.SignerOpts) (algID cbor.RawBytes, _ crypto.SignerOpts, _ error) {
+func signAlg(key crypto.Signer, opts crypto.SignerOpts) (algID SignatureAlgorithm, _ crypto.SignerOpts, _ error) {
 	switch pub := key.Public().(type) {
 	case *ecdsa.PublicKey:
 		switch pub.Curve {
 		case elliptic.P256():
-			return es256AlgCbor, crypto.SHA256, nil
+			return ES256Alg, crypto.SHA256, nil
 		case elliptic.P384():
-			return es384AlgCbor, crypto.SHA384, nil
+			return ES384Alg, crypto.SHA384, nil
 		case elliptic.P521():
-			return es512AlgCbor, crypto.SHA512, nil
+			return ES512Alg, crypto.SHA512, nil
 		default:
-			return nil, nil, fmt.Errorf("unsupported curve: %s", pub.Params().Name)
+			return 0, nil, fmt.Errorf("unsupported curve: %s", pub.Params().Name)
 		}
 
 	case *rsa.PublicKey:
 		// Ensure that a hash func was specified
 		if opts == nil {
-			return nil, nil, errors.New("required signer opts were missing; must specify hash type")
+			return 0, nil, errors.New("required signer opts were missing; must specify hash type")
 		}
 
 		// When using RSASSA-PSS, salt length must equal hash length
 		pssOpts, usingPss := opts.(*rsa.PSSOptions)
 		if usingPss && pssOpts.SaltLength != rsa.PSSSaltLengthEqualsHash && pssOpts.SaltLength != pssOpts.Hash.Size() {
-			return nil, nil, fmt.Errorf("PSS salt length must match hash size")
+			return 0, nil, fmt.Errorf("PSS salt length must match hash size")
 		}
 
 		switch {
 		case usingPss && opts.HashFunc().Size() == 32:
-			return ps256AlgCbor, opts, nil
+			return PS256Alg, opts, nil
 		case usingPss && opts.HashFunc().Size() == 48:
-			return ps384AlgCbor, opts, nil
+			return PS384Alg, opts, nil
 		case usingPss && opts.HashFunc().Size() == 64:
-			return ps512AlgCbor, opts, nil
+			return PS512Alg, opts, nil
 		case !usingPss && opts.HashFunc().Size() == 32:
-			return rs256AlgCbor, opts, nil
+			return RS256Alg, opts, nil
 		case !usingPss && opts.HashFunc().Size() == 48:
-			return rs384AlgCbor, opts, nil
+			return RS384Alg, opts, nil
 		case !usingPss && opts.HashFunc().Size() == 64:
-			return rs512AlgCbor, opts, nil
+			return RS512Alg, opts, nil
 		default:
-			return nil, nil, fmt.Errorf("unsupported hash size: %d bit", opts.HashFunc().Size()*8)
+			return 0, nil, fmt.Errorf("unsupported hash size: %d bit", opts.HashFunc().Size()*8)
 		}
 
 	default:
-		return nil, nil, fmt.Errorf("unsupported public key type: %T", pub)
+		return 0, nil, fmt.Errorf("unsupported public key type: %T", pub)
 	}
+}
+
+// Sign1Tag encodes to a CBOR tag while ensuring the right tag number.
+type Sign1Tag[T any] Sign1[T]
+
+// Tag is a helper for accessing the tag value.
+func (s1 *Sign1[T]) Tag() *Sign1Tag[T] { return (*Sign1Tag[T])(s1) }
+
+// Untag is a helper for accessing the tag value.
+func (t *Sign1Tag[T]) Untag() *Sign1[T] { return (*Sign1[T])(t) }
+
+// MarshalCBOR implements cbor.Marshaler.
+func (t Sign1Tag[T]) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(cbor.Tag[Sign1[T]]{
+		Num: Sign1TagNum,
+		Val: Sign1[T](t),
+	})
+}
+
+// UnmarshalCBOR implements cbor.Unmarshaler.
+func (t *Sign1Tag[T]) UnmarshalCBOR(data []byte) error {
+	var tag cbor.Tag[Sign1[T]]
+	if err := cbor.Unmarshal(data, &tag); err != nil {
+		return err
+	}
+	if tag.Num != Sign1TagNum {
+		return fmt.Errorf("mismatched tag number %d for Sign1, expected %d", tag.Num, Sign1TagNum)
+	}
+	*t = Sign1Tag[T](tag.Val)
+	return nil
+}
+
+// Sign using a single private key. Unless it was transported independently of
+// the signature, payload may be nil.
+func (t *Sign1Tag[T]) Sign(key crypto.Signer, payload []byte, opts crypto.SignerOpts) error {
+	return (*Sign1[T])(t).Sign(key, payload, opts)
+}
+
+// Verify using a single public key. Unless it was transported independently of
+// the signature, payload may be nil.
+func (t *Sign1Tag[T]) Verify(key crypto.PublicKey, payload []byte) (bool, error) {
+	return (*Sign1[T])(t).Verify(key, payload)
 }

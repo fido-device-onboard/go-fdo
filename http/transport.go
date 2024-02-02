@@ -161,12 +161,7 @@ func (t *Transport) handleResponse(resp *http.Response, sess kex.Session) (msgTy
 	if sess != nil && msgType != fdo.ErrorMsgType {
 		defer func() { _ = resp.Body.Close() }()
 
-		var data cbor.Tag[cbor.RawBytes]
-		if err := cbor.NewDecoder(content).Decode(&data); err != nil {
-			return 0, nil, fmt.Errorf("error decoding encrypted data into a CBOR tag: %w", err)
-		}
-
-		decrypted, err := sess.Decrypt(rand.Reader, data)
+		decrypted, err := sess.Decrypt(rand.Reader, content)
 		if err != nil {
 			return 0, nil, fmt.Errorf("error decrypting message %d: %w", msgType, err)
 		}

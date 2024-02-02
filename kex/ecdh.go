@@ -171,12 +171,16 @@ func computeSymmetricKeys(ecKey *ecdsa.PrivateKey, xA, xB []byte, cipher *Cipher
 	}
 
 	// Derive a symmetric key
-	symKey, err := kdf(cipher.Hash, shse, []byte{}, (cipher.SEKSize+cipher.SVKSize)*8)
+	sekSize, svkSize := cipher.EncryptAlg.KeySize(), uint16(0)
+	if cipher.MacAlg != 0 {
+		svkSize = cipher.MacAlg.KeySize()
+	}
+	symKey, err := kdf(cipher.PRFHash, shse, []byte{}, (sekSize+svkSize)*8)
 	if err != nil {
 		return nil, nil, fmt.Errorf("error deriving symmetric key: %w", err)
 	}
 
-	return symKey[:cipher.SEKSize], symKey[cipher.SEKSize:], nil
+	return symKey[:sekSize], symKey[sekSize:], nil
 }
 
 // Compute the ECDH shared secret

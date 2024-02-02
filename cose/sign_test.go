@@ -26,14 +26,7 @@ func TestSignAndVerify(t *testing.T) {
 		return
 	}
 
-	header, err := cose.NewHeader(nil, nil)
-	if err != nil {
-		t.Error(err)
-		return
-	}
-
 	s1 := cose.Sign1[any]{
-		Header:  header,
 		Payload: cbor.NewBstr[any]([]byte("Hello world")),
 	}
 

@@ -12,13 +12,13 @@ import (
 
 func TestDecodeSerializedOrEmptyHeaderMap(t *testing.T) {
 	var input = []byte{0x43, 0xa1, 0x01, 0x26}
-	expect, err := newSerializedOrEmptyHeaderMap(map[Label]any{
+	expect, err := newEmptyOrSerializedMap(map[Label]any{
 		{Int64: 1}: -7,
 	})
 	if err != nil {
 		t.Fatalf("error encoding expected serializedOrEmptyHeaderMap: %v", err)
 	}
-	var got serializedOrEmptyHeaderMap
+	var got emptyOrSerializedMap
 	if err := cbor.Unmarshal(input, &got); err != nil {
 		t.Fatalf("error decoding % x: %v", input, err)
 	}

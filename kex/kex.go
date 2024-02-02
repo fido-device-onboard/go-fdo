@@ -6,8 +6,6 @@ package kex
 
 import (
 	"io"
-
-	"github.com/fido-device-onboard/go-fdo/cbor"
 )
 
 // Session implements encryption/decryption for a single session. It is
@@ -29,8 +27,8 @@ type Session interface {
 
 	// Encrypt uses a session key to encrypt a payload. Depending on the suite,
 	// the result may be a plain COSE_Encrypt0 or one wrapped by COSE_Mac0.
-	Encrypt(rand io.Reader, payload any) (cbor.TagData, error)
+	Encrypt(rand io.Reader, payload any) (any, error)
 
 	// Decrypt a tagged COSE Encrypt0 or Mac0 object.
-	Decrypt(rand io.Reader, data cbor.Tag[cbor.RawBytes]) ([]byte, error)
+	Decrypt(rand io.Reader, r io.Reader) ([]byte, error)
 }

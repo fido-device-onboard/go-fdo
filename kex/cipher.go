@@ -39,19 +39,18 @@ func (id CipherSuiteID) New() *CipherSuite {
 	return f()
 }
 
-// CipherSuite extends the cose.Crypter interface to include SEK and SVK key
-// sizes as well as the hash function for verification and/or key derivation.
-//
-// When the cipher suite implements an authenticated encryption cipher, SVKSize
-// should be zero and the SEK size is used for SEVK.
+// CipherSuite combines a COSE encryption algorithm with a COSE MAC algorithm.
+// MacAlg must only be non-zero when EncryptAlg is a non-AE cipher.
 type CipherSuite struct {
-	cose.Crypter
-	SEKSize uint16
-	SVKSize uint16
-	Hash    crypto.Hash
+	EncryptAlg cose.EncryptAlgorithm
+	MacAlg     cose.MacAlgorithm
+
+	// Hash used for generating encryption and verification keys during key
+	// exchange
+	PRFHash crypto.Hash
 }
 
-var ciphers map[CipherSuiteID]func() *CipherSuite
+var ciphers = make(map[CipherSuiteID]func() *CipherSuite)
 
 // RegisterCipherSuite sets a new cipher suite constructor for a given ID. This
 // function is meant to be called in the init function of a package
@@ -169,50 +168,42 @@ func RegisterCipherSuite(id CipherSuiteID, f func() *CipherSuite) { ciphers[id] 
 func init() {
 	RegisterCipherSuite(A128GcmCipher, func() *CipherSuite {
 		return &CipherSuite{
-			Crypter: nil,
-			SEKSize: 16,
-			SVKSize: 0,
-			Hash:    crypto.SHA256,
+			EncryptAlg: cose.A128GCM,
+			PRFHash:    crypto.SHA256,
 		}
 	})
 	RegisterCipherSuite(A256GcmCipher, func() *CipherSuite {
 		return &CipherSuite{
-			Crypter: nil,
-			SEKSize: 32,
-			SVKSize: 0,
-			Hash:    crypto.SHA256,
+			EncryptAlg: cose.A256GCM,
+			PRFHash:    crypto.SHA256,
 		}
 	})
 	RegisterCipherSuite(CoseAes128CtrCipher, func() *CipherSuite {
 		return &CipherSuite{
-			Crypter: nil,
-			SEKSize: 16,
-			SVKSize: 32,
-			Hash:    crypto.SHA256,
+			EncryptAlg: -1, // FIXME:
+			MacAlg:     cose.HMac256,
+			PRFHash:    crypto.SHA256,
 		}
 	})
 	RegisterCipherSuite(CoseAes128CbcCipher, func() *CipherSuite {
 		return &CipherSuite{
-			Crypter: nil,
-			SEKSize: 16,
-			SVKSize: 32,
-			Hash:    crypto.SHA256,
+			EncryptAlg: -1, // FIXME:
+			MacAlg:     cose.HMac256,
+			PRFHash:    crypto.SHA256,
 		}
 	})
 	RegisterCipherSuite(CoseAes256CtrCipher, func() *CipherSuite {
 		return &CipherSuite{
-			Crypter: nil,
-			SEKSize: 32,
-			SVKSize: 64,
-			Hash:    crypto.SHA384,
+			EncryptAlg: -1, // FIXME:
+			MacAlg:     cose.HMac384,
+			PRFHash:    crypto.SHA384,
 		}
 	})
 	RegisterCipherSuite(CoseAes256CbcCipher, func() *CipherSuite {
 		return &CipherSuite{
-			Crypter: nil,
-			SEKSize: 32,
-			SVKSize: 64,
-			Hash:    crypto.SHA384,
+			EncryptAlg: -1, // FIXME:
+			MacAlg:     cose.HMac384,
+			PRFHash:    crypto.SHA384,
 		}
 	})
 }

@@ -12,6 +12,8 @@ import (
 // Bstr marshals and unmarshals CBOR data that is a byte array of the CBOR
 // encoding of its underlying value.
 //
+//	CDDL: bstr .cbor T
+//
 // This is a common convention in specifications like COSE and FDO and acts as
 // a sort of type erasure. While a specification may wish to erase a type to
 // allow for operating on arbitrary data (i.e. payloads in COSE signature
@@ -33,6 +35,9 @@ func (b Bstr[T]) MarshalCBOR() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if data == nil { // possibly due to bad Marshaler implementation
+		data = []byte{}
+	}
 	return Marshal(data)
 }
 
@@ -41,6 +46,39 @@ func (b *Bstr[T]) UnmarshalCBOR(p []byte) error {
 	var data []byte
 	if err := Unmarshal(p, &data); err != nil {
 		return err
+	}
+	return Unmarshal(data, &b.Val)
+}
+
+// ByteWrap is a Bstr that treats Bstr[[]byte] as Bstr[cbor.RawBytes]. While
+// Bstr guarantees that the inner bytes are valid CBOR, ByteWrap does not.
+// ByteWrap only ensures that the marshaled type is a bytestring.
+//
+// In other words, it avoids double-encoding a byte string. This convention is
+// used in COSE.
+type ByteWrap[T any] struct{ Val T }
+
+// NewByteWrap is shorthand for struct initialization and is useful, because
+// it often does not require writing the type parameter.
+func NewByteWrap[T any](v T) *ByteWrap[T] { return &ByteWrap[T]{Val: v} }
+
+// MarshalCBOR implements Marshaler.
+func (b ByteWrap[T]) MarshalCBOR() ([]byte, error) {
+	if bs, ok := any(b.Val).([]byte); ok {
+		return Marshal(bs)
+	}
+	return Marshal(Bstr[T](b))
+}
+
+// UnmarshalCBOR implements Unmarshaler.
+func (b *ByteWrap[T]) UnmarshalCBOR(p []byte) error {
+	var data []byte
+	if err := Unmarshal(p, &data); err != nil {
+		return err
+	}
+	if bs, ok := any(&b.Val).(*[]byte); ok {
+		*bs = data
+		return nil
 	}
 	return Unmarshal(data, &b.Val)
 }

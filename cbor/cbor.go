@@ -275,7 +275,12 @@ type Unmarshaler interface {
 type RawBytes []byte
 
 // MarshalCBOR implements Marshaler.
-func (b RawBytes) MarshalCBOR() ([]byte, error) { return b, nil }
+func (b RawBytes) MarshalCBOR() ([]byte, error) {
+	if b == nil {
+		return []byte{}, nil
+	}
+	return b, nil
+}
 
 // UnmarshalCBOR implements Unmarshaler.
 func (b *RawBytes) UnmarshalCBOR(p []byte) error { *b = p; return nil }
