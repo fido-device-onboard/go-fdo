@@ -13,8 +13,10 @@ import (
 	"crypto/x509/pkix"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"runtime"
+	"strconv"
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/blob"
@@ -82,6 +84,35 @@ func client() error {
 		return nil
 	}
 
+	// Try TO1+TO2
+	newDC := transferOwnership(cli, cred.RvInfo)
+	if newDC == nil {
+		return fmt.Errorf("transfer of ownership not successful")
+	}
+
+	// Store new credential
+	cred.DeviceCredential = *newDC
+	return saveBlob(cred)
+}
+
+func saveBlob(dc blob.DeviceCredential) error {
+	// Encode device credential to temp file
+	tmp, err := os.CreateTemp("", "fdo_cred_*")
+	if err != nil {
+		return fmt.Errorf("error creating temp file for device credential: %w", err)
+	}
+	defer func() { _ = tmp.Close() }()
+
+	if err := cbor.NewEncoder(tmp).Encode(dc); err != nil {
+		return err
+	}
+
+	// Rename temp file to given blob path
+	_ = tmp.Close()
+	if err := os.Rename(tmp.Name(), blobPath); err != nil {
+		return fmt.Errorf("error renaming temp blob credential to %q: %w", blobPath, err)
+	}
+
 	return nil
 }
 
@@ -128,27 +159,115 @@ func di(cli *fdo.Client) error {
 		return err
 	}
 
-	// Encode device credential to temp file
-	tmp, err := os.CreateTemp("", "fdo_cred_*")
-	if err != nil {
-		return fmt.Errorf("error creating temp file for device credential: %w", err)
-	}
-	defer func() { _ = tmp.Close() }()
-
-	if err := cbor.NewEncoder(tmp).Encode(blob.DeviceCredential{
+	return saveBlob(blob.DeviceCredential{
 		Active:           true,
 		DeviceCredential: *cred,
 		HmacSecret:       secret,
 		PrivateKey:       blob.Pkcs8Key{Signer: key},
-	}); err != nil {
-		return err
-	}
+	})
+}
 
-	// Rename temp file to given blob path
-	_ = tmp.Close()
-	if err := os.Rename(tmp.Name(), blobPath); err != nil {
-		return fmt.Errorf("error renaming temp blob credential to %q: %w", blobPath, err)
+//nolint:gocyclo
+func transferOwnership(cli *fdo.Client, rvInfo [][]fdo.RvInstruction) *fdo.DeviceCredential {
+	// Try TO1 on each RVAddr only once
+	for _, directive := range rvInfo {
+		m := make(map[fdo.RvVar][]byte)
+		for _, instruction := range directive {
+			m[instruction.Variable] = instruction.Value
+		}
+
+		// Check the protocol is HTTP
+		protVal, ok := m[fdo.RVProtocol]
+		if !ok {
+			fmt.Fprintf(os.Stderr, "Skipping TO1 directive with no protocol: %+v\n", m)
+			continue
+		}
+		var prot fdo.RvProt
+		if err := cbor.Unmarshal(protVal, &prot); err != nil {
+			fmt.Fprintf(os.Stderr, "error parsing protocol instruction value: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Skipping TO1 directive with non-uint8 protocol value: %+v\n", m)
+			continue
+		}
+		if prot != fdo.RVProtHTTP {
+			fmt.Fprintf(os.Stderr, "Skipping non-HTTP TO1 directive: %+v\n", m)
+			continue
+		}
+
+		// Parse the TO1 server addr
+		dnsAddrVal, isDNS := m[fdo.RVDns]
+		var dnsAddr string
+		if isDNS {
+			if err := cbor.Unmarshal(dnsAddrVal, &dnsAddr); err != nil {
+				fmt.Fprintf(os.Stderr, "error parsing DNS instruction value: %v\n", err)
+				isDNS = false
+			}
+		}
+		ipAddrVal, isIP := m[fdo.RVIPAddress]
+		var ipAddr net.IP
+		if isIP {
+			if err := cbor.Unmarshal(ipAddrVal, &ipAddr); err != nil {
+				fmt.Fprintf(os.Stderr, "error parsing IP instruction value: %v\n", err)
+				isIP = false
+			}
+		}
+		portVal, hasPort := m[fdo.RVDevPort]
+		var port uint16
+		if hasPort {
+			if err := cbor.Unmarshal(portVal, &port); err != nil {
+				fmt.Fprintf(os.Stderr, "error parsing port instruction value: %v\n", err)
+				hasPort = false
+			}
+		}
+		if !hasPort {
+			port = 80
+		}
+
+		// Try DNS then IP
+		if !isDNS && !isIP {
+			fmt.Fprintf(os.Stderr, "Skipping TO1 directive with no IP or DNS instructions: %+v\n", m)
+			continue
+		}
+		var addrs []fdo.RvTO2Addr
+		if isDNS {
+			baseURL := "http://" + net.JoinHostPort(dnsAddr, strconv.Itoa(int(port)))
+			var err error
+			addrs, err = cli.TransferOwnership1(context.TODO(), baseURL)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error running TO1 on %q: %v\n", baseURL, err)
+				continue
+			}
+		}
+		if len(addrs) == 0 && isIP {
+			baseURL := "http://" + net.JoinHostPort(ipAddr.String(), strconv.Itoa(int(port)))
+			var err error
+			addrs, err = cli.TransferOwnership1(context.TODO(), baseURL)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error running TO1 on %q: %v\n", baseURL, err)
+				continue
+			}
+		}
+		if len(addrs) == 0 {
+			fmt.Fprintf(os.Stderr, "Skipping TO1 directive with no found TO2 addrs: %+v\n", m)
+		}
+
+		// Print TO2 addrs if RV-only
+		if rvOnly {
+			fmt.Printf("TO2 Addrs found: %+v\n", addrs)
+			continue
+		}
+
+		// Try TO2
+		for _, addr := range addrs {
+			newDC := transferOwnership2(cli, addr)
+			if newDC != nil {
+				return newDC
+			}
+		}
 	}
 
 	return nil
+}
+
+func transferOwnership2(cli *fdo.Client, addr fdo.RvTO2Addr) *fdo.DeviceCredential {
+	panic("unimplemented")
 }
