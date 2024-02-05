@@ -248,6 +248,7 @@ func transferOwnership(cli *fdo.Client, rvInfo [][]fdo.RvInstruction) *fdo.Devic
 		}
 		if len(addrs) == 0 {
 			fmt.Fprintf(os.Stderr, "Skipping TO1 directive with no found TO2 addrs: %+v\n", m)
+			continue
 		}
 
 		// Print TO2 addrs if RV-only
@@ -269,5 +270,19 @@ func transferOwnership(cli *fdo.Client, rvInfo [][]fdo.RvInstruction) *fdo.Devic
 }
 
 func transferOwnership2(cli *fdo.Client, addr fdo.RvTO2Addr) *fdo.DeviceCredential {
-	panic("unimplemented")
+	host := addr.DNSAddress
+	if host == "" {
+		host = addr.IPAddress.String()
+	}
+	port := addr.Port
+	if port == 0 {
+		port = 80
+	}
+	baseURL := "http://" + net.JoinHostPort(host, strconv.Itoa(int(port)))
+	cred, err := cli.TransferOwnership2(context.TODO(), baseURL, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "TO2 failed for %q: %v\n", baseURL, err)
+		return nil
+	}
+	return cred
 }

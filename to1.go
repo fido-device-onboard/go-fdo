@@ -6,6 +6,7 @@ package fdo
 import (
 	"context"
 	"fmt"
+	"net"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
@@ -21,7 +22,7 @@ const (
 
 // RvTO2Addr indicates to the device how to connect to the owner service.
 type RvTO2Addr struct {
-	IPAddress         []byte
+	IPAddress         net.IP
 	DNSAddress        string
 	Port              uint16
 	TransportProtocol TransportProtocol
