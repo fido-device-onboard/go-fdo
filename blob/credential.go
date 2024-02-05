@@ -22,7 +22,7 @@ type DeviceCredential struct {
 	fdo.DeviceCredential
 
 	// Secrets that would otherwise be stored inside a TPM or other enclave.
-	HmacSecret []byte
+	HmacSecret Hmac
 	PrivateKey Pkcs8Key
 }
 

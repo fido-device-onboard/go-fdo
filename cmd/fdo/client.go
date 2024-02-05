@@ -27,14 +27,14 @@ var clientFlags = flag.NewFlagSet("client", flag.ContinueOnError)
 
 var (
 	blobPath    string
-	diAddr      string
+	diURL       string
 	printDevice bool
 	rvOnly      bool
 )
 
 func init() {
 	clientFlags.StringVar(&blobPath, "blob", "cred.bin", "File path of device credential blob")
-	clientFlags.StringVar(&diAddr, "di", "", "HTTP base `URL` for DI server")
+	clientFlags.StringVar(&diURL, "di", "", "HTTP base `URL` for DI server")
 	clientFlags.BoolVar(&printDevice, "print", false, "Print device credential blob and stop")
 	clientFlags.BoolVar(&rvOnly, "rv-only", false, "Perform TO1 then stop")
 }
@@ -54,11 +54,33 @@ func client() error {
 		CipherSuite: kex.A256GcmCipher,
 	}
 
-	if diAddr != "" {
+	// Perform DI if given a URL
+	if diURL != "" {
 		return di(cli)
 	}
 
-	// TODO: TO1/TO2
+	// Read device credential blob to configure client for TO1/TO2
+	blobFile, err := os.Open(blobPath)
+	if err != nil {
+		return fmt.Errorf("error opening blob credential %q: %w", blobPath, err)
+	}
+	defer func() { _ = blobFile.Close() }()
+
+	var cred blob.DeviceCredential
+	if err := cbor.NewDecoder(blobFile).Decode(&cred); err != nil {
+		_ = blobFile.Close()
+		return fmt.Errorf("error parsing blob credential %q: %w", blobPath, err)
+	}
+	_ = blobFile.Close()
+	cli.Cred = cred.DeviceCredential
+	cli.Hmac = cred.HmacSecret
+	cli.Key = cred.PrivateKey
+
+	// If print option was given, stop here
+	if printDevice {
+		fmt.Printf("%+v\n", cred)
+		return nil
+	}
 
 	return nil
 }
@@ -94,7 +116,7 @@ func di(cli *fdo.Client) error {
 	cli.Key = key
 
 	// Call the DI server
-	cred, err := cli.DeviceInitialize(context.TODO(), diAddr, fdo.DeviceMfgInfo{
+	cred, err := cli.DeviceInitialize(context.TODO(), diURL, fdo.DeviceMfgInfo{
 		KeyType:      fdo.RsaPkcsKeyType,                // KeyType
 		KeyEncoding:  fdo.X5ChainKeyEnc,                 // KeyEncoding
 		KeyHashAlg:   fdo.Sha384Hash,                    // HashAlg
