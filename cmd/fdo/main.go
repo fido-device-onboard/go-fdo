@@ -5,10 +5,10 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"os"
-	"strings"
 )
 
 var flags = flag.NewFlagSet("root", flag.ContinueOnError)
@@ -25,22 +25,14 @@ Server options:
 }
 
 func options(flags *flag.FlagSet) string {
-	var nameSize int
-	flags.VisitAll(func(f *flag.Flag) {
-		if len(f.Name) > nameSize {
-			nameSize = len(f.Name)
-		}
-	})
-	if nameSize < 4 {
-		nameSize = 4
-	}
-	nameSize++
+	oldOutput := flags.Output()
+	defer flags.SetOutput(oldOutput)
 
-	var out string
-	flags.VisitAll(func(f *flag.Flag) {
-		out += fmt.Sprintf("  -%s%s%s\n", f.Name, strings.Repeat(" ", nameSize-len(f.Name)), f.Usage)
-	})
-	return out
+	var buf bytes.Buffer
+	flags.SetOutput(&buf)
+	flags.PrintDefaults()
+
+	return buf.String()
 }
 
 func main() {
