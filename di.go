@@ -30,9 +30,9 @@ const (
 //	  serialNo,               // tstr
 //	  modelNo,                // tstr
 //	  CSR,                    // bstr
-//	  OnDie ECDSA cert chain, // bstr
-//	  test signature,         // bstr
-//	  MAROE prefix,           // bstr
+//	  OnDie ECDSA cert chain, // bstr OR OMITTED
+//	  test signature,         // bstr OR OMITTED
+//	  MAROE prefix,           // bstr OR OMITTED
 //	]
 //
 //	DeviceMfgInfo = bstr, MfgInfo.cbor (bstr-wrap MfgInfo CBOR bytes)
@@ -40,14 +40,14 @@ const (
 // [C client]: https://github.com/fido-device-onboard/client-sdk-fidoiot/
 // [Java client]: https://github.com/fido-device-onboard/pri-fidoiot
 type DeviceMfgInfo struct {
-	KeyType            KeyType
-	KeyEncoding        KeyEncoding
-	SerialNumber       string
-	DeviceInfo         string
-	CertInfo           cbor.X509CertificateRequest
-	ODCAChain          []byte // deprecated
-	TestSig            []byte // deprecated
-	TestSigMAROEPrefix []byte // deprecated
+	KeyType      KeyType
+	KeyEncoding  KeyEncoding
+	SerialNumber string
+	DeviceInfo   string
+	CertInfo     cbor.X509CertificateRequest
+	// ODCAChain          []byte // deprecated
+	// TestSig            []byte // deprecated
+	// TestSigMAROEPrefix []byte // deprecated
 }
 
 // AppStart(10) -> SetCredentials(11)
