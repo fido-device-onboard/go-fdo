@@ -392,8 +392,10 @@ func (d *Decoder) decodeRawVal(highThreeBits, lowFiveBits byte, additional []byt
 			length = uint64(lowFiveBits)
 		}
 		b := make([]byte, length)
-		if _, err := d.r.Read(b); err != nil {
+		if n, err := d.r.Read(b); err != nil && err != io.EOF {
 			return nil, err
+		} else if err == io.EOF && uint64(n) != length {
+			return nil, io.ErrUnexpectedEOF
 		}
 		return append(head, b...), nil
 
@@ -619,8 +621,10 @@ func (d *Decoder) decodeNegative(rv reflect.Value, additional []byte) error {
 func (d *Decoder) decodeByteSlice(rv reflect.Value, additional []byte) error {
 	length := toU64(additional)
 	bs := make([]byte, length)
-	if _, err := d.r.Read(bs); err != nil {
+	if n, err := d.r.Read(bs); err != nil && err != io.EOF {
 		return fmt.Errorf("error reading byte/text string: %w", err)
+	} else if err == io.EOF && uint64(n) != length {
+		return io.ErrUnexpectedEOF
 	}
 
 	// Note that setting cannot be done with reflect.Value.SetXXX because the
@@ -894,7 +898,7 @@ func (d *Decoder) decodeSimple(rv reflect.Value, lowFiveBits byte, additional []
 
 func (d *Decoder) typeInfo() (highThreeBits, lowFiveBits byte, additional []byte, _ error) {
 	var first [1]byte
-	if _, err := d.r.Read(first[:]); err != nil {
+	if n, err := d.r.Read(first[:]); err != nil && n == 0 { // allows for n=1, err=io.EOF
 		return 0, 0, nil, err
 	}
 
@@ -915,10 +919,10 @@ func (d *Decoder) typeInfo() (highThreeBits, lowFiveBits byte, additional []byte
 		return highThreeBits, lowFiveBits, nil, nil
 	}
 
-	if n, err := d.r.Read(additional); err != nil {
+	if n, err := d.r.Read(additional); err != nil && err != io.EOF {
 		return 0, 0, nil, err
 	} else if n < len(additional) {
-		return 0, 0, nil, fmt.Errorf("read of additional info was short, expected %d bytes, read %d", len(additional), n)
+		return 0, 0, nil, fmt.Errorf("read of additional info was short: %w", io.ErrUnexpectedEOF)
 	}
 	return highThreeBits, lowFiveBits, additional, nil
 }
