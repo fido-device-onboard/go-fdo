@@ -42,7 +42,6 @@ const (
 type DeviceMfgInfo struct {
 	KeyType            KeyType
 	KeyEncoding        KeyEncoding
-	KeyHashAlg         HashAlg
 	SerialNumber       string
 	DeviceInfo         string
 	CertInfo           cbor.X509CertificateRequest
