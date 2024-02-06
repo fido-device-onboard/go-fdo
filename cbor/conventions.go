@@ -117,12 +117,7 @@ func (c *X509Certificate) UnmarshalCBOR(data []byte) error {
 type X509CertificateRequest x509.CertificateRequest
 
 // MarshalCBOR implements Marshaler interface.
-func (c *X509CertificateRequest) MarshalCBOR() ([]byte, error) {
-	if c == nil {
-		return Marshal(nil)
-	}
-	return Marshal(c.Raw)
-}
+func (c X509CertificateRequest) MarshalCBOR() ([]byte, error) { return Marshal(c.Raw) }
 
 // UnmarshalCBOR implements Unmarshaler interface.
 func (c *X509CertificateRequest) UnmarshalCBOR(data []byte) error {
