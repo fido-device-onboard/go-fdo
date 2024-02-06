@@ -43,7 +43,7 @@ func init() {
 
 func client() error {
 	cli := &fdo.Client{
-		Transport: new(http.Transport),
+		Transport: &http.Transport{Debug: true},
 		Cred:      fdo.DeviceCredential{Version: 101},
 		Devmod: fdo.Devmod{
 			Os:      runtime.GOOS,

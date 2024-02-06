@@ -11,7 +11,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
+	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -42,11 +44,16 @@ type Transport struct {
 	// MaxContentLength defaults to 65535. Negative values disable content
 	// length checking.
 	MaxContentLength int64
+
+	// Debug will dump the request and response to stderr.
+	Debug bool
 }
 
 var _ fdo.Transport = (*Transport)(nil)
 
 // Send sends a single message and receives a single response message.
+//
+//nolint:gocyclo
 func (t *Transport) Send(ctx context.Context, base string, msgType uint8, msg any, sess kex.Session) (respType uint8, _ io.ReadCloser, _ error) {
 	// Initialize default values
 	if t.Client == nil {
@@ -95,9 +102,19 @@ func (t *Transport) Send(ctx context.Context, base string, msgType uint8, msg an
 	}
 
 	// Perform HTTP request
+	if t.Debug {
+		if debugReq, err := httputil.DumpRequest(req, true); err == nil {
+			fmt.Fprintln(os.Stderr, "Request: ", string(debugReq))
+		}
+	}
 	resp, err := t.Client.Do(req)
 	if err != nil {
 		return 0, nil, fmt.Errorf("error making HTTP request for message %d: %w", msgType, err)
+	}
+	if t.Debug {
+		if debugResp, err := httputil.DumpResponse(resp, true); err == nil {
+			fmt.Fprintln(os.Stderr, "Response: ", string(debugResp))
+		}
 	}
 
 	return t.handleResponse(resp, sess)
