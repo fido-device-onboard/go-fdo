@@ -94,6 +94,13 @@ func (hm HeaderMap) Parse(l Label, v any) (bool, error) {
 	return true, cbor.Unmarshal(data, v)
 }
 
+// HeaderParser decodes headers and is a read-only interface.
+type HeaderParser interface {
+	// Parse gets values from the header map as the expected type. v must be a
+	// pointer type, where the underlying value will be set.
+	Parse(l Label, v any) (bool, error)
+}
+
 /*
 Common labels
 

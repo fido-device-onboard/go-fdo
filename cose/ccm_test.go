@@ -25,7 +25,7 @@ func TestCCM(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := crypter.Encrypt(rand.Reader, plaintext, externalAAD, HeaderMap{})
+	got, _, err := crypter.Encrypt(rand.Reader, plaintext, externalAAD)
 	if err != nil {
 		t.Fatal(err)
 	}

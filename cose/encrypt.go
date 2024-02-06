@@ -14,14 +14,15 @@ import (
 // Crypter uses a given key and cipher to encypt and decrypt data.
 type Crypter interface {
 	// Encrypt converts plaintext and additional authenticated data to
-	// ciphertext using the implementer's key and cipher. The unprotected
-	// headers of the outgoing structure are provided in order for data such as
-	// IVs for block mode ciphers to be added.
+	// ciphertext using the implementer's key and cipher.
+	//
+	// The unprotected headers of the outgoing structure are returned in order
+	// for data such as IVs for block mode ciphers to be added.
 	//
 	// The value of externalAAD will be nil if no AAD was provided and be
 	// non-nil (and non-zero length, due to additional data COSE adds) if it
 	// was provided.
-	Encrypt(rand io.Reader, plaintext, externalAAD []byte, unprotected HeaderMap) (ciphertext []byte, err error)
+	Encrypt(rand io.Reader, plaintext, externalAAD []byte) (ciphertext []byte, unprotected HeaderMap, err error)
 
 	// Decrypt converts ciphertext and additional authenticated data to
 	// plaintext using the implementer's key and cipher. the unprotected
@@ -31,7 +32,7 @@ type Crypter interface {
 	// The value of externalAAD will be nil if no AAD was provided and be
 	// non-nil (and non-zero length, due to additional data COSE adds) if it
 	// was provided.
-	Decrypt(rand io.Reader, ciphertext, externalAAD []byte, unprotected HeaderMap) (plaintext []byte, err error)
+	Decrypt(rand io.Reader, ciphertext, externalAAD []byte, unprotected HeaderParser) (plaintext []byte, err error)
 }
 
 // Encrypt0 holds the encrypted content of an enveloped structure. It assumes
@@ -72,9 +73,15 @@ func (e0 Encrypt0[T, E]) Encrypt(alg EncryptAlgorithm, key []byte, payload T, aa
 	}
 
 	// Perform encryption to ciphertext
-	ciphertext, err := c.Encrypt(rand.Reader, plaintext, externalAAD, e0.Unprotected)
+	ciphertext, newUnprotected, err := c.Encrypt(rand.Reader, plaintext, externalAAD)
 	if err != nil {
 		return fmt.Errorf("error encrypting plaintext: %w", err)
+	}
+	if e0.Unprotected == nil {
+		e0.Unprotected = make(HeaderMap)
+	}
+	for label, val := range newUnprotected {
+		e0.Unprotected[label] = val
 	}
 	e0.Ciphertext = &ciphertext
 

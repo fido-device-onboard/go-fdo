@@ -179,18 +179,18 @@ type aeadCrypter struct {
 	AEAD cipher.AEAD
 }
 
-func (c *aeadCrypter) Encrypt(rand io.Reader, plaintext, externalAAD []byte, _ HeaderMap) ([]byte, error) {
+func (c *aeadCrypter) Encrypt(rand io.Reader, plaintext, externalAAD []byte) ([]byte, HeaderMap, error) {
 	if externalAAD == nil {
-		return nil, fmt.Errorf("AAD must be provided")
+		return nil, nil, fmt.Errorf("AAD must be provided")
 	}
 	nonce := make([]byte, c.AEAD.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
-		return nil, fmt.Errorf("error generating random nonce: %w", err)
+		return nil, nil, fmt.Errorf("error generating random nonce: %w", err)
 	}
-	return c.AEAD.Seal(nonce, nonce, plaintext, externalAAD), nil
+	return c.AEAD.Seal(nonce, nonce, plaintext, externalAAD), nil, nil
 }
 
-func (c *aeadCrypter) Decrypt(rand io.Reader, ciphertext, externalAAD []byte, _ HeaderMap) ([]byte, error) {
+func (c *aeadCrypter) Decrypt(rand io.Reader, ciphertext, externalAAD []byte, _ HeaderParser) ([]byte, error) {
 	if externalAAD == nil {
 		return nil, fmt.Errorf("AAD must be provided")
 	}
