@@ -51,8 +51,8 @@ type Encrypt0[T, E any] struct {
 // be type E and the same marshaling rules apply.
 //
 // For encryption algorithms that do not take external additional authenticated
-// data, aad must be nil. Otherwise, they must NOT be nil. To pass no AAD to an
-// AEAD, E should be []byte and aad should be a pointer to an empty byte slice.
+// data, aad must be nil. To pass no AAD to an AEAD, E should be []byte and aad
+// should be either nil or a pointer to an empty byte slice.
 func (e0 Encrypt0[T, E]) Encrypt(alg EncryptAlgorithm, key []byte, payload T, aad *E) error {
 	// Get Crypter to perform encryption/decryption
 	c, err := alg.NewCrypter(key)
@@ -92,8 +92,8 @@ func (e0 Encrypt0[T, E]) Encrypt(alg EncryptAlgorithm, key []byte, payload T, aa
 // to type T.
 //
 // For encryption algorithms that do not take external additional authenticated
-// data, aad must be nil. Otherwise, they must NOT be nil. To pass no AAD to an
-// AEAD, E should be []byte and aad should be a pointer to an empty byte slice.
+// data, aad must be nil. To pass no AAD to an AEAD, E should be []byte and aad
+// should be either nil or a pointer to an empty byte slice.
 func (e0 Encrypt0[T, E]) Decrypt(alg EncryptAlgorithm, key []byte, aad *E) (*T, error) {
 	// Get Crypter to perform encryption/decryption
 	c, err := alg.NewCrypter(key)
