@@ -51,7 +51,7 @@ type DeviceMfgInfo struct {
 	TestSigMAROEPrefix []byte // deprecated
 }
 
-// AppStart(10) -> SetCredential(11)
+// AppStart(10) -> SetCredentials(11)
 func (c *Client) appStart(ctx context.Context, baseURL string, info any) (*VoucherHeader, error) {
 	// Define request structure
 	var msg struct {

@@ -111,7 +111,7 @@ const (
 type PublicKey struct {
 	Type     KeyType
 	Encoding KeyEncoding
-	Body     []byte
+	Body     cbor.RawBytes
 
 	key   crypto.PublicKey
 	chain []*x509.Certificate
@@ -136,7 +136,11 @@ func newPublicKey(typ KeyType, pub any) (*PublicKey, error) {
 		}, nil
 
 	case *ecdsa.PublicKey, *rsa.PublicKey:
-		body, err := x509.MarshalPKIXPublicKey(pub)
+		der, err := x509.MarshalPKIXPublicKey(pub)
+		if err != nil {
+			return nil, fmt.Errorf("X509 encoding: %w", err)
+		}
+		body, err := cbor.Marshal(der)
 		if err != nil {
 			return nil, fmt.Errorf("X509 encoding: %w", err)
 		}
@@ -171,7 +175,7 @@ func (pub *PublicKey) Chain() ([]*x509.Certificate, error) {
 func (pub *PublicKey) parse() error {
 	switch pub.Encoding {
 	case X509KeyEnc:
-		key, err := x509.ParsePKIXPublicKey(pub.Body)
+		key, err := x509.ParsePKIXPublicKey([]byte(pub.Body))
 		if err != nil {
 			return err
 		}
@@ -197,7 +201,7 @@ func (pub *PublicKey) parse() error {
 
 	case X5ChainKeyEnc:
 		var certs []*cbor.X509Certificate
-		if err := cbor.Unmarshal(pub.Body, &certs); err != nil {
+		if err := cbor.Unmarshal([]byte(pub.Body), &certs); err != nil {
 			return err
 		}
 		if len(certs) == 0 {

@@ -148,7 +148,7 @@ func di(cli *fdo.Client) error {
 
 	// Call the DI server
 	cred, err := cli.DeviceInitialize(context.TODO(), diURL, fdo.DeviceMfgInfo{
-		KeyType:      fdo.RsaPkcsKeyType,                // KeyType
+		KeyType:      fdo.Secp384r1KeyType,              // KeyType
 		KeyEncoding:  fdo.X5ChainKeyEnc,                 // KeyEncoding
 		KeyHashAlg:   fdo.Sha384Hash,                    // HashAlg
 		SerialNumber: "12345",                           // string

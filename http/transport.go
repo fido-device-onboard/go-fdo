@@ -103,17 +103,23 @@ func (t *Transport) Send(ctx context.Context, base string, msgType uint8, msg an
 
 	// Perform HTTP request
 	if t.Debug {
-		if debugReq, err := httputil.DumpRequest(req, true); err == nil {
-			fmt.Fprintln(os.Stderr, "Request: ", string(debugReq))
+		if debugReq, err := httputil.DumpRequestOut(req, false); err == nil {
+			fmt.Fprintln(os.Stderr, "Request:", string(debugReq))
 		}
+		fmt.Fprintf(os.Stderr, "%x\n", body.Bytes())
 	}
 	resp, err := t.Client.Do(req)
 	if err != nil {
 		return 0, nil, fmt.Errorf("error making HTTP request for message %d: %w", msgType, err)
 	}
 	if t.Debug {
-		if debugResp, err := httputil.DumpResponse(resp, true); err == nil {
-			fmt.Fprintln(os.Stderr, "Response: ", string(debugResp))
+		if debugResp, err := httputil.DumpResponse(resp, false); err == nil {
+			fmt.Fprintln(os.Stderr, "Response:", string(debugResp))
+		}
+		var saveBody bytes.Buffer
+		if _, err = saveBody.ReadFrom(resp.Body); err == nil {
+			fmt.Fprintf(os.Stderr, "%x\n", saveBody.Bytes())
+			resp.Body = io.NopCloser(&saveBody)
 		}
 	}
 
