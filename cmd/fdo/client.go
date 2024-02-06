@@ -8,7 +8,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"flag"
@@ -118,7 +117,7 @@ func saveBlob(dc blob.DeviceCredential) error {
 
 func di(cli *fdo.Client) error {
 	// Generate Java implementation-compatible mfg string
-	certChainKey, err := rsa.GenerateKey(rand.Reader, 4096)
+	certChainKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	if err != nil {
 		return fmt.Errorf("error generating cert chain key: %w", err)
 	}
