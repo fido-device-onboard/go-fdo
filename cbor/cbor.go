@@ -625,38 +625,40 @@ func (d *Decoder) decodeByteSlice(rv reflect.Value, additional []byte) error {
 
 	// Note that setting cannot be done with reflect.Value.SetXXX because the
 	// reflect.Value may be an interface and its Elem() is not settable.
-	switch rv.Interface().(type) {
-	case []byte:
+	_, isBytes := rv.Interface().([]byte)
+	_, isString := rv.Interface().(string)
+	switch {
+	case isBytes || (rv.Kind() == reflect.Slice && rv.Type().Elem().Kind() == reflect.Uint8):
 		rv.Set(reflect.ValueOf(bs))
 		return nil
-	case string:
+	case isString || rv.Kind() == reflect.String:
 		rv.Set(reflect.ValueOf(string(bs)))
 		return nil
-	default:
-		// Support fixed-size array
-		if rv.Kind() == reflect.Array && rv.Type().Elem().Kind() == reflect.Uint8 {
-			// Ensure array is large enough
-			if uint64(rv.Len()) < length {
-				return fmt.Errorf("fixed-size array is too small: must be at least length %d", length)
-			}
+	}
 
-			// Grow decoded byte slice as needed to fit inside fixed array
-			rbs := reflect.ValueOf(&bs).Elem()
-			if grow := rv.Len() - rbs.Len(); grow > 0 {
-				rbs.Grow(grow)
-			}
-			rbs.SetLen(rv.Len())
-
-			// Convert slice to array and set new values
-			newArr := rbs.Convert(rv.Type())
-			rv.Set(newArr)
-
-			return nil
+	// Support fixed-size array
+	if rv.Kind() == reflect.Array && rv.Type().Elem().Kind() == reflect.Uint8 {
+		// Ensure array is large enough
+		if uint64(rv.Len()) < length {
+			return fmt.Errorf("fixed-size array is too small: must be at least length %d", length)
 		}
 
-		return fmt.Errorf("%w: only strings, byte slices, and fixed-size arrays are supported",
-			ErrUnsupportedType{typeName: rv.Type().String()})
+		// Grow decoded byte slice as needed to fit inside fixed array
+		rbs := reflect.ValueOf(&bs).Elem()
+		if grow := rv.Len() - rbs.Len(); grow > 0 {
+			rbs.Grow(grow)
+		}
+		rbs.SetLen(rv.Len())
+
+		// Convert slice to array and set new values
+		newArr := rbs.Convert(rv.Type())
+		rv.Set(newArr)
+
+		return nil
 	}
+
+	return fmt.Errorf("%w: only strings, byte slices, and fixed-size arrays are supported",
+		ErrUnsupportedType{typeName: rv.Type().String()})
 }
 
 func (d *Decoder) decodeArray(rv reflect.Value, additional []byte) error {

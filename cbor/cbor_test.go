@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/fido-device-onboard/go-fdo"
+	"github.com/fido-device-onboard/go-fdo/blob"
 	"github.com/fido-device-onboard/go-fdo/cbor"
 )
 
@@ -972,8 +973,8 @@ func TestDecodeByteSlice(t *testing.T) {
 }
 
 func TestDecodeByteSliceNewtype(t *testing.T) {
-	type bstr []byte
-	var got []byte
+	type bstr blob.Hmac
+	var got bstr
 	for _, test := range []struct {
 		input  []byte
 		expect bstr
