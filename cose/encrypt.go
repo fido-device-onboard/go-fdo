@@ -104,6 +104,13 @@ func (e0 Encrypt0[T, E]) Decrypt(alg EncryptAlgorithm, key []byte, aad *E) (*T, 
 		return nil, fmt.Errorf("error intializing crypter for alg %d: %w", alg, err)
 	}
 
+	// Add algorithm ID to protected header
+	if e0.Protected == nil {
+		e0.Protected = make(HeaderMap)
+	}
+	// TODO: Should this be done for non-AEAD?
+	e0.Protected[AlgLabel] = alg
+
 	// Encode additional authenticated data
 	var externalAAD []byte
 	if alg.SupportsAD() {
