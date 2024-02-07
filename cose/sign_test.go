@@ -35,6 +35,10 @@ func TestSignAndVerify(t *testing.T) {
 			t.Errorf("error signing: %v", err)
 			return
 		}
+		if len(s1.Signature) != 64 {
+			t.Errorf("signature length correct: expected %d, got %d", 64, len(s1.Signature))
+			return
+		}
 		passed, err := s1.Verify(key256.Public(), nil)
 		if err != nil {
 			t.Errorf("error verifying: %v", err)
@@ -49,6 +53,10 @@ func TestSignAndVerify(t *testing.T) {
 	t.Run("es384", func(t *testing.T) {
 		if err := s1.Sign(key384, nil, nil); err != nil {
 			t.Errorf("error signing: %v", err)
+			return
+		}
+		if len(s1.Signature) != 96 {
+			t.Errorf("signature length correct: expected %d, got %d", 96, len(s1.Signature))
 			return
 		}
 		passed, err := s1.Verify(key384.Public(), nil)
