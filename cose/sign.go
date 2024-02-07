@@ -73,7 +73,8 @@ func (s1 *Sign1[T]) Sign(key crypto.Signer, payload []byte, opts crypto.SignerOp
 	sig := signature{
 		Context:       sig1Context,
 		BodyProtected: body,
-		Payload:       payload,
+		ExternalAad:   cbor.RawBytes([]byte{0x40}),
+		Payload:       cbor.RawBytes(payload),
 	}
 	digest := opts.HashFunc().New()
 	if err := cbor.NewEncoder(digest).Encode(sig); err != nil {
@@ -117,8 +118,8 @@ func (s1 *Sign1[T]) Verify(key crypto.PublicKey, payload []byte) (bool, error) {
 	data, err := cbor.Marshal(signature{
 		Context:       sig1Context,
 		BodyProtected: body,
-		ExternalAad:   []byte{},
-		Payload:       payload,
+		ExternalAad:   cbor.RawBytes([]byte{0x40}),
+		Payload:       cbor.RawBytes(payload),
 	})
 	if err != nil {
 		return false, err
@@ -173,8 +174,8 @@ type signature struct {
 	Context       string
 	BodyProtected emptyOrSerializedMap
 	SignProtected emptyOrSerializedMap
-	ExternalAad   []byte
-	Payload       []byte
+	ExternalAad   cbor.RawBytes
+	Payload       cbor.RawBytes
 }
 
 // Omit SignProtected field when using Signature1 or CounterSignature0.
@@ -185,15 +186,15 @@ func (sig signature) MarshalCBOR() ([]byte, error) {
 			Context       string
 			BodyProtected emptyOrSerializedMap
 			SignProtected emptyOrSerializedMap
-			ExternalAad   []byte
-			Payload       []byte
+			ExternalAad   cbor.RawBytes
+			Payload       cbor.RawBytes
 		}(sig))
 	case sig1Context, sigCtr0Context:
 		return cbor.Marshal(struct {
 			Context       string
 			BodyProtected emptyOrSerializedMap
-			ExternalAad   []byte
-			Payload       []byte
+			ExternalAad   cbor.RawBytes
+			Payload       cbor.RawBytes
 		}{
 			Context:       sig.Context,
 			BodyProtected: sig.BodyProtected,
@@ -212,8 +213,8 @@ func (sig *signature) UnmarshalCBOR(b []byte) error {
 		Context       string
 		BodyProtected emptyOrSerializedMap
 		SignProtected emptyOrSerializedMap `cbor:",omitempty"`
-		ExternalAad   []byte
-		Payload       []byte
+		ExternalAad   cbor.RawBytes
+		Payload       cbor.RawBytes
 	}
 	if err := cbor.Unmarshal(b, &ss); err != nil {
 		return err
