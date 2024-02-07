@@ -472,7 +472,7 @@ func ExtendVoucher[T PublicKeyOrChain](v *Voucher, owner crypto.Signer, nextOwne
 
 func newSignedEntry(owner crypto.Signer, usePSS bool, payload VoucherEntryPayload) (*cose.Sign1Tag[VoucherEntryPayload], error) {
 	entry := cose.Sign1Tag[VoucherEntryPayload]{
-		Payload: cbor.NewBstr(payload),
+		Payload: cbor.NewByteWrap(payload),
 	}
 
 	signOpts, err := signOptsFor(owner, usePSS)

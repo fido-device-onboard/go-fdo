@@ -178,7 +178,7 @@ func TestExtendAndVerify(t *testing.T) {
 
 	ov1, err := fdo.ExtendVoucher(&ov, key, nextKey.Public().(*ecdsa.PublicKey), nil)
 	if err != nil {
-		t.Errorf("error extending voucher: %v", err)
+		t.Fatalf("error extending voucher: %v", err)
 	}
 
 	ov1Owner, err := ov1.OwnerPublicKey()

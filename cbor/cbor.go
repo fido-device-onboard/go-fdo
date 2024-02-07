@@ -270,6 +270,46 @@ type Unmarshaler interface {
 	UnmarshalCBOR([]byte) error
 }
 
+// FlatMarshaler is implemented by types to provide/consume more than one
+// object of an array. This is particularly useful in structs to match the
+// behavior of embedded struct fields, but with full control, like Marshaler.
+//
+// There is no separate FlatUnmarshaler interface.
+type FlatMarshaler interface {
+	// QuantityCBOR returns the number of CBOR objects FlatMarshalCBOR will encode.
+	QuantityCBOR() int
+
+	// FlatMarshalCBOR encodes CBOR objects to a stream (not wrapped in a CBOR
+	// array). The number of objects decoded must match QuantityCBOR.
+	FlatMarshalCBOR() ([]byte, error)
+
+	// FlatUnmarshalCBOR decodes CBOR objects from a stream (not an array). The
+	// number of objects decoded must match QuantityCBOR.
+	FlatUnmarshalCBOR(io.Reader) error
+}
+
+var flatMarshaler = reflect.TypeOf((*FlatMarshaler)(nil)).Elem()
+
+func toFlatMarshaler(rv reflect.Value) (FlatMarshaler, bool) {
+	if !rv.Type().Implements(flatMarshaler) && !reflect.PointerTo(rv.Type()).Implements(flatMarshaler) {
+		return nil, false
+	}
+
+	if fm, ok := rv.Interface().(FlatMarshaler); ok {
+		return fm, true
+	}
+
+	if rv.CanAddr() {
+		return rv.Addr().Interface().(FlatMarshaler), true
+	}
+
+	// Need to clone the value, because this is an encode operation and
+	// a non-pointer type was provided to Encode/Marshal
+	newRV := reflect.New(rv.Type()).Elem()
+	newRV.Set(rv)
+	return newRV.Addr().Interface().(FlatMarshaler), true
+}
+
 // RawBytes encodes and decodes untransformed. When encoding, it must contain
 // valid CBOR.
 type RawBytes []byte
@@ -681,6 +721,7 @@ func (d *Decoder) decodeArray(rv reflect.Value, additional []byte) error {
 	}
 }
 
+//nolint:gocyclo, TODO: Simplify, but only if it doesn't lose readability
 func (d *Decoder) decodeArrayToStruct(rv reflect.Value, additional []byte) error {
 	if rv.Kind() != reflect.Struct {
 		return fmt.Errorf("%w: expected a struct type",
@@ -689,7 +730,7 @@ func (d *Decoder) decodeArrayToStruct(rv reflect.Value, additional []byte) error
 	length := int(toU64(additional))
 
 	// Get order of fields and filter out up to one if necessary
-	indices, omittable := fieldOrder(rv.NumField(), rv.Type().Field)
+	indices, omittable := fieldOrder(rv.NumField(), rv.Type().Field, rv.Field)
 	if length != len(indices) {
 		omittedOne := false
 		for i, idx := range indices {
@@ -710,8 +751,29 @@ func (d *Decoder) decodeArrayToStruct(rv reflect.Value, additional []byte) error
 	}
 
 	// Decode each item into the appropriate field
-	for _, idx := range indices {
+	for i, idx := range indices {
+		// If the previous index was the same, skip, because FlatMarshaler
+		// already decoded QuantityCBOR() number of values. (The duplicate
+		// indices are just so the length of the indices slice matches the
+		// array size.)
+		if i > 0 && slices.Equal(idx, indices[i-1]) {
+			continue
+		}
+
 		f := rv.FieldByIndex(idx)
+
+		// Use FlatMarshaler, if implemented
+		if f.Type().Implements(flatMarshaler) || reflect.PointerTo(f.Type()).Implements(flatMarshaler) {
+			fm, ok := f.Interface().(FlatMarshaler)
+			if !ok {
+				// Decoding is always to a pointer, so safe to assume CanAddr()
+				fm = f.Addr().Interface().(FlatMarshaler)
+			}
+			if err := fm.FlatUnmarshalCBOR(d.r); err != nil {
+				return fmt.Errorf("error decoding array item %+v: %w", idx, err)
+			}
+			continue
+		}
 
 		// Allocate addressable memory for field
 		newVal := reflect.New(f.Type())
@@ -721,6 +783,7 @@ func (d *Decoder) decodeArrayToStruct(rv reflect.Value, additional []byte) error
 			newVal.Elem().Set(reflect.New(f.Type().Elem()))
 		}
 
+		// Decode into new value and then set the field
 		if err := d.Decode(newVal.Interface()); err != nil {
 			return fmt.Errorf("error decoding array item %+v: %w", idx, err)
 		}
@@ -1146,27 +1209,50 @@ func (e *Encoder) encodeArray(size int, get func(int) reflect.Value) error {
 
 func (e *Encoder) encodeStruct(size int, get func([]int) reflect.Value, field func(int) reflect.StructField) error {
 	// Get encoding order of fields
-	indices, omittable := fieldOrder(size, field)
+	indices, omittable := fieldOrder(size, field, func(i int) reflect.Value { return get([]int{i}) })
 
 	// Filter omittable fields which are the zero value for the associated type
-	var items []any
-	for _, i := range indices {
-		rv := get(i)
-		if omittable(i) && rv.IsZero() {
+	length := uint64(0)
+	var items []reflect.Value
+	for i, idx := range indices {
+		// If the previous index was the same, skip, because FlatMarshaler
+		// already decoded QuantityCBOR() number of values. (The duplicate
+		// indices are just so the length of the indices slice matches the
+		// array size.)
+		if i > 0 && slices.Equal(idx, indices[i-1]) {
+			length++
 			continue
 		}
-		items = append(items, rv.Interface())
+
+		rv := get(idx)
+		if omittable(idx) && rv.IsZero() {
+			continue
+		}
+		length++
+		items = append(items, rv)
 	}
 
 	// Write the length as additional info
-	info := u64Bytes(uint64(len(items)))
+	info := u64Bytes(length)
 	if err := e.write(additionalInfo(arrayMajorType, info)); err != nil {
 		return err
 	}
 
 	// Write each item
 	for _, item := range items {
-		if err := e.Encode(item); err != nil {
+		// Use FlatMarshaler, if available
+		if fm, ok := toFlatMarshaler(item); ok {
+			data, err := fm.FlatMarshalCBOR()
+			if err != nil {
+				return err
+			}
+			if _, err := e.w.Write(data); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := e.Encode(item.Interface()); err != nil {
 			return err
 		}
 	}
@@ -1258,9 +1344,9 @@ type weightedField struct {
 }
 
 // Handle weighting/skipping options in struct tags
-func fieldOrder(n int, field func(int) reflect.StructField) (indices [][]int, omittable func([]int) bool) {
+func fieldOrder(n int, field func(int) reflect.StructField, fieldVal func(int) reflect.Value) (indices [][]int, omittable func([]int) bool) {
 	// Collect weights by struct tag and skip fields with "-"
-	fields := collectFieldWeights(nil, 0, n, field, nil)
+	fields := collectFieldWeights(nil, 0, n, field, fieldVal, nil)
 
 	// Use weights to order indices using the following algorithm:
 	//
@@ -1271,11 +1357,14 @@ func fieldOrder(n int, field func(int) reflect.StructField) (indices [][]int, om
 			return fields[i].weight < fields[j].weight
 		}
 		for k := 0; k < len(fields[i].index); k++ {
+			if k+1 > len(fields[i].index) || k+1 > len(fields[j].index) {
+				panic("programming error - indices to sort cannot be a parent embedded field of another")
+			}
 			if fields[i].index[k] != fields[j].index[k] {
 				return fields[i].index[k] < fields[j].index[k]
 			}
 		}
-		panic("programming error - indices to sort cannot be equal or a parent embedded field of another")
+		return false // equal - allowed for FlatMarshaler fields which get encoded/decoded n times
 	})
 
 	// Strip weights, leaving only the ordered indices
@@ -1292,7 +1381,7 @@ func fieldOrder(n int, field func(int) reflect.StructField) (indices [][]int, om
 	}
 }
 
-func collectFieldWeights(parents []int, i, upper int, field func(int) reflect.StructField, fields []weightedField) []weightedField {
+func collectFieldWeights(parents []int, i, upper int, field func(int) reflect.StructField, fieldVal func(int) reflect.Value, fields []weightedField) []weightedField {
 	if i >= upper {
 		return fields
 	}
@@ -1300,7 +1389,7 @@ func collectFieldWeights(parents []int, i, upper int, field func(int) reflect.St
 
 	// Skip private fields
 	if !f.IsExported() {
-		return collectFieldWeights(parents, i+1, upper, field, fields)
+		return collectFieldWeights(parents, i+1, upper, field, fieldVal, fields)
 	}
 
 	// Extract cbor tag value before the first comma separator (if any)
@@ -1310,15 +1399,7 @@ func collectFieldWeights(parents []int, i, upper int, field func(int) reflect.St
 
 	// Skip item if it is a struct field and has the tag `cbor:"-"`
 	if val == "-" {
-		return collectFieldWeights(parents, i+1, upper, field, fields)
-	}
-
-	// Handle embedded fields
-	//
-	// TODO: Do not treat a field as embedded if it implements Marshaler/Unmarshaler?
-	if f.Anonymous && f.Type.Kind() == reflect.Struct {
-		nested := collectFieldWeights(append(parents, i), 0, f.Type.NumField(), f.Type.Field, nil)
-		return collectFieldWeights(parents, i+1, upper, field, append(fields, nested...))
+		return collectFieldWeights(parents, i+1, upper, field, fieldVal, fields)
 	}
 
 	// Parse weight from string
@@ -1333,8 +1414,28 @@ func collectFieldWeights(parents []int, i, upper int, field func(int) reflect.St
 		}
 	}
 
+	// Fields implementing FlatMarshaler provide/consumer multiple objects
+	if fm, ok := toFlatMarshaler(fieldVal(i)); ok {
+		n := fm.QuantityCBOR()
+		for j := 0; j < n; j++ {
+			fields = append(fields, weightedField{
+				index:  append(parents, i),
+				weight: weight,
+			})
+		}
+		return collectFieldWeights(parents, i+1, upper, field, fieldVal, fields)
+	}
+
+	// Handle embedded fields
+	//
+	// TODO: Handle pointer and interface types?
+	if f.Anonymous && f.Type.Kind() == reflect.Struct {
+		nested := collectFieldWeights(append(parents, i), 0, f.Type.NumField(), f.Type.Field, fieldVal(i).Field, nil)
+		return collectFieldWeights(parents, i+1, upper, field, fieldVal, append(fields, nested...))
+	}
+
 	// Append to field list
-	return collectFieldWeights(parents, i+1, upper, field, append(fields, weightedField{
+	return collectFieldWeights(parents, i+1, upper, field, fieldVal, append(fields, weightedField{
 		index:     append(parents, i),
 		weight:    weight,
 		omittable: omittable,

@@ -175,64 +175,76 @@ func (pub *PublicKey) Chain() ([]*x509.Certificate, error) {
 func (pub *PublicKey) parse() error {
 	switch pub.Encoding {
 	case X509KeyEnc:
-		key, err := x509.ParsePKIXPublicKey([]byte(pub.Body))
-		if err != nil {
-			return err
-		}
-
-		switch pub.Type {
-		case Secp256r1KeyType, Secp384r1KeyType:
-			eckey, ok := key.(*ecdsa.PublicKey)
-			if !ok {
-				return errors.New("public key must be an ECDSA public key")
-			}
-			pub.key = eckey
-			return nil
-		case RsaPssKeyType, RsaPkcsKeyType, Rsa2048RestrKeyType:
-			rsakey, ok := key.(*rsa.PublicKey)
-			if !ok {
-				return errors.New("public key must be an RSA public key")
-			}
-			pub.key = rsakey
-			return nil
-		default:
-			return fmt.Errorf("unsupported key type: %s", pub.Type)
-		}
+		return pub.parseX509()
 
 	case X5ChainKeyEnc:
-		var certs []*cbor.X509Certificate
-		if err := cbor.Unmarshal([]byte(pub.Body), &certs); err != nil {
-			return err
-		}
-		if len(certs) == 0 {
-			return errors.New("X5CHAIN key cannot be an empty certificate chain")
-		}
-		pub.chain = make([]*x509.Certificate, len(certs))
-		for i, cert := range certs {
-			cert := cert
-			pub.chain[i] = (*x509.Certificate)(cert)
-		}
-
-		switch pub.Type {
-		case Secp256r1KeyType, Secp384r1KeyType:
-			eckey, ok := certs[len(certs)-1].PublicKey.(*ecdsa.PublicKey)
-			if !ok {
-				return errors.New("public key must be an ECDSA public key")
-			}
-			pub.key = eckey
-			return nil
-		case RsaPssKeyType, RsaPkcsKeyType, Rsa2048RestrKeyType:
-			rsakey, ok := certs[len(certs)-1].PublicKey.(*rsa.PublicKey)
-			if !ok {
-				return errors.New("public key must be an RSA public key")
-			}
-			pub.key = rsakey
-			return nil
-		default:
-			return fmt.Errorf("unsupported key type: %s", pub.Type)
-		}
+		return pub.parseX5Chain()
 
 	default:
 		return fmt.Errorf("unsupported key encoding: %s", pub.Encoding)
+	}
+}
+
+func (pub *PublicKey) parseX509() error {
+	var der []byte
+	if err := cbor.Unmarshal([]byte(pub.Body), &der); err != nil {
+		return err
+	}
+	key, err := x509.ParsePKIXPublicKey(der)
+	if err != nil {
+		return err
+	}
+
+	switch pub.Type {
+	case Secp256r1KeyType, Secp384r1KeyType:
+		eckey, ok := key.(*ecdsa.PublicKey)
+		if !ok {
+			return errors.New("public key must be an ECDSA public key")
+		}
+		pub.key = eckey
+		return nil
+	case RsaPssKeyType, RsaPkcsKeyType, Rsa2048RestrKeyType:
+		rsakey, ok := key.(*rsa.PublicKey)
+		if !ok {
+			return errors.New("public key must be an RSA public key")
+		}
+		pub.key = rsakey
+		return nil
+	default:
+		return fmt.Errorf("unsupported key type: %s", pub.Type)
+	}
+}
+
+func (pub *PublicKey) parseX5Chain() error {
+	var certs []*cbor.X509Certificate
+	if err := cbor.Unmarshal([]byte(pub.Body), &certs); err != nil {
+		return err
+	}
+	if len(certs) == 0 {
+		return errors.New("X5CHAIN key cannot be an empty certificate chain")
+	}
+	pub.chain = make([]*x509.Certificate, len(certs))
+	for i, cert := range certs {
+		cert := cert
+		pub.chain[i] = (*x509.Certificate)(cert)
+	}
+
+	switch pub.Type {
+	case Secp256r1KeyType, Secp384r1KeyType:
+		eckey, ok := certs[len(certs)-1].PublicKey.(*ecdsa.PublicKey)
+		if !ok {
+			return errors.New("public key must be an ECDSA public key")
+		}
+		pub.key = eckey
+		return nil
+	case RsaPssKeyType, RsaPkcsKeyType, Rsa2048RestrKeyType:
+		rsakey, ok := certs[len(certs)-1].PublicKey.(*rsa.PublicKey)
+		if !ok {
+			return errors.New("public key must be an RSA public key")
+		}
+		pub.key = rsakey
+		return nil
+	default:
+		return fmt.Errorf("unsupported key type: %s", pub.Type)
 	}
 }

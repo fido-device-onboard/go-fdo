@@ -1857,3 +1857,95 @@ func TestDecodeOVHeaderX5Chain(t *testing.T) {
 	}
 	t.Logf("Header: %+v", ovh)
 }
+
+type Flatten struct {
+	B string
+	C []byte
+}
+
+var _ cbor.FlatMarshaler = (*Flatten)(nil)
+
+func (f Flatten) QuantityCBOR() int { return 2 }
+
+func (f Flatten) FlatMarshalCBOR() ([]byte, error) {
+	b, err := cbor.Marshal(f.B + "!") // note the extra rune!
+	if err != nil {
+		return nil, err
+	}
+	c, err := cbor.Marshal(f.C)
+	if err != nil {
+		return nil, err
+	}
+	return append(b, c...), nil
+}
+
+func (f *Flatten) FlatUnmarshalCBOR(r io.Reader) error {
+	if err := cbor.NewDecoder(r).Decode(&f.B); err != nil {
+		return err
+	}
+	return cbor.NewDecoder(r).Decode(&f.C)
+}
+
+func TestFlatMarshal(t *testing.T) {
+	type st struct {
+		A int
+		Z Flatten
+	}
+	s := st{
+		A: 1,
+		Z: Flatten{B: "hello", C: []byte{0x02, 0x01, 0x00}},
+	}
+
+	expect := []byte{0x83, 0x01, 0x66, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x21, 0x43, 0x02, 0x01, 0x00}
+
+	got, err := cbor.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(expect, got) {
+		t.Errorf("expected % x, got % x", expect, got)
+	}
+
+	expectS := s
+	expectS.Z.B += "!" // added in FlatMarshalCBOR
+
+	var gotS st
+	if err := cbor.Unmarshal(got, &gotS); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(expectS, gotS) {
+		t.Errorf("expected %+v, got %+v", expectS, gotS)
+	}
+}
+
+func TestFlatMarshalEmbedded(t *testing.T) {
+	type st struct {
+		A int
+		Flatten
+	}
+	s := st{
+		A:       1,
+		Flatten: Flatten{B: "hello", C: []byte{0x02, 0x01, 0x00}},
+	}
+
+	expect := []byte{0x83, 0x01, 0x66, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x21, 0x43, 0x02, 0x01, 0x00}
+
+	got, err := cbor.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(expect, got) {
+		t.Errorf("expected % x, got % x", expect, got)
+	}
+
+	expectS := s
+	expectS.B += "!" // added in FlatMarshalCBOR
+
+	var gotS st
+	if err := cbor.Unmarshal(got, &gotS); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(expectS, gotS) {
+		t.Errorf("expected %+v, got %+v", expectS, gotS)
+	}
+}

@@ -21,8 +21,8 @@ import (
 // signature is being placed on a message.
 type Sign1[T any] struct {
 	Header
-	Payload   *cbor.Bstr[T] // non-empty byte string or null
-	Signature []byte        // non-empty byte string
+	Payload   *cbor.ByteWrap[T] // non-empty byte string or null
+	Signature []byte            // non-empty byte string
 }
 
 // Sign using a single private key. Unless it was transported independently of

@@ -4,7 +4,9 @@
 package cose
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"strconv"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
@@ -26,8 +28,11 @@ func (hdr Header) Algorithm() (id int64) {
 	return id
 }
 
-// MarshalCBOR implements cbor.Marshaler.
-func (hdr Header) MarshalCBOR() ([]byte, error) {
+// QuantityCBOR implements cbor.FlatMarshaler.
+func (hdr Header) QuantityCBOR() int { return 2 }
+
+// FlatMarshalCBOR implements cbor.FlatMarshaler.
+func (hdr Header) FlatMarshalCBOR() ([]byte, error) {
 	protectedHeader, err := newEmptyOrSerializedMap(hdr.Protected)
 	if err != nil {
 		return nil, err
@@ -36,21 +41,34 @@ func (hdr Header) MarshalCBOR() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return cbor.Marshal(cborHeader{
-		Protected:   protectedHeader,
-		Unprotected: unprotectedHeader,
-	})
+
+	var buf bytes.Buffer
+	enc := cbor.NewEncoder(&buf)
+	if err := enc.Encode(protectedHeader); err != nil {
+		return nil, err
+	}
+	if err := enc.Encode(unprotectedHeader); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
-// UnmarshalCBOR implements cbor.Unmarshaler.
-func (hdr *Header) UnmarshalCBOR(b []byte) error {
-	var hdrCbor cborHeader
-	if err := cbor.Unmarshal(b, &hdrCbor); err != nil {
+// FlatUnmarshalCBOR implements cbor.FlatMarshaler.
+func (hdr *Header) FlatUnmarshalCBOR(r io.Reader) error {
+	dec := cbor.NewDecoder(r)
+
+	var protectedHeader emptyOrSerializedMap
+	if err := dec.Decode(&protectedHeader); err != nil {
+		return err
+	}
+
+	var unprotectedHeader rawHeaderMap
+	if err := dec.Decode(&unprotectedHeader); err != nil {
 		return err
 	}
 
 	hdr.Protected = make(map[Label]any)
-	for k, raw := range hdrCbor.Protected.Val.Val {
+	for k, raw := range protectedHeader.Val.Val {
 		var v any
 		if err := cbor.Unmarshal([]byte(raw), &v); err != nil {
 			return fmt.Errorf("error decoding protected value for %s: %w", k, err)
@@ -59,7 +77,7 @@ func (hdr *Header) UnmarshalCBOR(b []byte) error {
 	}
 
 	hdr.Unprotected = make(map[Label]any)
-	for k, raw := range hdrCbor.Unprotected {
+	for k, raw := range unprotectedHeader {
 		var v any
 		if err := cbor.Unmarshal([]byte(raw), &v); err != nil {
 			return fmt.Errorf("error decoding unprotected value for %s: %w", k, err)
@@ -68,11 +86,6 @@ func (hdr *Header) UnmarshalCBOR(b []byte) error {
 	}
 
 	return nil
-}
-
-type cborHeader struct {
-	Protected   emptyOrSerializedMap // wrapped in byte string, zero len if map is empty
-	Unprotected rawHeaderMap         // encoded like a normal map
 }
 
 // HeaderMap is used for protected and unprotected headers, which must have an

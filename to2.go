@@ -352,7 +352,7 @@ func (c *Client) proveDevice(ctx context.Context, baseURL string, proveDeviceNon
 				eatUnprotectedNonceClaim: setupDeviceNonce,
 			},
 		},
-		Payload: cbor.NewBstr(newEAT(c.Cred.GUID, proveDeviceNonce, eatPayload, nil)),
+		Payload: cbor.NewByteWrap(newEAT(c.Cred.GUID, proveDeviceNonce, eatPayload, nil)),
 	}
 	opts, err := signOptsFor(c.Key, c.PSS)
 	if err != nil {
