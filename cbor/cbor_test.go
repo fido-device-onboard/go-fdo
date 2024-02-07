@@ -1949,3 +1949,69 @@ func TestFlatMarshalEmbedded(t *testing.T) {
 		t.Errorf("expected %+v, got %+v", expectS, gotS)
 	}
 }
+
+func TestMarshalEmbeddedPointer(t *testing.T) {
+	type E struct {
+		B string
+	}
+	type st struct {
+		A int
+		*E
+	}
+
+	t.Run("marshal nil (addressable)", func(t *testing.T) {
+		input := st{A: 1}
+		expect := []byte{0x82, 0x01, 0x60}
+
+		got, err := cbor.Marshal(&input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(expect, got) {
+			t.Errorf("expected % x, got % x", expect, got)
+		}
+	})
+
+	t.Run("marshal nil (unaddressable)", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Errorf("the code did not panic")
+			}
+		}()
+
+		input := st{A: 1}
+		_, _ = cbor.Marshal(input)
+	})
+
+	t.Run("marshal non-nil", func(t *testing.T) {
+		input := st{
+			A: 1,
+			E: &E{B: "hello"},
+		}
+		expect := []byte{0x82, 0x01, 0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f}
+
+		got, err := cbor.Marshal(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(expect, got) {
+			t.Errorf("expected % x, got % x", expect, got)
+		}
+	})
+
+	t.Run("unmarshal", func(t *testing.T) {
+		input := []byte{0x82, 0x01, 0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f}
+		expect := st{
+			A: 1,
+			E: &E{B: "hello"},
+		}
+
+		var got st
+		if err := cbor.Unmarshal(input, &got); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(expect, got) {
+			t.Errorf("expected %+v, got %+v", expect, got)
+		}
+	})
+}

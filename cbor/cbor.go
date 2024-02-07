@@ -1427,11 +1427,28 @@ func collectFieldWeights(parents []int, i, upper int, field func(int) reflect.St
 	}
 
 	// Handle embedded fields
-	//
-	// TODO: Handle pointer and interface types?
-	if f.Anonymous && f.Type.Kind() == reflect.Struct {
-		nested := collectFieldWeights(append(parents, i), 0, f.Type.NumField(), f.Type.Field, fieldVal(i).Field, nil)
-		return collectFieldWeights(parents, i+1, upper, field, fieldVal, append(fields, nested...))
+	if f.Anonymous {
+		switch {
+		case f.Type.Kind() == reflect.Struct:
+			nested := collectFieldWeights(append(parents, i), 0, f.Type.NumField(),
+				f.Type.Field, fieldVal(i).Field, nil)
+			return collectFieldWeights(parents, i+1, upper, field, fieldVal, append(fields, nested...))
+		case f.Type.Kind() == reflect.Pointer && f.Type.Elem().Kind() == reflect.Struct:
+			// If the embedded struct point is nil, initialize it so that
+			// fieldVal(i) does not panic when collecting nested field weights.
+			if !fieldVal(i).Elem().IsValid() {
+				if !fieldVal(i).CanSet() {
+					panic("encoding a nil embedded struct pointer is invalid")
+				}
+				fieldVal(i).Set(reflect.New(f.Type.Elem()))
+			}
+
+			nested := collectFieldWeights(append(parents, i), 0, f.Type.Elem().NumField(),
+				f.Type.Elem().Field, fieldVal(i).Elem().Field, nil)
+			return collectFieldWeights(parents, i+1, upper, field, fieldVal, append(fields, nested...))
+		default:
+			// TODO: Should embedded interfaces be handled differently?
+		}
 	}
 
 	// Append to field list
