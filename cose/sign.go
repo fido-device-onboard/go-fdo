@@ -49,7 +49,7 @@ func (s1 *Sign1[T]) Sign(key crypto.Signer, payload []byte, opts crypto.SignerOp
 	// When an *ecdsa.PrivateKey is used, override its Sign implementation
 	// to use RFC8152 signature encoding rather than ASN1.
 	if eckey, ok := key.(*ecdsa.PrivateKey); ok {
-		key = rfc8152ecSigner{eckey}
+		key = RFC8152Signer{eckey}
 	}
 
 	// Put algorithm ID in the signature protected header before signing
@@ -222,18 +222,18 @@ func (sig *signature) UnmarshalCBOR(b []byte) error {
 	return nil
 }
 
-// This type wraps an ECDSA private key and uses the signature encoding
+// RFC8152Signer wraps an ECDSA private key and uses the signature encoding
 // required by COSE.
-type rfc8152ecSigner struct {
+type RFC8152Signer struct {
 	PrivateKey *ecdsa.PrivateKey
 }
 
 // Public returns the public key corresponding to the opaque,
 // private key.
-func (key rfc8152ecSigner) Public() crypto.PublicKey { return key.PrivateKey.Public() }
+func (key RFC8152Signer) Public() crypto.PublicKey { return key.PrivateKey.Public() }
 
 // Sign implements crypto.Signer.
-func (key rfc8152ecSigner) Sign(rand io.Reader, digest []byte, _ crypto.SignerOpts) ([]byte, error) {
+func (key RFC8152Signer) Sign(rand io.Reader, digest []byte, _ crypto.SignerOpts) ([]byte, error) {
 	r, s, err := ecdsa.Sign(rand, key.PrivateKey, digest)
 	if err != nil {
 		return nil, err

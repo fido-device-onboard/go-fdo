@@ -161,7 +161,7 @@ func di(cli *fdo.Client) error {
 		Active:           true,
 		DeviceCredential: *cred,
 		HmacSecret:       secret,
-		PrivateKey:       blob.Pkcs8Key{Signer: key},
+		PrivateKey:       blob.Pkcs8Key{PrivateKey: key},
 	})
 }
 
