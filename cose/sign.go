@@ -45,6 +45,10 @@ func (s1 *Sign1[T]) Sign(key crypto.Signer, payload []byte, opts crypto.SignerOp
 	if err != nil {
 		return err
 	}
+	if s1.Unprotected == nil {
+		s1.Unprotected = make(HeaderMap)
+	}
+	s1.Unprotected[AlgLabel] = algID
 
 	// When an *ecdsa.PrivateKey is used, override its Sign implementation
 	// to use RFC8152 signature encoding rather than ASN1.
@@ -56,7 +60,6 @@ func (s1 *Sign1[T]) Sign(key crypto.Signer, payload []byte, opts crypto.SignerOp
 	if s1.Protected == nil {
 		s1.Protected = make(map[Label]any)
 	}
-	s1.Protected[AlgLabel] = algID
 	body, err := newEmptyOrSerializedMap(s1.Protected)
 	if err != nil {
 		return fmt.Errorf("error marshaling signature protected body: %W", err)
@@ -126,7 +129,14 @@ func (s1 *Sign1[T]) Verify(key crypto.PublicKey, payload []byte) (bool, error) {
 	}
 
 	// Hash and verify
-	hashAlg := SignatureAlgorithm(s1.Algorithm()).HashFunc()
+	if s1.Unprotected == nil {
+		s1.Unprotected = make(HeaderMap)
+	}
+	algID, ok := s1.Unprotected[AlgLabel].(int64)
+	if !ok {
+		return false, fmt.Errorf("no algorithm in unprotected headers")
+	}
+	hashAlg := SignatureAlgorithm(algID).HashFunc()
 	if !hashAlg.Available() {
 		return false, errors.New("unsupported algorithm")
 	}
@@ -145,21 +155,24 @@ func (s1 *Sign1[T]) Verify(key crypto.PublicKey, payload []byte) (bool, error) {
 		return ecdsa.Verify(pub, hash, r, s), nil
 
 	case *rsa.PublicKey:
-		var err error
-		switch SignatureAlgorithm(s1.Algorithm()) {
-		case RS256Alg, RS384Alg, RS512Alg:
-			err = rsa.VerifyPKCS1v15(pub, hashAlg, hash, s1.Signature)
-		case PS256Alg, PS384Alg, PS512Alg:
-			err = rsa.VerifyPSS(pub, hashAlg, hash, s1.Signature, &rsa.PSSOptions{
-				SaltLength: rsa.PSSSaltLengthEqualsHash,
-				Hash:       hashAlg,
-			})
-		}
-		return err == nil, nil
+		return verifyRSA(pub, hashAlg, hash, s1.Signature, SignatureAlgorithm(algID))
 
 	default:
 		return false, fmt.Errorf("")
 	}
+}
+
+func verifyRSA(pub *rsa.PublicKey, hash crypto.Hash, digest []byte, sig []byte, alg SignatureAlgorithm) (bool, error) {
+	switch alg {
+	case RS256Alg, RS384Alg, RS512Alg:
+		return rsa.VerifyPKCS1v15(pub, hash, digest, sig) == nil, nil
+	case PS256Alg, PS384Alg, PS512Alg:
+		return rsa.VerifyPSS(pub, hash, digest, sig, &rsa.PSSOptions{
+			SaltLength: rsa.PSSSaltLengthEqualsHash,
+			Hash:       hash,
+		}) == nil, nil
+	}
+	return false, fmt.Errorf("invalid algorithm for verifying with RSA public key: %d", alg)
 }
 
 const (

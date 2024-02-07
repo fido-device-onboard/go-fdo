@@ -27,7 +27,7 @@ func TestSignAndVerify(t *testing.T) {
 	}
 
 	s1 := cose.Sign1[[]byte]{
-		Payload: cbor.NewByteWrap[[]byte]([]byte("Hello world")),
+		Payload: cbor.NewByteWrap[[]byte]([]byte("This is the content.")),
 	}
 
 	t.Run("es256", func(t *testing.T) {

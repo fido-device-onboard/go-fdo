@@ -19,15 +19,6 @@ type Header struct {
 	Unprotected HeaderMap
 }
 
-// Algorithm returns the ID of the algorithm set in the protected headers. If
-// no algorithm is set or the value is not a number, then 0 is returned.
-func (hdr Header) Algorithm() (id int64) {
-	if _, err := hdr.Protected.Parse(AlgLabel, &id); err != nil {
-		return 0
-	}
-	return id
-}
-
 // QuantityCBOR implements cbor.FlatMarshaler.
 func (hdr Header) QuantityCBOR() int { return 2 }
 
