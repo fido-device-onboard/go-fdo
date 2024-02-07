@@ -44,6 +44,9 @@ type Encrypt0[T, E any] struct {
 	Ciphertext *[]byte // byte string or null when transported separately
 }
 
+// Tag is a helper for converting to a tag value.
+func (e0 Encrypt0[T, E]) Tag() *Encrypt0Tag[T, E] { return &Encrypt0Tag[T, E]{e0} }
+
 // Encrypt a payload, setting the Chiphertext field value.
 //
 // The payload accepted is any type T, which will be marshaled to CBOR and if
@@ -172,19 +175,18 @@ type encStruct struct {
 }
 
 // Encrypt0Tag encodes to a CBOR tag while ensuring the right tag number.
-type Encrypt0Tag[T, E any] Encrypt0[T, E]
-
-// Tag is a helper for accessing the tag value.
-func (e0 *Encrypt0[T, E]) Tag() *Encrypt0Tag[T, E] { return (*Encrypt0Tag[T, E])(e0) }
+type Encrypt0Tag[T, E any] struct {
+	Encrypt0[T, E]
+}
 
 // Untag is a helper for accessing the tag value.
-func (t *Encrypt0Tag[T, E]) Untag() *Encrypt0[T, E] { return (*Encrypt0[T, E])(t) }
+func (t Encrypt0Tag[T, E]) Untag() *Encrypt0[T, E] { return &t.Encrypt0 }
 
 // MarshalCBOR implements cbor.Marshaler.
 func (t Encrypt0Tag[T, E]) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(cbor.Tag[Encrypt0[T, E]]{
 		Num: Encrypt0TagNum,
-		Val: Encrypt0[T, E](t),
+		Val: t.Encrypt0,
 	})
 }
 
@@ -197,6 +199,6 @@ func (t *Encrypt0Tag[T, E]) UnmarshalCBOR(data []byte) error {
 	if tag.Num != Encrypt0TagNum {
 		return fmt.Errorf("mismatched tag number %d for Encrypt0, expected %d", tag.Num, Encrypt0TagNum)
 	}
-	*t = Encrypt0Tag[T, E](tag.Val)
+	*t = Encrypt0Tag[T, E]{tag.Val}
 	return nil
 }

@@ -18,6 +18,9 @@ type Mac0[T, E any] struct {
 	Value   []byte // non-empty byte string containing the MAC
 }
 
+// Tag is a helper for converting to a tag value.
+func (m0 Mac0[T, E]) Tag() *Mac0Tag[T, E] { return &Mac0Tag[T, E]{m0} }
+
 // Digest the payload and set the Value. Unless it was transported
 // independently of the mac, payload may be nil. For empty AAD, the type should
 // be []byte.
@@ -74,19 +77,18 @@ type mac[T, E any] struct {
 }
 
 // Mac0Tag encodes to a CBOR tag while ensuring the right tag number.
-type Mac0Tag[T, E any] Mac0[T, E]
-
-// Tag is a helper for accessing the tag value.
-func (m0 *Mac0[T, E]) Tag() *Mac0Tag[T, E] { return (*Mac0Tag[T, E])(m0) }
+type Mac0Tag[T, E any] struct {
+	Mac0[T, E]
+}
 
 // Untag is a helper for accessing the tag value.
-func (t *Mac0Tag[T, E]) Untag() *Mac0[T, E] { return (*Mac0[T, E])(t) }
+func (t Mac0Tag[T, E]) Untag() *Mac0[T, E] { return &t.Mac0 }
 
 // MarshalCBOR implements cbor.Marshaler.
 func (t Mac0Tag[T, E]) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(cbor.Tag[Mac0[T, E]]{
 		Num: Mac0TagNum,
-		Val: Mac0[T, E](t),
+		Val: t.Mac0,
 	})
 }
 
@@ -99,6 +101,6 @@ func (t *Mac0Tag[T, E]) UnmarshalCBOR(data []byte) error {
 	if tag.Num != Mac0TagNum {
 		return fmt.Errorf("mismatched tag number %d for Mac0, expected %d", tag.Num, Mac0TagNum)
 	}
-	*t = Mac0Tag[T, E](tag.Val)
+	*t = Mac0Tag[T, E]{tag.Val}
 	return nil
 }

@@ -25,6 +25,9 @@ type Sign1[T any] struct {
 	Signature []byte            // non-empty byte string
 }
 
+// Tag is a helper for converting to a tag value.
+func (s1 Sign1[T]) Tag() *Sign1Tag[T] { return &Sign1Tag[T]{s1} }
+
 // Sign using a single private key. Unless it was transported independently of
 // the signature, payload may be nil.
 //
@@ -307,19 +310,18 @@ func signAlg(key crypto.Signer, opts crypto.SignerOpts) (algID SignatureAlgorith
 }
 
 // Sign1Tag encodes to a CBOR tag while ensuring the right tag number.
-type Sign1Tag[T any] Sign1[T]
-
-// Tag is a helper for accessing the tag value.
-func (s1 *Sign1[T]) Tag() *Sign1Tag[T] { return (*Sign1Tag[T])(s1) }
+type Sign1Tag[T any] struct {
+	Sign1[T]
+}
 
 // Untag is a helper for accessing the tag value.
-func (t *Sign1Tag[T]) Untag() *Sign1[T] { return (*Sign1[T])(t) }
+func (t Sign1Tag[T]) Untag() *Sign1[T] { return &t.Sign1 }
 
 // MarshalCBOR implements cbor.Marshaler.
 func (t Sign1Tag[T]) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(cbor.Tag[Sign1[T]]{
 		Num: Sign1TagNum,
-		Val: Sign1[T](t),
+		Val: t.Sign1,
 	})
 }
 
@@ -332,18 +334,6 @@ func (t *Sign1Tag[T]) UnmarshalCBOR(data []byte) error {
 	if tag.Num != Sign1TagNum {
 		return fmt.Errorf("mismatched tag number %d for Sign1, expected %d", tag.Num, Sign1TagNum)
 	}
-	*t = Sign1Tag[T](tag.Val)
+	*t = Sign1Tag[T]{tag.Val}
 	return nil
-}
-
-// Sign using a single private key. Unless it was transported independently of
-// the signature, payload may be nil.
-func (t *Sign1Tag[T]) Sign(key crypto.Signer, payload []byte, opts crypto.SignerOpts) error {
-	return (*Sign1[T])(t).Sign(key, payload, opts)
-}
-
-// Verify using a single public key. Unless it was transported independently of
-// the signature, payload may be nil.
-func (t *Sign1Tag[T]) Verify(key crypto.PublicKey, payload []byte) (bool, error) {
-	return (*Sign1[T])(t).Verify(key, payload)
 }
