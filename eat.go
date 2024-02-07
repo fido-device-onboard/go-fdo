@@ -128,7 +128,7 @@ func newEAT(guid GUID, nonce Nonce, fdo any, other map[cose.Label]any) eatoken {
 	if fdo != nil {
 		other[eatFdoClaim] = fdo
 	}
-	other[eatNonceClaim] = append([]byte{0x50}, nonce[:]...)
-	other[eatUeidClaim] = append([]byte{0x51, eatRandUeid}, guid[:]...)
+	other[eatNonceClaim] = nonce
+	other[eatUeidClaim] = append([]byte{eatRandUeid}, guid[:]...)
 	return other
 }
