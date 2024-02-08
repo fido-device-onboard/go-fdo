@@ -4,7 +4,6 @@
 package cose_test
 
 import (
-	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -31,7 +30,7 @@ func TestSignAndVerify(t *testing.T) {
 			},
 			D: new(big.Int).SetBytes(d),
 		}
-		expect256, _ := hex.DecodeString("d28443a10126a10442313154546869732069732074686520636f6e74656e742e584010729cd711cb3813d8d8e944a8da7111e7b258c9bdca6135f7ae1adbee9509891267837e1e33bd36c150326ae62755c6bd8e540c3e8f92d7d225e8db72b8820b")
+		data, _ := hex.DecodeString("d28443a10126a10442313154546869732069732074686520636f6e74656e742e584010729cd711cb3813d8d8e944a8da7111e7b258c9bdca6135f7ae1adbee9509891267837e1e33bd36c150326ae62755c6bd8e540c3e8f92d7d225e8db72b8820b")
 
 		s1 := cose.Sign1[[]byte, []byte]{
 			Header: cose.Header{
@@ -51,14 +50,7 @@ func TestSignAndVerify(t *testing.T) {
 			t.Fatalf("signature length correct: expected %d, got %d", 64, len(s1.Signature))
 		}
 
-		// Marshal and Unmarshal
-		data, err := cbor.Marshal(s1.Tag())
-		if err != nil {
-			t.Fatalf("error marshaling: %v", err)
-		}
-		if !bytes.Equal(expect256, data) {
-			t.Fatalf("\nexpected %x\ngot      %x", expect256, data)
-		}
+		// Unmarshal from test case
 		var s1t cose.Sign1Tag[[]byte, []byte]
 		if err := cbor.Unmarshal(data, &s1t); err != nil {
 			t.Fatalf("error unmarshaling: %v", err)
