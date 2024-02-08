@@ -80,14 +80,14 @@ func (c *Client) helloRv(ctx context.Context, baseURL string) (Nonce, error) {
 // ProveToRV(32) -> RVRedirect(33)
 func (c *Client) proveToRv(ctx context.Context, baseURL string, nonce Nonce) ([]RvTO2Addr, error) {
 	// Define request structure
-	token := cose.Sign1[eatoken]{
+	token := cose.Sign1[eatoken, []byte]{
 		Payload: cbor.NewByteWrap(newEAT(c.Cred.GUID, nonce, nil, nil)),
 	}
 	opts, err := signOptsFor(c.Key, c.PSS)
 	if err != nil {
 		return nil, fmt.Errorf("error determining signing options for TO1.ProveToRV: %w", err)
 	}
-	if err := token.Sign(c.Key, nil, opts); err != nil {
+	if err := token.Sign(c.Key, nil, nil, opts); err != nil {
 		return nil, fmt.Errorf("error signing EAT payload for TO1.ProveToRV: %w", err)
 	}
 	msg := token.Tag()

@@ -77,6 +77,7 @@ func (s1 *Sign1[T, E]) Sign(key crypto.Signer, payload *T, externalAAD E, opts c
 	if err := cbor.NewEncoder(digest).Encode(sig); err != nil {
 		return err
 	}
+	fmt.Printf("%x\n", digest.Sum(nil))
 	sigBytes, err := key.Sign(rand.Reader, digest.Sum(nil)[:], opts)
 	if err != nil {
 		return err

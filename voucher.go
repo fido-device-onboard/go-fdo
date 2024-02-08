@@ -44,7 +44,7 @@ type Voucher struct {
 	Header    cbor.Bstr[VoucherHeader]
 	Hmac      Hmac
 	CertChain *[]*cbor.X509Certificate
-	Entries   []cose.Sign1Tag[VoucherEntryPayload]
+	Entries   []cose.Sign1Tag[VoucherEntryPayload, []byte]
 }
 
 // VoucherHeader is the Ownership Voucher header, also used in TO1 protocol.
@@ -294,11 +294,11 @@ func (v *Voucher) VerifyEntries() error {
 }
 
 // Validate each entry recursively
-func validateNextEntry(prevOwnerKey crypto.PublicKey, prevHash hash.Hash, headerInfo map[HashAlg][]byte, i int, entries []cose.Sign1Tag[VoucherEntryPayload]) error {
+func validateNextEntry(prevOwnerKey crypto.PublicKey, prevHash hash.Hash, headerInfo map[HashAlg][]byte, i int, entries []cose.Sign1Tag[VoucherEntryPayload, []byte]) error {
 	entry := entries[0].Untag()
 
 	// Check payload has a valid COSE signature from the previous owner key
-	if ok, err := entry.Verify(prevOwnerKey, nil); err != nil {
+	if ok, err := entry.Verify(prevOwnerKey, nil, nil); err != nil {
 		return fmt.Errorf("COSE signature for entry %d could not be verified: %w", i, err)
 	} else if !ok {
 		return fmt.Errorf("%w: COSE signature for entry %d did not match previous owner key", ErrCryptoVerifyFailed, i)
@@ -470,8 +470,8 @@ func ExtendVoucher[T PublicKeyOrChain](v *Voucher, owner crypto.Signer, nextOwne
 	return xv, nil
 }
 
-func newSignedEntry(owner crypto.Signer, usePSS bool, payload VoucherEntryPayload) (*cose.Sign1Tag[VoucherEntryPayload], error) {
-	var entry cose.Sign1Tag[VoucherEntryPayload]
+func newSignedEntry(owner crypto.Signer, usePSS bool, payload VoucherEntryPayload) (*cose.Sign1Tag[VoucherEntryPayload, []byte], error) {
+	var entry cose.Sign1Tag[VoucherEntryPayload, []byte]
 	entry.Payload = cbor.NewByteWrap(payload)
 
 	signOpts, err := signOptsFor(owner, usePSS)
@@ -479,7 +479,7 @@ func newSignedEntry(owner crypto.Signer, usePSS bool, payload VoucherEntryPayloa
 		return nil, err
 	}
 
-	if err := entry.Sign(owner, nil, signOpts); err != nil {
+	if err := entry.Sign(owner, nil, nil, signOpts); err != nil {
 		return nil, fmt.Errorf("error signing voucher entry payload: %w", err)
 	}
 

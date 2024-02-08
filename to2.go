@@ -62,7 +62,7 @@ func (c *Client) verifyOwner(ctx context.Context, baseURL string) (Nonce, *Vouch
 	if info.NumVoucherEntries == 0 {
 		return Nonce{}, nil, nil, fmt.Errorf("ownership voucher cannot have zero entries")
 	}
-	var entries []cose.Sign1Tag[VoucherEntryPayload]
+	var entries []cose.Sign1Tag[VoucherEntryPayload, []byte]
 	for i := 0; i < info.NumVoucherEntries; i++ {
 		entry, err := c.nextOVEntry(ctx, baseURL, i)
 		if err != nil {
@@ -175,7 +175,7 @@ func (c *Client) helloDevice(ctx context.Context, baseURL string) (Nonce, *ovhVa
 		KeyExchangeA        []byte
 		HelloDeviceHash     Hash
 		MaxOwnerMessageSize uint16
-	}]
+	}, []byte]
 	switch typ {
 	case to2ProveOVHdrMsgType:
 		captureMsgType(ctx, typ)
@@ -226,7 +226,7 @@ func (c *Client) helloDevice(ctx context.Context, baseURL string) (Nonce, *ovhVa
 		captureErr(ctx, invalidMessageErrCode, "")
 		return Nonce{}, nil, nil, fmt.Errorf("error parsing owner public key to verify TO2.ProveOVHdr payload signature: %w", err)
 	}
-	if ok, err := proveOVHdr.Verify(key, nil); err != nil {
+	if ok, err := proveOVHdr.Verify(key, nil, nil); err != nil {
 		captureErr(ctx, invalidMessageErrCode, "")
 		return Nonce{}, nil, nil, fmt.Errorf("error verifying TO2.ProveOVHdr payload signature: %w", err)
 	} else if !ok {
@@ -271,7 +271,7 @@ func (c *Client) helloDevice(ctx context.Context, baseURL string) (Nonce, *ovhVa
 }
 
 // GetOVNextEntry(62) -> OVNextEntry(63)
-func (c *Client) nextOVEntry(ctx context.Context, baseURL string, i int) (*cose.Sign1Tag[VoucherEntryPayload], error) {
+func (c *Client) nextOVEntry(ctx context.Context, baseURL string, i int) (*cose.Sign1Tag[VoucherEntryPayload, []byte], error) {
 	// Define request structure
 	msg := struct {
 		OVEntryNum int
@@ -301,7 +301,7 @@ func (c *Client) nextOVEntry(ctx context.Context, baseURL string, i int) (*cose.
 		captureMsgType(ctx, typ)
 		var ovNextEntry struct {
 			OVEntryNum int
-			OVEntry    cose.Sign1Tag[VoucherEntryPayload]
+			OVEntry    cose.Sign1Tag[VoucherEntryPayload, []byte]
 		}
 		if err := cbor.NewDecoder(resp).Decode(&ovNextEntry); err != nil {
 			captureErr(ctx, messageBodyErrCode, "")
@@ -346,7 +346,7 @@ func (c *Client) proveDevice(ctx context.Context, baseURL string, proveDeviceNon
 	if err != nil {
 		return Nonce{}, nil, fmt.Errorf("error creating header for EAT int TO2.ProveDevice: %w", err)
 	}
-	token := cose.Sign1[eatoken]{
+	token := cose.Sign1[eatoken, []byte]{
 		Header: cose.Header{
 			Unprotected: map[cose.Label]any{
 				eatUnprotectedNonceClaim: setupDeviceNonce,
@@ -358,7 +358,7 @@ func (c *Client) proveDevice(ctx context.Context, baseURL string, proveDeviceNon
 	if err != nil {
 		return Nonce{}, nil, fmt.Errorf("error determining signing options for TO2.ProveDevice: %w", err)
 	}
-	if err := token.Sign(c.Key, nil, opts); err != nil {
+	if err := token.Sign(c.Key, nil, nil, opts); err != nil {
 		return Nonce{}, nil, fmt.Errorf("error signing EAT payload for TO2.ProveDevice: %w", err)
 	}
 	msg := token.Tag()
@@ -388,7 +388,7 @@ func (c *Client) proveDevice(ctx context.Context, baseURL string, proveDeviceNon
 			GUID            GUID              // GUID replacement
 			NonceTO2SetupDv Nonce             // proves freshness of signature
 			Owner2Key       PublicKey         // Replacement for Owner key
-		}]
+		}, []byte]
 		if err := cbor.NewDecoder(resp).Decode(&setupDevice); err != nil {
 			captureErr(ctx, messageBodyErrCode, "")
 			return Nonce{}, nil, fmt.Errorf("error parsing TO2.SetupDevice contents: %w", err)

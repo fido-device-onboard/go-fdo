@@ -80,7 +80,7 @@ func TestVoucherHeaderDeterministic(t *testing.T) {
 		Header    cbor.Bstr[cbor.RawBytes]
 		Hmac      fdo.Hmac
 		CertChain *[]*cbor.X509Certificate
-		Entries   []cose.Sign1Tag[fdo.VoucherEntryPayload]
+		Entries   []cose.Sign1Tag[fdo.VoucherEntryPayload, []byte]
 	}
 	if err := cbor.Unmarshal(b, &ov); err != nil {
 		t.Fatalf("error parsing voucher test data: %v", err)
