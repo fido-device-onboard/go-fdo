@@ -263,49 +263,61 @@ func (key RFC8152Signer) Sign(rand io.Reader, digest []byte, _ crypto.SignerOpts
 func SignatureAlgorithmFor(key crypto.Signer, opts crypto.SignerOpts) (SignatureAlgorithm, error) {
 	switch pub := key.Public().(type) {
 	case *ecdsa.PublicKey:
-		switch pub.Curve {
-		case elliptic.P256():
-			return ES256Alg, nil
-		case elliptic.P384():
-			return ES384Alg, nil
-		case elliptic.P521():
-			return ES512Alg, nil
-		default:
-			return 0, fmt.Errorf("unsupported curve: %s", pub.Params().Name)
-		}
+		return ecSigAlg(pub)
 
 	case *rsa.PublicKey:
-		// Ensure that a hash func was specified
-		if opts == nil {
-			return 0, errors.New("required signer opts were missing; must specify hash type")
-		}
-
-		// When using RSASSA-PSS, salt length must equal hash length
-		pssOpts, usingPss := opts.(*rsa.PSSOptions)
-		if usingPss && pssOpts.SaltLength != rsa.PSSSaltLengthEqualsHash && pssOpts.SaltLength != pssOpts.Hash.Size() {
-			return 0, fmt.Errorf("PSS salt length must match hash size")
-		}
-
-		switch {
-		case usingPss && opts.HashFunc().Size() == 32:
-			return PS256Alg, nil
-		case usingPss && opts.HashFunc().Size() == 48:
-			return PS384Alg, nil
-		case usingPss && opts.HashFunc().Size() == 64:
-			return PS512Alg, nil
-		case !usingPss && opts.HashFunc().Size() == 32:
-			return RS256Alg, nil
-		case !usingPss && opts.HashFunc().Size() == 48:
-			return RS384Alg, nil
-		case !usingPss && opts.HashFunc().Size() == 64:
-			return RS512Alg, nil
-		default:
-			return 0, fmt.Errorf("unsupported hash size: %d bit", opts.HashFunc().Size()*8)
-		}
+		return rsaSigAlg(pub, opts)
 
 	default:
 		return 0, fmt.Errorf("unsupported public key type: %T", pub)
 	}
+}
+
+func ecSigAlg(pub *ecdsa.PublicKey) (SignatureAlgorithm, error) {
+	switch pub.Curve {
+	case elliptic.P256():
+		return ES256Alg, nil
+	case elliptic.P384():
+		return ES384Alg, nil
+	case elliptic.P521():
+		return ES512Alg, nil
+	}
+	return 0, fmt.Errorf("unsupported curve: %s", pub.Params().Name)
+}
+
+func rsaSigAlg(pub *rsa.PublicKey, opts crypto.SignerOpts) (SignatureAlgorithm, error) {
+	// Ensure that a hash func was specified
+	if opts == nil {
+		return 0, errors.New("required signer opts were missing; must specify hash type")
+	}
+
+	// When using RSASSA-PSS, salt length must equal hash length
+	pssOpts, usingPss := opts.(*rsa.PSSOptions)
+	if usingPss && pssOpts.SaltLength != rsa.PSSSaltLengthEqualsHash && pssOpts.SaltLength != pssOpts.Hash.Size() {
+		return 0, fmt.Errorf("PSS salt length must match hash size")
+	}
+
+	if usingPss {
+		switch opts.HashFunc() {
+		case crypto.SHA256:
+			return PS256Alg, nil
+		case crypto.SHA384:
+			return PS384Alg, nil
+		case crypto.SHA512:
+			return PS512Alg, nil
+		}
+	} else {
+		switch opts.HashFunc() {
+		case crypto.SHA256:
+			return RS256Alg, nil
+		case crypto.SHA384:
+			return RS384Alg, nil
+		case crypto.SHA512:
+			return RS512Alg, nil
+		}
+	}
+
+	return 0, fmt.Errorf("unsupported hash: %d", opts.HashFunc())
 }
 
 // Sign1Tag encodes to a CBOR tag while ensuring the right tag number.
