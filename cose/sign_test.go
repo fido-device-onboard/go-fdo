@@ -66,15 +66,16 @@ func TestSignAndVerify(t *testing.T) {
 	})
 
 	t.Run("es384", func(t *testing.T) {
-		var s1 cose.Sign1[[]byte, []byte]
 		key384, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 		if err != nil {
 			t.Errorf("error generating ec key p384: %v", err)
 			return
 		}
 
-		payload := []byte("Hello world!")
-		if err := s1.Sign(key384, &payload, nil, nil); err != nil {
+		s1 := cose.Sign1[[]byte, []byte]{
+			Payload: cbor.NewByteWrap[[]byte]([]byte("This is the content.")),
+		}
+		if err := s1.Sign(key384, nil, nil, nil); err != nil {
 			t.Fatalf("error signing: %v", err)
 		}
 		if len(s1.Signature) != 96 {

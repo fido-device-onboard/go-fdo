@@ -33,8 +33,10 @@ func (s SessionCrypter) Encrypt(rand io.Reader, payload any) (any, error) {
 		return enc0.Tag(), nil
 	}
 
-	var mac0 cose.Mac0[cose.Encrypt0[any, []byte], []byte]
-	if err := mac0.Digest(s.Cipher.MacAlg, s.SVK, &enc0, nil); err != nil {
+	mac0 := cose.Mac0[cose.Encrypt0[any, []byte], []byte]{
+		Payload: cbor.NewByteWrap(enc0),
+	}
+	if err := mac0.Digest(s.Cipher.MacAlg, s.SVK, nil, nil); err != nil {
 		return nil, err
 	}
 	return mac0.Tag(), nil
@@ -68,7 +70,7 @@ func (s SessionCrypter) Decrypt(rand io.Reader, r io.Reader) ([]byte, error) {
 		if !bytes.Equal(mac0.Value, expectedDigest) {
 			return nil, fmt.Errorf("value of COSE_Mac0 tag did not match expected")
 		}
-		enc0 = *mac0.Payload
+		enc0 = mac0.Payload.Val
 
 	default:
 		return nil, fmt.Errorf("decrypted value must be a COSE_Encrypt0 or COSE_Mac0")

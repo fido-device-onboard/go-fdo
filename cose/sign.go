@@ -40,8 +40,9 @@ func (s1 *Sign1[T, E]) Sign(key crypto.Signer, payload *T, externalAAD E, opts c
 	if s1.Payload == nil && payload == nil {
 		return errors.New("payload was transported independently but not given as an argument to Sign")
 	}
-	if payload != nil {
-		s1.Payload = cbor.NewByteWrap(*payload)
+	sigPayload := s1.Payload
+	if sigPayload == nil {
+		sigPayload = cbor.NewByteWrap(*payload)
 	}
 
 	// Determine hash and signing algorithm
@@ -71,13 +72,12 @@ func (s1 *Sign1[T, E]) Sign(key crypto.Signer, payload *T, externalAAD E, opts c
 		Context:       sig1Context,
 		BodyProtected: body,
 		ExternalAad:   *cbor.NewByteWrap(externalAAD),
-		Payload:       *s1.Payload,
+		Payload:       *sigPayload,
 	}
 	digest := algID.HashFunc().New()
 	if err := cbor.NewEncoder(digest).Encode(sig); err != nil {
 		return err
 	}
-	fmt.Printf("%x\n", digest.Sum(nil))
 	sigBytes, err := key.Sign(rand.Reader, digest.Sum(nil)[:], opts)
 	if err != nil {
 		return err

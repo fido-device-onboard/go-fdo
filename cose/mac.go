@@ -14,8 +14,8 @@ import (
 // known.
 type Mac0[T, E any] struct {
 	Header
-	Payload *T     // null when transported separately
-	Value   []byte // non-empty byte string containing the MAC
+	Payload *cbor.ByteWrap[T] // null when transported separately
+	Value   []byte            // non-empty byte string containing the MAC
 }
 
 // Tag is a helper for converting to a tag value.
@@ -38,11 +38,12 @@ func (m0 *Mac0[T, E]) Digest(alg MacAlgorithm, key []byte, payload *T, aad E) er
 	}
 
 	// Set payload
-	if m0.Payload == nil {
-		if payload == nil {
-			return fmt.Errorf("payload must be provided when independently transported")
-		}
-		m0.Payload = payload
+	if m0.Payload == nil && payload == nil {
+		return fmt.Errorf("payload must be provided when independently transported")
+	}
+	macPayload := m0.Payload
+	if macPayload == nil {
+		macPayload = cbor.NewByteWrap(*payload)
 	}
 
 	// Encode and mac
@@ -54,7 +55,7 @@ func (m0 *Mac0[T, E]) Digest(alg MacAlgorithm, key []byte, payload *T, aad E) er
 		Context:     mac0Context,
 		Protected:   protected,
 		ExternalAAD: *cbor.NewByteWrap(aad),
-		Payload:     *cbor.NewByteWrap(*m0.Payload),
+		Payload:     *macPayload,
 	}); err != nil {
 		return err
 	}
