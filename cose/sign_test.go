@@ -39,7 +39,20 @@ func TestSignAndVerify(t *testing.T) {
 			t.Errorf("signature length correct: expected %d, got %d", 64, len(s1.Signature))
 			return
 		}
-		passed, err := s1.Verify(key256.Public(), nil)
+
+		// Marshal and Unmarshal
+		data, err := cbor.Marshal(s1)
+		if err != nil {
+			t.Errorf("error marshaling: %v", err)
+			return
+		}
+		var s1a cose.Sign1[[]byte]
+		if err := cbor.Unmarshal(data, &s1a); err != nil {
+			t.Errorf("error unmarshaling: %v", err)
+			return
+		}
+
+		passed, err := s1a.Verify(key256.Public(), nil)
 		if err != nil {
 			t.Errorf("error verifying: %v", err)
 			return
@@ -59,7 +72,20 @@ func TestSignAndVerify(t *testing.T) {
 			t.Errorf("signature length correct: expected %d, got %d", 96, len(s1.Signature))
 			return
 		}
-		passed, err := s1.Verify(key384.Public(), nil)
+
+		// Marshal and Unmarshal
+		data, err := cbor.Marshal(s1)
+		if err != nil {
+			t.Errorf("error marshaling: %v", err)
+			return
+		}
+		var s1a cose.Sign1[[]byte]
+		if err := cbor.Unmarshal(data, &s1a); err != nil {
+			t.Errorf("error unmarshaling: %v", err)
+			return
+		}
+
+		passed, err := s1a.Verify(key384.Public(), nil)
 		if err != nil {
 			t.Errorf("error verifying: %v", err)
 			return

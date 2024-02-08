@@ -41,14 +41,10 @@ func (s1 *Sign1[T]) Sign(key crypto.Signer, payload []byte, opts crypto.SignerOp
 	}
 
 	// Determine hash and signing algorithm
-	algID, opts, err := signAlg(key, opts)
+	algID, err := SignatureAlgorithmFor(key, opts)
 	if err != nil {
 		return err
 	}
-	if s1.Unprotected == nil {
-		s1.Unprotected = make(HeaderMap)
-	}
-	s1.Unprotected[AlgLabel] = algID
 
 	// When an *ecdsa.PrivateKey is used, override its Sign implementation
 	// to use RFC8152 signature encoding rather than ASN1.
@@ -60,6 +56,7 @@ func (s1 *Sign1[T]) Sign(key crypto.Signer, payload []byte, opts crypto.SignerOp
 	if s1.Protected == nil {
 		s1.Protected = make(map[Label]any)
 	}
+	s1.Protected[AlgLabel] = algID
 	body, err := newEmptyOrSerializedMap(s1.Protected)
 	if err != nil {
 		return fmt.Errorf("error marshaling signature protected body: %W", err)
@@ -79,7 +76,7 @@ func (s1 *Sign1[T]) Sign(key crypto.Signer, payload []byte, opts crypto.SignerOp
 		ExternalAad:   cbor.RawBytes([]byte{0x40}),
 		Payload:       cbor.RawBytes(payload),
 	}
-	digest := opts.HashFunc().New()
+	digest := algID.HashFunc().New()
 	if err := cbor.NewEncoder(digest).Encode(sig); err != nil {
 		return err
 	}
@@ -129,12 +126,12 @@ func (s1 *Sign1[T]) Verify(key crypto.PublicKey, payload []byte) (bool, error) {
 	}
 
 	// Hash and verify
-	if s1.Unprotected == nil {
-		s1.Unprotected = make(HeaderMap)
+	if s1.Protected == nil {
+		s1.Protected = make(HeaderMap)
 	}
-	algID, ok := s1.Unprotected[AlgLabel].(int64)
+	algID, ok := s1.Protected[AlgLabel].(int64)
 	if !ok {
-		return false, fmt.Errorf("no algorithm in unprotected headers")
+		return false, fmt.Errorf("no algorithm in protected headers")
 	}
 	hashAlg := SignatureAlgorithm(algID).HashFunc()
 	if !hashAlg.Available() {
@@ -264,62 +261,50 @@ func (key RFC8152Signer) Sign(rand io.Reader, digest []byte, _ crypto.SignerOpts
 // SignatureAlgorithmFor returns the Signature Algorithm identifier for the
 // given key and options.
 func SignatureAlgorithmFor(key crypto.Signer, opts crypto.SignerOpts) (SignatureAlgorithm, error) {
-	id, _, err := signAlg(key, opts)
-	return id, err
-}
-
-// signAlg returns the already marshaled algorithm ID and possibly modified
-// SignerOpts.
-//
-// This function has a high cyclomatic complexity, but should NOT be reduced
-// further, because indirection will only make the code harder to read.
-//
-//nolint:gocyclo
-func signAlg(key crypto.Signer, opts crypto.SignerOpts) (algID SignatureAlgorithm, _ crypto.SignerOpts, _ error) {
 	switch pub := key.Public().(type) {
 	case *ecdsa.PublicKey:
 		switch pub.Curve {
 		case elliptic.P256():
-			return ES256Alg, crypto.SHA256, nil
+			return ES256Alg, nil
 		case elliptic.P384():
-			return ES384Alg, crypto.SHA384, nil
+			return ES384Alg, nil
 		case elliptic.P521():
-			return ES512Alg, crypto.SHA512, nil
+			return ES512Alg, nil
 		default:
-			return 0, nil, fmt.Errorf("unsupported curve: %s", pub.Params().Name)
+			return 0, fmt.Errorf("unsupported curve: %s", pub.Params().Name)
 		}
 
 	case *rsa.PublicKey:
 		// Ensure that a hash func was specified
 		if opts == nil {
-			return 0, nil, errors.New("required signer opts were missing; must specify hash type")
+			return 0, errors.New("required signer opts were missing; must specify hash type")
 		}
 
 		// When using RSASSA-PSS, salt length must equal hash length
 		pssOpts, usingPss := opts.(*rsa.PSSOptions)
 		if usingPss && pssOpts.SaltLength != rsa.PSSSaltLengthEqualsHash && pssOpts.SaltLength != pssOpts.Hash.Size() {
-			return 0, nil, fmt.Errorf("PSS salt length must match hash size")
+			return 0, fmt.Errorf("PSS salt length must match hash size")
 		}
 
 		switch {
 		case usingPss && opts.HashFunc().Size() == 32:
-			return PS256Alg, opts, nil
+			return PS256Alg, nil
 		case usingPss && opts.HashFunc().Size() == 48:
-			return PS384Alg, opts, nil
+			return PS384Alg, nil
 		case usingPss && opts.HashFunc().Size() == 64:
-			return PS512Alg, opts, nil
+			return PS512Alg, nil
 		case !usingPss && opts.HashFunc().Size() == 32:
-			return RS256Alg, opts, nil
+			return RS256Alg, nil
 		case !usingPss && opts.HashFunc().Size() == 48:
-			return RS384Alg, opts, nil
+			return RS384Alg, nil
 		case !usingPss && opts.HashFunc().Size() == 64:
-			return RS512Alg, opts, nil
+			return RS512Alg, nil
 		default:
-			return 0, nil, fmt.Errorf("unsupported hash size: %d bit", opts.HashFunc().Size()*8)
+			return 0, fmt.Errorf("unsupported hash size: %d bit", opts.HashFunc().Size()*8)
 		}
 
 	default:
-		return 0, nil, fmt.Errorf("unsupported public key type: %T", pub)
+		return 0, fmt.Errorf("unsupported public key type: %T", pub)
 	}
 }
 
