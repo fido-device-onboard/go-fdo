@@ -36,7 +36,7 @@ func TestSignAndVerify(t *testing.T) {
 		s1 := cose.Sign1[[]byte, []byte]{
 			Header: cose.Header{
 				Unprotected: cose.HeaderMap{
-					cose.Label{Int64: 4}: "11",
+					cose.Label{Int64: 4}: []byte("11"),
 				},
 			},
 			Payload: cbor.NewByteWrap[[]byte]([]byte("This is the content.")),
