@@ -19,25 +19,29 @@ import (
 
 // Sign1 is a COSE_Sign1 signature structure, which is used when only one
 // signature is being placed on a message.
-type Sign1[T any] struct {
+type Sign1[T, E any] struct {
 	Header
 	Payload   *cbor.ByteWrap[T] // non-empty byte string or null
 	Signature []byte            // non-empty byte string
 }
 
 // Tag is a helper for converting to a tag value.
-func (s1 Sign1[T]) Tag() *Sign1Tag[T] { return &Sign1Tag[T]{s1} }
+func (s1 Sign1[T, E]) Tag() *Sign1Tag[T, E] { return &Sign1Tag[T, E]{s1} }
 
 // Sign using a single private key. Unless it was transported independently of
-// the signature, payload may be nil.
+// the signature, payload may be nil. If no external AAD is supplied, the type
+// should be []byte and the value nil.
 //
 // For RSA keys, opts must either be type *rsa.PSSOptions with a SaltLength
 // value of PSSSaltLengthEqualsHash or equivalent numerical value or a valid
 // hash function for PKCS1 v1.5 signing.
-func (s1 *Sign1[T]) Sign(key crypto.Signer, payload []byte, opts crypto.SignerOpts) error {
+func (s1 *Sign1[T, E]) Sign(key crypto.Signer, payload *T, externalAAD E, opts crypto.SignerOpts) error {
 	// Check that some payload was given
-	if s1.Payload == nil && len(payload) == 0 {
+	if s1.Payload == nil && payload == nil {
 		return errors.New("payload was transported independently but not given as an argument to Sign")
+	}
+	if payload != nil {
+		s1.Payload = cbor.NewByteWrap(*payload)
 	}
 
 	// Determine hash and signing algorithm
@@ -63,18 +67,11 @@ func (s1 *Sign1[T]) Sign(key crypto.Signer, payload []byte, opts crypto.SignerOp
 	}
 
 	// Sign contents of Sig_structure
-	if len(payload) == 0 {
-		var err error
-		payload, err = cbor.Marshal(s1.Payload)
-		if err != nil {
-			return fmt.Errorf("error marshaling payload: %w", err)
-		}
-	}
-	sig := signature{
+	sig := signature1[T, E]{
 		Context:       sig1Context,
 		BodyProtected: body,
-		ExternalAad:   cbor.RawBytes([]byte{0x40}),
-		Payload:       cbor.RawBytes(payload),
+		ExternalAad:   *cbor.NewByteWrap(externalAAD),
+		Payload:       *s1.Payload,
 	}
 	digest := algID.HashFunc().New()
 	if err := cbor.NewEncoder(digest).Encode(sig); err != nil {
@@ -90,18 +87,15 @@ func (s1 *Sign1[T]) Sign(key crypto.Signer, payload []byte, opts crypto.SignerOp
 }
 
 // Verify using a single public key. Unless it was transported independently of
-// the signature, payload may be nil.
-func (s1 *Sign1[T]) Verify(key crypto.PublicKey, payload []byte) (bool, error) {
+// the signature, payload may be nil. If no external AAD is supplied, the type
+// should be []byte and the value nil.
+func (s1 *Sign1[T, E]) Verify(key crypto.PublicKey, payload *T, externalAAD E) (bool, error) {
 	// Check that some payload was given
-	if s1.Payload == nil && len(payload) == 0 {
+	if s1.Payload == nil && payload == nil {
 		return false, errors.New("payload was transported independently but not given as an argument to Verify")
 	}
-	if len(payload) == 0 {
-		var err error
-		payload, err = cbor.Marshal(s1.Payload)
-		if err != nil {
-			return false, fmt.Errorf("error marshaling payload: %w", err)
-		}
+	if payload != nil {
+		s1.Payload = cbor.NewByteWrap(*payload)
 	}
 	if len(s1.Signature) < 2 {
 		return false, errors.New("signature length insufficient")
@@ -115,11 +109,11 @@ func (s1 *Sign1[T]) Verify(key crypto.PublicKey, payload []byte) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("error marshaling signature protected body: %W", err)
 	}
-	data, err := cbor.Marshal(signature{
+	data, err := cbor.Marshal(signature1[T, E]{
 		Context:       sig1Context,
 		BodyProtected: body,
-		ExternalAad:   cbor.RawBytes([]byte{0x40}),
-		Payload:       cbor.RawBytes(payload),
+		ExternalAad:   *cbor.NewByteWrap(externalAAD),
+		Payload:       *s1.Payload,
 	})
 	if err != nil {
 		return false, err
@@ -179,58 +173,27 @@ const (
 	sigCtr0Context = "CounterSignature0"
 )
 
-// Underlying signature struct
-type signature struct {
+// Underlying signature struct for
+//   - sigContext
+//   - sigCtrContext
+//
+//nolint:unused
+type signature[T, E any] struct {
 	Context       string
 	BodyProtected emptyOrSerializedMap
 	SignProtected emptyOrSerializedMap
-	ExternalAad   cbor.RawBytes
-	Payload       cbor.RawBytes
+	ExternalAad   cbor.ByteWrap[E]
+	Payload       cbor.ByteWrap[T]
 }
 
-// Omit SignProtected field when using Signature1 or CounterSignature0.
-func (sig signature) MarshalCBOR() ([]byte, error) {
-	switch sig.Context {
-	case sigContext, sigCtrContext:
-		return cbor.Marshal(struct {
-			Context       string
-			BodyProtected emptyOrSerializedMap
-			SignProtected emptyOrSerializedMap
-			ExternalAad   cbor.RawBytes
-			Payload       cbor.RawBytes
-		}(sig))
-	case sig1Context, sigCtr0Context:
-		return cbor.Marshal(struct {
-			Context       string
-			BodyProtected emptyOrSerializedMap
-			ExternalAad   cbor.RawBytes
-			Payload       cbor.RawBytes
-		}{
-			Context:       sig.Context,
-			BodyProtected: sig.BodyProtected,
-			ExternalAad:   sig.ExternalAad,
-			Payload:       sig.Payload,
-		})
-	default:
-		return nil, fmt.Errorf("unknown signature context: %s", sig.Context)
-	}
-}
-
-// SignProtected field may be omitted when context is Signature1 or
-// CounterSignature0.
-func (sig *signature) UnmarshalCBOR(b []byte) error {
-	var ss struct {
-		Context       string
-		BodyProtected emptyOrSerializedMap
-		SignProtected emptyOrSerializedMap `cbor:",omitempty"`
-		ExternalAad   cbor.RawBytes
-		Payload       cbor.RawBytes
-	}
-	if err := cbor.Unmarshal(b, &ss); err != nil {
-		return err
-	}
-	*sig = signature(ss)
-	return nil
+// Underlying signature struct for
+//   - sig1Context
+//   - sigCtr0Context
+type signature1[T, E any] struct {
+	Context       string
+	BodyProtected emptyOrSerializedMap
+	ExternalAad   cbor.ByteWrap[E]
+	Payload       cbor.ByteWrap[T]
 }
 
 // RFC8152Signer wraps an ECDSA private key and uses the signature encoding
@@ -321,30 +284,30 @@ func rsaSigAlg(pub *rsa.PublicKey, opts crypto.SignerOpts) (SignatureAlgorithm, 
 }
 
 // Sign1Tag encodes to a CBOR tag while ensuring the right tag number.
-type Sign1Tag[T any] struct {
-	Sign1[T]
+type Sign1Tag[T, E any] struct {
+	Sign1[T, E]
 }
 
 // Untag is a helper for accessing the tag value.
-func (t Sign1Tag[T]) Untag() *Sign1[T] { return &t.Sign1 }
+func (t Sign1Tag[T, E]) Untag() *Sign1[T, E] { return &t.Sign1 }
 
 // MarshalCBOR implements cbor.Marshaler.
-func (t Sign1Tag[T]) MarshalCBOR() ([]byte, error) {
-	return cbor.Marshal(cbor.Tag[Sign1[T]]{
+func (t Sign1Tag[T, E]) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(cbor.Tag[Sign1[T, E]]{
 		Num: Sign1TagNum,
 		Val: t.Sign1,
 	})
 }
 
 // UnmarshalCBOR implements cbor.Unmarshaler.
-func (t *Sign1Tag[T]) UnmarshalCBOR(data []byte) error {
-	var tag cbor.Tag[Sign1[T]]
+func (t *Sign1Tag[T, E]) UnmarshalCBOR(data []byte) error {
+	var tag cbor.Tag[Sign1[T, E]]
 	if err := cbor.Unmarshal(data, &tag); err != nil {
 		return err
 	}
 	if tag.Num != Sign1TagNum {
 		return fmt.Errorf("mismatched tag number %d for Sign1, expected %d", tag.Num, Sign1TagNum)
 	}
-	*t = Sign1Tag[T]{tag.Val}
+	*t = Sign1Tag[T, E]{tag.Val}
 	return nil
 }

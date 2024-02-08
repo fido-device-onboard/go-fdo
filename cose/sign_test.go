@@ -26,12 +26,12 @@ func TestSignAndVerify(t *testing.T) {
 		return
 	}
 
-	s1 := cose.Sign1[[]byte]{
+	s1 := cose.Sign1[[]byte, []byte]{
 		Payload: cbor.NewByteWrap[[]byte]([]byte("This is the content.")),
 	}
 
 	t.Run("es256", func(t *testing.T) {
-		if err := s1.Sign(key256, nil, nil); err != nil {
+		if err := s1.Sign(key256, nil, nil, nil); err != nil {
 			t.Errorf("error signing: %v", err)
 			return
 		}
@@ -46,13 +46,13 @@ func TestSignAndVerify(t *testing.T) {
 			t.Errorf("error marshaling: %v", err)
 			return
 		}
-		var s1a cose.Sign1[[]byte]
+		var s1a cose.Sign1[[]byte, []byte]
 		if err := cbor.Unmarshal(data, &s1a); err != nil {
 			t.Errorf("error unmarshaling: %v", err)
 			return
 		}
 
-		passed, err := s1a.Verify(key256.Public(), nil)
+		passed, err := s1a.Verify(key256.Public(), nil, nil)
 		if err != nil {
 			t.Errorf("error verifying: %v", err)
 			return
@@ -64,7 +64,7 @@ func TestSignAndVerify(t *testing.T) {
 	})
 
 	t.Run("es384", func(t *testing.T) {
-		if err := s1.Sign(key384, nil, nil); err != nil {
+		if err := s1.Sign(key384, nil, nil, nil); err != nil {
 			t.Errorf("error signing: %v", err)
 			return
 		}
@@ -79,13 +79,13 @@ func TestSignAndVerify(t *testing.T) {
 			t.Errorf("error marshaling: %v", err)
 			return
 		}
-		var s1a cose.Sign1[[]byte]
+		var s1a cose.Sign1[[]byte, []byte]
 		if err := cbor.Unmarshal(data, &s1a); err != nil {
 			t.Errorf("error unmarshaling: %v", err)
 			return
 		}
 
-		passed, err := s1a.Verify(key384.Public(), nil)
+		passed, err := s1a.Verify(key384.Public(), nil, nil)
 		if err != nil {
 			t.Errorf("error verifying: %v", err)
 			return
