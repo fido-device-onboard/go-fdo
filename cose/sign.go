@@ -46,7 +46,7 @@ func (s1 *Sign1[T, E]) Sign(key crypto.Signer, payload *T, externalAAD E, opts c
 	}
 
 	// Determine hash and signing algorithm
-	algID, err := SignatureAlgorithmFor(key, opts)
+	algID, err := SignatureAlgorithmFor(key.Public(), opts)
 	if err != nil {
 		return err
 	}
@@ -120,15 +120,21 @@ func (s1 *Sign1[T, E]) Verify(key crypto.PublicKey, payload *T, externalAAD E) (
 		return false, err
 	}
 
+	// Get signature algorithm
+	expectedAlg, err := SignatureAlgorithmFor(key, nil)
+	if err != nil {
+		return false, err
+	}
+	algID := expectedAlg
+	if _, err := s1.Protected.Parse(AlgLabel, &algID); err != nil {
+		return false, err
+	}
+	// TODO: Warn if found && algID != expectedAlg. Not currently an error,
+	// because expected always uses PKCSv1_5 for RSA and it would break PSS
+	// support.
+
 	// Hash and verify
-	if s1.Protected == nil {
-		s1.Protected = make(HeaderMap)
-	}
-	algID, ok := s1.Protected[AlgLabel].(int64)
-	if !ok {
-		return false, fmt.Errorf("no algorithm in protected headers")
-	}
-	hashAlg := SignatureAlgorithm(algID).HashFunc()
+	hashAlg := algID.HashFunc()
 	if !hashAlg.Available() {
 		return false, errors.New("unsupported algorithm")
 	}
@@ -147,7 +153,7 @@ func (s1 *Sign1[T, E]) Verify(key crypto.PublicKey, payload *T, externalAAD E) (
 		return ecdsa.Verify(pub, hash, r, s), nil
 
 	case *rsa.PublicKey:
-		return verifyRSA(pub, hashAlg, hash, s1.Signature, SignatureAlgorithm(algID))
+		return verifyRSA(pub, hashAlg, hash, s1.Signature, algID)
 
 	default:
 		return false, fmt.Errorf("")
@@ -224,8 +230,8 @@ func (key RFC8152Signer) Sign(rand io.Reader, digest []byte, _ crypto.SignerOpts
 
 // SignatureAlgorithmFor returns the Signature Algorithm identifier for the
 // given key and options.
-func SignatureAlgorithmFor(key crypto.Signer, opts crypto.SignerOpts) (SignatureAlgorithm, error) {
-	switch pub := key.Public().(type) {
+func SignatureAlgorithmFor(key crypto.PublicKey, opts crypto.SignerOpts) (SignatureAlgorithm, error) {
+	switch pub := key.(type) {
 	case *ecdsa.PublicKey:
 		return ecSigAlg(pub)
 
@@ -233,7 +239,7 @@ func SignatureAlgorithmFor(key crypto.Signer, opts crypto.SignerOpts) (Signature
 		return rsaSigAlg(pub, opts)
 
 	default:
-		return 0, fmt.Errorf("unsupported public key type: %T", pub)
+		return 0, fmt.Errorf("unsupported public key type: %T", key)
 	}
 }
 

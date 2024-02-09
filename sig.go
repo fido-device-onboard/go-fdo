@@ -76,7 +76,7 @@ func sigInfoFor(key crypto.Signer, usePSS bool) (*sigInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	algID, err := cose.SignatureAlgorithmFor(key, opts)
+	algID, err := cose.SignatureAlgorithmFor(key.Public(), opts)
 	if err != nil {
 		return nil, err
 	}
