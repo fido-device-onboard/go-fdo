@@ -77,8 +77,15 @@ func (c *Client) helloRv(ctx context.Context, baseURL string) (Nonce, error) {
 	}
 }
 
+// To1d is a "blob" that indicates a network address (RVTO2Addr) where the
+// Device can find a prospective Owner for the TO2 Protocol.
+type To1d struct {
+	RV       []RvTO2Addr
+	To0dHash Hash
+}
+
 // ProveToRV(32) -> RVRedirect(33)
-func (c *Client) proveToRv(ctx context.Context, baseURL string, nonce Nonce) ([]RvTO2Addr, error) {
+func (c *Client) proveToRv(ctx context.Context, baseURL string, nonce Nonce) (*cose.Sign1[To1d, []byte], error) {
 	// Define request structure
 	token := cose.Sign1[eatoken, []byte]{
 		Payload: cbor.NewByteWrap(newEAT(c.Cred.GUID, nonce, nil, nil)),
@@ -103,15 +110,12 @@ func (c *Client) proveToRv(ctx context.Context, baseURL string, nonce Nonce) ([]
 	switch typ {
 	case to1RVRedirectMsgType:
 		captureMsgType(ctx, typ)
-		var redirect struct {
-			To1dRV       []RvTO2Addr
-			To1dTo0dHash Hash
-		}
+		var redirect cose.Sign1Tag[To1d, []byte]
 		if err := cbor.NewDecoder(resp).Decode(&redirect); err != nil {
 			captureErr(ctx, messageBodyErrCode, "")
 			return nil, fmt.Errorf("error parsing TO1.RVRedirect contents: %w", err)
 		}
-		return redirect.To1dRV, nil
+		return redirect.Untag(), nil
 
 	case ErrorMsgType:
 		var errMsg ErrorMessage

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/cose"
 	"github.com/fido-device-onboard/go-fdo/kex"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
@@ -107,7 +108,7 @@ func (c *Client) DeviceInitialize(ctx context.Context, baseURL string, info any)
 // TransferOwnership1 runs the TO1 protocol and returns the owner service (TO2)
 // addresses. It requires that a device credential, hmac secret, and key are
 // all configured on the client.
-func (c *Client) TransferOwnership1(ctx context.Context, baseURL string) ([]RvTO2Addr, error) {
+func (c *Client) TransferOwnership1(ctx context.Context, baseURL string) (*cose.Sign1[To1d, []byte], error) {
 	ctx = contextWithErrMsg(ctx)
 
 	nonce, err := c.helloRv(ctx, baseURL)
@@ -116,13 +117,13 @@ func (c *Client) TransferOwnership1(ctx context.Context, baseURL string) ([]RvTO
 		return nil, err
 	}
 
-	addrs, err := c.proveToRv(ctx, baseURL, nonce)
+	blob, err := c.proveToRv(ctx, baseURL, nonce)
 	if err != nil {
 		c.errorMsg(ctx, baseURL, err)
 		return nil, err
 	}
 
-	return addrs, nil
+	return blob, nil
 }
 
 // TransferOwnership2 runs the TO2 protocol and returns a DeviceCredential with
@@ -131,7 +132,7 @@ func (c *Client) TransferOwnership1(ctx context.Context, baseURL string) ([]RvTO
 //
 // It has the side effect of performing FSIMs, which may include actions such
 // as downloading files.
-func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, fsims map[string]serviceinfo.Module) (*DeviceCredential, error) {
+func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, to1d *cose.Sign1[To1d, []byte], fsims map[string]serviceinfo.Module) (*DeviceCredential, error) {
 	ctx = contextWithErrMsg(ctx)
 
 	// Client configuraiton defaults
@@ -151,7 +152,7 @@ func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, fsims m
 	//
 	// Results: Replacement ownership voucher, nonces to be retransmitted in
 	// Done/Done2 messages
-	proveDeviceNonce, originalOVH, session, err := c.verifyOwner(ctx, baseURL)
+	proveDeviceNonce, originalOVH, session, err := c.verifyOwner(ctx, baseURL, to1d)
 	if err != nil {
 		c.errorMsg(ctx, baseURL, err)
 		return nil, err

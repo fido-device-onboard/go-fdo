@@ -20,6 +20,7 @@ import (
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/blob"
 	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/cose"
 	"github.com/fido-device-onboard/go-fdo/http"
 	"github.com/fido-device-onboard/go-fdo/kex"
 )
@@ -121,13 +122,11 @@ func di(cli *fdo.Client) error {
 	if _, err := rand.Read(secret); err != nil {
 		return fmt.Errorf("error generating device secret: %w", err)
 	}
-	cli.Hmac = blob.Hmac(secret)
 
 	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	if err != nil {
 		return fmt.Errorf("error generating device key: %w", err)
 	}
-	cli.Key = key
 
 	// Generate Java implementation-compatible mfg string
 	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
@@ -221,39 +220,39 @@ func transferOwnership(cli *fdo.Client, rvInfo [][]fdo.RvInstruction) *fdo.Devic
 			fmt.Fprintf(os.Stderr, "Skipping TO1 directive with no IP or DNS instructions: %+v\n", m)
 			continue
 		}
-		var addrs []fdo.RvTO2Addr
+		var to1d *cose.Sign1[fdo.To1d, []byte]
 		if isDNS {
 			baseURL := "http://" + net.JoinHostPort(dnsAddr, strconv.Itoa(int(port)))
 			var err error
-			addrs, err = cli.TransferOwnership1(context.TODO(), baseURL)
+			to1d, err = cli.TransferOwnership1(context.TODO(), baseURL)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error running TO1 on %q: %v\n", baseURL, err)
 				continue
 			}
 		}
-		if len(addrs) == 0 && isIP {
+		if to1d == nil && isIP {
 			baseURL := "http://" + net.JoinHostPort(ipAddr.String(), strconv.Itoa(int(port)))
 			var err error
-			addrs, err = cli.TransferOwnership1(context.TODO(), baseURL)
+			to1d, err = cli.TransferOwnership1(context.TODO(), baseURL)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error running TO1 on %q: %v\n", baseURL, err)
 				continue
 			}
 		}
-		if len(addrs) == 0 {
+		if to1d == nil {
 			fmt.Fprintf(os.Stderr, "Skipping TO1 directive with no found TO2 addrs: %+v\n", m)
 			continue
 		}
 
 		// Print TO2 addrs if RV-only
 		if rvOnly {
-			fmt.Printf("TO2 Addrs found: %+v\n", addrs)
+			fmt.Printf("TO1 Blob: %+v\n", to1d.Payload.Val)
 			continue
 		}
 
 		// Try TO2
-		for _, addr := range addrs {
-			newDC := transferOwnership2(cli, addr)
+		for _, addr := range to1d.Payload.Val.RV {
+			newDC := transferOwnership2(cli, addr, to1d)
 			if newDC != nil {
 				return newDC
 			}
@@ -263,7 +262,7 @@ func transferOwnership(cli *fdo.Client, rvInfo [][]fdo.RvInstruction) *fdo.Devic
 	return nil
 }
 
-func transferOwnership2(cli *fdo.Client, addr fdo.RvTO2Addr) *fdo.DeviceCredential {
+func transferOwnership2(cli *fdo.Client, addr fdo.RvTO2Addr, to1d *cose.Sign1[fdo.To1d, []byte]) *fdo.DeviceCredential {
 	host := addr.DNSAddress
 	if host == "" {
 		host = addr.IPAddress.String()
@@ -273,7 +272,7 @@ func transferOwnership2(cli *fdo.Client, addr fdo.RvTO2Addr) *fdo.DeviceCredenti
 		port = 80
 	}
 	baseURL := "http://" + net.JoinHostPort(host, strconv.Itoa(int(port)))
-	cred, err := cli.TransferOwnership2(context.TODO(), baseURL, nil)
+	cred, err := cli.TransferOwnership2(context.TODO(), baseURL, to1d, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "TO2 failed for %q: %v\n", baseURL, err)
 		return nil

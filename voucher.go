@@ -141,7 +141,7 @@ func (v *Voucher) DevicePublicKey() (crypto.PublicKey, error) {
 	if len(*v.CertChain) == 0 {
 		return nil, errors.New("empty cert chain")
 	}
-	return (*v.CertChain)[len(*v.CertChain)-1].PublicKey, nil
+	return (*v.CertChain)[0].PublicKey, nil
 }
 
 // OwnerPublicKey extracts the voucher owner's public key from either the

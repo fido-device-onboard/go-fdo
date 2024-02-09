@@ -53,7 +53,7 @@ type ovhValidationContext struct {
 // Verify owner by sending HelloDevice and validating the response, as well as
 // all ownership voucher entries, which are retrieved iteratively with
 // subsequence requests.
-func (c *Client) verifyOwner(ctx context.Context, baseURL string) (Nonce, *VoucherHeader, kex.Session, error) {
+func (c *Client) verifyOwner(ctx context.Context, baseURL string, to1d *cose.Sign1[To1d, []byte]) (Nonce, *VoucherHeader, kex.Session, error) {
 	// Construct ownership voucher from parts received from the owner service
 	proveDeviceNonce, info, session, err := c.helloDevice(ctx, baseURL)
 	if err != nil {
@@ -111,6 +111,17 @@ func (c *Client) verifyOwner(ctx context.Context, baseURL string) (Nonce, *Vouch
 	if !info.PublicKeyToValidate.(interface{ Equal(crypto.PublicKey) bool }).Equal(expectedOwnerPub) {
 		captureErr(ctx, invalidMessageErrCode, "")
 		return Nonce{}, nil, nil, fmt.Errorf("owner public key did not match last entry in ownership voucher")
+	}
+
+	// If the TO1.RVRedirect signature does not verify, the Device must assume
+	// that a man in the middle is monitoring its traffic, and fail TO2
+	// immediately with an error code message.
+	if ok, err := to1d.Verify(expectedOwnerPub, nil, nil); err != nil {
+		captureErr(ctx, invalidMessageErrCode, "")
+		return Nonce{}, nil, nil, fmt.Errorf("error verifying to1d signature: %w", err)
+	} else if !ok {
+		captureErr(ctx, invalidMessageErrCode, "")
+		return Nonce{}, nil, nil, fmt.Errorf("%w: to1d signature verification failed", ErrCryptoVerifyFailed)
 	}
 
 	return proveDeviceNonce, &info.OVH, session, nil
