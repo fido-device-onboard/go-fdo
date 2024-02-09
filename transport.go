@@ -33,6 +33,25 @@ const (
 	CoAPSTransport TransportProtocol = 6
 )
 
+func (p TransportProtocol) String() string {
+	switch p {
+	case TCPTransport:
+		return "tcp"
+	case TLSTransport:
+		return "tls"
+	case HTTPTransport:
+		return "http"
+	case CoAPTransport:
+		return "coap"
+	case HTTPSTransport:
+		return "https"
+	case CoAPSTransport:
+		return "coaps"
+	default:
+		return "unknown"
+	}
+}
+
 // Transport abstracts the underlying TCP/HTTP/CoAP transport for sending a
 // message and receiving a response.
 type Transport interface {

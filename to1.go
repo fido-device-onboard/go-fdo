@@ -5,6 +5,7 @@ package fdo
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"net"
 
@@ -26,6 +27,19 @@ type RvTO2Addr struct {
 	DNSAddress        *string // Can be null, unless IPAddress is null
 	Port              uint16
 	TransportProtocol TransportProtocol
+}
+
+func (a RvTO2Addr) String() string {
+	var addr any
+	if a.DNSAddress != nil {
+		addr = *a.DNSAddress
+	} else if a.IPAddress != nil {
+		addr = *a.IPAddress
+	}
+	if a.Port == 0 {
+		return fmt.Sprintf("%s://%s", a.TransportProtocol, addr)
+	}
+	return fmt.Sprintf("%s://%s:%d", a.TransportProtocol, addr, a.Port)
 }
 
 // HelloRV(30) -> HelloRVAck(31)
@@ -82,6 +96,18 @@ func (c *Client) helloRv(ctx context.Context, baseURL string) (Nonce, error) {
 type To1d struct {
 	RV       []RvTO2Addr
 	To0dHash Hash
+}
+
+func (to1d To1d) String() string {
+	s := "to1d[\n"
+	s += "  RV:\n"
+	for _, addr := range to1d.RV {
+		s += "    - " + addr.String() + "\n"
+	}
+	s += "  To0dHash:\n"
+	s += "    Algorithm: " + to1d.To0dHash.Algorithm.String() + "\n"
+	s += "    Value: " + hex.EncodeToString(to1d.To0dHash.Value) + "\n"
+	return s + "]"
 }
 
 // ProveToRV(32) -> RVRedirect(33)
