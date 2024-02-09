@@ -116,22 +116,6 @@ func saveBlob(dc blob.DeviceCredential) error {
 }
 
 func di(cli *fdo.Client) error {
-	// Generate Java implementation-compatible mfg string
-	certChainKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
-	if err != nil {
-		return fmt.Errorf("error generating cert chain key: %w", err)
-	}
-	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
-		Subject: pkix.Name{CommonName: "device.go-fdo"},
-	}, certChainKey)
-	if err != nil {
-		return fmt.Errorf("error creating CSR for device certificate chain: %w", err)
-	}
-	csr, err := x509.ParseCertificateRequest(csrDER)
-	if err != nil {
-		return fmt.Errorf("error parsing CSR for device certificate chain: %w", err)
-	}
-
 	// Generate new key and secret
 	secret := make([]byte, 32)
 	if _, err := rand.Read(secret); err != nil {
@@ -144,6 +128,18 @@ func di(cli *fdo.Client) error {
 		return fmt.Errorf("error generating device key: %w", err)
 	}
 	cli.Key = key
+
+	// Generate Java implementation-compatible mfg string
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
+		Subject: pkix.Name{CommonName: "device.go-fdo"},
+	}, key)
+	if err != nil {
+		return fmt.Errorf("error creating CSR for device certificate chain: %w", err)
+	}
+	csr, err := x509.ParseCertificateRequest(csrDER)
+	if err != nil {
+		return fmt.Errorf("error parsing CSR for device certificate chain: %w", err)
+	}
 
 	// Call the DI server
 	cred, err := cli.DeviceInitialize(context.TODO(), diURL, fdo.DeviceMfgInfo{
