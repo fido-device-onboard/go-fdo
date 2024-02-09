@@ -86,6 +86,9 @@ func client() error {
 
 	// Try TO1+TO2
 	newDC := transferOwnership(cli, cred.RvInfo)
+	if rvOnly {
+		return nil
+	}
 	if newDC == nil {
 		return fmt.Errorf("transfer of ownership not successful")
 	}
@@ -249,7 +252,7 @@ func transferOwnership(cli *fdo.Client, rvInfo [][]fdo.RvInstruction) *fdo.Devic
 		// Print TO2 addrs if RV-only
 		if rvOnly {
 			fmt.Printf("TO1 Blob: %+v\n", to1d.Payload.Val)
-			continue
+			return nil
 		}
 
 		// Try TO2
