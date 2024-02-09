@@ -7,6 +7,8 @@
 *.dll
 *.so
 *.dylib
+*.bin
+*.pem
 
 # Test binary, built with `go test -c`
 *.test
@@ -19,3 +21,6 @@
 
 # Go workspace file
 go.work
+
+# VS Code
+.vscode/
