@@ -26,6 +26,33 @@ type DeviceCredential struct {
 	PrivateKey Pkcs8Key
 }
 
+func (dc DeviceCredential) String() string {
+	var key crypto.PrivateKey
+	if dc.PrivateKey.IsValid() {
+		key = dc.PrivateKey.PrivateKey
+	}
+	s := fmt.Sprintf(`blobcred[
+  Active        %t
+  Version       %d
+  DeviceInfo   %q
+  GUID          %x
+  PublicKeyHash
+    Algorithm   %s
+    Value       %x
+  HmacSecret    %x
+  PrivateKey    %T
+    %+v
+  RvInfo
+`, dc.Active, dc.Version, dc.DeviceInfo, dc.GUID, dc.PublicKeyHash.Algorithm, dc.PublicKeyHash.Value, dc.HmacSecret, key, key)
+	for _, directive := range dc.RvInfo {
+		s += "    >\n"
+		for _, instruction := range directive {
+			s += fmt.Sprintf("      %d = %x\n", instruction.Variable, instruction.Value)
+		}
+	}
+	return s + "]"
+}
+
 var _ fdo.KeyedHasher = (*DeviceCredential)(nil)
 
 // NewHmac returns a key-based hash (Hmac) using the given hash function some

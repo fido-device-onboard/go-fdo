@@ -246,9 +246,11 @@ func (c *Client) errorMsg(ctx context.Context, baseURL string, err error) {
 	if errMsg.ErrString == "" {
 		errMsg.ErrString = err.Error()
 	}
-	if errMsg.Timestamp == (Timestamp{}) {
-		errMsg.Timestamp = Timestamp(time.Now())
-	}
+	/*
+		if errMsg.Timestamp == (Timestamp{}) {
+			errMsg.Timestamp = Timestamp(time.Now())
+		}
+	*/
 
 	// Create a new context, because the previous one may have expired, thus
 	// causing the protocol failure

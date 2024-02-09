@@ -141,14 +141,15 @@ type ErrorMessage struct {
 	Code          uint16
 	PrevMsgType   uint8
 	ErrString     string
-	Timestamp     Timestamp
+	Timestamp     int64 // Timestamp once the Java implementation is fixed
 	CorrelationID *uint
 }
 
 // String implements Stringer.
 func (e ErrorMessage) String() string {
 	return fmt.Sprintf("%s [code=%d,prevMsgType=%d,id=%d] %s",
-		time.Time(e.Timestamp), e.Code, e.PrevMsgType, e.CorrelationID, e.ErrString,
+		time.Unix(e.Timestamp, 0), // time.Time(e.Timestamp),
+		e.Code, e.PrevMsgType, e.CorrelationID, e.ErrString,
 	)
 }
 

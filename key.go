@@ -231,14 +231,14 @@ func (pub *PublicKey) parseX5Chain() error {
 
 	switch pub.Type {
 	case Secp256r1KeyType, Secp384r1KeyType:
-		eckey, ok := certs[len(certs)-1].PublicKey.(*ecdsa.PublicKey)
+		eckey, ok := certs[0].PublicKey.(*ecdsa.PublicKey)
 		if !ok {
 			return errors.New("public key must be an ECDSA public key")
 		}
 		pub.key = eckey
 		return nil
 	case RsaPssKeyType, RsaPkcsKeyType, Rsa2048RestrKeyType:
-		rsakey, ok := certs[len(certs)-1].PublicKey.(*rsa.PublicKey)
+		rsakey, ok := certs[0].PublicKey.(*rsa.PublicKey)
 		if !ok {
 			return errors.New("public key must be an RSA public key")
 		}
