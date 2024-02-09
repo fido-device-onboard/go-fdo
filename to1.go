@@ -22,8 +22,8 @@ const (
 
 // RvTO2Addr indicates to the device how to connect to the owner service.
 type RvTO2Addr struct {
-	IPAddress         net.IP
-	DNSAddress        string
+	IPAddress         *net.IP // Can be null, unless DNSAddress is null
+	DNSAddress        *string // Can be null, unless IPAddress is null
 	Port              uint16
 	TransportProtocol TransportProtocol
 }

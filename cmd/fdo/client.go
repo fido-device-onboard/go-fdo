@@ -265,9 +265,14 @@ func transferOwnership(cli *fdo.Client, rvInfo [][]fdo.RvInstruction) *fdo.Devic
 }
 
 func transferOwnership2(cli *fdo.Client, addr fdo.RvTO2Addr, to1d *cose.Sign1[fdo.To1d, []byte]) *fdo.DeviceCredential {
-	host := addr.DNSAddress
-	if host == "" {
+	var host string
+	switch {
+	case addr.DNSAddress != nil:
+		host = *addr.DNSAddress
+	case addr.IPAddress != nil:
 		host = addr.IPAddress.String()
+	default:
+		panic("invalid to1d: cannot have addr with null DNS and IP addresses")
 	}
 	port := addr.Port
 	if port == 0 {
