@@ -118,6 +118,13 @@ type PublicKey struct {
 	err   error
 }
 
+func (pub PublicKey) String() string {
+	s := fmt.Sprintf("Type      %s\n", pub.Type)
+	s += fmt.Sprintf("Encoding  %s\n", pub.Encoding)
+	s += fmt.Sprintf("Body      %x\n", pub.Body)
+	return s
+}
+
 func newPublicKey(typ KeyType, pub any) (*PublicKey, error) {
 	switch pub := pub.(type) {
 	case []*x509.Certificate:

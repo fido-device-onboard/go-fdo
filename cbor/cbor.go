@@ -746,8 +746,8 @@ func (d *Decoder) decodeArrayToStruct(rv reflect.Value, additional []byte) error
 		}
 	}
 	if length != len(indices) {
-		return fmt.Errorf("%w: struct has an incorrect number of fields",
-			ErrUnsupportedType{typeName: rv.Type().String()})
+		return fmt.Errorf("%w: struct has an incorrect number of fields: has %d, expected %d",
+			ErrUnsupportedType{typeName: rv.Type().String()}, len(indices), length)
 	}
 
 	// Decode each item into the appropriate field
