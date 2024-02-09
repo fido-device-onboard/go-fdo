@@ -17,7 +17,8 @@ type CipherSuiteID int64
 const (
 	// Authenticated encryption ciphers
 	A128GcmCipher          CipherSuiteID = 1
-	A256GcmCipher          CipherSuiteID = 2
+	A192GcmCipher          CipherSuiteID = 2
+	A256GcmCipher          CipherSuiteID = 3
 	AesCcm16_128_128Cipher CipherSuiteID = 30 // deprecated, not implemented
 	AesCcm16_128_256Cipher CipherSuiteID = 31 // deprecated, not implemented
 	AesCcm64_128_128Cipher CipherSuiteID = 32
