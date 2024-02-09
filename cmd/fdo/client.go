@@ -122,11 +122,13 @@ func di(cli *fdo.Client) error {
 	if _, err := rand.Read(secret); err != nil {
 		return fmt.Errorf("error generating device secret: %w", err)
 	}
+	cli.Hmac = blob.Hmac(secret)
 
 	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	if err != nil {
 		return fmt.Errorf("error generating device key: %w", err)
 	}
+	cli.Key = key
 
 	// Generate Java implementation-compatible mfg string
 	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
