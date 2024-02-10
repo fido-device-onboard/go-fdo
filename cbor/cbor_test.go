@@ -1864,19 +1864,14 @@ type Flatten struct {
 }
 
 var _ cbor.FlatMarshaler = (*Flatten)(nil)
+var _ cbor.FlatUnmarshaler = (*Flatten)(nil)
 
-func (f Flatten) QuantityCBOR() int { return 2 }
-
-func (f Flatten) FlatMarshalCBOR() ([]byte, error) {
-	b, err := cbor.Marshal(f.B + "!") // note the extra rune!
-	if err != nil {
-		return nil, err
+func (f Flatten) FlatMarshalCBOR(w io.Writer) error {
+	// Note the extra rune!
+	if err := cbor.NewEncoder(w).Encode(f.B + "!"); err != nil {
+		return err
 	}
-	c, err := cbor.Marshal(f.C)
-	if err != nil {
-		return nil, err
-	}
-	return append(b, c...), nil
+	return cbor.NewEncoder(w).Encode(f.C)
 }
 
 func (f *Flatten) FlatUnmarshalCBOR(r io.Reader) error {
@@ -1889,7 +1884,7 @@ func (f *Flatten) FlatUnmarshalCBOR(r io.Reader) error {
 func TestFlatMarshal(t *testing.T) {
 	type st struct {
 		A int
-		Z Flatten
+		Z Flatten `cbor:",flat2"`
 	}
 	s := st{
 		A: 1,
@@ -1920,8 +1915,8 @@ func TestFlatMarshal(t *testing.T) {
 
 func TestFlatMarshalEmbedded(t *testing.T) {
 	type st struct {
-		A int
-		Flatten
+		A       int
+		Flatten `cbor:",flat2"`
 	}
 	s := st{
 		A:       1,
@@ -1959,20 +1954,7 @@ func TestMarshalEmbeddedPointer(t *testing.T) {
 		*E
 	}
 
-	t.Run("marshal nil (addressable)", func(t *testing.T) {
-		input := st{A: 1}
-		expect := []byte{0x82, 0x01, 0x60}
-
-		got, err := cbor.Marshal(&input)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !bytes.Equal(expect, got) {
-			t.Errorf("expected % x, got % x", expect, got)
-		}
-	})
-
-	t.Run("marshal nil (unaddressable)", func(t *testing.T) {
+	t.Run("marshal nil", func(t *testing.T) {
 		defer func() {
 			if r := recover(); r == nil {
 				t.Errorf("the code did not panic")

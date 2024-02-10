@@ -20,7 +20,7 @@ import (
 // Sign1 is a COSE_Sign1 signature structure, which is used when only one
 // signature is being placed on a message.
 type Sign1[T, E any] struct {
-	Header
+	Header    `cbor:",flat2"`
 	Payload   *cbor.ByteWrap[T] // non-empty byte string or null
 	Signature []byte            // non-empty byte string
 }

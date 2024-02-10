@@ -40,7 +40,7 @@ type Crypter interface {
 // of the object will already know the identity of the key to be used in order
 // to decrypt the message.
 type Encrypt0[T, E any] struct {
-	Header
+	Header     `cbor:",flat2"`
 	Ciphertext *[]byte // byte string or null when transported separately
 }
 

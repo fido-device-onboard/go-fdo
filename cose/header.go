@@ -4,7 +4,6 @@
 package cose
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"strconv"
@@ -19,32 +18,28 @@ type Header struct {
 	Unprotected HeaderMap
 }
 
-// QuantityCBOR implements cbor.FlatMarshaler.
-func (hdr Header) QuantityCBOR() int { return 2 }
+var _ cbor.FlatMarshaler = (*Header)(nil)
+var _ cbor.FlatUnmarshaler = (*Header)(nil)
 
 // FlatMarshalCBOR implements cbor.FlatMarshaler.
-func (hdr Header) FlatMarshalCBOR() ([]byte, error) {
+func (hdr Header) FlatMarshalCBOR(w io.Writer) error {
 	protectedHeader, err := newEmptyOrSerializedMap(hdr.Protected)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	unprotectedHeader, err := newRawHeaderMap(hdr.Unprotected)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	var buf bytes.Buffer
-	enc := cbor.NewEncoder(&buf)
+	enc := cbor.NewEncoder(w)
 	if err := enc.Encode(protectedHeader); err != nil {
-		return nil, err
+		return err
 	}
-	if err := enc.Encode(unprotectedHeader); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
+	return enc.Encode(unprotectedHeader)
 }
 
-// FlatUnmarshalCBOR implements cbor.FlatMarshaler.
+// FlatUnmarshalCBOR implements cbor.FlatUnmarshaler.
 func (hdr *Header) FlatUnmarshalCBOR(r io.Reader) error {
 	dec := cbor.NewDecoder(r)
 

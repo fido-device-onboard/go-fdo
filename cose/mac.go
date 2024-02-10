@@ -13,7 +13,7 @@ import (
 // recipient structure is not needed, because the key to be used is implicitly
 // known.
 type Mac0[T, E any] struct {
-	Header
+	Header  `cbor:",flat2"`
 	Payload *cbor.ByteWrap[T] // null when transported separately
 	Value   []byte            // non-empty byte string containing the MAC
 }
