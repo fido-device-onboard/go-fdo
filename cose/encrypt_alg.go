@@ -179,30 +179,31 @@ type aeadCrypter struct {
 	AEAD cipher.AEAD
 }
 
-func (c *aeadCrypter) Encrypt(rand io.Reader, plaintext, externalAAD []byte) ([]byte, HeaderMap, error) {
-	if externalAAD == nil {
+func (c *aeadCrypter) Encrypt(rand io.Reader, plaintext, additionalData []byte) ([]byte, HeaderMap, error) {
+	if additionalData == nil {
 		return nil, nil, fmt.Errorf("AAD must be provided")
 	}
 	nonce := make([]byte, c.AEAD.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, nil, fmt.Errorf("error generating random nonce: %w", err)
 	}
-	return c.AEAD.Seal(nonce, nonce, plaintext, externalAAD), nil, nil
+	return c.AEAD.Seal(plaintext[:0], nonce, plaintext, additionalData), HeaderMap{IvLabel: nonce}, nil
 }
 
-func (c *aeadCrypter) Decrypt(rand io.Reader, ciphertext, externalAAD []byte, _ HeaderParser) ([]byte, error) {
-	if externalAAD == nil {
+func (c *aeadCrypter) Decrypt(rand io.Reader, ciphertext, additionalData []byte, unprotected HeaderParser) ([]byte, error) {
+	if additionalData == nil {
 		return nil, fmt.Errorf("AAD must be provided")
 	}
 	if len(ciphertext) < c.AEAD.NonceSize() {
 		return nil, fmt.Errorf("ciphertext too short")
 	}
-	return c.AEAD.Open(
-		ciphertext[:0],
-		ciphertext[:c.AEAD.NonceSize()],
-		ciphertext[c.AEAD.NonceSize():],
-		externalAAD,
-	)
+	var nonce []byte
+	if ok, err := unprotected.Parse(IvLabel, &nonce); err != nil {
+		return nil, fmt.Errorf("error reading IV from unprotected headers: %w", err)
+	} else if !ok {
+		return nil, fmt.Errorf("missing expected IV unprotected header")
+	}
+	return c.AEAD.Open(ciphertext[:0], nonce, ciphertext, additionalData)
 }
 
 type ccmAEAD struct {
@@ -235,6 +236,7 @@ func (c *ccmAEAD) Open(dst, nonce, ciphertext, additionalData []byte) ([]byte, e
 	panic("unimplemented")
 }
 
+//nolint:unused
 func (c *ccmAEAD) tag(plaintext, additionalData []byte) []byte {
 	c.Mac.Reset()
 	panic("unimplemented")

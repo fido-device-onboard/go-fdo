@@ -139,6 +139,7 @@ Common labels
 */
 var (
 	AlgLabel = Label{Int64: 1}
+	IvLabel  = Label{Int64: 5}
 )
 
 // Label is used for [HeaderMap]s and can be either an int64 or a string.

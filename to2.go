@@ -375,7 +375,7 @@ func (c *Client) proveDevice(ctx context.Context, baseURL string, proveDeviceNon
 	msg := token.Tag()
 
 	// Make request
-	typ, resp, err := c.Transport.Send(ctx, baseURL, to2ProveDeviceMsgType, msg, session)
+	typ, resp, err := c.Transport.Send(ctx, baseURL, to2ProveDeviceMsgType, msg, kex.DecryptOnly{Session: session})
 	if err != nil {
 		return Nonce{}, nil, fmt.Errorf("error sending TO2.ProveDevice: %w", err)
 	}

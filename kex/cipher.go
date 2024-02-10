@@ -173,6 +173,12 @@ func init() {
 			PRFHash:    crypto.SHA256,
 		}
 	})
+	RegisterCipherSuite(A192GcmCipher, func() *CipherSuite {
+		return &CipherSuite{
+			EncryptAlg: cose.A192GCM,
+			PRFHash:    crypto.SHA256,
+		}
+	})
 	RegisterCipherSuite(A256GcmCipher, func() *CipherSuite {
 		return &CipherSuite{
 			EncryptAlg: cose.A256GCM,

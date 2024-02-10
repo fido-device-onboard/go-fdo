@@ -32,3 +32,13 @@ type Session interface {
 	// Decrypt a tagged COSE Encrypt0 or Mac0 object.
 	Decrypt(rand io.Reader, r io.Reader) ([]byte, error)
 }
+
+// DecryptOnly is a session that only performs decryption and key exchange
+// functions.
+type DecryptOnly struct {
+	Session
+}
+
+// Encrypt uses a session key to encrypt a payload. Depending on the suite,
+// the result may be a plain COSE_Encrypt0 or one wrapped by COSE_Mac0.
+func (s DecryptOnly) Encrypt(_ io.Reader, payload any) (any, error) { return payload, nil }

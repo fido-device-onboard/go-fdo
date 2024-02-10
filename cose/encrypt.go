@@ -70,9 +70,15 @@ func (e0 Encrypt0[T, E]) Encrypt(alg EncryptAlgorithm, key []byte, payload T, aa
 	}
 
 	// Encode additional authenticated data
-	externalAAD, err := e0.externalAAD(aad)
-	if err != nil {
-		return err
+	var externalAAD []byte
+	if alg.SupportsAD() {
+		var err error
+		externalAAD, err = e0.externalAAD(aad)
+		if err != nil {
+			return err
+		}
+	} else if aad != nil {
+		return fmt.Errorf("additional data provided, but the encryption algorithm does not support it")
 	}
 
 	// Perform encryption to ciphertext
