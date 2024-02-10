@@ -56,7 +56,7 @@ func (e0 Encrypt0[T, E]) Tag() *Encrypt0Tag[T, E] { return &Encrypt0Tag[T, E]{e0
 // For encryption algorithms that do not take external additional authenticated
 // data, aad must be nil. To pass no AAD to an AEAD, E should be []byte and aad
 // should be either nil or a pointer to an empty byte slice.
-func (e0 Encrypt0[T, E]) Encrypt(alg EncryptAlgorithm, key []byte, payload T, aad *E) error {
+func (e0 *Encrypt0[T, E]) Encrypt(alg EncryptAlgorithm, key []byte, payload T, aad *E) error {
 	// Get Crypter to perform encryption/decryption
 	c, err := alg.NewCrypter(key)
 	if err != nil {

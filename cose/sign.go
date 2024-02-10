@@ -148,8 +148,8 @@ func (s1 *Sign1[T, E]) Verify(key crypto.PublicKey, payload *T, externalAAD E) (
 	case *ecdsa.PublicKey:
 		// Decode signature following RFC8152 8.1.
 		n := (pub.Params().N.BitLen() + 7) / 8
-		r := big.NewInt(0).SetBytes(s1.Signature[:n])
-		s := big.NewInt(0).SetBytes(s1.Signature[n:])
+		r := new(big.Int).SetBytes(s1.Signature[:n])
+		s := new(big.Int).SetBytes(s1.Signature[n:])
 		return ecdsa.Verify(pub, hash, r, s), nil
 
 	case *rsa.PublicKey:
