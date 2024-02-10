@@ -16,7 +16,7 @@ import (
 // struct embedding) to implement the Session interface.
 type SessionCrypter struct {
 	ID     CipherSuiteID
-	Cipher *CipherSuite
+	Cipher CipherSuite
 
 	SEK []byte
 	SVK []byte

@@ -105,6 +105,14 @@ func (s1 Sign1[P, A]) Verify(key crypto.PublicKey, payload *P, additionalData A)
 		return false, errors.New("signature length must be even")
 	}
 
+	// Get signature algorithm
+	var alg SignatureAlgorithm
+	if ok, err := s1.Protected.Parse(AlgLabel, &alg); err != nil {
+		return false, err
+	} else if !ok {
+		return false, fmt.Errorf("missing signature algorithm protected header")
+	}
+
 	// Marshal signature to bytes
 	protected, err := newEmptyOrSerializedMap(s1.Protected)
 	if err != nil {
@@ -118,14 +126,6 @@ func (s1 Sign1[P, A]) Verify(key crypto.PublicKey, payload *P, additionalData A)
 	})
 	if err != nil {
 		return false, err
-	}
-
-	// Get signature algorithm
-	var alg SignatureAlgorithm
-	if ok, err := s1.Protected.Parse(AlgLabel, &alg); err != nil {
-		return false, err
-	} else if !ok {
-		return false, fmt.Errorf("missing signature algorithm protected header")
 	}
 
 	// Hash and verify

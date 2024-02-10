@@ -47,7 +47,7 @@ type ECDHSession struct {
 func (s *ECDHSession) new(xA []byte, cipher CipherSuiteID) Session {
 	s.xA = xA
 	s.ID = cipher
-	s.Cipher = cipher.New()
+	s.Cipher = cipher.Suite()
 	return s
 }
 
@@ -154,7 +154,7 @@ func (p *ecdhParam) UnmarshalBinary(b []byte) error {
 	return nil
 }
 
-func computeSymmetricKeys(ecKey *ecdsa.PrivateKey, xA, xB []byte, cipher *CipherSuite) (sek, svk []byte, err error) {
+func computeSymmetricKeys(ecKey *ecdsa.PrivateKey, xA, xB []byte, cipher CipherSuite) (sek, svk []byte, err error) {
 	// Decode parameters
 	var paramA, paramB ecdhParam
 	if err := paramA.UnmarshalBinary(xA); err != nil {
@@ -275,7 +275,7 @@ func (s *ECDHSession) UnmarshalBinary(data []byte) error {
 
 		SessionCrypter: SessionCrypter{
 			ID:     persist.Cipher,
-			Cipher: persist.Cipher.New(),
+			Cipher: persist.Cipher.Suite(),
 			SEK:    persist.SEK,
 			SVK:    persist.SVK,
 		},

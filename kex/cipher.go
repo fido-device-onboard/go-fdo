@@ -31,13 +31,13 @@ const (
 	CoseAes256CtrCipher CipherSuiteID = -17760706
 )
 
-// New returns a new cipher suite registered to the given ID.
-func (id CipherSuiteID) New() *CipherSuite {
-	f, ok := ciphers[id]
+// Suite returns the cipher suite registered to the given ID.
+func (id CipherSuiteID) Suite() CipherSuite {
+	s, ok := ciphers[id]
 	if !ok {
 		panic("cipher suite not registered: " + strconv.Itoa(int(id)))
 	}
-	return f()
+	return s
 }
 
 // CipherSuite combines a COSE encryption algorithm with a COSE MAC algorithm.
@@ -51,12 +51,12 @@ type CipherSuite struct {
 	PRFHash crypto.Hash
 }
 
-var ciphers = make(map[CipherSuiteID]func() *CipherSuite)
+var ciphers = make(map[CipherSuiteID]CipherSuite)
 
 // RegisterCipherSuite sets a new cipher suite constructor for a given ID. This
 // function is meant to be called in the init function of a package
 // implementing a cipher suite.
-func RegisterCipherSuite(id CipherSuiteID, f func() *CipherSuite) { ciphers[id] = f }
+func RegisterCipherSuite(id CipherSuiteID, suite CipherSuite) { ciphers[id] = suite }
 
 // ┌────────────────────────┬──────────────────────────────────────┬─────────────────────────────────────┐
 // │Cipher Suite Name       │ Initialization Vector (IVData.iv in  │ Notes                               │
@@ -167,50 +167,36 @@ func RegisterCipherSuite(id CipherSuiteID, f func() *CipherSuite) { ciphers[id] 
 // │                        │                                      │ KDF uses HMAC-SHA384                │
 // └────────────────────────┴──────────────────────────────────────┴─────────────────────────────────────┘
 func init() {
-	RegisterCipherSuite(A128GcmCipher, func() *CipherSuite {
-		return &CipherSuite{
-			EncryptAlg: cose.A128GCM,
-			PRFHash:    crypto.SHA256,
-		}
+	RegisterCipherSuite(A128GcmCipher, CipherSuite{
+		EncryptAlg: cose.A128GCM,
+		PRFHash:    crypto.SHA256,
 	})
-	RegisterCipherSuite(A192GcmCipher, func() *CipherSuite {
-		return &CipherSuite{
-			EncryptAlg: cose.A192GCM,
-			PRFHash:    crypto.SHA256,
-		}
+	RegisterCipherSuite(A192GcmCipher, CipherSuite{
+		EncryptAlg: cose.A192GCM,
+		PRFHash:    crypto.SHA256,
 	})
-	RegisterCipherSuite(A256GcmCipher, func() *CipherSuite {
-		return &CipherSuite{
-			EncryptAlg: cose.A256GCM,
-			PRFHash:    crypto.SHA256,
-		}
+	RegisterCipherSuite(A256GcmCipher, CipherSuite{
+		EncryptAlg: cose.A256GCM,
+		PRFHash:    crypto.SHA256,
 	})
-	RegisterCipherSuite(CoseAes128CtrCipher, func() *CipherSuite {
-		return &CipherSuite{
-			EncryptAlg: -1, // FIXME:
-			MacAlg:     cose.HMac256,
-			PRFHash:    crypto.SHA256,
-		}
+	RegisterCipherSuite(CoseAes128CtrCipher, CipherSuite{
+		EncryptAlg: -1, // FIXME:
+		MacAlg:     cose.HMac256,
+		PRFHash:    crypto.SHA256,
 	})
-	RegisterCipherSuite(CoseAes128CbcCipher, func() *CipherSuite {
-		return &CipherSuite{
-			EncryptAlg: -1, // FIXME:
-			MacAlg:     cose.HMac256,
-			PRFHash:    crypto.SHA256,
-		}
+	RegisterCipherSuite(CoseAes128CbcCipher, CipherSuite{
+		EncryptAlg: -1, // FIXME:
+		MacAlg:     cose.HMac256,
+		PRFHash:    crypto.SHA256,
 	})
-	RegisterCipherSuite(CoseAes256CtrCipher, func() *CipherSuite {
-		return &CipherSuite{
-			EncryptAlg: -1, // FIXME:
-			MacAlg:     cose.HMac384,
-			PRFHash:    crypto.SHA384,
-		}
+	RegisterCipherSuite(CoseAes256CtrCipher, CipherSuite{
+		EncryptAlg: -1, // FIXME:
+		MacAlg:     cose.HMac384,
+		PRFHash:    crypto.SHA384,
 	})
-	RegisterCipherSuite(CoseAes256CbcCipher, func() *CipherSuite {
-		return &CipherSuite{
-			EncryptAlg: -1, // FIXME:
-			MacAlg:     cose.HMac384,
-			PRFHash:    crypto.SHA384,
-		}
+	RegisterCipherSuite(CoseAes256CbcCipher, CipherSuite{
+		EncryptAlg: -1, // FIXME:
+		MacAlg:     cose.HMac384,
+		PRFHash:    crypto.SHA384,
 	})
 }
