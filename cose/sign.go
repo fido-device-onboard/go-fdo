@@ -19,14 +19,14 @@ import (
 
 // Sign1 is a COSE_Sign1 signature structure, which is used when only one
 // signature is being placed on a message.
-type Sign1[T, E any] struct {
+type Sign1[P, A any] struct {
 	Header    `cbor:",flat2"`
-	Payload   *cbor.ByteWrap[T] // non-empty byte string or null
+	Payload   *cbor.ByteWrap[P] // non-empty byte string or null
 	Signature []byte            // non-empty byte string
 }
 
 // Tag is a helper for converting to a tag value.
-func (s1 Sign1[T, E]) Tag() *Sign1Tag[T, E] { return &Sign1Tag[T, E]{s1} }
+func (s1 Sign1[P, A]) Tag() *Sign1Tag[P, A] { return &Sign1Tag[P, A]{s1} }
 
 // Sign using a single private key. Unless it was transported independently of
 // the signature, payload may be nil. If no external AAD is supplied, the type
@@ -35,7 +35,7 @@ func (s1 Sign1[T, E]) Tag() *Sign1Tag[T, E] { return &Sign1Tag[T, E]{s1} }
 // For RSA keys, opts must either be type *rsa.PSSOptions with a SaltLength
 // value of PSSSaltLengthEqualsHash or equivalent numerical value or a valid
 // hash function for PKCS1 v1.5 signing.
-func (s1 *Sign1[T, E]) Sign(key crypto.Signer, payload *T, externalAAD E, opts crypto.SignerOpts) error {
+func (s1 *Sign1[P, A]) Sign(key crypto.Signer, payload *P, additionalData A, opts crypto.SignerOpts) error {
 	// Check that some payload was given
 	if s1.Payload == nil && payload == nil {
 		return errors.New("payload was transported independently but not given as an argument to Sign")
@@ -68,10 +68,10 @@ func (s1 *Sign1[T, E]) Sign(key crypto.Signer, payload *T, externalAAD E, opts c
 	}
 
 	// Sign contents of Sig_structure
-	sig := signature1[T, E]{
+	sig := signature1[P, A]{
 		Context:       sig1Context,
 		BodyProtected: body,
-		ExternalAad:   *cbor.NewByteWrap(externalAAD),
+		ExternalAad:   *cbor.NewByteWrap(additionalData),
 		Payload:       *sigPayload,
 	}
 	digest := algID.HashFunc().New()
@@ -90,7 +90,7 @@ func (s1 *Sign1[T, E]) Sign(key crypto.Signer, payload *T, externalAAD E, opts c
 // Verify using a single public key. Unless it was transported independently of
 // the signature, payload may be nil. If no external AAD is supplied, the type
 // should be []byte and the value nil.
-func (s1 *Sign1[T, E]) Verify(key crypto.PublicKey, payload *T, externalAAD E) (bool, error) {
+func (s1 Sign1[P, A]) Verify(key crypto.PublicKey, payload *P, additionalData A) (bool, error) {
 	// Check that some payload was given
 	if s1.Payload == nil && payload == nil {
 		return false, errors.New("payload was transported independently but not given as an argument to Verify")
@@ -106,14 +106,14 @@ func (s1 *Sign1[T, E]) Verify(key crypto.PublicKey, payload *T, externalAAD E) (
 	}
 
 	// Marshal signature to bytes
-	body, err := newEmptyOrSerializedMap(s1.Protected)
+	protected, err := newEmptyOrSerializedMap(s1.Protected)
 	if err != nil {
 		return false, fmt.Errorf("error marshaling signature protected body: %W", err)
 	}
-	data, err := cbor.Marshal(signature1[T, E]{
+	data, err := cbor.Marshal(signature1[P, A]{
 		Context:       sig1Context,
-		BodyProtected: body,
-		ExternalAad:   *cbor.NewByteWrap(externalAAD),
+		BodyProtected: protected,
+		ExternalAad:   *cbor.NewByteWrap(additionalData),
 		Payload:       *s1.Payload,
 	})
 	if err != nil {
@@ -121,28 +121,23 @@ func (s1 *Sign1[T, E]) Verify(key crypto.PublicKey, payload *T, externalAAD E) (
 	}
 
 	// Get signature algorithm
-	expectedAlg, err := SignatureAlgorithmFor(key, nil)
-	if err != nil {
+	var alg SignatureAlgorithm
+	if ok, err := s1.Protected.Parse(AlgLabel, &alg); err != nil {
 		return false, err
+	} else if !ok {
+		return false, fmt.Errorf("missing signature algorithm protected header")
 	}
-	algID := expectedAlg
-	if _, err := s1.Protected.Parse(AlgLabel, &algID); err != nil {
-		return false, err
-	}
-	// TODO: Warn if found && algID != expectedAlg. Not currently an error,
-	// because expected always uses PKCSv1_5 for RSA and it would break PSS
-	// support.
 
 	// Hash and verify
-	hashAlg := algID.HashFunc()
-	if !hashAlg.Available() {
+	hash := alg.HashFunc()
+	if !hash.Available() {
 		return false, errors.New("unsupported algorithm")
 	}
-	digest := hashAlg.New()
-	if _, err := digest.Write(data); err != nil {
+	h := hash.New()
+	if _, err := h.Write(data); err != nil {
 		return false, err
 	}
-	hash := digest.Sum(nil)
+	digest := h.Sum(nil)
 
 	switch pub := key.(type) {
 	case *ecdsa.PublicKey:
@@ -150,10 +145,10 @@ func (s1 *Sign1[T, E]) Verify(key crypto.PublicKey, payload *T, externalAAD E) (
 		n := (pub.Params().N.BitLen() + 7) / 8
 		r := new(big.Int).SetBytes(s1.Signature[:n])
 		s := new(big.Int).SetBytes(s1.Signature[n:])
-		return ecdsa.Verify(pub, hash, r, s), nil
+		return ecdsa.Verify(pub, digest, r, s), nil
 
 	case *rsa.PublicKey:
-		return verifyRSA(pub, hashAlg, hash, s1.Signature, algID)
+		return verifyRSA(pub, hash, digest, s1.Signature, alg)
 
 	default:
 		return false, fmt.Errorf("")
@@ -185,22 +180,22 @@ const (
 //   - sigCtrContext
 //
 //nolint:unused
-type signature[T, E any] struct {
+type signature[P, A any] struct {
 	Context       string
 	BodyProtected emptyOrSerializedMap
 	SignProtected emptyOrSerializedMap
-	ExternalAad   cbor.ByteWrap[E]
-	Payload       cbor.ByteWrap[T]
+	ExternalAad   cbor.ByteWrap[A]
+	Payload       cbor.ByteWrap[P]
 }
 
 // Underlying signature struct for
 //   - sig1Context
 //   - sigCtr0Context
-type signature1[T, E any] struct {
+type signature1[P, A any] struct {
 	Context       string
 	BodyProtected emptyOrSerializedMap
-	ExternalAad   cbor.ByteWrap[E]
-	Payload       cbor.ByteWrap[T]
+	ExternalAad   cbor.ByteWrap[A]
+	Payload       cbor.ByteWrap[P]
 }
 
 // RFC8152Signer wraps an ECDSA private key and uses the signature encoding
@@ -291,30 +286,30 @@ func rsaSigAlg(pub *rsa.PublicKey, opts crypto.SignerOpts) (SignatureAlgorithm, 
 }
 
 // Sign1Tag encodes to a CBOR tag while ensuring the right tag number.
-type Sign1Tag[T, E any] struct {
-	Sign1[T, E]
+type Sign1Tag[P, A any] struct {
+	Sign1[P, A]
 }
 
 // Untag is a helper for accessing the tag value.
-func (t Sign1Tag[T, E]) Untag() *Sign1[T, E] { return &t.Sign1 }
+func (t Sign1Tag[P, A]) Untag() *Sign1[P, A] { return &t.Sign1 }
 
 // MarshalCBOR implements cbor.Marshaler.
-func (t Sign1Tag[T, E]) MarshalCBOR() ([]byte, error) {
-	return cbor.Marshal(cbor.Tag[Sign1[T, E]]{
+func (t Sign1Tag[P, A]) MarshalCBOR() ([]byte, error) {
+	return cbor.Marshal(cbor.Tag[Sign1[P, A]]{
 		Num: Sign1TagNum,
 		Val: t.Sign1,
 	})
 }
 
 // UnmarshalCBOR implements cbor.Unmarshaler.
-func (t *Sign1Tag[T, E]) UnmarshalCBOR(data []byte) error {
-	var tag cbor.Tag[Sign1[T, E]]
+func (t *Sign1Tag[P, A]) UnmarshalCBOR(data []byte) error {
+	var tag cbor.Tag[Sign1[P, A]]
 	if err := cbor.Unmarshal(data, &tag); err != nil {
 		return err
 	}
 	if tag.Num != Sign1TagNum {
 		return fmt.Errorf("mismatched tag number %d for Sign1, expected %d", tag.Num, Sign1TagNum)
 	}
-	*t = Sign1Tag[T, E]{tag.Val}
+	*t = Sign1Tag[P, A]{tag.Val}
 	return nil
 }

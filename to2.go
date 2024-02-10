@@ -113,6 +113,12 @@ func (c *Client) verifyOwner(ctx context.Context, baseURL string, to1d *cose.Sig
 		return Nonce{}, nil, nil, fmt.Errorf("owner public key did not match last entry in ownership voucher")
 	}
 
+	// If no to1d blob was given, then immmediately return. This will be the
+	// case when RV bypass was used.
+	if to1d == nil {
+		return proveDeviceNonce, &info.OVH, session, nil
+	}
+
 	// If the TO1.RVRedirect signature does not verify, the Device must assume
 	// that a man in the middle is monitoring its traffic, and fail TO2
 	// immediately with an error code message.

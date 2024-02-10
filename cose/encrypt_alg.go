@@ -183,10 +183,12 @@ func (c *aeadCrypter) Encrypt(rand io.Reader, plaintext, additionalData []byte) 
 	if additionalData == nil {
 		return nil, nil, fmt.Errorf("AAD must be provided")
 	}
+
 	nonce := make([]byte, c.AEAD.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, nil, fmt.Errorf("error generating random nonce: %w", err)
 	}
+
 	return c.AEAD.Seal(plaintext[:0], nonce, plaintext, additionalData), HeaderMap{IvLabel: nonce}, nil
 }
 
@@ -194,15 +196,14 @@ func (c *aeadCrypter) Decrypt(rand io.Reader, ciphertext, additionalData []byte,
 	if additionalData == nil {
 		return nil, fmt.Errorf("AAD must be provided")
 	}
-	if len(ciphertext) < c.AEAD.NonceSize() {
-		return nil, fmt.Errorf("ciphertext too short")
-	}
+
 	var nonce []byte
 	if ok, err := unprotected.Parse(IvLabel, &nonce); err != nil {
 		return nil, fmt.Errorf("error reading IV from unprotected headers: %w", err)
 	} else if !ok {
 		return nil, fmt.Errorf("missing expected IV unprotected header")
 	}
+
 	return c.AEAD.Open(ciphertext[:0], nonce, ciphertext, additionalData)
 }
 
