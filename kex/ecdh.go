@@ -219,7 +219,7 @@ func sharedSecret(key *ecdsa.PrivateKey, paramA, paramB ecdhParam) ([]byte, erro
 	}
 
 	// Combine ECDH shared secret with rand from parameters
-	return append(append(shx, paramA.Rand...), paramB.Rand...), nil
+	return append(append(shx, paramB.Rand...), paramA.Rand...), nil
 }
 
 type ecdhPersist struct {

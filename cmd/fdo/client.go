@@ -52,8 +52,8 @@ func client() error {
 			FileSep: ";",
 			Bin:     runtime.GOARCH,
 		},
-		KeyExchange: kex.ECDH384Suite,
-		CipherSuite: kex.A256GcmCipher,
+		KeyExchange: kex.ECDH256Suite,
+		CipherSuite: kex.A128GcmCipher,
 	}
 
 	// Perform DI if given a URL
@@ -127,7 +127,7 @@ func di(cli *fdo.Client) error {
 	}
 	cli.Hmac = blob.Hmac(secret)
 
-	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return fmt.Errorf("error generating device key: %w", err)
 	}
@@ -147,7 +147,7 @@ func di(cli *fdo.Client) error {
 
 	// Call the DI server
 	cred, err := cli.DeviceInitialize(context.TODO(), diURL, fdo.DeviceMfgInfo{
-		KeyType:      fdo.Secp384r1KeyType,              // KeyType
+		KeyType:      fdo.Secp256r1KeyType,              // KeyType
 		KeyEncoding:  fdo.X5ChainKeyEnc,                 // KeyEncoding
 		SerialNumber: "12345",                           // string
 		DeviceInfo:   "gotest",                          // string

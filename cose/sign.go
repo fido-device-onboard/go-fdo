@@ -113,41 +113,36 @@ func (s1 Sign1[P, A]) Verify(key crypto.PublicKey, payload *P, additionalData A)
 		return false, fmt.Errorf("missing signature algorithm protected header")
 	}
 
-	// Marshal signature to bytes
+	// Hash signature structure
 	protected, err := newEmptyOrSerializedMap(s1.Protected)
 	if err != nil {
 		return false, fmt.Errorf("error marshaling signature protected body: %W", err)
 	}
-	data, err := cbor.Marshal(signature1[P, A]{
-		Context:       sig1Context,
-		BodyProtected: protected,
-		ExternalAad:   *cbor.NewByteWrap(additionalData),
-		Payload:       *s1.Payload,
-	})
-	if err != nil {
-		return false, err
-	}
-
-	// Hash and verify
 	hash := alg.HashFunc()
 	if !hash.Available() {
 		return false, errors.New("unsupported algorithm")
 	}
 	h := hash.New()
-	if _, err := h.Write(data); err != nil {
+	if err := cbor.NewEncoder(h).Encode(signature1[P, A]{
+		Context:       sig1Context,
+		BodyProtected: protected,
+		ExternalAad:   *cbor.NewByteWrap(additionalData),
+		Payload:       *s1.Payload,
+	}); err != nil {
 		return false, err
 	}
-	digest := h.Sum(nil)
 
+	// Verify signature
 	switch pub := key.(type) {
 	case *ecdsa.PublicKey:
 		// Decode signature following RFC8152 8.1.
 		n := (pub.Params().N.BitLen() + 7) / 8
 		r := new(big.Int).SetBytes(s1.Signature[:n])
 		s := new(big.Int).SetBytes(s1.Signature[n:])
-		return ecdsa.Verify(pub, digest, r, s), nil
+		return ecdsa.Verify(pub, h.Sum(nil), r, s), nil
 
 	case *rsa.PublicKey:
+		digest := h.Sum(nil)
 		return verifyRSA(pub, hash, digest, s1.Signature, alg)
 
 	default:
