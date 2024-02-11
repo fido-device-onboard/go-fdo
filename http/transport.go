@@ -65,6 +65,10 @@ func (t *Transport) Send(ctx context.Context, base string, msgType uint8, msg an
 
 	// Encrypt if a key exchange session is provided
 	if sess != nil {
+		if t.Debug {
+			body, _ := cbor.Marshal(msg)
+			fmt.Fprintf(os.Stderr, "Unencrypted request body [msg %d]:\n%x\n", msgType, body)
+		}
 		var err error
 		msg, err = sess.Encrypt(rand.Reader, msg)
 		if err != nil {
@@ -187,6 +191,10 @@ func (t *Transport) handleResponse(resp *http.Response, sess kex.Session) (msgTy
 		decrypted, err := sess.Decrypt(rand.Reader, content)
 		if err != nil {
 			return 0, nil, fmt.Errorf("error decrypting message %d: %w", msgType, err)
+		}
+
+		if t.Debug {
+			fmt.Fprintf(os.Stderr, "Decrypted response body [msg %d]:\n%x\n", msgType, decrypted)
 		}
 
 		content = io.NopCloser(bytes.NewBuffer(decrypted))

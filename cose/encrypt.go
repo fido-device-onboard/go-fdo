@@ -49,9 +49,9 @@ func (e0 Encrypt0[P, A]) Tag() *Encrypt0Tag[P, A] { return &Encrypt0Tag[P, A]{e0
 
 // Encrypt a payload, setting the Chiphertext field value.
 //
-// The payload accepted is any type T, which will be marshaled to CBOR and if
+// The payload accepted is any type P, which will be marshaled to CBOR and if
 // not already a CBOR byte string, then wrapped in one. The external AAD will
-// be type E and the same marshaling rules apply.
+// be type A and the same marshaling rules apply.
 //
 // For encryption algorithms that do not take external additional authenticated
 // data, aad must be nil. To pass no AAD to an AEAD, E should be []byte and aad
@@ -98,7 +98,7 @@ func (e0 *Encrypt0[P, A]) Encrypt(alg EncryptAlgorithm, key []byte, payload P, a
 }
 
 // Decrypt a payload from the Ciphertext field, automatically unmarshaling it
-// to type T.
+// to type P.
 //
 // For encryption algorithms that do not take external additional authenticated
 // data, aad must be nil. To pass no AAD to an AEAD, E should be []byte and aad

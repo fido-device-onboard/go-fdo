@@ -448,11 +448,11 @@ func (c *Client) readyServiceInfo(ctx context.Context, baseURL string, replaceme
 
 	// Define request structure
 	var msg struct {
-		Hmac                    Hmac
-		MaxOwnerServiceInfoSize uint16 // maximum size service info that Device can receive
+		Hmac                    *Hmac
+		MaxOwnerServiceInfoSize *uint16 // maximum size service info that Device can receive
 	}
-	msg.Hmac = replacementHmac
-	msg.MaxOwnerServiceInfoSize = c.MaxServiceInfoSizeReceive
+	msg.Hmac = &replacementHmac
+	msg.MaxOwnerServiceInfoSize = &c.MaxServiceInfoSizeReceive
 
 	// Make request
 	typ, resp, err := c.Transport.Send(ctx, baseURL, to2DeviceServiceInfoReadyMsgType, msg, session)

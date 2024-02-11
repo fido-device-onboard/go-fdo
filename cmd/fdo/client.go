@@ -29,6 +29,7 @@ var clientFlags = flag.NewFlagSet("client", flag.ContinueOnError)
 
 var (
 	blobPath    string
+	debug       bool
 	diURL       string
 	printDevice bool
 	rvOnly      bool
@@ -36,6 +37,7 @@ var (
 
 func init() {
 	clientFlags.StringVar(&blobPath, "blob", "cred.bin", "File path of device credential blob")
+	clientFlags.BoolVar(&debug, "debug", false, "Print HTTP contents")
 	clientFlags.StringVar(&diURL, "di", "", "HTTP base `URL` for DI server")
 	clientFlags.BoolVar(&printDevice, "print", false, "Print device credential blob and stop")
 	clientFlags.BoolVar(&rvOnly, "rv-only", false, "Perform TO1 then stop")
@@ -43,7 +45,7 @@ func init() {
 
 func client() error {
 	cli := &fdo.Client{
-		Transport: &http.Transport{Debug: true},
+		Transport: &http.Transport{Debug: debug},
 		Cred:      fdo.DeviceCredential{Version: 101},
 		Devmod: fdo.Devmod{
 			Os:      runtime.GOOS,
