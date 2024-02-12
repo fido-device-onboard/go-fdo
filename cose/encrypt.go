@@ -99,9 +99,6 @@ func (e0 *Encrypt0[P, A]) Encrypt(alg EncryptAlgorithm, key []byte, payload P, a
 	if err != nil {
 		return fmt.Errorf("error encrypting plaintext: %w", err)
 	}
-	if e0.Unprotected == nil {
-		e0.Unprotected = make(HeaderMap)
-	}
 	for label, val := range newUnprotected {
 		e0.Unprotected[label] = val
 	}
@@ -117,9 +114,13 @@ func (e0 *Encrypt0[P, A]) Encrypt(alg EncryptAlgorithm, key []byte, payload P, a
 // data, aad must be nil. To pass no AAD to an AEAD, E should be []byte and aad
 // should be either nil or a pointer to an empty byte slice.
 func (e0 Encrypt0[P, A]) Decrypt(alg EncryptAlgorithm, key []byte, aad *A) (*P, error) {
-	// Validate algorithm protected header
+	// Validate algorithm header matches expected
+	header := e0.Protected
+	if !alg.SupportsAD() {
+		header = e0.Unprotected
+	}
 	var headerAlg EncryptAlgorithm
-	if ok, err := e0.Protected.Parse(AlgLabel, &headerAlg); err != nil {
+	if ok, err := header.Parse(AlgLabel, &headerAlg); err != nil {
 		return nil, fmt.Errorf("error parsing algorithm from protected header: %w", err)
 	} else if !ok {
 		return nil, fmt.Errorf("missing required algorithm protected header")
