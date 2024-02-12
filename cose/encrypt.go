@@ -77,7 +77,7 @@ func (e0 *Encrypt0[P, A]) Encrypt(alg EncryptAlgorithm, key []byte, payload P, a
 	}
 
 	// Encode payload to plaintext
-	plaintext, err := cbor.Marshal(cbor.NewByteWrap(payload))
+	plaintext, err := cbor.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("error marshaling payload to plaintext: %w", err)
 	}
