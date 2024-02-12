@@ -63,6 +63,19 @@ func (e0 *Encrypt0[P, A]) Encrypt(alg EncryptAlgorithm, key []byte, payload P, a
 		return fmt.Errorf("error intializing crypter for alg %d: %w", alg, err)
 	}
 
+	// Set alg header
+	if e0.Protected == nil {
+		e0.Protected = HeaderMap{}
+	}
+	if e0.Unprotected == nil {
+		e0.Unprotected = HeaderMap{}
+	}
+	if alg.SupportsAD() {
+		e0.Protected[AlgLabel] = alg
+	} else {
+		e0.Unprotected[AlgLabel] = alg
+	}
+
 	// Encode payload to plaintext
 	plaintext, err := cbor.Marshal(cbor.NewByteWrap(payload))
 	if err != nil {
@@ -77,7 +90,7 @@ func (e0 *Encrypt0[P, A]) Encrypt(alg EncryptAlgorithm, key []byte, payload P, a
 		if err != nil {
 			return err
 		}
-	} else if aad != nil {
+	} else if aad != nil || len(e0.Protected) > 0 {
 		return fmt.Errorf("additional data provided, but the encryption algorithm does not support it")
 	}
 
