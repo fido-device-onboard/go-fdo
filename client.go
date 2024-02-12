@@ -8,7 +8,6 @@ import (
 	"crypto"
 	"crypto/sha512"
 	"fmt"
-	"io"
 	"strings"
 	"time"
 
@@ -145,6 +144,9 @@ func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, to1d *c
 	if c.MaxServiceInfoSizeReceive == 0 {
 		c.MaxServiceInfoSizeReceive = serviceinfo.DefaultMTU
 	}
+	if fsims == nil {
+		fsims = make(map[string]serviceinfo.Module)
+	}
 
 	// TODO: Validate key exchange options using table in 3.6.5
 
@@ -183,20 +185,6 @@ func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, to1d *c
 	// concurrently read by the send/receive service info loop.
 	serviceInfoReader, serviceInfoWriter := serviceinfo.NewChunkOutPipe()
 	defer func() { _ = serviceInfoWriter.Close() }()
-
-	// Ensure that FSIMs include devmod at a minimum
-	if fsims == nil {
-		fsims = make(map[string]serviceinfo.Module)
-	}
-	if fsims[devmodModuleName] == nil {
-		fsims[devmodModuleName] = serviceinfo.Handler(
-			func(context.Context, string, io.Reader, func(string, string) io.Writer) error {
-				// Empty handler to cause active=true to be sent and to include
-				// devmod in the modules list
-				return nil
-			},
-		)
-	}
 
 	// Send devmod KVs in initial ServiceInfo
 	var modules []string
