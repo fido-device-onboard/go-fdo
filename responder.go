@@ -6,6 +6,7 @@ package fdo
 import (
 	"context"
 	"crypto/x509"
+	"io"
 )
 
 // Responder handles the business logic of responding to FDO messages,
@@ -17,6 +18,6 @@ type Responder struct {
 }
 
 // Respond validates a request and returns the appropriate response message.
-func (r *Responder) Respond(ctx context.Context, msgType uint8, msg any) (respType uint8, resp any, _ error) {
+func (r Responder) Respond(ctx context.Context, token string, msgType uint8, msg io.Reader) (newToken string, respType uint8, resp any, _ error) {
 	panic("unimplemented")
 }

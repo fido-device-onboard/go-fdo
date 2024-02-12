@@ -121,7 +121,7 @@ func (t *Transport) Send(ctx context.Context, base string, msgType uint8, msg an
 			fmt.Fprintln(os.Stderr, "Response:", string(debugResp))
 		}
 		var saveBody bytes.Buffer
-		if _, err = saveBody.ReadFrom(resp.Body); err == nil {
+		if _, err := saveBody.ReadFrom(resp.Body); err == nil {
 			fmt.Fprintf(os.Stderr, "%x\n", saveBody.Bytes())
 			resp.Body = io.NopCloser(&saveBody)
 		}
@@ -171,18 +171,18 @@ func (t *Transport) handleResponse(resp *http.Response, sess kex.Session) (msgTy
 		_ = resp.Body.Close()
 		return 0, nil, errors.New("content length must be specified in response headers")
 	}
-	if resp.ContentLength < 0 {
-		return msgType, resp.Body, nil
-	}
 
 	// Allow reading up to expected content length
-	content := io.ReadCloser(struct {
-		io.Reader
-		io.Closer
-	}{
-		Reader: io.LimitReader(resp.Body, resp.ContentLength),
-		Closer: resp.Body,
-	})
+	content := resp.Body
+	if resp.ContentLength > 0 {
+		content = io.ReadCloser(struct {
+			io.Reader
+			io.Closer
+		}{
+			Reader: io.LimitReader(resp.Body, resp.ContentLength),
+			Closer: resp.Body,
+		})
+	}
 
 	// Decrypt if a key exchange session is provided for types other than error
 	if sess != nil && msgType != fdo.ErrorMsgType {
