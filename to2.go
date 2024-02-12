@@ -671,10 +671,6 @@ type recvServiceInfo struct {
 func (c *Client) exchangeServiceInfoRound(ctx context.Context, baseURL string, mtu uint16,
 	r *serviceinfo.ChunkReader, w *serviceinfo.ChunkWriter, session kex.Session,
 ) (bool, error) {
-	// Ensure w is always closed so that FSIM handling goroutine doesn't
-	// deadlock
-	defer func() { _ = w.Close() }()
-
 	// Subtract 3 bytes from MTU to account for a CBOR header indicating "array
 	// of 256-65535 items"
 	mtu -= 3
@@ -689,12 +685,14 @@ func (c *Client) exchangeServiceInfoRound(ctx context.Context, baseURL string, m
 		}
 		if errors.Is(err, serviceinfo.ErrSizeTooSmall) {
 			if maxRead == mtu {
+				_ = w.CloseWithError(err)
 				return false, fmt.Errorf("MTU too small to send ServiceInfo: malicious large key string?")
 			}
 			msg.IsMoreServiceInfo = true
 			break
 		}
 		if err != nil {
+			_ = w.CloseWithError(err)
 			return false, fmt.Errorf("error reading KV to send to owner: %w", err)
 		}
 		maxRead -= chunk.Size()
@@ -704,6 +702,7 @@ func (c *Client) exchangeServiceInfoRound(ctx context.Context, baseURL string, m
 	// Send request
 	ownerServiceInfo, err := c.deviceServiceInfo(ctx, baseURL, msg, session)
 	if err != nil {
+		_ = w.CloseWithError(err)
 		return false, err
 	}
 
@@ -715,17 +714,15 @@ func (c *Client) exchangeServiceInfoRound(ctx context.Context, baseURL string, m
 		}
 	}
 
-	// If no more owner service info, close the pipe
-	if !ownerServiceInfo.IsMoreServiceInfo {
-		if err := w.Close(); err != nil {
-			return false, fmt.Errorf("error closing owner service info -> FSIM pipe: %w", err)
-		}
-	}
-
 	// Recurse when there's more service info to send from device or receive
 	// from owner
 	if msg.IsMoreServiceInfo || ownerServiceInfo.IsMoreServiceInfo {
 		return c.exchangeServiceInfoRound(ctx, baseURL, mtu, r, w, session)
+	}
+
+	// If no more owner service info, close the pipe
+	if err := w.Close(); err != nil {
+		return false, fmt.Errorf("error closing owner service info -> FSIM pipe: %w", err)
 	}
 
 	return ownerServiceInfo.IsDone, nil
