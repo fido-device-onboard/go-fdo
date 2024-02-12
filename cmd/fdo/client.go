@@ -50,6 +50,7 @@ func client() error {
 		Devmod: fdo.Devmod{
 			Os:      runtime.GOOS,
 			Arch:    runtime.GOARCH,
+			Version: "Debian Bookworm",
 			Device:  "go-validation",
 			FileSep: ";",
 			Bin:     runtime.GOARCH,
