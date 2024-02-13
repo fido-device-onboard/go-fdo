@@ -653,7 +653,7 @@ func handleFSIM(ctx context.Context, mtu uint16, fsims map[string]serviceinfo.Mo
 			// Section 3.8.3.1 says to ignore all messages for unknown modules,
 			// except message=active, which should respond CBOR false
 			respondFn = func(_ context.Context, newInfo func(string) io.Writer) error {
-				return cbor.NewEncoder(newInfo("active")).Encode(false)
+				return cbor.NewEncoder(newInfo("active")).Encode(moduleName == devmodModuleName) // only true for devmod
 			}
 			continue
 		}
@@ -688,8 +688,9 @@ func (c *Client) exchangeServiceInfoRound(ctx context.Context, baseURL string, m
 	r *serviceinfo.ChunkReader, w *serviceinfo.ChunkWriter, session kex.Session,
 ) (bool, error) {
 	// Subtract 3 bytes from MTU to account for a CBOR header indicating "array
-	// of 256-65535 items"
-	mtu -= 3
+	// of 256-65535 items" and 2 more bytes for "array of two" plus the first
+	// item indicating "IsMoreServiceInfo"
+	mtu -= 5
 
 	// Create DeviceServiceInfo request structure
 	var msg sendServiceInfo

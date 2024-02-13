@@ -100,6 +100,9 @@ func (d *Devmod) Write(modules []string, mtu uint16, w *serviceinfo.UnchunkWrite
 		return
 	}
 
+	// Always ensure devmod is in the module list
+	modules = append(modules, devmodModuleName)
+
 	if err := d.writeModuleMessages(modules, mtu, w); err != nil {
 		_ = w.CloseWithError(err)
 		return
@@ -150,6 +153,14 @@ type devmodModulesChunk struct {
 	Start   int
 	Len     int
 	Modules []string
+}
+
+func (c devmodModulesChunk) MarshalCBOR() ([]byte, error) {
+	arr := []interface{}{c.Start, c.Len}
+	for _, name := range c.Modules {
+		arr = append(arr, name)
+	}
+	return cbor.Marshal(arr)
 }
 
 func (d *Devmod) writeModuleMessages(modules []string, mtu uint16, w *serviceinfo.UnchunkWriter) error {
