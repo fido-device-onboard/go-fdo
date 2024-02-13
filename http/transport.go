@@ -17,6 +17,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
@@ -108,7 +109,7 @@ func (t *Transport) Send(ctx context.Context, base string, msgType uint8, msg an
 	// Perform HTTP request
 	if t.Debug {
 		if debugReq, err := httputil.DumpRequestOut(req, false); err == nil {
-			fmt.Fprintln(os.Stderr, "Request:", string(debugReq))
+			fmt.Fprintf(os.Stderr, "[%s] Request:\n%s", time.Now(), string(debugReq))
 		}
 		fmt.Fprintf(os.Stderr, "%x\n", body.Bytes())
 	}
@@ -118,7 +119,7 @@ func (t *Transport) Send(ctx context.Context, base string, msgType uint8, msg an
 	}
 	if t.Debug {
 		if debugResp, err := httputil.DumpResponse(resp, false); err == nil {
-			fmt.Fprintln(os.Stderr, "Response:", string(debugResp))
+			fmt.Fprintf(os.Stderr, "[%s] Response:\n%s", time.Now(), string(debugResp))
 		}
 		var saveBody bytes.Buffer
 		if _, err := saveBody.ReadFrom(resp.Body); err == nil {
@@ -194,7 +195,7 @@ func (t *Transport) handleResponse(resp *http.Response, sess kex.Session) (msgTy
 		}
 
 		if t.Debug {
-			fmt.Fprintf(os.Stderr, "Decrypted response body [msg %d]:\n%x\n", msgType, decrypted)
+			fmt.Fprintf(os.Stderr, "[%s] Decrypted response body [msg %d]:\n%x\n", time.Now(), msgType, decrypted)
 		}
 
 		content = io.NopCloser(bytes.NewBuffer(decrypted))

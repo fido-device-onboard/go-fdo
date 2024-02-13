@@ -29,7 +29,7 @@ func TestDevmodRequired(t *testing.T) {
 		},
 	} {
 		t.Run("Devmod "+strconv.Itoa(i), func(t *testing.T) {
-			r, w := serviceinfo.NewChunkOutPipe()
+			r, w := serviceinfo.NewChunkOutPipe(0)
 			defer func() { _ = w.Close() }()
 
 			go devmod.Write([]string{"devmod"}, mtu, w)
@@ -63,7 +63,7 @@ func TestDevmod(t *testing.T) {
 	}
 	modules := []string{"devmod", "unit-test1", "unit-test2", "unit-test3"}
 
-	r, w := serviceinfo.NewChunkOutPipe()
+	r, w := serviceinfo.NewChunkOutPipe(0)
 	defer func() { _ = w.Close() }()
 
 	mtu := uint16(40)

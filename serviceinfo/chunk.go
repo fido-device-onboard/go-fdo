@@ -4,9 +4,11 @@
 package serviceinfo
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 )
@@ -15,10 +17,79 @@ import (
 // max size.
 var ErrSizeTooSmall = errors.New("not enough size for chunk")
 
+type pipeReader interface {
+	io.ReadCloser
+	CloseWithError(error) error
+}
+
+type pipeWriter interface {
+	io.WriteCloser
+	CloseWithError(error) error
+}
+
+func bufferedPipe() (pipeReader, pipeWriter) {
+	pipe := &bufPipe{
+		ch: make(chan struct{}, 1),
+	}
+	return pipe, pipe
+}
+
+type bufPipe struct {
+	sync.Mutex
+	buf bytes.Buffer
+
+	err error
+	ch  chan struct{}
+}
+
+func (b *bufPipe) Read(p []byte) (int, error) {
+	for {
+		b.Lock()
+		if b.buf.Len() > 0 {
+			n, _ := b.buf.Read(p)
+			b.Unlock()
+			return n, nil
+		}
+		b.Unlock()
+		_, ok := <-b.ch
+		if !ok {
+			return 0, b.err
+		}
+	}
+}
+
+func (b *bufPipe) Write(p []byte) (int, error) {
+	b.Lock()
+	defer b.Unlock()
+
+	if b.err != nil {
+		return 0, io.ErrClosedPipe
+	}
+
+	select {
+	case b.ch <- struct{}{}:
+	default:
+	}
+	return b.buf.Write(p)
+}
+
+func (b *bufPipe) Close() error { return b.CloseWithError(io.EOF) }
+
+func (b *bufPipe) CloseWithError(err error) error {
+	b.Lock()
+	defer b.Unlock()
+
+	if b.err == nil {
+		b.err = err
+		close(b.ch)
+	}
+	return nil
+}
+
 // ChunkReader reads ServiceInfo chunked at some MTU.
 type ChunkReader struct {
-	readers <-chan *io.PipeReader
-	r       *io.PipeReader
+	readers <-chan pipeReader
+	r       pipeReader
 	rkey    cbor.RawBytes
 	key     string
 	buffer  []byte
@@ -113,9 +184,10 @@ func (r *ChunkReader) Close() error {
 // order and appropriate MTU. When all chunks have been written, it must be
 // closed exactly once with either Close or CloseWithError.
 type ChunkWriter struct {
-	readers chan<- *io.PipeReader
-	w       *io.PipeWriter
+	readers chan<- pipeReader
+	w       pipeWriter
 	prevKey string
+	pipe    func() (pipeReader, pipeWriter)
 }
 
 // WriteChunk is called with chunked ServiceInfos.
@@ -127,7 +199,7 @@ func (w *ChunkWriter) WriteChunk(kv *KV) error {
 			}
 		}
 
-		pr, pw := io.Pipe()
+		pr, pw := w.pipe()
 		w.readers <- pr
 		w.w = pw
 		w.prevKey = kv.Key
@@ -162,7 +234,7 @@ func (w *ChunkWriter) CloseWithError(err error) error {
 
 // UnchunkReader gets a new io.Reader for each logical ServiceInfo.
 type UnchunkReader struct {
-	readers <-chan *io.PipeReader
+	readers <-chan pipeReader
 }
 
 // NextServiceInfo gets a new io.Reader for a logical ServiceInfo. The reader
@@ -184,9 +256,10 @@ func (r *UnchunkReader) NextServiceInfo() (key string, val io.ReadCloser, ok boo
 // and message name, then the full body is written via zero or more calls to
 // Write.
 type UnchunkWriter struct {
-	readers chan<- *io.PipeReader
-	w       *io.PipeWriter
+	readers chan<- pipeReader
+	w       pipeWriter
 	closed  bool
+	pipe    func() (pipeReader, pipeWriter)
 }
 
 // NextServiceInfo must be called once before each logical ServiceInfo.
@@ -215,7 +288,7 @@ func (w *UnchunkWriter) nextPipe(forceNewMessage bool) error {
 	if w.w != nil {
 		_ = w.w.Close()
 	}
-	pr, pw := io.Pipe()
+	pr, pw := w.pipe()
 	w.readers <- pr
 	if forceNewMessage {
 		_ = pw.Close()
@@ -261,15 +334,25 @@ func (w *UnchunkWriter) CloseWithError(err error) error {
 
 // NewChunkInPipe creates a ChunkWriter and UnchunkReader pair. All chunks sent
 // to the writer will be unchunked and emitted from the reader.
-func NewChunkInPipe() (*UnchunkReader, *ChunkWriter) {
-	readers := make(chan *io.PipeReader)
-	return &UnchunkReader{readers: readers}, &ChunkWriter{readers: readers}
+func NewChunkInPipe(buffers int) (*UnchunkReader, *ChunkWriter) {
+	readers := make(chan pipeReader)
+	pipe := func() (pipeReader, pipeWriter) { return io.Pipe() }
+	if buffers > 0 {
+		readers = make(chan pipeReader, buffers)
+		pipe = bufferedPipe
+	}
+	return &UnchunkReader{readers: readers}, &ChunkWriter{readers: readers, pipe: pipe}
 }
 
 // NewChunkOutPipe creates a ChunkReader and UnchunkWriter pair. All service
 // info sent to the writer will be chunked using the given MTU and emitted from
 // the reader.
-func NewChunkOutPipe() (*ChunkReader, *UnchunkWriter) {
-	readers := make(chan *io.PipeReader)
-	return &ChunkReader{readers: readers}, &UnchunkWriter{readers: readers}
+func NewChunkOutPipe(buffers int) (*ChunkReader, *UnchunkWriter) {
+	readers := make(chan pipeReader)
+	pipe := func() (pipeReader, pipeWriter) { return io.Pipe() }
+	if buffers > 0 {
+		readers = make(chan pipeReader, buffers)
+		pipe = bufferedPipe
+	}
+	return &ChunkReader{readers: readers}, &UnchunkWriter{readers: readers, pipe: pipe}
 }

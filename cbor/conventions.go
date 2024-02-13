@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // Bstr marshals and unmarshals CBOR data that is a byte array of the CBOR
@@ -134,4 +135,65 @@ func (c *X509CertificateRequest) UnmarshalCBOR(data []byte) error {
 	}
 	*c = X509CertificateRequest(*csr)
 	return nil
+}
+
+// Timestamp implements the timestamp CBOR format used in the FDO error message
+// type. The expected string format, if used, is RFC3339.
+//
+//	timestamp = null / UTCStr / UTCInt / TIME_T
+//	UTCStr = #6.0(tstr)
+//	UTCInt = #6.1(uint)
+//	TIMET  = #6.1(uint)
+type Timestamp time.Time
+
+// MarshalCBOR implements Marshaler.
+func (ts Timestamp) MarshalCBOR() ([]byte, error) {
+	if time.Time(ts).IsZero() {
+		return Marshal(nil)
+	}
+	return Marshal(Tag[int]{
+		Num: 1,
+		Val: time.Time(ts).UTC().Second(),
+	})
+}
+
+// UnmarshalCBOR implements Unmarshaler.
+func (ts *Timestamp) UnmarshalCBOR(data []byte) error {
+	// Parse into a null or tag structure
+	var tag *Tag[RawBytes]
+	if err := Unmarshal(data, &tag); err != nil {
+		return err
+	}
+
+	// If value is null, set timestamp to zero value
+	if tag == nil {
+		*ts = Timestamp(time.Time{})
+		return nil
+	}
+
+	switch tag.Number() {
+	// Tag 0: Parse string as RFC3339
+	case 0:
+		var value string
+		if err := Unmarshal([]byte(tag.Val), &value); err != nil {
+			return err
+		}
+		t, err := time.Parse(time.RFC3339, value)
+		if err != nil {
+			return fmt.Errorf("invalid timestamp string, must be RFC3339 format: %w", err)
+		}
+		*ts = Timestamp(t)
+		return nil
+
+	// Tag 1: Parse uint as seconds
+	case 1:
+		var sec int64
+		if err := Unmarshal([]byte(tag.Val), &sec); err != nil {
+			return err
+		}
+		*ts = Timestamp(time.Unix(sec, 0))
+		return nil
+	}
+
+	return fmt.Errorf("unknown tag number %d", tag.Number())
 }

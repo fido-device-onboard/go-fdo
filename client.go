@@ -183,7 +183,7 @@ func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, to1d *c
 	// Start synchronously writing the initial device service info. This occurs
 	// in a goroutine because the pipe is unbuffered and needs to be
 	// concurrently read by the send/receive service info loop.
-	serviceInfoReader, serviceInfoWriter := serviceinfo.NewChunkOutPipe()
+	serviceInfoReader, serviceInfoWriter := serviceinfo.NewChunkOutPipe(0)
 	defer func() { _ = serviceInfoWriter.Close() }()
 
 	// Send devmod KVs in initial ServiceInfo
@@ -234,11 +234,9 @@ func (c *Client) errorMsg(ctx context.Context, baseURL string, err error) {
 	if errMsg.ErrString == "" {
 		errMsg.ErrString = err.Error()
 	}
-	/*
-		if errMsg.Timestamp == (Timestamp{}) {
-			errMsg.Timestamp = Timestamp(time.Now())
-		}
-	*/
+	if errMsg.Timestamp == 0 {
+		errMsg.Timestamp = time.Now().Unix()
+	}
 
 	// Create a new context, because the previous one may have expired, thus
 	// causing the protocol failure

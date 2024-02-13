@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"time"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
@@ -516,21 +515,64 @@ func (c *Client) exchangeServiceInfo(ctx context.Context,
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	// Subtract 3 bytes from MTU to account for a CBOR header indicating "array
+	// of 256-65535 items" and 2 more bytes for "array of two" plus the first
+	// item indicating "IsMoreServiceInfo"
+	mtu -= 5
+
 	// TODO: Limit to 1e6 (1 million) rounds and fail TO2 if exceeded
 	deviceServiceInfoOut := initInfo
 	for {
-		ownerServiceInfoOut, ownerServiceInfoIn := serviceinfo.NewChunkInPipe()
-		nextDeviceServiceInfoOut, deviceServiceInfoIn := serviceinfo.NewChunkOutPipe()
+		// Buffer service info send and receive queues. This buffer may grow
+		// indefinitely if FSIMs are not well behaved. For example, if an owner
+		// service sends 100s of upload requests, the requests will be
+		// processed as they are received and may fill up the send buffer until
+		// the device is out of memory.
+		//
+		// While in this case, it may seem obvious that the upload requests
+		// should be buffered and then processed rather than handled
+		// sequentially, it would be equally unsafe to implement this behavior,
+		// because the request buffer may also grow past the MTU if
+		// IsMoreServiceInfo is used, keeping the device from processing its
+		// received service info.
+		//
+		// In the end, there's no general way to exchange arbitrary data
+		// between two parties where each piece of data one party receives may
+		// cause it to put any number of pieces of data on its send queue and
+		// the other party gets to choose when it may flush its queue.
+		//
+		// Buffering both queues and relying on good behavior of FSIMs is the
+		// best and only real option. Both queues should be buffered because
+		// there can be an asymmetric use of queues in either direction. Many
+		// file upload requests results in a small device receive queue and
+		// large device send queue. Many file downloads result in the opposite.
+
+		// 1000 service info buffered in and out means up to ~1MB of data for
+		// the default MTU. If both queues fill, the device will deadlock. This
+		// should only happen for a poorly behaved FSIM.
+		ownerServiceInfoOut, ownerServiceInfoIn := serviceinfo.NewChunkInPipe(1000)
+		nextDeviceServiceInfoOut, deviceServiceInfoIn := serviceinfo.NewChunkOutPipe(1000)
 
 		// The goroutine is started before sending DeviceServiceInfo, which
 		// writes to the owner service info (unbuffered) pipe.
-		go handleFSIM(ctx, mtu, fsims, deviceServiceInfoIn, ownerServiceInfoOut)
+		modules := fsimMap{modules: fsims, active: make(map[string]bool)}
+		go handleFSIMs(ctx, mtu, modules, deviceServiceInfoIn, ownerServiceInfoOut)
 
-		// Send all device service info and get all owner service info
+		// Send all device service info and receive all owner service info into
+		// a buffered chan
 		done, err := c.exchangeServiceInfoRound(ctx, baseURL, mtu, deviceServiceInfoOut, ownerServiceInfoIn, session)
 		if err != nil {
+			_ = ownerServiceInfoIn.CloseWithError(err)
 			return err
 		}
+
+		// If there is no ServiceInfo to send and the last owner response did
+		// not contain any service info, then this is just a regular interval
+		// check to see if owner IsDone. In this case, add a delay to avoid
+		// clobbering the owner service.
+		//
+		// TODO: Wait a few seconds if no service info was sent or received in
+		// the last round.
 
 		// Stop loop only once owner indicates it is done
 		if done {
@@ -595,80 +637,97 @@ func (c *Client) exchangeServiceInfo(ctx context.Context,
 	}
 }
 
-// Handle owner service info with FSIM. This must be run in a goroutine,
+// Handle owner service info with FSIMs. This must be run in a goroutine,
 // because the chunking/unchunking pipes are not buffered.
-func handleFSIM(ctx context.Context, mtu uint16, fsims map[string]serviceinfo.Module, send *serviceinfo.UnchunkWriter, recv *serviceinfo.UnchunkReader) {
-	defer func() { _ = send.Close() }()
-
-	var moduleCurrent string
-	var respondFn func(context.Context, func(string) io.Writer) error
-
+func handleFSIMs(ctx context.Context, mtu uint16, modules fsimMap, send *serviceinfo.UnchunkWriter, recv *serviceinfo.UnchunkReader) {
 	for {
-		// Get next service info from the owner service. If no more service
-		// info is available, finalize the FSIM by allowing the FSIM to
-		// respond.
+		// Get next service info from the owner service and handle it.
 		key, messageBody, ok := recv.NextServiceInfo()
 		if !ok {
-			if respondFn == nil {
-				// No service info was sent from the owner
-				return
-			}
+			_ = send.Close()
+			return
+		}
 
-			// The function provided to each FSIM handler returns a writer to write
-			// the value part of the service info KV. This writer is buffered and
-			// automatically flushed when the handler returns or another service
-			// info is to be sent.
-			buf := bufio.NewWriterSize(send, int(mtu))
-			if err := respondFn(ctx, func(messageName string) io.Writer {
-				if err := buf.Flush(); err != nil {
-					_ = send.CloseWithError(err)
-				}
-				if err := send.NextServiceInfo(moduleCurrent, messageName); err != nil {
-					_ = send.CloseWithError(err)
-				}
-				return buf
-			}); err != nil {
+		// Automatically receive and respond to active messages
+		moduleName, messageName, _ := strings.Cut(key, ":")
+		fsim, active := modules.Lookup(moduleName)
+		if messageName == "active" {
+			// Receive active message of true or false
+			prevActive, active := active, false
+			if err := cbor.NewDecoder(messageBody).Decode(&active); err != nil {
 				_ = send.CloseWithError(err)
 				return
 			}
-			_ = send.CloseWithError(buf.Flush())
-			return
-		}
+			_, _ = io.Copy(io.Discard, messageBody)
 
-		// If more than one module is handled per service info round, this is
-		// an error, because the device never has a chance to respond to the
-		// first module.
-		moduleName, messageName, _ := strings.Cut(key, ":")
-		if moduleName != moduleCurrent && moduleCurrent != "" {
-			_ = send.CloseWithError(fmt.Errorf(
-				"owner sent message for module %q before letting device complete module %q",
-				moduleName, moduleCurrent))
-			return
-		}
-		moduleCurrent = moduleName
+			// Transition internal state
+			modules.active[moduleName] = active
+			fsim.Transition(active)
 
-		// Lookup FSIM to use for handling service info
-		fsim, ok := fsims[moduleName]
-		if !ok {
-			// Section 3.8.3.1 says to ignore all messages for unknown modules,
-			// except message=active, which should respond CBOR false
-			respondFn = func(_ context.Context, newInfo func(string) io.Writer) error {
-				return cbor.NewEncoder(newInfo("active")).Encode(moduleName == devmodModuleName) // only true for devmod
+			// Send active message when appropriate
+			if active && !prevActive {
+				if _, isUnknown := fsim.(serviceinfo.UnknownModule); isUnknown && moduleName != devmodModuleName {
+					active = false
+				}
+				if err := send.NextServiceInfo(moduleName, messageName); err != nil {
+					_ = send.CloseWithError(err)
+					return
+				}
+				if err := cbor.NewEncoder(send).Encode(active); err != nil {
+					_ = send.CloseWithError(err)
+					return
+				}
 			}
 			continue
 		}
-		respondFn = fsim.Respond
 
 		// Use FSIM handler and provide it a function which can be used to send
-		// zero or more service info KVs. If the FSIM handler returns an error
-		// then the pipe will be closed with an error, causing the error to
-		// propagate to the chunk reader, which is used in the ServiceInfo send
-		// loop.
-		if err := fsim.Receive(ctx, moduleName, messageName, messageBody); err != nil {
+		// zero or more service info KVs. The function returns a writer to
+		// write the value part of the service info KV. This writer is buffered
+		// and automatically flushed when the handler returns or another
+		// service info is to be sent.
+		//
+		// If the FSIM handler returns an error then the pipe will be closed
+		// with an error, causing the error to propagate to the chunk reader,
+		// which is used in the ServiceInfo send loop.
+		buf := bufio.NewWriterSize(send, int(mtu))
+		if err := fsim.Receive(ctx, moduleName, messageName, messageBody, func(messageName string) io.Writer {
+			_ = buf.Flush()
+			_ = send.NextServiceInfo(moduleName, messageName)
+			return buf
+		}); err != nil {
 			_ = send.CloseWithError(err)
 			return
 		}
+		if err := buf.Flush(); err != nil {
+			_ = send.CloseWithError(err)
+			return
+		}
+
+		// Discard any remaining bytes from reader and error if n > 0
+		if n, err := io.Copy(io.Discard, messageBody); err != nil {
+			_ = send.CloseWithError(err)
+			return
+		} else if n > 0 {
+			_ = send.CloseWithError(fmt.Errorf(
+				"fsim did not read full body of message '%s:%s'",
+				moduleName, messageName))
+			return
+		}
 	}
+}
+
+type fsimMap struct {
+	modules map[string]serviceinfo.Module
+	active  map[string]bool
+}
+
+func (fm fsimMap) Lookup(moduleName string) (fsim serviceinfo.Module, active bool) {
+	module, known := fm.modules[moduleName]
+	if !known {
+		module = serviceinfo.UnknownModule{}
+	}
+	return module, fm.active[moduleName]
 }
 
 type sendServiceInfo struct {
@@ -687,11 +746,6 @@ type recvServiceInfo struct {
 func (c *Client) exchangeServiceInfoRound(ctx context.Context, baseURL string, mtu uint16,
 	r *serviceinfo.ChunkReader, w *serviceinfo.ChunkWriter, session kex.Session,
 ) (bool, error) {
-	// Subtract 3 bytes from MTU to account for a CBOR header indicating "array
-	// of 256-65535 items" and 2 more bytes for "array of two" plus the first
-	// item indicating "IsMoreServiceInfo"
-	mtu -= 5
-
 	// Create DeviceServiceInfo request structure
 	var msg sendServiceInfo
 	maxRead := mtu
@@ -702,14 +756,12 @@ func (c *Client) exchangeServiceInfoRound(ctx context.Context, baseURL string, m
 		}
 		if errors.Is(err, serviceinfo.ErrSizeTooSmall) {
 			if maxRead == mtu {
-				_ = w.CloseWithError(err)
 				return false, fmt.Errorf("MTU too small to send ServiceInfo: malicious large key string?")
 			}
 			msg.IsMoreServiceInfo = true
 			break
 		}
 		if err != nil {
-			_ = w.CloseWithError(err)
 			return false, fmt.Errorf("error reading KV to send to owner: %w", err)
 		}
 		maxRead -= chunk.Size()
@@ -719,20 +771,18 @@ func (c *Client) exchangeServiceInfoRound(ctx context.Context, baseURL string, m
 	// Send request
 	ownerServiceInfo, err := c.deviceServiceInfo(ctx, baseURL, msg, session)
 	if err != nil {
-		_ = w.CloseWithError(err)
 		return false, err
 	}
 
 	// Receive all owner service info
 	for _, kv := range ownerServiceInfo.ServiceInfo {
 		if err := w.WriteChunk(kv); err != nil {
-			_ = w.CloseWithError(err)
 			return false, fmt.Errorf("error piping owner service info to FSIM: %w", err)
 		}
 	}
 
 	// Recurse when there's more service info to send from device or receive
-	// from owner
+	// from owner without allowing the other side to respond
 	if msg.IsMoreServiceInfo || ownerServiceInfo.IsMoreServiceInfo {
 		return c.exchangeServiceInfoRound(ctx, baseURL, mtu, r, w, session)
 	}
@@ -747,20 +797,6 @@ func (c *Client) exchangeServiceInfoRound(ctx context.Context, baseURL string, m
 
 // DeviceServiceInfo(68) -> OwnerServiceInfo(69)
 func (c *Client) deviceServiceInfo(ctx context.Context, baseURL string, msg sendServiceInfo, session kex.Session) (*recvServiceInfo, error) {
-	// If there is no ServiceInfo to send and the last owner response did not
-	// indicate IsMore, then this is just a regular interval check to see if
-	// owner IsDone. In this case, add a delay to avoid clobbering the owner
-	// service.
-	//
-	// TODO: Make delay configurable
-	if len(msg.ServiceInfo) == 0 {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(5 * time.Second):
-		}
-	}
-
 	// Make request
 	typ, resp, err := c.Transport.Send(ctx, baseURL, to2DeviceServiceInfoMsgType, msg, session)
 	if err != nil {

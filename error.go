@@ -6,8 +6,6 @@ package fdo
 import (
 	"fmt"
 	"time"
-
-	"github.com/fido-device-onboard/go-fdo/cbor"
 )
 
 // Error codes
@@ -148,71 +146,10 @@ type ErrorMessage struct {
 // String implements Stringer.
 func (e ErrorMessage) String() string {
 	return fmt.Sprintf("%s [code=%d,prevMsgType=%d,id=%d] %s",
-		time.Unix(e.Timestamp, 0), // time.Time(e.Timestamp),
+		time.Unix(e.Timestamp, 0),
 		e.Code, e.PrevMsgType, e.CorrelationID, e.ErrString,
 	)
 }
 
 // Error implements the standard error interface.
 func (e ErrorMessage) Error() string { return e.String() }
-
-// Timestamp implements the timestamp CBOR format used in the FDO error message
-// type. The expected string format, if used, is RFC3339.
-//
-//	timestamp = null / UTCStr / UTCInt / TIME_T
-//	UTCStr = #6.0(tstr)
-//	UTCInt = #6.1(uint)
-//	TIMET  = #6.1(uint)
-type Timestamp time.Time
-
-// MarshalCBOR implements cbor.Marshaler.
-func (ts Timestamp) MarshalCBOR() ([]byte, error) {
-	if time.Time(ts).IsZero() {
-		return cbor.Marshal(nil)
-	}
-	return cbor.Marshal(cbor.Tag[int]{
-		Num: 1,
-		Val: time.Time(ts).UTC().Second(),
-	})
-}
-
-// UnmarshalCBOR implements cbor.Unmarshaler.
-func (ts *Timestamp) UnmarshalCBOR(data []byte) error {
-	// Parse into a null or tag structure
-	var tag *cbor.Tag[cbor.RawBytes]
-	if err := cbor.Unmarshal(data, &tag); err != nil {
-		return err
-	}
-
-	// If value is null, set timestamp to zero value
-	if tag == nil {
-		*ts = Timestamp(time.Time{})
-		return nil
-	}
-
-	switch tag.Number() {
-	// Tag 0: Parse string as RFC3339
-	case 0:
-		var value string
-		if err := cbor.Unmarshal([]byte(tag.Val), &value); err != nil {
-			return err
-		}
-		t, err := time.Parse(time.RFC3339, value)
-		if err != nil {
-			return fmt.Errorf("invalid timestamp string, must be RFC3339 format: %w", err)
-		}
-		*ts = Timestamp(t)
-		return nil
-
-	// Tag 1: Parse uint as seconds
-	case 1:
-		var sec int64
-		if err := cbor.Unmarshal([]byte(tag.Val), &sec); err != nil {
-			return err
-		}
-		*ts = Timestamp(time.Unix(sec, 0))
-		return nil
-	}
-
-	return fmt.Errorf("unknown tag number %d", tag.Number())
-}
