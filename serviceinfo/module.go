@@ -15,21 +15,19 @@ import (
 // Any error returned will cause an ErrorMessage to be sent and TO2 will fail.
 // If a warning should be logged, this must be done within the handler.
 type Module interface {
-	// HandleFSIM handles a received service info. When any message is received
+	// Receive handles received service info. When any message is received
 	// multiple times, the values will automatically be concatenated. For
 	// cumulative data, this means that large values like files can be read
 	// from a single io.Reader. For repetitive discrete objects, a CBOR decoder
 	// should be applied to the io.Reader and a stream of objects can be read.
-	// The stream ends when Decode returns an error wrapping io.EOF.
-	HandleFSIM(ctx context.Context, messageName string, info io.Reader, newInfo func(module, message string) io.Writer) error
-}
+	Receive(ctx context.Context, moduleName, messageName string, messageBody io.Reader) error
 
-// Handler implements Module to handle incoming service infos.
-type Handler func(context.Context, string, io.Reader, func(string, string) io.Writer) error
-
-var _ Module = (Handler)(nil)
-
-// HandleFSIM handles a received service info.
-func (h Handler) HandleFSIM(ctx context.Context, messageName string, r io.Reader, newInfo func(module, message string) io.Writer) error {
-	return h(ctx, messageName, r, newInfo)
+	// Respond is called after all info is received and ReceiveInfo has
+	// completed for every message. The Module is given an opportunity to send
+	// any number of service info KVs. A writer is provided, as automatic
+	// chunking of messages larger than the MTU will be performed. However,
+	// there is no automatic batching of writes into a single KV, so each Write
+	// will result in at least one service info KV being sent (possibly in a
+	// larger group of KVs per FDO message).
+	Respond(ctx context.Context, sendInfo func(message string) io.Writer) error
 }

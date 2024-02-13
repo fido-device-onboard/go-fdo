@@ -524,7 +524,7 @@ func (c *Client) exchangeServiceInfo(ctx context.Context,
 
 		// The goroutine is started before sending DeviceServiceInfo, which
 		// writes to the owner service info (unbuffered) pipe.
-		go handleFSIMs(ctx, mtu, fsims, deviceServiceInfoIn, ownerServiceInfoOut)
+		go handleFSIM(ctx, mtu, fsims, deviceServiceInfoIn, ownerServiceInfoOut)
 
 		// Send all device service info and get all owner service info
 		done, err := c.exchangeServiceInfoRound(ctx, baseURL, mtu, deviceServiceInfoOut, ownerServiceInfoIn, session)
@@ -595,60 +595,76 @@ func (c *Client) exchangeServiceInfo(ctx context.Context,
 	}
 }
 
-// Handle owner service info with FSIMs. This must be run in a goroutine,
+// Handle owner service info with FSIM. This must be run in a goroutine,
 // because the chunking/unchunking pipes are not buffered.
-func handleFSIMs(ctx context.Context, mtu uint16, fsims map[string]serviceinfo.Module, send *serviceinfo.UnchunkWriter, recv *serviceinfo.UnchunkReader) {
+func handleFSIM(ctx context.Context, mtu uint16, fsims map[string]serviceinfo.Module, send *serviceinfo.UnchunkWriter, recv *serviceinfo.UnchunkReader) {
 	defer func() { _ = send.Close() }()
+
+	var moduleCurrent string
+	var respondFn func(context.Context, func(string) io.Writer) error
+
 	for {
-		// Get next service info from the owner service
-		key, info, ok := recv.NextServiceInfo()
+		// Get next service info from the owner service. If no more service
+		// info is available, finalize the FSIM by allowing the FSIM to
+		// respond.
+		key, messageBody, ok := recv.NextServiceInfo()
 		if !ok {
+			if respondFn == nil {
+				// No service info was sent from the owner
+				return
+			}
+
+			// The function provided to each FSIM handler returns a writer to write
+			// the value part of the service info KV. This writer is buffered and
+			// automatically flushed when the handler returns or another service
+			// info is to be sent.
+			buf := bufio.NewWriterSize(send, int(mtu))
+			if err := respondFn(ctx, func(messageName string) io.Writer {
+				if err := buf.Flush(); err != nil {
+					_ = send.CloseWithError(err)
+				}
+				if err := send.NextServiceInfo(moduleCurrent, messageName); err != nil {
+					_ = send.CloseWithError(err)
+				}
+				return buf
+			}); err != nil {
+				_ = send.CloseWithError(err)
+				return
+			}
+			_ = send.CloseWithError(buf.Flush())
 			return
 		}
+
+		// If more than one module is handled per service info round, this is
+		// an error, because the device never has a chance to respond to the
+		// first module.
 		moduleName, messageName, _ := strings.Cut(key, ":")
+		if moduleName != moduleCurrent && moduleCurrent != "" {
+			_ = send.CloseWithError(fmt.Errorf(
+				"owner sent message for module %q before letting device complete module %q",
+				moduleName, moduleCurrent))
+			return
+		}
+		moduleCurrent = moduleName
 
 		// Lookup FSIM to use for handling service info
 		fsim, ok := fsims[moduleName]
 		if !ok {
 			// Section 3.8.3.1 says to ignore all messages for unknown modules,
 			// except message=active, which should respond CBOR false
-			if messageName == "active" {
-				if err := send.NextServiceInfo(moduleName, messageName); err != nil {
-					_ = send.CloseWithError(err)
-					return
-				}
-				if err := cbor.NewEncoder(send).Encode(false); err != nil {
-					_ = send.CloseWithError(err)
-					return
-				}
+			respondFn = func(_ context.Context, newInfo func(string) io.Writer) error {
+				return cbor.NewEncoder(newInfo("active")).Encode(false)
 			}
 			continue
 		}
+		respondFn = fsim.Respond
 
 		// Use FSIM handler and provide it a function which can be used to send
 		// zero or more service info KVs. If the FSIM handler returns an error
 		// then the pipe will be closed with an error, causing the error to
 		// propagate to the chunk reader, which is used in the ServiceInfo send
 		// loop.
-		//
-		// The function provided to each FSIM handler returns a writer to write
-		// the value part of the service info KV. This writer is buffered and
-		// automatically flushed when the handler returns or another service
-		// info is to be sent.
-		buf := bufio.NewWriterSize(send, int(mtu))
-		if err := fsim.HandleFSIM(ctx, messageName, info, func(moduleName, messageName string) io.Writer {
-			if err := buf.Flush(); err != nil {
-				_ = send.CloseWithError(err)
-			}
-			if err := send.NextServiceInfo(moduleName, messageName); err != nil {
-				_ = send.CloseWithError(err)
-			}
-			return buf
-		}); err != nil {
-			_ = send.CloseWithError(err)
-			return
-		}
-		if err := buf.Flush(); err != nil {
+		if err := fsim.Receive(ctx, moduleName, messageName, messageBody); err != nil {
 			_ = send.CloseWithError(err)
 			return
 		}
