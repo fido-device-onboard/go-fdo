@@ -21,8 +21,10 @@ import (
 	"github.com/fido-device-onboard/go-fdo/blob"
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
+	"github.com/fido-device-onboard/go-fdo/fsim"
 	"github.com/fido-device-onboard/go-fdo/http"
 	"github.com/fido-device-onboard/go-fdo/kex"
+	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
 
 var clientFlags = flag.NewFlagSet("client", flag.ContinueOnError)
@@ -285,7 +287,9 @@ func transferOwnership2(cli *fdo.Client, addr fdo.RvTO2Addr, to1d *cose.Sign1[fd
 		port = 80
 	}
 	baseURL := "http://" + net.JoinHostPort(host, strconv.Itoa(int(port)))
-	cred, err := cli.TransferOwnership2(context.TODO(), baseURL, to1d, nil)
+	cred, err := cli.TransferOwnership2(context.TODO(), baseURL, to1d, map[string]serviceinfo.Module{
+		"fdo.download": &fsim.Download{},
+	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "TO2 failed for %q: %v\n", baseURL, err)
 		return nil

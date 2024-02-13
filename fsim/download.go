@@ -26,6 +26,7 @@ type Download struct {
 	// file after downloading to a temporary location.
 	Rename func(name string) error
 
+	// Internal state
 	name   string
 	length uint
 	sha384 []byte // optional
