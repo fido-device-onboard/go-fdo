@@ -283,7 +283,7 @@ func (w *UnchunkWriter) ForceNewMessage() error {
 
 func (w *UnchunkWriter) nextPipe(forceNewMessage bool) error {
 	if w.closed {
-		return fmt.Errorf("writer already closed")
+		return io.ErrClosedPipe
 	}
 	if w.w != nil {
 		_ = w.w.Close()
@@ -306,13 +306,13 @@ func (w *UnchunkWriter) Write(p []byte) (n int, err error) { return w.w.Write(p)
 // to Next or Write will be made.
 func (w *UnchunkWriter) Close() error {
 	if w.closed {
-		return fmt.Errorf("writer already closed")
+		return io.ErrClosedPipe
 	}
 	w.closed = true
 	close(w.readers)
 
 	if w.w == nil {
-		return nil
+		_, w.w = io.Pipe()
 	}
 	return w.w.Close()
 }
@@ -321,13 +321,13 @@ func (w *UnchunkWriter) Close() error {
 // the given error.
 func (w *UnchunkWriter) CloseWithError(err error) error {
 	if w.closed {
-		return fmt.Errorf("writer already closed")
+		return io.ErrClosedPipe
 	}
 	w.closed = true
 	close(w.readers)
 
 	if w.w == nil {
-		return nil
+		_, w.w = io.Pipe()
 	}
 	return w.w.CloseWithError(err)
 }

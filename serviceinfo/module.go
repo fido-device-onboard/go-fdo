@@ -55,3 +55,17 @@ func (m UnknownModule) Receive(_ context.Context, _, _ string, messageBody io.Re
 	_, _ = io.Copy(io.Discard, messageBody)
 	return nil
 }
+
+// UnsafeModule is optionally implemented by Modules in order to allow sending
+// service info before reading the entire body of the received message. Doing
+// so is unsafe, because the TO2 service info subprotocol lets each peer send
+// as many service info KVs as it wants before allowing the other to respond.
+//
+// If service info is not immediately consumed, then responses cannot be sent
+// over the wire, because the peer may have indicated IsMoreServiceInfo.
+// Service info sent from an UnsafeModule will be buffered, but the buffer is
+// not infinite, so the implementer must acknowledge that the implementation
+// may cause deadlocks (or out-of-memory errors).
+type UnsafeModule interface {
+	ThisModuleMayCauseDeadlocks()
+}

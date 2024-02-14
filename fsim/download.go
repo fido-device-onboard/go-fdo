@@ -11,7 +11,6 @@ import (
 	"hash"
 	"io"
 	"os"
-	"time"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
@@ -28,15 +27,15 @@ type Download struct {
 	// file after downloading to a temporary location.
 	Rename func(name string) error
 
-	// Internal state
+	// Message data
 	name   string
 	length int
 	sha384 []byte // optional
 
+	// Internal state
 	temp    *os.File
 	hash    hash.Hash
 	written int
-	chunk   []byte
 }
 
 var _ serviceinfo.Module = (*Download)(nil)
@@ -82,14 +81,13 @@ func (d *Download) Receive(ctx context.Context, moduleName, messageName string, 
 		if d.name == "" {
 			return fmt.Errorf("module %q did not receive a name before data", moduleName)
 		}
-		if err := cbor.NewDecoder(messageBody).Decode(&d.chunk); err != nil {
-			fmt.Fprintf(os.Stderr, "[%s] %v\n", time.Now(), err)
+		var chunk []byte
+		if err := cbor.NewDecoder(messageBody).Decode(&chunk); err != nil {
 			d.reset()
 			return cbor.NewEncoder(respond("done")).Encode(-1)
 		}
-		n, err := io.MultiWriter(d.temp, d.hash).Write(d.chunk)
+		n, err := io.MultiWriter(d.temp, d.hash).Write(chunk)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "[%s] %v\n", time.Now(), err)
 			d.reset()
 			return cbor.NewEncoder(respond("done")).Encode(-1)
 		}
@@ -107,12 +105,10 @@ func (d *Download) Receive(ctx context.Context, moduleName, messageName string, 
 func (d *Download) finalize(respond func(string) io.Writer) error {
 	// Validate file length and checksum
 	if d.written > d.length {
-		fmt.Fprintf(os.Stderr, "[%s] %v\n", time.Now(), fmt.Errorf("length does not match: wrote %d, expected %d", d.written, d.length))
 		d.reset()
 		return cbor.NewEncoder(respond("done")).Encode(-1)
 	}
 	if hashed := d.hash.Sum(nil); len(d.sha384) > 0 && !bytes.Equal(hashed, d.sha384) {
-		fmt.Fprintf(os.Stderr, "[%s] %v\n", time.Now(), fmt.Errorf("checksum does not match\nexpected: %x\n     got: %x", d.sha384, hashed))
 		d.reset()
 		return cbor.NewEncoder(respond("done")).Encode(-1)
 	}
@@ -133,5 +129,5 @@ func (d *Download) finalize(respond func(string) io.Writer) error {
 func (d *Download) reset() {
 	_ = d.temp.Close()
 	_ = os.Remove(d.temp.Name())
-	d.name, d.length, d.sha384, d.temp, d.hash, d.written, d.chunk = "", 0, nil, nil, nil, 0, nil
+	d.name, d.length, d.sha384, d.temp, d.hash, d.written = "", 0, nil, nil, nil, 0
 }

@@ -157,7 +157,7 @@ func (c *Client) helloDevice(ctx context.Context, baseURL string) (Nonce, *ovhVa
 		CipherSuite          kex.CipherSuiteID
 		SigInfoA             sigInfo
 	}{
-		MaxDeviceMessageSize: c.MaxServiceInfoSizeReceive, // TODO: Should this be separately configurable?
+		MaxDeviceMessageSize: 65535, // TODO: Make this configurable and match transport config
 		GUID:                 c.Cred.GUID,
 		NonceTO2ProveOV:      proveOVNonce,
 		KexSuiteName:         c.KeyExchange,
@@ -171,15 +171,6 @@ func (c *Client) helloDevice(ctx context.Context, baseURL string) (Nonce, *ovhVa
 		return Nonce{}, nil, nil, err
 	}
 	defer func() { _ = resp.Close() }()
-
-	// Enforce MaxDeviceMessageSize
-	resp = struct {
-		io.Reader
-		io.Closer
-	}{
-		Reader: io.LimitReader(resp, int64(c.MaxServiceInfoSizeReceive)),
-		Closer: resp,
-	}
 
 	// Parse response
 	var proveOVHdr cose.Sign1Tag[struct {
@@ -302,15 +293,6 @@ func (c *Client) nextOVEntry(ctx context.Context, baseURL string, i int) (*cose.
 	}
 	defer func() { _ = resp.Close() }()
 
-	// Enforce MaxDeviceMessageSize
-	resp = struct {
-		io.Reader
-		io.Closer
-	}{
-		Reader: io.LimitReader(resp, int64(c.MaxServiceInfoSizeReceive)),
-		Closer: resp,
-	}
-
 	// Parse response
 	switch typ {
 	case to2OVNextEntryMsgType:
@@ -386,15 +368,6 @@ func (c *Client) proveDevice(ctx context.Context, baseURL string, proveDeviceNon
 	}
 	defer func() { _ = resp.Close() }()
 
-	// Enforce MaxDeviceMessageSize
-	resp = struct {
-		io.Reader
-		io.Closer
-	}{
-		Reader: io.LimitReader(resp, int64(c.MaxServiceInfoSizeReceive)),
-		Closer: resp,
-	}
-
 	// Parse response
 	switch typ {
 	case to2SetupDeviceMsgType:
@@ -459,15 +432,6 @@ func (c *Client) readyServiceInfo(ctx context.Context, baseURL string, replaceme
 		return 0, fmt.Errorf("error sending TO2.DeviceServiceInfoReady: %w", err)
 	}
 	defer func() { _ = resp.Close() }()
-
-	// Enforce MaxDeviceMessageSize
-	resp = struct {
-		io.Reader
-		io.Closer
-	}{
-		Reader: io.LimitReader(resp, int64(c.MaxServiceInfoSizeReceive)),
-		Closer: resp,
-	}
 
 	// Parse response
 	switch typ {
@@ -598,15 +562,6 @@ func (c *Client) exchangeServiceInfo(ctx context.Context,
 	}
 	defer func() { _ = resp.Close() }()
 
-	// Enforce MaxDeviceMessageSize
-	resp = struct {
-		io.Reader
-		io.Closer
-	}{
-		Reader: io.LimitReader(resp, int64(c.MaxServiceInfoSizeReceive)),
-		Closer: resp,
-	}
-
 	// Parse response
 	switch typ {
 	case to2Done2MsgType:
@@ -640,12 +595,13 @@ func (c *Client) exchangeServiceInfo(ctx context.Context,
 // Handle owner service info with FSIMs. This must be run in a goroutine,
 // because the chunking/unchunking pipes are not buffered.
 func handleFSIMs(ctx context.Context, mtu uint16, modules fsimMap, send *serviceinfo.UnchunkWriter, recv *serviceinfo.UnchunkReader) {
+	var writeChans []chan chan struct{}
 	for {
 		// Get next service info from the owner service and handle it.
 		key, messageBody, ok := recv.NextServiceInfo()
 		if !ok {
 			_ = send.Close()
-			return
+			break
 		}
 
 		// Automatically receive and respond to active messages
@@ -666,14 +622,7 @@ func handleFSIMs(ctx context.Context, mtu uint16, modules fsimMap, send *service
 
 			// Send active message when appropriate
 			if active && !prevActive {
-				if _, isUnknown := fsim.(serviceinfo.UnknownModule); isUnknown && moduleName != devmodModuleName {
-					active = false
-				}
-				if err := send.NextServiceInfo(moduleName, messageName); err != nil {
-					_ = send.CloseWithError(err)
-					return
-				}
-				if err := cbor.NewEncoder(send).Encode(active); err != nil {
+				if err := sendActive(ctx, moduleName, active, fsim, send); err != nil {
 					_ = send.CloseWithError(err)
 					return
 				}
@@ -690,30 +639,103 @@ func handleFSIMs(ctx context.Context, mtu uint16, modules fsimMap, send *service
 		// If the FSIM handler returns an error then the pipe will be closed
 		// with an error, causing the error to propagate to the chunk reader,
 		// which is used in the ServiceInfo send loop.
-		buf := bufio.NewWriterSize(send, int(mtu))
-		if err := fsim.Receive(ctx, moduleName, messageName, messageBody, func(messageName string) io.Writer {
-			_ = buf.Flush()
-			_ = send.NextServiceInfo(moduleName, messageName)
-			return buf
-		}); err != nil {
-			_ = send.CloseWithError(err)
+		//
+		// The FSIM is handled in a goroutine, allowing service info to be read
+		// and processed in parallel, but sends are serialized via a channel
+		// letting it know when to start and indicate back when writing is
+		// complete.
+		readyToWrite := make(chan chan struct{})
+		writeChans = append(writeChans, readyToWrite)
+		go handleFSIM(ctx, fsim, moduleName, messageName, messageBody, send, mtu, readyToWrite)
+	}
+
+	// Synchronize writes by sending one done channel at a time and waiting for
+	// the receiver to send back done.
+	for _, nextWrite := range writeChans {
+		done := make(chan struct{})
+		select {
+		case <-ctx.Done():
 			return
+		case nextWrite <- done:
 		}
-		if err := buf.Flush(); err != nil {
-			_ = send.CloseWithError(err)
+		select {
+		case <-ctx.Done():
 			return
+		case <-done:
+		}
+	}
+}
+
+func sendActive(ctx context.Context, moduleName string, active bool, fsim serviceinfo.Module, send *serviceinfo.UnchunkWriter) error {
+	if _, isUnknown := fsim.(serviceinfo.UnknownModule); isUnknown && moduleName != devmodModuleName {
+		active = false
+	}
+	if err := send.NextServiceInfo(moduleName, "active"); err != nil {
+		return err
+	}
+	if err := cbor.NewEncoder(send).Encode(active); err != nil {
+		return err
+	}
+	return nil
+}
+
+func handleFSIM(ctx context.Context, fsim serviceinfo.Module,
+	moduleName, messageName string, messageBody io.Reader,
+	send *serviceinfo.UnchunkWriter, mtu uint16, readyToWrite <-chan chan struct{},
+) {
+	var done chan<- struct{}
+	defer func() {
+		if done != nil {
+			close(done)
+		}
+	}()
+	buf := bufio.NewWriterSize(send, int(mtu))
+	if err := fsim.Receive(ctx, moduleName, messageName, messageBody, func(messageName string) io.Writer {
+		_ = buf.Flush()
+		// Drain messageBody and fail by closing writer with error if any
+		// body remains. This is to ensure that writes occur only after
+		// reads, thus allowing all service info to be read while response
+		// writers wait to be signaled to start writing.
+		if _, unsafe := fsim.(serviceinfo.UnsafeModule); !unsafe {
+			if n, err := io.Copy(io.Discard, messageBody); err != nil {
+				_ = send.CloseWithError(err)
+				return send
+			} else if n > 0 {
+				_ = send.CloseWithError(fmt.Errorf(
+					"fsim did not read full body of message '%s:%s'",
+					moduleName, messageName))
+				return send
+			}
 		}
 
-		// Discard any remaining bytes from reader and error if n > 0
-		if n, err := io.Copy(io.Discard, messageBody); err != nil {
-			_ = send.CloseWithError(err)
-			return
-		} else if n > 0 {
-			_ = send.CloseWithError(fmt.Errorf(
-				"fsim did not read full body of message '%s:%s'",
-				moduleName, messageName))
-			return
+		// Wait on channel to synchronize response order
+		select {
+		case <-ctx.Done():
+			_ = send.CloseWithError(ctx.Err())
+			return send
+		case done = <-readyToWrite:
 		}
+
+		_ = send.NextServiceInfo(moduleName, messageName)
+		return buf
+	}); err != nil {
+		_ = send.CloseWithError(err)
+		return
+	}
+	if err := buf.Flush(); err != nil {
+		_ = send.CloseWithError(err)
+		return
+	}
+
+	// Ensure that buffer was drained, even if an unsafe module was used
+	if n, err := io.Copy(io.Discard, messageBody); err != nil {
+		_ = send.CloseWithError(err)
+		return
+	} else if n > 0 {
+		_ = send.CloseWithError(fmt.Errorf(
+			"fsim did not read full body of message '%s:%s'",
+			moduleName, messageName))
+		return
 	}
 }
 
@@ -803,15 +825,6 @@ func (c *Client) deviceServiceInfo(ctx context.Context, baseURL string, msg send
 		return nil, fmt.Errorf("error sending TO2.DeviceServiceInfo: %w", err)
 	}
 	defer func() { _ = resp.Close() }()
-
-	// Enforce MaxDeviceMessageSize
-	resp = struct {
-		io.Reader
-		io.Closer
-	}{
-		Reader: io.LimitReader(resp, int64(c.MaxServiceInfoSizeReceive)),
-		Closer: resp,
-	}
 
 	// Parse response
 	switch typ {
