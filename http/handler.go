@@ -17,6 +17,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
@@ -28,7 +29,7 @@ const bearerPrefix = "Bearer "
 // Handler implements http.Handler and responds to all DI, TO1, and TO2 message
 // types.
 type Handler struct {
-	fdo.Responder
+	Responder *fdo.Server
 
 	// Session returns the given key exchange/encryption session based on an
 	// opaque "authorization" token.
@@ -82,7 +83,7 @@ func (h Handler) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// Parse message type from request URL
 	typ, err := strconv.ParseUint(path.Base(r.URL.Path), 10, 8)
 	if err != nil {
-		h.error(w, fmt.Errorf("invalid message type"))
+		h.error(w, 0, fmt.Errorf("invalid message type"))
 		return
 	}
 	msgType := uint8(typ)
@@ -90,7 +91,7 @@ func (h Handler) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// Parse request headers
 	token := r.Header.Get("Authorization")
 	if token != "" && !strings.HasPrefix(token, bearerPrefix) {
-		h.error(w, fmt.Errorf("invalid bearer token"))
+		h.error(w, msgType, fmt.Errorf("invalid bearer token"))
 		return
 	}
 	token = strings.TrimPrefix(token, bearerPrefix)
@@ -102,12 +103,12 @@ func (h Handler) handleRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	if maxSize > 0 && r.ContentLength > maxSize {
 		_ = r.Body.Close()
-		h.error(w, fmt.Errorf("content too large (%d bytes)", r.ContentLength))
+		h.error(w, msgType, fmt.Errorf("content too large (%d bytes)", r.ContentLength))
 		return
 	}
 	if maxSize > 0 && r.ContentLength < 0 {
 		_ = r.Body.Close()
-		h.error(w, errors.New("content length must be specified in request headers"))
+		h.error(w, msgType, errors.New("content length must be specified in request headers"))
 		return
 	}
 
@@ -126,7 +127,7 @@ func (h Handler) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// Decrypt message when appropriate
 	sess, err := h.Session(r.Context(), token)
 	if err != nil {
-		h.error(w, err)
+		h.error(w, msgType, err)
 		return
 	}
 	if sess != nil && msgType != fdo.ErrorMsgType {
@@ -134,7 +135,7 @@ func (h Handler) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 		decrypted, err := sess.Decrypt(rand.Reader, msg)
 		if err != nil {
-			h.error(w, fmt.Errorf("error decrypting message %d: %w", msgType, err))
+			h.error(w, msgType, fmt.Errorf("error decrypting message %d: %w", msgType, err))
 			return
 		}
 
@@ -152,9 +153,9 @@ func (h Handler) handleRequest(w http.ResponseWriter, r *http.Request) {
 //nolint:gocyclo
 func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, token string, msgType uint8, msg io.Reader, sess kex.Session) {
 	// Perform business logic of message handling
-	token, respType, resp, err := h.Respond(ctx, token, msgType, msg)
+	token, respType, resp, err := h.Responder.Respond(ctx, token, msgType, msg)
 	if err != nil {
-		h.error(w, err)
+		h.error(w, msgType, err)
 		return
 	}
 
@@ -167,7 +168,7 @@ func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, token
 		var err error
 		resp, err = sess.Encrypt(rand.Reader, resp)
 		if err != nil {
-			h.error(w, fmt.Errorf("error encrypting message %d: %w", respType, err))
+			h.error(w, msgType, fmt.Errorf("error encrypting message %d: %w", respType, err))
 			return
 		}
 	}
@@ -175,7 +176,7 @@ func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, token
 	// Marshal response to get size
 	var body bytes.Buffer
 	if err := cbor.NewEncoder(&body).Encode(resp); err != nil {
-		h.error(w, fmt.Errorf("error marshaling response message %d: %w", respType, err))
+		h.error(w, msgType, fmt.Errorf("error marshaling response message %d: %w", respType, err))
 		return
 	}
 
@@ -184,13 +185,32 @@ func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, token
 	w.Header().Add("Content-Length", strconv.Itoa(body.Len()))
 	w.Header().Add("Content-Type", "application/cbor")
 	w.Header().Add("Message-Type", strconv.Itoa(int(respType)))
+	w.WriteHeader(http.StatusOK)
 
 	if _, err := w.Write(body.Bytes()); err != nil {
-		h.error(w, fmt.Errorf("error writing response message %d: %w", respType, err))
+		h.error(w, msgType, fmt.Errorf("error writing response message %d: %w", respType, err))
 		return
 	}
 }
 
-func (h Handler) error(rw http.ResponseWriter, err error) {
-	// TODO: Write error message
+func (h Handler) error(w http.ResponseWriter, prevMsgType uint8, err error) {
+	var msg fdo.ErrorMessage
+	if !errors.As(err, &msg) {
+		msg.Code = 500
+		msg.PrevMsgType = prevMsgType
+		msg.ErrString = err.Error()
+		msg.Timestamp = time.Now().Unix()
+	}
+
+	// TODO: Set correlation ID
+	msg.CorrelationID = nil
+
+	var body bytes.Buffer
+	_ = cbor.NewEncoder(&body).Encode(msg)
+
+	w.Header().Add("Content-Length", strconv.Itoa(body.Len()))
+	w.Header().Add("Content-Type", "application/cbor")
+	w.Header().Add("Message-Type", strconv.Itoa(int(fdo.ErrorMsgType)))
+	w.WriteHeader(http.StatusInternalServerError)
+	_, _ = w.Write(body.Bytes())
 }
