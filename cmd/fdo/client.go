@@ -12,10 +12,13 @@ import (
 	"crypto/x509/pkix"
 	"flag"
 	"fmt"
+	"io/fs"
 	"net"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/blob"
@@ -35,14 +38,93 @@ var (
 	diURL       string
 	printDevice bool
 	rvOnly      bool
+	dlDir       string
+	uploads     = make(fsVar)
 )
+
+type fsVar map[string]string
+
+func (files fsVar) String() string {
+	if len(files) == 0 {
+		return "[]"
+	}
+	paths := "["
+	for path := range files {
+		paths += path + ","
+	}
+	return paths[:len(paths)-1] + "]"
+}
+
+func (files fsVar) Set(paths string) error {
+	for _, path := range strings.Split(paths, ",") {
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			return fmt.Errorf("[%q]: %w", path, err)
+		}
+		files[pathToName(path, abs)] = abs
+	}
+	return nil
+}
+
+// The name of the directory or file is its cleaned path, if absolute. If the
+// path given is relative, then remove all ".." and "." at the start. If the
+// path given is only 1 or more ".." or ".", then use the name of the absolute
+// path.
+func pathToName(path, abs string) string {
+	cleaned := filepath.Clean(path)
+	if rooted := path[:1] == "/"; rooted {
+		return cleaned
+	}
+	pathparts := strings.Split(cleaned, string(filepath.Separator))
+	for len(pathparts) > 0 && (pathparts[0] == ".." || pathparts[0] == ".") {
+		pathparts = pathparts[1:]
+	}
+	if len(pathparts) == 0 && abs != "" {
+		pathparts = []string{filepath.Base(abs)}
+	}
+	return filepath.Join(pathparts...)
+}
+
+// Open implements fs.FS
+func (files fsVar) Open(path string) (fs.File, error) {
+	if !fs.ValidPath(path) {
+		return nil, &fs.PathError{
+			Op:   "open",
+			Path: path,
+			Err:  fs.ErrInvalid,
+		}
+	}
+
+	// TODO: Enforce chroot-like security
+	if _, rootAccess := files["/"]; rootAccess {
+		return os.Open(path)
+	}
+
+	name := pathToName(path, "")
+	if abs, ok := files[name]; ok {
+		return os.Open(abs)
+	}
+	for dir := filepath.Dir(name); dir != "/" && dir != "."; dir = filepath.Dir(dir) {
+		if abs, ok := files[dir]; ok {
+			return os.Open(abs)
+		}
+	}
+	return nil, &fs.PathError{
+		Op:   "open",
+		Path: path,
+		Err:  fs.ErrNotExist,
+	}
+}
 
 func init() {
 	clientFlags.StringVar(&blobPath, "blob", "cred.bin", "File path of device credential blob")
 	clientFlags.BoolVar(&debug, "debug", false, "Print HTTP contents")
+	clientFlags.StringVar(&dlDir, "download", "", "A `dir` to download files into (FSIM disabled if empty)")
 	clientFlags.StringVar(&diURL, "di", "", "HTTP base `URL` for DI server")
 	clientFlags.BoolVar(&printDevice, "print", false, "Print device credential blob and stop")
 	clientFlags.BoolVar(&rvOnly, "rv-only", false, "Perform TO1 then stop")
+	clientFlags.Var(&uploads, "upload", "List of dirs and `files` to upload files from, "+
+		"comma-separated and/or flag provided multiple times (FSIM disabled if empty)")
 }
 
 func client() error {
@@ -273,6 +355,21 @@ func transferOwnership(cli *fdo.Client, rvInfo [][]fdo.RvInstruction) *fdo.Devic
 }
 
 func transferOwnership2(cli *fdo.Client, addr fdo.RvTO2Addr, to1d *cose.Sign1[fdo.To1d, []byte]) *fdo.DeviceCredential {
+	fsims := make(map[string]serviceinfo.Module)
+	if dlDir != "" {
+		fsims["fdo.download"] = &fsim.Download{
+			NameToPath: func(name string) string {
+				// TODO: Enforce chroot-like security
+				return filepath.Join(dlDir, name)
+			},
+		}
+	}
+	if len(uploads) > 0 {
+		fsims["fdo.upload"] = &fsim.Upload{
+			FS: uploads,
+		}
+	}
+
 	var host string
 	switch {
 	case addr.DNSAddress != nil:
@@ -287,9 +384,7 @@ func transferOwnership2(cli *fdo.Client, addr fdo.RvTO2Addr, to1d *cose.Sign1[fd
 		port = 80
 	}
 	baseURL := "http://" + net.JoinHostPort(host, strconv.Itoa(int(port)))
-	cred, err := cli.TransferOwnership2(context.TODO(), baseURL, to1d, map[string]serviceinfo.Module{
-		"fdo.download": &fsim.Download{},
-	})
+	cred, err := cli.TransferOwnership2(context.TODO(), baseURL, to1d, fsims)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "TO2 failed for %q: %v\n", baseURL, err)
 		return nil

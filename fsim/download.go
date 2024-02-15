@@ -23,9 +23,9 @@ type Download struct {
 	// temporary file to download to.
 	CreateTemp func() (*os.File, error)
 
-	// Rename optionally overrides the behavior of where Download places the
-	// file after downloading to a temporary location.
-	Rename func(name string) error
+	// NameToPath optionally overrides the behavior of where Download places
+	// the file after downloading to a temporary location.
+	NameToPath func(name string) string
 
 	// Message data
 	name   string
@@ -114,11 +114,11 @@ func (d *Download) finalize(respond func(string) io.Writer) error {
 	}
 
 	// Rename temp file to final file name
-	rename := d.Rename
-	if rename == nil {
-		rename = func(name string) error { return os.Rename(d.temp.Name(), name) }
+	resolveName := d.NameToPath
+	if resolveName == nil {
+		resolveName = func(name string) string { return name }
 	}
-	if err := rename(d.name); err != nil {
+	if err := os.Rename(d.temp.Name(), resolveName(d.name)); err != nil {
 		return cbor.NewEncoder(respond("done")).Encode(-1)
 	}
 
