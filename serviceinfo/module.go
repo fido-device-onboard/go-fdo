@@ -9,8 +9,27 @@ import (
 )
 
 // A Module handles a single service info key's moduleName (key format:
-// "moduleName:messageName"). Any service info structs returned should be added
-// to the send queue and processed before TO2 completes.
+// "moduleName:messageName"). "active" messages are automatically handled and
+// do not result in a call to Receive method.
+//
+// Chunking is applied automatically, so large responses may be written without
+// custom chunking code. Responses larger than the MTU will cause the marshaled
+// payload to be split across multiple bstrs. The data within the bstrs must be
+// concatenated at the receiver in order to reconstruct the payload and
+// guarantee a valid CBOR object. When chunking occurs, the device sends
+// IsMoreServiceInfo = true.
+//
+// Unchunking is automatic and applies the reverse process to the above. Note
+// that this only occurs when IsMoreServiceInfo = true and the same message is
+// sent multiple times in a row.
+//
+// MessageBody must be fully read before writing a response unless the module
+// implements UnsafeModule. Writing before fully consuming the reader will case
+// the writer to fail.
+//
+// Responses may not be sent immediately, as the receive queue in TO2 is
+// processed in parallel and must be completed, potentially across multiple
+// rounds of 68-69 messages, before sends may occur.
 //
 // Any error returned will cause an ErrorMessage to be sent and TO2 will fail.
 // If a warning should be logged, this must be done within the handler.

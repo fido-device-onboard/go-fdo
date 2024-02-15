@@ -41,18 +41,18 @@ type Download struct {
 var _ serviceinfo.Module = (*Download)(nil)
 
 // Transition implements serviceinfo.Module.
-func (d *Download) Transition(active bool) {
-	if active {
-		// No setup code
-		return
-	}
-
-	// Tear-down code
-	d.reset()
-}
+func (d *Download) Transition(active bool) { d.reset() }
 
 // Receive implements serviceinfo.Module.
 func (d *Download) Receive(ctx context.Context, moduleName, messageName string, messageBody io.Reader, respond func(string) io.Writer) error {
+	if err := d.receive(ctx, moduleName, messageName, messageBody, respond); err != nil {
+		d.reset()
+		return err
+	}
+	return nil
+}
+
+func (d *Download) receive(ctx context.Context, moduleName, messageName string, messageBody io.Reader, respond func(string) io.Writer) error {
 	switch messageName {
 	case "length":
 		return cbor.NewDecoder(messageBody).Decode(&d.length)
@@ -74,7 +74,7 @@ func (d *Download) Receive(ctx context.Context, moduleName, messageName string, 
 		if err != nil {
 			return err
 		}
-		d.temp, d.hash = file, sha512.New384()
+		d.temp = file
 		return nil
 
 	case "data":
@@ -103,13 +103,13 @@ func (d *Download) Receive(ctx context.Context, moduleName, messageName string, 
 }
 
 func (d *Download) finalize(respond func(string) io.Writer) error {
+	defer d.reset()
+
 	// Validate file length and checksum
 	if d.written > d.length {
-		d.reset()
 		return cbor.NewEncoder(respond("done")).Encode(-1)
 	}
 	if hashed := d.hash.Sum(nil); len(d.sha384) > 0 && !bytes.Equal(hashed, d.sha384) {
-		d.reset()
 		return cbor.NewEncoder(respond("done")).Encode(-1)
 	}
 
@@ -127,7 +127,13 @@ func (d *Download) finalize(respond func(string) io.Writer) error {
 }
 
 func (d *Download) reset() {
-	_ = d.temp.Close()
-	_ = os.Remove(d.temp.Name())
-	d.name, d.length, d.sha384, d.temp, d.hash, d.written = "", 0, nil, nil, nil, 0
+	if d.temp != nil {
+		_ = d.temp.Close()
+		_ = os.Remove(d.temp.Name())
+	}
+	if d.hash == nil {
+		d.hash = sha512.New384()
+	}
+	d.hash.Reset()
+	d.name, d.length, d.sha384, d.temp, d.written = "", 0, nil, nil, 0
 }

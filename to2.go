@@ -604,7 +604,12 @@ func handleFSIMs(ctx context.Context, mtu uint16, modules fsimMap, send *service
 			break
 		}
 
-		// Automatically receive and respond to active messages
+		// Automatically receive and respond to active messages. This send is
+		// expected to be buffered until all receives are processed, unlike
+		// modules which must wait for all receives to occur before sending.
+		// This is allowed because the data is small and the send buffer is
+		// large enough for many more "active" responses than is practical to
+		// expect in the real world.
 		moduleName, messageName, _ := strings.Cut(key, ":")
 		fsim, active := modules.Lookup(moduleName)
 		if messageName == "active" {
