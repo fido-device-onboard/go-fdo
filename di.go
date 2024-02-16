@@ -6,6 +6,7 @@ package fdo
 import (
 	"context"
 	"fmt"
+	"io"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 )
@@ -93,6 +94,11 @@ func (c *Client) appStart(ctx context.Context, baseURL string, info any) (*Vouch
 	}
 }
 
+// AppStart(10) -> SetCredentials(11)
+func (s *Server) setCredentials(ctx context.Context, token string, msg io.Reader) (*VoucherHeader, error) {
+	panic("unimplemented")
+}
+
 // SetHMAC(12) -> Done(13)
 func (c *Client) setHmac(ctx context.Context, baseURL string, ovh *VoucherHeader) (err error) {
 	var ovhHash Hmac
@@ -136,4 +142,9 @@ func (c *Client) setHmac(ctx context.Context, baseURL string, ovh *VoucherHeader
 		captureErr(ctx, messageBodyErrCode, "")
 		return fmt.Errorf("unexpected message type for response to DI.SetHMAC: %d", typ)
 	}
+}
+
+// SetHMAC(12) -> Done(13)
+func (s *Server) diDone(ctx context.Context, token string, msg io.Reader) (struct{}, error) {
+	panic("unimplemented")
 }

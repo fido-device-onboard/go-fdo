@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
@@ -68,10 +69,7 @@ func (c *Client) helloRv(ctx context.Context, baseURL string) (Nonce, error) {
 	switch typ {
 	case to1HelloRVAckMsgType:
 		captureMsgType(ctx, typ)
-		var ack struct {
-			NonceTO1Proof Nonce
-			BSigInfo      sigInfo
-		}
+		var ack rvAck
 		if err := cbor.NewDecoder(resp).Decode(&ack); err != nil {
 			captureErr(ctx, messageBodyErrCode, "")
 			return Nonce{}, fmt.Errorf("error parsing TO1.HelloRVAck contents: %w", err)
@@ -89,6 +87,16 @@ func (c *Client) helloRv(ctx context.Context, baseURL string) (Nonce, error) {
 		captureErr(ctx, messageBodyErrCode, "")
 		return Nonce{}, fmt.Errorf("unexpected message type for response to TO1.HelloRV: %d", typ)
 	}
+}
+
+type rvAck struct {
+	NonceTO1Proof Nonce
+	BSigInfo      sigInfo
+}
+
+// HelloRV(30) -> HelloRVAck(31)
+func (s *Server) helloRVAck(ctx context.Context, token string, msg io.Reader) (rvAck, error) {
+	panic("unimplemented")
 }
 
 // To1d is a "blob" that indicates a network address (RVTO2Addr) where the
@@ -154,4 +162,9 @@ func (c *Client) proveToRv(ctx context.Context, baseURL string, nonce Nonce) (*c
 		captureErr(ctx, messageBodyErrCode, "")
 		return nil, fmt.Errorf("unexpected message type for response to TO1.ProveToRV: %d", typ)
 	}
+}
+
+// ProveToRV(32) -> RVRedirect(33)
+func (s *Server) rvRedirect(ctx context.Context, token string, msg io.Reader) (cose.Sign1Tag[To1d, []byte], error) {
+	panic("unimplemented")
 }

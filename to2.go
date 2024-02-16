@@ -173,16 +173,7 @@ func (c *Client) helloDevice(ctx context.Context, baseURL string) (Nonce, *ovhVa
 	defer func() { _ = resp.Close() }()
 
 	// Parse response
-	var proveOVHdr cose.Sign1Tag[struct {
-		OVH                 cbor.Bstr[VoucherHeader]
-		NumOVEntries        uint8
-		OVHHmac             Hmac
-		NonceTO2ProveOV     Nonce
-		SigInfoB            sigInfo
-		KeyExchangeA        []byte
-		HelloDeviceHash     Hash
-		MaxOwnerMessageSize uint16
-	}, []byte]
+	var proveOVHdr cose.Sign1Tag[ovhProof, []byte]
 	switch typ {
 	case to2ProveOVHdrMsgType:
 		captureMsgType(ctx, typ)
@@ -277,6 +268,22 @@ func (c *Client) helloDevice(ctx context.Context, baseURL string) (Nonce, *ovhVa
 
 }
 
+type ovhProof struct {
+	OVH                 cbor.Bstr[VoucherHeader]
+	NumOVEntries        uint8
+	OVHHmac             Hmac
+	NonceTO2ProveOV     Nonce
+	SigInfoB            sigInfo
+	KeyExchangeA        []byte
+	HelloDeviceHash     Hash
+	MaxOwnerMessageSize uint16
+}
+
+// HelloDevice(60) -> ProveOVHdr(61)
+func (s *Server) proveOVHdr(ctx context.Context, token string, msg io.Reader) (*cose.Sign1Tag[ovhProof, []byte], error) {
+	panic("unimplemented")
+}
+
 // GetOVNextEntry(62) -> OVNextEntry(63)
 func (c *Client) nextOVEntry(ctx context.Context, baseURL string, i int) (*cose.Sign1Tag[VoucherEntryPayload, []byte], error) {
 	// Define request structure
@@ -297,10 +304,7 @@ func (c *Client) nextOVEntry(ctx context.Context, baseURL string, i int) (*cose.
 	switch typ {
 	case to2OVNextEntryMsgType:
 		captureMsgType(ctx, typ)
-		var ovNextEntry struct {
-			OVEntryNum int
-			OVEntry    cose.Sign1Tag[VoucherEntryPayload, []byte]
-		}
+		var ovNextEntry ovEntry
 		if err := cbor.NewDecoder(resp).Decode(&ovNextEntry); err != nil {
 			captureErr(ctx, messageBodyErrCode, "")
 			return nil, fmt.Errorf("error parsing TO2.OVNextEntry contents: %w", err)
@@ -321,6 +325,16 @@ func (c *Client) nextOVEntry(ctx context.Context, baseURL string, i int) (*cose.
 		captureErr(ctx, messageBodyErrCode, "")
 		return nil, fmt.Errorf("unexpected message type for response to TO2.GetOVNextEntry: %d", typ)
 	}
+}
+
+type ovEntry struct {
+	OVEntryNum int
+	OVEntry    cose.Sign1Tag[VoucherEntryPayload, []byte]
+}
+
+// GetOVNextEntry(62) -> OVNextEntry(63)
+func (s *Server) ovNextEntry(ctx context.Context, token string, msg io.Reader) (*ovEntry, error) {
+	panic("unimplemented")
 }
 
 // ProveDevice(64) -> SetupDevice(65)
@@ -372,12 +386,7 @@ func (c *Client) proveDevice(ctx context.Context, baseURL string, proveDeviceNon
 	switch typ {
 	case to2SetupDeviceMsgType:
 		captureMsgType(ctx, typ)
-		var setupDevice cose.Sign1Tag[struct {
-			RendezvousInfo  [][]RvInstruction // RendezvousInfo replacement
-			GUID            GUID              // GUID replacement
-			NonceTO2SetupDv Nonce             // proves freshness of signature
-			Owner2Key       PublicKey         // Replacement for Owner key
-		}, []byte]
+		var setupDevice cose.Sign1Tag[deviceSetup, []byte]
 		if err := cbor.NewDecoder(resp).Decode(&setupDevice); err != nil {
 			captureErr(ctx, messageBodyErrCode, "")
 			return Nonce{}, nil, fmt.Errorf("error parsing TO2.SetupDevice contents: %w", err)
@@ -403,6 +412,18 @@ func (c *Client) proveDevice(ctx context.Context, baseURL string, proveDeviceNon
 		captureErr(ctx, messageBodyErrCode, "")
 		return Nonce{}, nil, fmt.Errorf("unexpected message type for response to TO2.ProveDevice: %d", typ)
 	}
+}
+
+type deviceSetup struct {
+	RendezvousInfo  [][]RvInstruction // RendezvousInfo replacement
+	GUID            GUID              // GUID replacement
+	NonceTO2SetupDv Nonce             // proves freshness of signature
+	Owner2Key       PublicKey         // Replacement for Owner key
+}
+
+// ProveDevice(64) -> SetupDevice(65)
+func (s *Server) setupDevice(ctx context.Context, token string, msg io.Reader) (*cose.Sign1Tag[deviceSetup, []byte], error) {
+	panic("unimplemented")
 }
 
 // DeviceServiceInfoReady(66) -> OwnerServiceInfoReady(67)
@@ -437,17 +458,15 @@ func (c *Client) readyServiceInfo(ctx context.Context, baseURL string, replaceme
 	switch typ {
 	case to2OwnerServiceInfoReadyMsgType:
 		captureMsgType(ctx, typ)
-		var ownerServiceInfoReady struct {
-			MaxDeviceServiceInfoSize *uint16 // maximum size service info that Owner can receive
-		}
-		if err := cbor.NewDecoder(resp).Decode(&ownerServiceInfoReady); err != nil {
+		var ready ownerServiceInfoReady
+		if err := cbor.NewDecoder(resp).Decode(&ready); err != nil {
 			captureErr(ctx, messageBodyErrCode, "")
 			return 0, fmt.Errorf("error parsing TO2.OwnerServiceInfoReady contents: %w", err)
 		}
-		if ownerServiceInfoReady.MaxDeviceServiceInfoSize == nil {
+		if ready.MaxDeviceServiceInfoSize == nil {
 			return serviceinfo.DefaultMTU, nil
 		}
-		return *ownerServiceInfoReady.MaxDeviceServiceInfoSize, nil
+		return *ready.MaxDeviceServiceInfoSize, nil
 
 	case ErrorMsgType:
 		var errMsg ErrorMessage
@@ -460,6 +479,15 @@ func (c *Client) readyServiceInfo(ctx context.Context, baseURL string, replaceme
 		captureErr(ctx, messageBodyErrCode, "")
 		return 0, fmt.Errorf("unexpected message type for response to TO2.DeviceServiceInfoReady: %d", typ)
 	}
+}
+
+type ownerServiceInfoReady struct {
+	MaxDeviceServiceInfoSize *uint16 // maximum size service info that Owner can receive
+}
+
+// DeviceServiceInfoReady(66) -> OwnerServiceInfoReady(67)
+func (s *Server) ownerServiceInfoReady(ctx context.Context, token string, msg io.Reader) (*ownerServiceInfoReady, error) {
+	panic("unimplemented")
 }
 
 // loop[DeviceServiceInfo(68) -> OwnerServiceInfo(69)]
@@ -853,4 +881,14 @@ func (c *Client) deviceServiceInfo(ctx context.Context, baseURL string, msg send
 		captureErr(ctx, messageBodyErrCode, "")
 		return nil, fmt.Errorf("unexpected message type for response to TO2.DeviceServiceInfo: %d", typ)
 	}
+}
+
+// DeviceServiceInfo(68) -> OwnerServiceInfo(69)
+func (s *Server) ownerServiceInfo(ctx context.Context, token string, msg io.Reader) (*recvServiceInfo, error) {
+	panic("unimplemented")
+}
+
+// Done(70) -> Done2(71)
+func (s *Server) to2Done2(ctx context.Context, token string, msg io.Reader) (*[1]Nonce, error) {
+	panic("unimplemented")
 }

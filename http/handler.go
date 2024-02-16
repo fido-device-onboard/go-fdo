@@ -153,11 +153,7 @@ func (h Handler) handleRequest(w http.ResponseWriter, r *http.Request) {
 //nolint:gocyclo
 func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, token string, msgType uint8, msg io.Reader, sess kex.Session) {
 	// Perform business logic of message handling
-	token, respType, resp, err := h.Responder.Respond(ctx, token, msgType, msg)
-	if err != nil {
-		h.error(w, msgType, err)
-		return
-	}
+	newToken, respType, resp := h.Responder.Respond(ctx, token, msgType, msg)
 
 	// Encrypt as needed
 	if sess != nil && respType != fdo.ErrorMsgType {
@@ -181,7 +177,7 @@ func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, token
 	}
 
 	// Add response headers
-	w.Header().Add("Authorization", bearerPrefix+token)
+	w.Header().Add("Authorization", bearerPrefix+newToken)
 	w.Header().Add("Content-Length", strconv.Itoa(body.Len()))
 	w.Header().Add("Content-Type", "application/cbor")
 	w.Header().Add("Message-Type", strconv.Itoa(int(respType)))
