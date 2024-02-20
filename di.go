@@ -5,6 +5,8 @@ package fdo
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha512"
 	"fmt"
 	"io"
 
@@ -77,7 +79,7 @@ func (c *Client) appStart(ctx context.Context, baseURL string, info any) (*Vouch
 		}
 		if err := cbor.NewDecoder(resp).Decode(&setCredentials); err != nil {
 			captureErr(ctx, messageBodyErrCode, "")
-			return nil, fmt.Errorf("error parsing DI.SetCredentials contents: %w", err)
+			return nil, fmt.Errorf("error parsing DI.SetCredentials request: %w", err)
 		}
 		return &setCredentials.OVHeader.Val, nil
 
@@ -95,8 +97,45 @@ func (c *Client) appStart(ctx context.Context, baseURL string, info any) (*Vouch
 }
 
 // AppStart(10) -> SetCredentials(11)
-func (s *Server) setCredentials(ctx context.Context, token string, msg io.Reader) (*VoucherHeader, error) {
-	panic("unimplemented")
+func (s *Server) setCredentials(ctx context.Context, msg io.Reader) (*VoucherHeader, error) {
+	var info DeviceMfgInfo
+	if err := cbor.NewDecoder(msg).Decode(&info); err != nil {
+		return nil, fmt.Errorf("error decoding device manufacturing info: %w", err)
+	}
+	chain, err := s.NewDevices.NewDeviceCertChain(ctx, info)
+	if err != nil {
+		return nil, fmt.Errorf("error creating device certificate chain: %w", err)
+	}
+	certChainHash := sha512.New384()
+	for _, cert := range chain {
+		_, _ = certChainHash.Write(cert.Raw)
+	}
+	var guid GUID
+	if _, err := rand.Read(guid[:]); err != nil {
+		return nil, fmt.Errorf("error generating device GUID: %w", err)
+	}
+	if err := s.GUID.SetGUID(ctx, guid); err != nil {
+		return nil, fmt.Errorf("error storing device GUID: %w", err)
+	}
+	_, mfgPubKey, ok := s.ManufacturerKeys(info.KeyType)
+	if !ok {
+		return nil, fmt.Errorf("no manufacturer keys available for key type %s", info.KeyType)
+	}
+	ovh := &VoucherHeader{
+		Version:         101,
+		GUID:            guid,
+		RvInfo:          s.RvInfo,
+		DeviceInfo:      info.DeviceInfo,
+		ManufacturerKey: mfgPubKey,
+		CertChainHash: &Hash{
+			Algorithm: Sha384Hash,
+			Value:     certChainHash.Sum(nil),
+		},
+	}
+	if err := s.NewDevices.SetIncompleteVoucherHeader(ctx, ovh); err != nil {
+		return nil, fmt.Errorf("error storing incomplete voucher header: %w", err)
+	}
+	return ovh, nil
 }
 
 // SetHMAC(12) -> Done(13)
@@ -145,6 +184,33 @@ func (c *Client) setHmac(ctx context.Context, baseURL string, ovh *VoucherHeader
 }
 
 // SetHMAC(12) -> Done(13)
-func (s *Server) diDone(ctx context.Context, token string, msg io.Reader) (struct{}, error) {
-	panic("unimplemented")
+func (s *Server) diDone(ctx context.Context, msg io.Reader) (struct{}, error) {
+	var req struct {
+		Hmac Hmac
+	}
+	if err := cbor.NewDecoder(msg).Decode(&req); err != nil {
+		return struct{}{}, fmt.Errorf("error parsing DI.SetHMAC request: %w", err)
+	}
+	ovh, err := s.NewDevices.IncompleteVoucherHeader(ctx)
+	if err != nil {
+		return struct{}{}, fmt.Errorf("voucher header not found for session: %w", err)
+	}
+	deviceCertChain, err := s.NewDevices.DeviceCertChain(ctx)
+	if err != nil {
+		return struct{}{}, fmt.Errorf("device certificate chain not found for session: %w", err)
+	}
+	certChain := make([]*cbor.X509Certificate, len(deviceCertChain))
+	for i, cert := range deviceCertChain {
+		certChain[i] = (*cbor.X509Certificate)(cert)
+	}
+	if err := s.Devices.NewVoucher(ctx, &Voucher{
+		Version:   101,
+		Header:    *cbor.NewBstr(*ovh),
+		Hmac:      req.Hmac,
+		CertChain: &certChain,
+		Entries:   nil,
+	}); err != nil {
+		return struct{}{}, fmt.Errorf("error creating voucher: %w", err)
+	}
+	return struct{}{}, nil
 }

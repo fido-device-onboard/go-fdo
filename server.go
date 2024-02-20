@@ -6,19 +6,17 @@ package fdo
 import (
 	"context"
 	"crypto"
-	"crypto/x509"
 	"io"
 	"time"
 )
 
 // Server implements business logic handling for all FDO protocols.
 type Server struct {
-	// Service to manage generating and decoding tokens
-	Tokens TokenService
-
-	// Correlates a device certificate chain to info provided in the
-	// DI.AppStart message
-	DeviceForInfo func(info DeviceMfgInfo) ([]*x509.Certificate, error)
+	// Protocol session state
+	State      TokenService
+	GUID       GUIDState
+	Devices    VoucherState
+	NewDevices VoucherCreationState
 
 	// Rendezvous directives
 	RvInfo [][]RvInstruction
@@ -31,63 +29,72 @@ type Server struct {
 //
 //nolint:gocyclo, Message dispatch
 func (s *Server) Respond(ctx context.Context, token string, msgType uint8, msg io.Reader) (newToken string, respType uint8, resp any) {
+	// Inject a mutable error into the context for error info capturing without
+	// complex error wrapping or overburdened method signatures.
 	ctx = contextWithErrMsg(ctx)
 	captureMsgType(ctx, msgType)
 
-	// Generate a new token if none set
-	if token == "" {
-		var err error
-		token, err = s.Tokens.NewSession(ctx)
-		if err != nil {
-			return newToken, ErrorMsgType, ErrorMessage{
-				PrevMsgType:   msgType,
-				Code:          internalServerErrCode,
-				ErrString:     err.Error(),
-				Timestamp:     time.Now().Unix(),
-				CorrelationID: nil, // TODO: From token?
-			}
+	// Inject token state into context to keep method signatures clean while
+	// allowing some implementations to mutate tokens on every message.
+	var err error
+	switch msgType {
+	case diAppStartMsgType:
+		token, err = s.State.NewToken(ctx, DIProtocol)
+	case to1HelloRVMsgType:
+		token, err = s.State.NewToken(ctx, TO1Protocol)
+	case to2HelloDeviceMsgType:
+		token, err = s.State.NewToken(ctx, TO2Protocol)
+	}
+	if err != nil {
+		return "", ErrorMsgType, ErrorMessage{
+			Code:          internalServerErrCode,
+			PrevMsgType:   msgType,
+			ErrString:     err.Error(),
+			Timestamp:     time.Now().Unix(),
+			CorrelationID: nil,
 		}
 	}
+	ctx = s.State.TokenContext(ctx, token)
 
 	// Handle each message type
-	var err error
 	switch msgType {
 	// DI
 	case diAppStartMsgType:
 		respType = diSetCredentialsMsgType
-		resp, err = s.setCredentials(ctx, token, msg)
+		resp, err = s.setCredentials(ctx, msg)
 	case diSetHmacMsgType:
 		respType = diDoneMsgType
-		resp, err = s.diDone(ctx, token, msg)
+		resp, err = s.diDone(ctx, msg)
 
 	// TO1
 	case to1HelloRVMsgType:
 		respType = to1HelloRVAckMsgType
-		resp, err = s.helloRVAck(ctx, token, msg)
+		resp, err = s.helloRVAck(ctx, msg)
 	case to1ProveToRVMsgType:
 		respType = to1RVRedirectMsgType
-		resp, err = s.rvRedirect(ctx, token, msg)
+		resp, err = s.rvRedirect(ctx, msg)
 
 	// TO2
 	case to2HelloDeviceMsgType:
 		respType = to2ProveOVHdrMsgType
-		resp, err = s.proveOVHdr(ctx, token, msg)
+		resp, err = s.proveOVHdr(ctx, msg)
 	case to2GetOVNextEntryMsgType:
 		respType = to2OVNextEntryMsgType
-		resp, err = s.ovNextEntry(ctx, token, msg)
+		resp, err = s.ovNextEntry(ctx, msg)
 	case to2ProveDeviceMsgType:
 		respType = to2SetupDeviceMsgType
-		resp, err = s.setupDevice(ctx, token, msg)
+		resp, err = s.setupDevice(ctx, msg)
 	case to2DeviceServiceInfoReadyMsgType:
 		respType = to2OwnerServiceInfoReadyMsgType
-		resp, err = s.ownerServiceInfoReady(ctx, token, msg)
+		resp, err = s.ownerServiceInfoReady(ctx, msg)
 	case to2DeviceServiceInfoMsgType:
 		respType = to2OwnerServiceInfoMsgType
-		resp, err = s.ownerServiceInfo(ctx, token, msg)
+		resp, err = s.ownerServiceInfo(ctx, msg)
 	case to2DoneMsgType:
 		respType = to2Done2MsgType
-		resp, err = s.to2Done2(ctx, token, msg)
+		resp, err = s.to2Done2(ctx, msg)
 	}
+	newToken, _ = s.State.TokenFromContext(ctx)
 	if err == nil {
 		return newToken, respType, resp
 	}

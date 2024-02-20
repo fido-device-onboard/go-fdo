@@ -280,7 +280,7 @@ type ovhProof struct {
 }
 
 // HelloDevice(60) -> ProveOVHdr(61)
-func (s *Server) proveOVHdr(ctx context.Context, token string, msg io.Reader) (*cose.Sign1Tag[ovhProof, []byte], error) {
+func (s *Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1Tag[ovhProof, []byte], error) {
 	panic("unimplemented")
 }
 
@@ -333,7 +333,7 @@ type ovEntry struct {
 }
 
 // GetOVNextEntry(62) -> OVNextEntry(63)
-func (s *Server) ovNextEntry(ctx context.Context, token string, msg io.Reader) (*ovEntry, error) {
+func (s *Server) ovNextEntry(ctx context.Context, msg io.Reader) (*ovEntry, error) {
 	panic("unimplemented")
 }
 
@@ -422,7 +422,7 @@ type deviceSetup struct {
 }
 
 // ProveDevice(64) -> SetupDevice(65)
-func (s *Server) setupDevice(ctx context.Context, token string, msg io.Reader) (*cose.Sign1Tag[deviceSetup, []byte], error) {
+func (s *Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1Tag[deviceSetup, []byte], error) {
 	panic("unimplemented")
 }
 
@@ -486,7 +486,7 @@ type ownerServiceInfoReady struct {
 }
 
 // DeviceServiceInfoReady(66) -> OwnerServiceInfoReady(67)
-func (s *Server) ownerServiceInfoReady(ctx context.Context, token string, msg io.Reader) (*ownerServiceInfoReady, error) {
+func (s *Server) ownerServiceInfoReady(ctx context.Context, msg io.Reader) (*ownerServiceInfoReady, error) {
 	panic("unimplemented")
 }
 
@@ -884,11 +884,11 @@ func (c *Client) deviceServiceInfo(ctx context.Context, baseURL string, msg send
 }
 
 // DeviceServiceInfo(68) -> OwnerServiceInfo(69)
-func (s *Server) ownerServiceInfo(ctx context.Context, token string, msg io.Reader) (*recvServiceInfo, error) {
+func (s *Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*recvServiceInfo, error) {
 	panic("unimplemented")
 }
 
 // Done(70) -> Done2(71)
-func (s *Server) to2Done2(ctx context.Context, token string, msg io.Reader) (*[1]Nonce, error) {
+func (s *Server) to2Done2(ctx context.Context, msg io.Reader) (*[1]Nonce, error) {
 	panic("unimplemented")
 }

@@ -95,7 +95,7 @@ type rvAck struct {
 }
 
 // HelloRV(30) -> HelloRVAck(31)
-func (s *Server) helloRVAck(ctx context.Context, token string, msg io.Reader) (rvAck, error) {
+func (s *Server) helloRVAck(ctx context.Context, msg io.Reader) (rvAck, error) {
 	panic("unimplemented")
 }
 
@@ -165,6 +165,6 @@ func (c *Client) proveToRv(ctx context.Context, baseURL string, nonce Nonce) (*c
 }
 
 // ProveToRV(32) -> RVRedirect(33)
-func (s *Server) rvRedirect(ctx context.Context, token string, msg io.Reader) (cose.Sign1Tag[To1d, []byte], error) {
+func (s *Server) rvRedirect(ctx context.Context, msg io.Reader) (cose.Sign1Tag[To1d, []byte], error) {
 	panic("unimplemented")
 }
