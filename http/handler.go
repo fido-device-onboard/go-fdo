@@ -52,7 +52,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Dump request
 	if debugReq, err := httputil.DumpRequest(r, false); err == nil {
-		fmt.Fprint(os.Stderr, "Request:", string(debugReq))
+		fmt.Fprint(os.Stderr, "Request: ", string(debugReq))
 	}
 	var saveBody bytes.Buffer
 	if _, err := saveBody.ReadFrom(r.Body); err == nil {
@@ -64,7 +64,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rr := httptest.NewRecorder()
 	h.handleRequest(rr, r)
 	if debugResp, err := httputil.DumpResponse(rr.Result(), false); err == nil {
-		fmt.Fprint(os.Stderr, "Response:", string(debugResp))
+		fmt.Fprint(os.Stderr, "Response: ", string(debugResp))
 	}
 	fmt.Fprintf(os.Stderr, "%x\n", rr.Body.Bytes())
 
