@@ -16,6 +16,23 @@ const (
 	AnyProtocol // for error message types
 )
 
+func (p Protocol) String() string {
+	switch p {
+	case DIProtocol:
+		return "DI"
+	case TO0Protocol:
+		return "TO0"
+	case TO1Protocol:
+		return "TO1"
+	case TO2Protocol:
+		return "TO2"
+	case AnyProtocol:
+		return "Any"
+	default:
+		return "Unknown"
+	}
+}
+
 // ProtocolOf returns the protocol a given message type belongs to.
 func ProtocolOf(msgType uint8) Protocol {
 	switch msgType {

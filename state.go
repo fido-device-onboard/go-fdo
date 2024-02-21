@@ -39,18 +39,6 @@ type TokenService interface {
 	TokenFromContext(context.Context) (string, bool)
 }
 
-// GUIDState maintains the GUID of the requester. Unlike some other states,
-// which may often be backed by a database for persistence and horizontal
-// scaling, GuidState is a good candidate for implementing with MAC'd
-// "stateless" tokens.
-type GUIDState interface {
-	// SetGUID sets the GUID for the current session.
-	SetGUID(context.Context, GUID) error
-
-	// GUID retrieves the GUID for the current session.
-	GUID(context.Context) (*GUID, error)
-}
-
 // VoucherCreationState maintains incomplete voucher state. This state is only
 // used for the DI protocol.
 type VoucherCreationState interface {

@@ -5,7 +5,6 @@ package fdo
 
 import (
 	"context"
-	"crypto"
 	"io"
 	"time"
 )
@@ -14,15 +13,11 @@ import (
 type Server struct {
 	// Protocol session state
 	State      TokenService
-	GUID       GUIDState
 	Devices    VoucherState
 	NewDevices VoucherCreationState
 
 	// Rendezvous directives
 	RvInfo [][]RvInstruction
-
-	// ManufacturerKeys used for device initialization
-	ManufacturerKeys func(KeyType) (crypto.Signer, PublicKey, bool)
 }
 
 // Respond validates a request and returns the appropriate response message.

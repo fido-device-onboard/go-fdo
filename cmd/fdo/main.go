@@ -13,6 +13,10 @@ import (
 
 var flags = flag.NewFlagSet("root", flag.ContinueOnError)
 
+var (
+	debug bool
+)
+
 func usage() {
 	fmt.Fprintf(os.Stderr, `
 Usage:

@@ -74,9 +74,7 @@ func (c *Client) appStart(ctx context.Context, baseURL string, info any) (*Vouch
 	switch typ {
 	case diSetCredentialsMsgType:
 		captureMsgType(ctx, typ)
-		var setCredentials struct {
-			OVHeader cbor.Bstr[VoucherHeader]
-		}
+		var setCredentials setCredentialsMsg
 		if err := cbor.NewDecoder(resp).Decode(&setCredentials); err != nil {
 			captureErr(ctx, messageBodyErrCode, "")
 			return nil, fmt.Errorf("error parsing DI.SetCredentials request: %w", err)
@@ -96,15 +94,26 @@ func (c *Client) appStart(ctx context.Context, baseURL string, info any) (*Vouch
 	}
 }
 
+type setCredentialsMsg struct {
+	OVHeader cbor.Bstr[VoucherHeader]
+}
+
 // AppStart(10) -> SetCredentials(11)
-func (s *Server) setCredentials(ctx context.Context, msg io.Reader) (*VoucherHeader, error) {
-	var info DeviceMfgInfo
-	if err := cbor.NewDecoder(msg).Decode(&info); err != nil {
+func (s *Server) setCredentials(ctx context.Context, msg io.Reader) (*setCredentialsMsg, error) {
+	var appStart struct {
+		DeviceMfgInfo *cbor.Bstr[DeviceMfgInfo]
+	}
+	if err := cbor.NewDecoder(msg).Decode(&appStart); err != nil {
 		return nil, fmt.Errorf("error decoding device manufacturing info: %w", err)
 	}
+	info := appStart.DeviceMfgInfo.Val
 	chain, err := s.NewDevices.NewDeviceCertChain(ctx, info)
 	if err != nil {
 		return nil, fmt.Errorf("error creating device certificate chain: %w", err)
+	}
+	mfgPubKey, err := newPublicKey(info.KeyType, chain[1:])
+	if err != nil {
+		return nil, fmt.Errorf("error constructing manufacturer public key from CA chain: %w", err)
 	}
 	certChainHash := sha512.New384()
 	for _, cert := range chain {
@@ -114,19 +123,12 @@ func (s *Server) setCredentials(ctx context.Context, msg io.Reader) (*VoucherHea
 	if _, err := rand.Read(guid[:]); err != nil {
 		return nil, fmt.Errorf("error generating device GUID: %w", err)
 	}
-	if err := s.GUID.SetGUID(ctx, guid); err != nil {
-		return nil, fmt.Errorf("error storing device GUID: %w", err)
-	}
-	_, mfgPubKey, ok := s.ManufacturerKeys(info.KeyType)
-	if !ok {
-		return nil, fmt.Errorf("no manufacturer keys available for key type %s", info.KeyType)
-	}
 	ovh := &VoucherHeader{
 		Version:         101,
 		GUID:            guid,
 		RvInfo:          s.RvInfo,
 		DeviceInfo:      info.DeviceInfo,
-		ManufacturerKey: mfgPubKey,
+		ManufacturerKey: *mfgPubKey,
 		CertChainHash: &Hash{
 			Algorithm: Sha384Hash,
 			Value:     certChainHash.Sum(nil),
@@ -135,7 +137,10 @@ func (s *Server) setCredentials(ctx context.Context, msg io.Reader) (*VoucherHea
 	if err := s.NewDevices.SetIncompleteVoucherHeader(ctx, ovh); err != nil {
 		return nil, fmt.Errorf("error storing incomplete voucher header: %w", err)
 	}
-	return ovh, nil
+	return &setCredentialsMsg{
+		OVHeader: *cbor.NewBstr(*ovh),
+	}, nil
+
 }
 
 // SetHMAC(12) -> Done(13)

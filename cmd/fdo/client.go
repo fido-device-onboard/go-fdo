@@ -34,7 +34,6 @@ var clientFlags = flag.NewFlagSet("client", flag.ContinueOnError)
 
 var (
 	blobPath    string
-	debug       bool
 	diURL       string
 	printDevice bool
 	rvOnly      bool
