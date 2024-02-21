@@ -22,31 +22,50 @@ import (
 var serverFlags = flag.NewFlagSet("server", flag.ContinueOnError)
 
 var (
-	addr string
+	addr     string
+	extAddr  string
+	rvBypass bool
 )
 
 func init() {
-	serverFlags.StringVar(&addr, "http", ":8080", "Address to listen on")
 	serverFlags.BoolVar(&debug, "debug", false, "Print HTTP contents")
+	serverFlags.StringVar(&extAddr, "ext-http", "", "External `addr`ess devices should connect to (default \"127.0.0.1:${LISTEN_PORT}\")")
+	serverFlags.StringVar(&addr, "http", ":8080", "The `addr`ess to listen on")
+	serverFlags.BoolVar(&rvBypass, "rv-bypass", false, "Skip TO1")
 }
 
 func server() error {
-	// Parse listening address
-	_, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return fmt.Errorf("invalid addr: %w", err)
-	}
-	portNum, err := strconv.Atoi(port)
-	if err != nil {
-		return fmt.Errorf("invalid port: %w", err)
-	}
-
 	// Configure state
 	stateless, err := token.NewService()
 	if err != nil {
 		return err
 	}
 	inMemory := memory.NewState()
+
+	// RV Info
+	rvInfo := [][]fdo.RvInstruction{{{Variable: fdo.RVProtocol, Value: mustMarshal(fdo.RVProtHTTP)}}}
+	if extAddr == "" {
+		extAddr = addr
+	}
+	host, port, err := net.SplitHostPort(extAddr)
+	if err != nil {
+		return fmt.Errorf("invalid external addr: %w", err)
+	}
+	if host == "" {
+		rvInfo[0] = append(rvInfo[0], fdo.RvInstruction{Variable: fdo.RVIPAddress, Value: mustMarshal(net.IP{127, 0, 0, 1})})
+	} else if hostIP := net.ParseIP(host); hostIP.To4() != nil || hostIP.To16() != nil {
+		rvInfo[0] = append(rvInfo[0], fdo.RvInstruction{Variable: fdo.RVIPAddress, Value: mustMarshal(hostIP)})
+	} else {
+		rvInfo[0] = append(rvInfo[0], fdo.RvInstruction{Variable: fdo.RVDns, Value: mustMarshal(host)})
+	}
+	portNum, err := strconv.Atoi(port)
+	if err != nil {
+		return fmt.Errorf("invalid external port: %w", err)
+	}
+	rvInfo[0] = append(rvInfo[0], fdo.RvInstruction{Variable: fdo.RVDevPort, Value: mustMarshal(portNum)})
+	if rvBypass {
+		rvInfo[0] = append(rvInfo[0], fdo.RvInstruction{Variable: fdo.RVBypass})
+	}
 
 	// Listen and serve
 	return (&http.Server{
@@ -56,22 +75,7 @@ func server() error {
 				State:      stateless,
 				Devices:    inMemory,
 				NewDevices: stateless,
-				RvInfo: [][]fdo.RvInstruction{
-					{
-						{
-							Variable: fdo.RVProtocol,
-							Value:    mustMarshal(fdo.RVProtHTTP),
-						},
-						{
-							Variable: fdo.RVIPAddress,
-							Value:    mustMarshal(net.IP{127, 0, 0, 1}),
-						},
-						{
-							Variable: fdo.RVDevPort,
-							Value:    mustMarshal(portNum),
-						},
-					},
-				},
+				RvInfo:     rvInfo,
 			},
 			Session: func(ctx context.Context, token string) (kex.Session, error) {
 				// TODO: When implementing TO2
