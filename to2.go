@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto"
 	"crypto/rand"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -132,6 +133,15 @@ func (c *Client) verifyOwner(ctx context.Context, baseURL string, to1d *cose.Sig
 	return proveDeviceNonce, &info.OVH, session, nil
 }
 
+type helloDeviceMsg struct {
+	MaxDeviceMessageSize uint16
+	GUID                 GUID
+	NonceTO2ProveOV      Nonce
+	KexSuiteName         kex.Suite
+	CipherSuite          kex.CipherSuiteID
+	SigInfoA             sigInfo
+}
+
 // HelloDevice(60) -> ProveOVHdr(61)
 //
 //nolint:gocyclo, This is very complex validation that is better understood linearly
@@ -149,14 +159,7 @@ func (c *Client) helloDevice(ctx context.Context, baseURL string) (Nonce, *ovhVa
 	}
 
 	// Create a request structure
-	helloDeviceMsg := struct {
-		MaxDeviceMessageSize uint16
-		GUID                 GUID
-		NonceTO2ProveOV      Nonce
-		KexSuiteName         kex.Suite
-		CipherSuite          kex.CipherSuiteID
-		SigInfoA             sigInfo
-	}{
+	hello := helloDeviceMsg{
 		MaxDeviceMessageSize: 65535, // TODO: Make this configurable and match transport config
 		GUID:                 c.Cred.GUID,
 		NonceTO2ProveOV:      proveOVNonce,
@@ -166,7 +169,7 @@ func (c *Client) helloDevice(ctx context.Context, baseURL string) (Nonce, *ovhVa
 	}
 
 	// Make a request
-	typ, resp, err := c.Transport.Send(ctx, baseURL, to2HelloDeviceMsgType, helloDeviceMsg, nil)
+	typ, resp, err := c.Transport.Send(ctx, baseURL, to2HelloDeviceMsgType, hello, nil)
 	if err != nil {
 		return Nonce{}, nil, nil, err
 	}
@@ -196,7 +199,7 @@ func (c *Client) helloDevice(ctx context.Context, baseURL string) (Nonce, *ovhVa
 
 	// Validate the HelloDeviceHash
 	helloDeviceHash := proveOVHdr.Payload.Val.HelloDeviceHash.Algorithm.HashFunc().New()
-	if err := cbor.NewEncoder(helloDeviceHash).Encode(helloDeviceMsg); err != nil {
+	if err := cbor.NewEncoder(helloDeviceHash).Encode(hello); err != nil {
 		return Nonce{}, nil, nil, fmt.Errorf("error hashing HelloDevice message to verify against TO2.ProveOVHdr payload's hash: %w", err)
 	}
 	if !bytes.Equal(proveOVHdr.Payload.Val.HelloDeviceHash.Value, helloDeviceHash.Sum(nil)) {
@@ -280,8 +283,90 @@ type ovhProof struct {
 }
 
 // HelloDevice(60) -> ProveOVHdr(61)
+//
+// TODO: Handle MaxDeviceMessageSize
 func (s *Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1Tag[ovhProof, []byte], error) {
-	panic("unimplemented")
+	var rawHello cbor.RawBytes
+	if err := cbor.NewDecoder(msg).Decode(&rawHello); err != nil {
+		return nil, fmt.Errorf("error decoding TO2.HelloDevice request: %w", err)
+	}
+	helloSum256 := sha256.Sum256(rawHello)
+	var hello helloDeviceMsg
+	if err := cbor.Unmarshal(rawHello, &hello); err != nil {
+		return nil, fmt.Errorf("error decoding TO2.HelloDevice request: %w", err)
+	}
+
+	// Retrieve voucher
+	if err := s.Proofs.SetGUID(ctx, hello.GUID); err != nil {
+		return nil, fmt.Errorf("error associating device GUID to proof session: %w", err)
+	}
+	ov, err := s.Devices.Voucher(ctx, hello.GUID)
+	if err != nil {
+		captureErr(ctx, resourceNotFound, "")
+		return nil, fmt.Errorf("error retrieving voucher for device %x: %w", hello.GUID, err)
+	}
+
+	// Generate nonce for ProveDevice
+	var proveDeviceNonce Nonce
+	if _, err := rand.Read(proveDeviceNonce[:]); err != nil {
+		return nil, fmt.Errorf("error generating new nonce for TO2.ProveOVHdr response: %w", err)
+	}
+	if err := s.Nonces.SetProveDeviceNonce(ctx, proveDeviceNonce); err != nil {
+		return nil, fmt.Errorf("error storing nonce for later use in TO2.Done: %w", err)
+	}
+
+	// Begin key exchange
+	if !kex.IsValid(hello.KexSuiteName, hello.CipherSuite) {
+		return nil, fmt.Errorf("unsupported key exchange/cipher suite")
+	}
+	sess := hello.KexSuiteName.New(nil, hello.CipherSuite)
+	xA, err := sess.Parameter(rand.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("error generating client key exchange parameter: %w", err)
+	}
+	if err := s.KeyExchange.SetSession(ctx, sess); err != nil {
+		return nil, fmt.Errorf("error storing key exchange session: %w", err)
+	}
+
+	// Send begin proof
+	keyType, opts, err := keyTypeFor(hello.SigInfoA.Type)
+	if err != nil {
+		return nil, err
+	}
+	key, ok := s.OwnerKeys.Signer(keyType)
+	if !ok {
+		return nil, fmt.Errorf("key type %s not supported", keyType)
+	}
+	ownerPublicKey, err := newPublicKey(keyType, key.Public())
+	if err != nil {
+		return nil, fmt.Errorf("error with owner public key: %w", err)
+	}
+	s1 := cose.Sign1[ovhProof, []byte]{
+		Header: cose.Header{
+			Unprotected: map[cose.Label]any{
+				to2NonceClaim:       proveDeviceNonce,
+				to2OwnerPubKeyClaim: ownerPublicKey,
+			},
+		},
+		Payload: cbor.NewByteWrap(ovhProof{
+			OVH:             ov.Header,
+			NumOVEntries:    uint8(len(ov.Entries)),
+			OVHHmac:         ov.Hmac,
+			NonceTO2ProveOV: hello.NonceTO2ProveOV,
+			SigInfoB:        hello.SigInfoA,
+			KeyExchangeA:    xA,
+			HelloDeviceHash: Hash{
+				Algorithm: Sha256Hash,
+				Value:     helloSum256[:],
+			},
+			MaxOwnerMessageSize: 65535, // TODO: Make this configurable and match handler config
+		}),
+	}
+	if err := s1.Sign(key, nil, nil, opts); err != nil {
+		return nil, fmt.Errorf("error signing TO2.ProveOVHdr payload: %w", err)
+	}
+
+	return s1.Tag(), nil
 }
 
 // GetOVNextEntry(62) -> OVNextEntry(63)

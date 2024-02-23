@@ -5,7 +5,10 @@ package fdo
 
 import (
 	"context"
+	"crypto"
 	"crypto/x509"
+
+	"github.com/fido-device-onboard/go-fdo/kex"
 )
 
 /*
@@ -60,12 +63,59 @@ type VoucherCreationState interface {
 	IncompleteVoucherHeader(context.Context) (*VoucherHeader, error)
 }
 
-// VoucherState maintains complete voucher state. This state is used in the DI,
-// TO0, TO1, and TO2 protocols.
-type VoucherState interface {
+// VoucherProofState maintains the voucher association of a TO2 session while
+// messages are being passed to
+type VoucherProofState interface {
+	// SetGUID associates a voucher GUID with a TO2 session.
+	SetGUID(context.Context, GUID) error
+
+	// GUID retrieves the GUID of the voucher associated with the session.
+	GUID(context.Context) (GUID, error)
+}
+
+// VoucherPersistentState maintains complete voucher state. This state is used
+// in the DI, TO0, TO1, and TO2 protocols.
+type VoucherPersistentState interface {
 	// NewVoucher creates and stores a new voucher.
 	NewVoucher(context.Context, *Voucher) error
 
 	// Voucher retrieves a voucher by GUID.
 	Voucher(context.Context, GUID) (*Voucher, error)
+}
+
+// KeyExchangeState maintains the current key exchange/encryption session for
+// TO2 after message 64.
+type KeyExchangeState interface {
+	// SetSession updates the current key exchange/encryption session based on
+	// an opaque "authorization" token.
+	SetSession(context.Context, kex.Session) error
+
+	// Session returns the current key exchange/encryption session based on an
+	// opaque "authorization" token.
+	Session(context.Context, string) (kex.Session, error)
+}
+
+// NonceState tracks the nonces which are used... more than once... across a
+// single protocol session.
+type NonceState interface {
+	// SetProveDeviceNonce stores the Nonce used in TO2.ProveDevice for use in
+	// TO2.Done.
+	SetProveDeviceNonce(context.Context, Nonce) error
+
+	// ProveDeviceNonce returns the Nonce used in TO2.ProveDevice and TO2.Done.
+	ProveDeviceNonce(context.Context) (Nonce, error)
+
+	// SetSetupDeviceNonce stores the Nonce used in TO2.SetupDevice for use in
+	// TO2.Done2.
+	SetSetupDeviceNonce(context.Context, Nonce) error
+
+	// SetupDeviceNonce returns the Nonce used in TO2.SetupDevice and
+	// TO2.Done2.
+	SetupDeviceNonce(context.Context) (Nonce, error)
+}
+
+// OwnerKeyPersistentState maintains the owner service keys.
+type OwnerKeyPersistentState interface {
+	// Signer returns the private key matching a given key type.
+	Signer(KeyType) (crypto.Signer, bool)
 }

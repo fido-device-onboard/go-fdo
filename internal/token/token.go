@@ -20,6 +20,7 @@ import (
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/kex"
 )
 
 var errInvalidToken = fmt.Errorf("invalid token")
@@ -44,6 +45,10 @@ type to1State struct {
 
 type to2State struct {
 	Unique
+	GUID    fdo.GUID
+	KEx     kex.Session
+	ProveDv fdo.Nonce
+	SetupDv fdo.Nonce
 }
 
 // CA for creating a device certificate chain
@@ -61,6 +66,9 @@ type Service struct {
 
 var _ fdo.TokenService = (*Service)(nil)
 var _ fdo.VoucherCreationState = (*Service)(nil)
+var _ fdo.VoucherProofState = (*Service)(nil)
+var _ fdo.KeyExchangeState = (*Service)(nil)
+var _ fdo.NonceState = (*Service)(nil)
 
 // NewService initializes a stateless token service with a random HMAC secret
 // and self-signed CAs for the common key types.
@@ -185,15 +193,6 @@ func (s Service) TokenFromContext(ctx context.Context) (string, bool) {
 // provided in the (non-normative) DI.AppStart message and also stores it
 // in session state.
 func (s Service) NewDeviceCertChain(ctx context.Context, info fdo.DeviceMfgInfo) ([]*x509.Certificate, error) {
-	token, ok := ctx.Value(key).(*string)
-	if !ok {
-		return nil, errInvalidToken
-	}
-	state, err := fromToken[*diState, diState](*token, s.HmacSecret)
-	if err != nil {
-		return nil, err
-	}
-
 	// Sign CSR
 	csr := x509.CertificateRequest(info.CertInfo)
 	if err := csr.CheckSignature(); err != nil {
@@ -224,20 +223,18 @@ func (s Service) NewDeviceCertChain(ctx context.Context, info fdo.DeviceMfgInfo)
 	if err != nil {
 		return nil, fmt.Errorf("error parsing signed device cert: %w", err)
 	}
+	chain := append([]*x509.Certificate{cert}, ca.Chain...)
 
 	// Update state with cert chain
-	chain := append([]*x509.Certificate{cert}, ca.Chain...)
-	state.Chain = make([]*cbor.X509Certificate, len(chain))
-	for i, cert := range chain {
-		state.Chain[i] = (*cbor.X509Certificate)(cert)
-	}
-
-	// Mutate token with new state
-	newToken, err := toToken(state, s.HmacSecret)
-	if err != nil {
+	if err := update[diState](ctx, s, func(state *diState) error {
+		state.Chain = make([]*cbor.X509Certificate, len(chain))
+		for i, cert := range chain {
+			state.Chain[i] = (*cbor.X509Certificate)(cert)
+		}
+		return nil
+	}); err != nil {
 		return nil, err
 	}
-	*token = newToken
 
 	return chain, nil
 }
@@ -245,57 +242,119 @@ func (s Service) NewDeviceCertChain(ctx context.Context, info fdo.DeviceMfgInfo)
 // DeviceCertChain gets a device certificate chain from the current
 // session.
 func (s Service) DeviceCertChain(ctx context.Context) ([]*x509.Certificate, error) {
-	token, ok := s.TokenFromContext(ctx)
-	if !ok {
-		return nil, errInvalidToken
-	}
-	state, err := fromToken[*diState, diState](token, s.HmacSecret)
-	if err != nil {
-		return nil, err
-	}
-	if len(state.Chain) == 0 {
-		return nil, errNotFound
-	}
-	chain := make([]*x509.Certificate, len(state.Chain))
-	for i, cert := range state.Chain {
-		chain[i] = (*x509.Certificate)(cert)
-	}
-	return chain, nil
+	return fetch[diState, []*x509.Certificate](ctx, s, func(state diState) ([]*x509.Certificate, error) {
+		if len(state.Chain) == 0 {
+			return nil, errNotFound
+		}
+		chain := make([]*x509.Certificate, len(state.Chain))
+		for i, cert := range state.Chain {
+			chain[i] = (*x509.Certificate)(cert)
+		}
+		return chain, nil
+	})
 }
 
 // SetIncompleteVoucherHeader stores an incomplete (missing HMAC) voucher
 // header tied to a session.
 func (s Service) SetIncompleteVoucherHeader(ctx context.Context, ovh *fdo.VoucherHeader) error {
-	token, ok := ctx.Value(key).(*string)
-	if !ok {
-		return errInvalidToken
-	}
-	state, err := fromToken[*diState, diState](*token, s.HmacSecret)
-	if err != nil {
-		return err
-	}
-	state.OVH = ovh
-	newToken, err := toToken(state, s.HmacSecret)
-	if err != nil {
-		return err
-	}
-	*token = newToken
-	return nil
+	return update[diState](ctx, s, func(state *diState) error {
+		state.OVH = ovh
+		return nil
+	})
 }
 
 // IncompleteVoucherHeader gets an incomplete (missing HMAC) voucher header
 // which has not yet been persisted.
 func (s Service) IncompleteVoucherHeader(ctx context.Context) (*fdo.VoucherHeader, error) {
-	token, ok := s.TokenFromContext(ctx)
-	if !ok {
-		return nil, errInvalidToken
-	}
-	state, err := fromToken[*diState, diState](token, s.HmacSecret)
+	return fetch[diState, *fdo.VoucherHeader](ctx, s, func(state diState) (*fdo.VoucherHeader, error) {
+		if state.OVH == nil {
+			return nil, errNotFound
+		}
+		return state.OVH, nil
+	})
+}
+
+// SetGUID associates a voucher GUID with a TO2 session.
+func (s Service) SetGUID(ctx context.Context, guid fdo.GUID) error {
+	return update[to2State](ctx, s, func(state *to2State) error {
+		state.GUID = guid
+		return nil
+	})
+}
+
+// GUID retrieves the GUID of the voucher associated with the session.
+func (s Service) GUID(ctx context.Context) (fdo.GUID, error) {
+	return fetch[to2State, fdo.GUID](ctx, s, func(state to2State) (fdo.GUID, error) {
+		return state.GUID, nil
+	})
+}
+
+// SetSession updates the current key exchange/encryption session based on an
+// opaque "authorization" token.
+func (s Service) SetSession(ctx context.Context, sess kex.Session) error {
+	return update[to2State](ctx, s, func(state *to2State) error {
+		state.KEx = sess
+		return nil
+	})
+}
+
+// Session returns the current key exchange/encryption session based on an
+// opaque "authorization" token.
+func (s Service) Session(ctx context.Context, token string) (kex.Session, error) {
+	state, err := fromToken[to2State](token, s.HmacSecret)
 	if err != nil {
 		return nil, err
 	}
-	if state.OVH == nil {
+	if state.KEx == nil {
 		return nil, errNotFound
 	}
-	return state.OVH, nil
+	return state.KEx, nil
+}
+
+// SetProveDeviceNonce stores the Nonce used in TO2.ProveDevice for use in
+// TO2.Done.
+func (s Service) SetProveDeviceNonce(ctx context.Context, nonce fdo.Nonce) error {
+	return update[to2State](ctx, s, func(state *to2State) error {
+		state.ProveDv = nonce
+		return nil
+	})
+}
+
+// ProveDeviceNonce returns the Nonce used in TO2.ProveDevice and TO2.Done.
+func (s Service) ProveDeviceNonce(ctx context.Context) (fdo.Nonce, error) {
+	return fetch[to2State, fdo.Nonce](ctx, s, func(state to2State) (fdo.Nonce, error) {
+		if state.ProveDv == (fdo.Nonce{}) {
+			return fdo.Nonce{}, errNotFound
+		}
+		return state.ProveDv, nil
+	})
+}
+
+// SetSetupDeviceNonce stores the Nonce used in TO2.SetupDevice for use in
+// TO2.Done2.
+func (s Service) SetSetupDeviceNonce(ctx context.Context, nonce fdo.Nonce) error {
+	return update[to2State](ctx, s, func(state *to2State) error {
+		state.SetupDv = nonce
+		return nil
+	})
+}
+
+// ExtendVoucher adds a new signed voucher entry to the list and returns the
+// new extended vouchers. Vouchers should be treated as immutable structures.
+func (s Service) ExtendVoucher(ov *fdo.Voucher, nextOwner crypto.PublicKey) (*fdo.Voucher, error) {
+	keyType := ov.Header.Val.ManufacturerKey.Type
+	ca, ok := s.CAs[keyType]
+	if !ok {
+		return nil, fmt.Errorf("signed by unsupported key type %s", keyType)
+	}
+	switch nextOwner := nextOwner.(type) {
+	case *ecdsa.PublicKey:
+		return fdo.ExtendVoucher(ov, ca.Key, nextOwner, nil)
+	case *rsa.PublicKey:
+		return fdo.ExtendVoucher(ov, ca.Key, nextOwner, nil)
+	case []*x509.Certificate:
+		return fdo.ExtendVoucher(ov, ca.Key, nextOwner, nil)
+	default:
+		return nil, fmt.Errorf("invalid public key type %T", nextOwner)
+	}
 }

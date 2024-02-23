@@ -12,9 +12,15 @@ import (
 // Server implements business logic handling for all FDO protocols.
 type Server struct {
 	// Protocol session state
-	State      TokenService
-	Devices    VoucherState
-	NewDevices VoucherCreationState
+	State       TokenService
+	NewDevices  VoucherCreationState
+	Proofs      VoucherProofState
+	KeyExchange KeyExchangeState
+	Nonces      NonceState
+
+	// Persistent state
+	Devices   VoucherPersistentState
+	OwnerKeys OwnerKeyPersistentState
 
 	// Rendezvous directives
 	RvInfo [][]RvInstruction

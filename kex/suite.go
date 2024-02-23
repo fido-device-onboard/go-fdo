@@ -3,6 +3,14 @@
 
 package kex
 
+// IsValid returns whether the given key exchange and cipher suites are both
+// available.
+func IsValid(suite Suite, cipher CipherSuiteID) bool {
+	_, suiteRegistered := constructors[string(suite)]
+	_, cipherRegistered := ciphers[cipher]
+	return suiteRegistered && cipherRegistered
+}
+
 // Suite name of each key exchange suite
 //
 // When the Owner Key is RSA:

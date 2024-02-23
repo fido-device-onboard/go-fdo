@@ -104,3 +104,22 @@ func signOptsFor(key crypto.Signer, usePSS bool) (crypto.SignerOpts, error) {
 	}
 	return opts, nil
 }
+
+func keyTypeFor(alg cose.SignatureAlgorithm) (KeyType, crypto.SignerOpts, error) {
+	switch alg {
+	case cose.ES256Alg:
+		return Secp256r1KeyType, nil, nil
+	case cose.ES384Alg:
+		return Secp384r1KeyType, nil, nil
+	case cose.RS256Alg, cose.RS384Alg:
+		// TODO: Support RSA2048Restr?
+		return RsaPkcsKeyType, alg, nil
+	case cose.PS256Alg, cose.PS384Alg:
+		return RsaPssKeyType, &rsa.PSSOptions{
+			SaltLength: rsa.PSSSaltLengthEqualsHash,
+			Hash:       alg.HashFunc(),
+		}, nil
+	default:
+		return 0, nil, fmt.Errorf("COSE signature type %d not supported", alg)
+	}
+}

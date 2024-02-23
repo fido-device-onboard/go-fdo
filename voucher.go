@@ -390,7 +390,7 @@ func verifyCertChain(chain []*x509.Certificate, roots *x509.CertPool) error {
 }
 
 // ExtendVoucher adds a new signed voucher entry to the list and returns the
-// new extended vouchers. Vouchers should be treated as immutable structures.
+// new extended voucher. Vouchers should be treated as immutable structures.
 func ExtendVoucher[T PublicKeyOrChain](v *Voucher, owner crypto.Signer, nextOwner T, extra ExtraInfo) (*Voucher, error) {
 	// This performs a shallow clone, which allows arrays, maps, and pointers
 	// to have their contents modified and both the original and copied voucher

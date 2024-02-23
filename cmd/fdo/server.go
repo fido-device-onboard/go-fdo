@@ -4,7 +4,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"net"
@@ -16,7 +15,6 @@ import (
 	transport "github.com/fido-device-onboard/go-fdo/http"
 	"github.com/fido-device-onboard/go-fdo/internal/memory"
 	"github.com/fido-device-onboard/go-fdo/internal/token"
-	"github.com/fido-device-onboard/go-fdo/kex"
 )
 
 var serverFlags = flag.NewFlagSet("server", flag.ContinueOnError)
@@ -40,7 +38,11 @@ func server() error {
 	if err != nil {
 		return err
 	}
-	inMemory := memory.NewState()
+	inMemory, err := memory.NewState()
+	if err != nil {
+		return err
+	}
+	inMemory.AutoExtend = stateless
 
 	// RV Info
 	rvInfo := [][]fdo.RvInstruction{{{Variable: fdo.RVProtocol, Value: mustMarshal(fdo.RVProtHTTP)}}}
@@ -72,14 +74,16 @@ func server() error {
 		Addr: addr,
 		Handler: &transport.Handler{
 			Responder: &fdo.Server{
-				State:      stateless,
-				Devices:    inMemory,
-				NewDevices: stateless,
-				RvInfo:     rvInfo,
-			},
-			Session: func(ctx context.Context, token string) (kex.Session, error) {
-				// TODO: When implementing TO2
-				return nil, nil
+				State:       stateless,
+				NewDevices:  stateless,
+				Proofs:      stateless,
+				KeyExchange: stateless,
+				Nonces:      stateless,
+
+				Devices:   inMemory,
+				OwnerKeys: inMemory,
+
+				RvInfo: rvInfo,
 			},
 			Debug: debug,
 		},

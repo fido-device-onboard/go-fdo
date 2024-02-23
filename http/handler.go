@@ -31,10 +31,6 @@ const bearerPrefix = "Bearer "
 type Handler struct {
 	Responder *fdo.Server
 
-	// Session returns the given key exchange/encryption session based on an
-	// opaque "authorization" token.
-	Session func(ctx context.Context, token string) (kex.Session, error)
-
 	// MaxContentLength defaults to 65535. Negative values disable content
 	// length checking.
 	MaxContentLength int64
@@ -78,7 +74,6 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(rr.Body.Bytes())
 }
 
-//nolint:gocyclo
 func (h Handler) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// Parse message type from request URL
 	typ, err := strconv.ParseUint(path.Base(r.URL.Path), 10, 8)
@@ -125,12 +120,13 @@ func (h Handler) handleRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Decrypt message when appropriate
-	sess, err := h.Session(r.Context(), token)
-	if err != nil {
-		h.error(w, msgType, err)
-		return
-	}
-	if sess != nil && msgType != fdo.ErrorMsgType {
+	var sess kex.Session
+	if 64 < msgType && msgType < fdo.ErrorMsgType {
+		sess, err = h.Responder.KeyExchange.Session(r.Context(), token)
+		if err != nil {
+			h.error(w, msgType, err)
+			return
+		}
 		defer func() { _ = r.Body.Close() }()
 
 		decrypted, err := sess.Decrypt(rand.Reader, msg)
@@ -150,7 +146,6 @@ func (h Handler) handleRequest(w http.ResponseWriter, r *http.Request) {
 	h.writeResponse(r.Context(), w, token, msgType, msg, sess)
 }
 
-//nolint:gocyclo
 func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, token string, msgType uint8, msg io.Reader, sess kex.Session) {
 	// Perform business logic of message handling
 	newToken, respType, resp := h.Responder.Respond(ctx, token, msgType, msg)
