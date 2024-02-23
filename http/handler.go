@@ -43,6 +43,7 @@ var _ http.Handler = (*Handler)(nil)
 func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !h.Debug {
 		h.handleRequest(w, r)
+		return
 	}
 
 	// Dump request

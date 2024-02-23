@@ -1046,12 +1046,12 @@ func (fm fsimMap) Lookup(moduleName string) (fsim serviceinfo.Module, active boo
 	return module, fm.active[moduleName]
 }
 
-type sendServiceInfo struct {
+type deviceServiceInfo struct {
 	IsMoreServiceInfo bool
 	ServiceInfo       []*serviceinfo.KV
 }
 
-type recvServiceInfo struct {
+type ownerServiceInfo struct {
 	IsMoreServiceInfo bool
 	IsDone            bool
 	ServiceInfo       []*serviceinfo.KV
@@ -1063,7 +1063,7 @@ func (c *Client) exchangeServiceInfoRound(ctx context.Context, baseURL string, m
 	r *serviceinfo.ChunkReader, w *serviceinfo.ChunkWriter, session kex.Session,
 ) (bool, error) {
 	// Create DeviceServiceInfo request structure
-	var msg sendServiceInfo
+	var msg deviceServiceInfo
 	maxRead := mtu
 	for {
 		chunk, err := r.ReadChunk(maxRead)
@@ -1112,7 +1112,7 @@ func (c *Client) exchangeServiceInfoRound(ctx context.Context, baseURL string, m
 }
 
 // DeviceServiceInfo(68) -> OwnerServiceInfo(69)
-func (c *Client) deviceServiceInfo(ctx context.Context, baseURL string, msg sendServiceInfo, session kex.Session) (*recvServiceInfo, error) {
+func (c *Client) deviceServiceInfo(ctx context.Context, baseURL string, msg deviceServiceInfo, session kex.Session) (*ownerServiceInfo, error) {
 	// Make request
 	typ, resp, err := c.Transport.Send(ctx, baseURL, to2DeviceServiceInfoMsgType, msg, session)
 	if err != nil {
@@ -1124,7 +1124,7 @@ func (c *Client) deviceServiceInfo(ctx context.Context, baseURL string, msg send
 	switch typ {
 	case to2OwnerServiceInfoMsgType:
 		captureMsgType(ctx, typ)
-		var ownerServiceInfo recvServiceInfo
+		var ownerServiceInfo ownerServiceInfo
 		if err := cbor.NewDecoder(resp).Decode(&ownerServiceInfo); err != nil {
 			captureErr(ctx, messageBodyErrCode, "")
 			return nil, fmt.Errorf("error parsing TO2.OwnerServiceInfo contents: %w", err)
@@ -1145,8 +1145,23 @@ func (c *Client) deviceServiceInfo(ctx context.Context, baseURL string, msg send
 }
 
 // DeviceServiceInfo(68) -> OwnerServiceInfo(69)
-func (s *Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*recvServiceInfo, error) {
-	panic("unimplemented")
+func (s *Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*ownerServiceInfo, error) {
+	// Parse request
+	var deviceInfo deviceServiceInfo
+	if err := cbor.NewDecoder(msg).Decode(&deviceInfo); err != nil {
+		return nil, fmt.Errorf("error decoding TO2.DeviceServiceInfo request: %w", err)
+	}
+
+	// Print out all service info
+	for _, info := range deviceInfo.ServiceInfo {
+		fmt.Printf("Device service info: %+v\n", info)
+	}
+
+	return &ownerServiceInfo{
+		IsMoreServiceInfo: false,
+		IsDone:            !deviceInfo.IsMoreServiceInfo,
+		ServiceInfo:       nil,
+	}, nil
 }
 
 // Done(70) -> Done2(71)
