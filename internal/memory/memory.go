@@ -75,6 +75,14 @@ func (s *State) NewVoucher(_ context.Context, ov *fdo.Voucher) error {
 	return nil
 }
 
+// ReplaceVoucher stores a new voucher, possibly deleting or marking the
+// previous voucher as replaced.
+func (s *State) ReplaceVoucher(_ context.Context, oldGUID fdo.GUID, ov *fdo.Voucher) error {
+	delete(s.Vouchers, oldGUID)
+	s.Vouchers[ov.Header.Val.GUID] = ov
+	return nil
+}
+
 // Voucher retrieves a voucher by GUID.
 func (s *State) Voucher(_ context.Context, guid fdo.GUID) (*fdo.Voucher, error) {
 	ov, ok := s.Vouchers[guid]

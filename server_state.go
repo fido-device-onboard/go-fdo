@@ -79,6 +79,10 @@ type VoucherPersistentState interface {
 	// NewVoucher creates and stores a new voucher.
 	NewVoucher(context.Context, *Voucher) error
 
+	// ReplaceVoucher stores a new voucher, possibly deleting or marking the
+	// previous voucher as replaced.
+	ReplaceVoucher(context.Context, GUID, *Voucher) error
+
 	// Voucher retrieves a voucher by GUID.
 	Voucher(context.Context, GUID) (*Voucher, error)
 }

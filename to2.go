@@ -747,6 +747,14 @@ func (s *Server) ownerServiceInfoReady(ctx context.Context, msg io.Reader) (*own
 	return ownerReady, nil
 }
 
+type doneMsg struct {
+	NonceTO2ProveDv Nonce
+}
+
+type done2Msg struct {
+	NonceTO2SetupDv Nonce
+}
+
 // loop[DeviceServiceInfo(68) -> OwnerServiceInfo(69)]
 // Done(70) -> Done2(71)
 func (c *Client) exchangeServiceInfo(ctx context.Context,
@@ -834,9 +842,7 @@ func (c *Client) exchangeServiceInfo(ctx context.Context,
 	}
 
 	// Finalize TO2 by sending Done message
-	msg := struct {
-		NonceTO2ProveDv Nonce
-	}{
+	msg := doneMsg{
 		NonceTO2ProveDv: proveDvNonce,
 	}
 
@@ -851,9 +857,7 @@ func (c *Client) exchangeServiceInfo(ctx context.Context,
 	switch typ {
 	case to2Done2MsgType:
 		captureMsgType(ctx, typ)
-		var done2 struct {
-			NonceTO2SetupDv Nonce
-		}
+		var done2 done2Msg
 		if err := cbor.NewDecoder(resp).Decode(&done2); err != nil {
 			captureErr(ctx, messageBodyErrCode, "")
 			return fmt.Errorf("error parsing TO2.Done2 contents: %w", err)
@@ -1146,6 +1150,76 @@ func (s *Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*recvServ
 }
 
 // Done(70) -> Done2(71)
-func (s *Server) to2Done2(ctx context.Context, msg io.Reader) (*[1]Nonce, error) {
-	panic("unimplemented")
+func (s *Server) to2Done2(ctx context.Context, msg io.Reader) (*done2Msg, error) {
+	// Parse request
+	var done doneMsg
+	if err := cbor.NewDecoder(msg).Decode(&done); err != nil {
+		return nil, fmt.Errorf("error decoding TO2.Done request: %w", err)
+	}
+
+	// Get session nonces
+	proveDeviceNonce, err := s.Nonces.ProveDeviceNonce(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error retrieving ProveDevice nonce for session: %w", err)
+	}
+	setupDeviceNonce, err := s.Nonces.SetupDeviceNonce(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error retrieving SetupDevice nonce for session: %w", err)
+	}
+
+	// Validate request nonce
+	if !bytes.Equal(proveDeviceNonce[:], done.NonceTO2ProveDv[:]) {
+		return nil, fmt.Errorf("nonce from TO2.ProveDevice did not match TO2.Done")
+	}
+
+	// Get voucher and voucher replacement state
+	currentGUID, err := s.Proofs.GUID(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error retrieving associated device GUID of proof session: %w", err)
+	}
+	currentOV, err := s.Devices.Voucher(ctx, currentGUID)
+	if err != nil {
+		return nil, fmt.Errorf("error retrieving voucher for device %x: %w", currentGUID, err)
+	}
+	replacementGUID, err := s.Replacements.ReplacementGUID(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error retrieving replacement GUID for device: %w", err)
+	}
+	replacementHmac, err := s.Replacements.ReplacementHmac(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error retrieving replacement Hmac for device: %w", err)
+	}
+
+	// Create and store a new voucher
+	keyType := currentOV.Header.Val.ManufacturerKey.Type
+	key, ok := s.OwnerKeys.Signer(keyType)
+	if !ok {
+		return nil, fmt.Errorf("key type %s not supported", keyType)
+	}
+	ownerPublicKey, err := newPublicKey(keyType, key.Public())
+	if err != nil {
+		return nil, fmt.Errorf("error with owner public key: %w", err)
+	}
+	ov := &Voucher{
+		Version: currentOV.Version,
+		Header: *cbor.NewBstr(VoucherHeader{
+			Version:         currentOV.Header.Val.Version,
+			GUID:            replacementGUID,
+			RvInfo:          s.RvInfo,
+			DeviceInfo:      currentOV.Header.Val.DeviceInfo,
+			ManufacturerKey: *ownerPublicKey,
+			CertChainHash:   currentOV.Header.Val.CertChainHash,
+		}),
+		Hmac:      replacementHmac,
+		CertChain: currentOV.CertChain,
+		Entries:   nil,
+	}
+	if err := s.Devices.ReplaceVoucher(ctx, currentGUID, ov); err != nil {
+		return nil, fmt.Errorf("error replacing persisted voucher: %w", err)
+	}
+
+	// Respond with nonce
+	return &done2Msg{
+		NonceTO2SetupDv: setupDeviceNonce,
+	}, nil
 }
