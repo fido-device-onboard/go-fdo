@@ -149,7 +149,7 @@ type Label struct {
 }
 
 func (l Label) String() string {
-	if l.Int64 > 0 {
+	if l.Int64 != 0 {
 		return strconv.FormatInt(l.Int64, 10)
 	}
 	return l.Str

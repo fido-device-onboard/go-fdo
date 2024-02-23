@@ -27,13 +27,6 @@ import (
 var errInvalidToken = fmt.Errorf("invalid token")
 var errNotFound = fmt.Errorf("not found")
 
-// Unique provides randomness to a token before any state is set.
-type Unique struct {
-	Random [16]byte
-}
-
-func (u Unique) id() []byte { return u.Random[:] }
-
 type diState struct {
 	Unique
 	OVH   *fdo.VoucherHeader
@@ -47,6 +40,10 @@ type to1State struct {
 type to2State struct {
 	Unique
 	GUID        fdo.GUID
+	Replacement struct {
+		GUID fdo.GUID
+		Hmac fdo.Hmac
+	}
 	KeyExchange keyExchange `cbor:",flat2"`
 	ProveDv     fdo.Nonce
 	SetupDv     fdo.Nonce
@@ -99,6 +96,7 @@ type Service struct {
 var _ fdo.TokenService = (*Service)(nil)
 var _ fdo.VoucherCreationState = (*Service)(nil)
 var _ fdo.VoucherProofState = (*Service)(nil)
+var _ fdo.VoucherReplacementState = (*Service)(nil)
 var _ fdo.KeyExchangeState = (*Service)(nil)
 var _ fdo.NonceState = (*Service)(nil)
 
@@ -321,6 +319,36 @@ func (s Service) GUID(ctx context.Context) (fdo.GUID, error) {
 	})
 }
 
+// SetReplacementGUID stores the device GUID to persist at the end of TO2.
+func (s Service) SetReplacementGUID(ctx context.Context, guid fdo.GUID) error {
+	return update[to2State](ctx, s, func(state *to2State) error {
+		state.Replacement.GUID = guid
+		return nil
+	})
+}
+
+// ReplacementGUID retrieves the device GUID to persist at the end of TO2.
+func (s Service) ReplacementGUID(ctx context.Context) (fdo.GUID, error) {
+	return fetch[to2State, fdo.GUID](ctx, s, func(state to2State) (fdo.GUID, error) {
+		return state.Replacement.GUID, nil
+	})
+}
+
+// SetReplacementHmac stores the voucher HMAC to persist at the end of TO2.
+func (s Service) SetReplacementHmac(ctx context.Context, hmac fdo.Hmac) error {
+	return update[to2State](ctx, s, func(state *to2State) error {
+		state.Replacement.Hmac = hmac
+		return nil
+	})
+}
+
+// ReplacementHmac retrieves the voucher HMAC to persist at the end of TO2.
+func (s Service) ReplacementHmac(ctx context.Context) (fdo.Hmac, error) {
+	return fetch[to2State, fdo.Hmac](ctx, s, func(state to2State) (fdo.Hmac, error) {
+		return state.Replacement.Hmac, nil
+	})
+}
+
 // SetSession updates the current key exchange/encryption session based on an
 // opaque "authorization" token.
 func (s Service) SetSession(ctx context.Context, suite kex.Suite, sess kex.Session) error {
@@ -332,15 +360,15 @@ func (s Service) SetSession(ctx context.Context, suite kex.Suite, sess kex.Sessi
 
 // Session returns the current key exchange/encryption session based on an
 // opaque "authorization" token.
-func (s Service) Session(ctx context.Context, token string) (kex.Session, error) {
+func (s Service) Session(ctx context.Context, token string) (kex.Suite, kex.Session, error) {
 	state, err := fromToken[to2State](token, s.HmacSecret)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	if state.KeyExchange.Sess == nil {
-		return nil, errNotFound
+		return "", nil, errNotFound
 	}
-	return state.KeyExchange.Sess, nil
+	return state.KeyExchange.Suite, state.KeyExchange.Sess, nil
 }
 
 // SetProveDeviceNonce stores the Nonce used in TO2.ProveDevice for use in
@@ -368,6 +396,16 @@ func (s Service) SetSetupDeviceNonce(ctx context.Context, nonce fdo.Nonce) error
 	return update[to2State](ctx, s, func(state *to2State) error {
 		state.SetupDv = nonce
 		return nil
+	})
+}
+
+// SetupDeviceNonce returns the Nonce used in TO2.SetupDevice and TO2.Done2.
+func (s Service) SetupDeviceNonce(ctx context.Context) (fdo.Nonce, error) {
+	return fetch[to2State, fdo.Nonce](ctx, s, func(state to2State) (fdo.Nonce, error) {
+		if state.SetupDv == (fdo.Nonce{}) {
+			return fdo.Nonce{}, errNotFound
+		}
+		return state.SetupDv, nil
 	})
 }
 

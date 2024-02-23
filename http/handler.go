@@ -21,7 +21,6 @@ import (
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
-	"github.com/fido-device-onboard/go-fdo/kex"
 )
 
 const bearerPrefix = "Bearer "
@@ -119,10 +118,9 @@ func (h Handler) handleRequest(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// Decrypt message when appropriate
-	var sess kex.Session
+	// Decrypt TO2 messages after 64
 	if 64 < msgType && msgType < fdo.ErrorMsgType {
-		sess, err = h.Responder.KeyExchange.Session(r.Context(), token)
+		_, sess, err := h.Responder.KeyExchange.Session(r.Context(), token)
 		if err != nil {
 			h.error(w, msgType, err)
 			return
@@ -143,20 +141,26 @@ func (h Handler) handleRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Handle request message
-	h.writeResponse(r.Context(), w, token, msgType, msg, sess)
+	h.writeResponse(r.Context(), w, token, msgType, msg)
 }
 
-func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, token string, msgType uint8, msg io.Reader, sess kex.Session) {
+func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, token string, msgType uint8, msg io.Reader) {
 	// Perform business logic of message handling
 	newToken, respType, resp := h.Responder.Respond(ctx, token, msgType, msg)
 
-	// Encrypt as needed
-	if sess != nil && respType != fdo.ErrorMsgType {
+	// Encrypt TO2 messages beginning with 64
+	if 64 < respType && respType < fdo.ErrorMsgType {
+		_, sess, err := h.Responder.KeyExchange.Session(ctx, newToken)
+		if err != nil {
+			h.error(w, msgType, err)
+			return
+		}
+
 		if h.Debug {
 			body, _ := cbor.Marshal(resp)
 			fmt.Fprintf(os.Stderr, "Unencrypted response body [msg %d]:\n%x\n", respType, body)
 		}
-		var err error
+
 		resp, err = sess.Encrypt(rand.Reader, resp)
 		if err != nil {
 			h.error(w, msgType, fmt.Errorf("error encrypting message %d: %w", respType, err))

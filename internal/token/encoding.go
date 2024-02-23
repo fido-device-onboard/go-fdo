@@ -10,9 +10,15 @@ import (
 	"crypto/sha512"
 	"encoding/base64"
 
-	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
 )
+
+// Unique provides randomness to a token before any state is set.
+type Unique struct {
+	Random [16]byte
+}
+
+func (u *Unique) id() []byte { return u.Random[:] }
 
 type statePtr[T state] interface {
 	*T
@@ -61,21 +67,11 @@ func fromToken[T state](s string, secret []byte) (*T, error) {
 		return nil, errInvalidToken
 	}
 
-	var v T
-	if err := cbor.Unmarshal(payload, &v); err != nil {
+	v := new(T)
+	if err := cbor.Unmarshal(payload, v); err != nil {
 		return nil, err
 	}
-	return &v, nil
-}
-
-// SetupDeviceNonce returns the Nonce used in TO2.SetupDevice and TO2.Done2.
-func (s Service) SetupDeviceNonce(ctx context.Context) (fdo.Nonce, error) {
-	return fetch[to2State, fdo.Nonce](ctx, s, func(state to2State) (fdo.Nonce, error) {
-		if state.SetupDv == (fdo.Nonce{}) {
-			return fdo.Nonce{}, errNotFound
-		}
-		return state.SetupDv, nil
-	})
+	return v, nil
 }
 
 func fetch[S state, T any](ctx context.Context, s Service, f func(S) (T, error)) (T, error) {

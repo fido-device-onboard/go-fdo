@@ -286,6 +286,7 @@ type ovhProof struct {
 //
 // TODO: Handle MaxDeviceMessageSize
 func (s *Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1Tag[ovhProof, []byte], error) {
+	// Parse request
 	var rawHello cbor.RawBytes
 	if err := cbor.NewDecoder(msg).Decode(&rawHello); err != nil {
 		return nil, fmt.Errorf("error decoding TO2.HelloDevice request: %w", err)
@@ -535,8 +536,132 @@ type deviceSetup struct {
 }
 
 // ProveDevice(64) -> SetupDevice(65)
+//
+//nolint:gocyclo, This is very complex validation that is better understood linearly
 func (s *Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1Tag[deviceSetup, []byte], error) {
-	panic("unimplemented")
+	// Parse request
+	var proof cose.Sign1Tag[eatoken, []byte]
+	if err := cbor.NewDecoder(msg).Decode(&proof); err != nil {
+		return nil, fmt.Errorf("error decoding TO2.ProveDevice request: %w", err)
+	}
+
+	// Parse and store SetupDevice nonce
+	var setupDeviceNonce Nonce
+	if ok, err := proof.Unprotected.Parse(eatUnprotectedNonceClaim, &setupDeviceNonce); err != nil {
+		return nil, fmt.Errorf("error parsing SetupDevice nonce from TO2.ProveDevice request unprotected header: %w", err)
+	} else if !ok {
+		return nil, fmt.Errorf("TO2.ProveDevice request missing SetupDevice nonce in unprotected headers")
+	}
+	if err := s.Nonces.SetSetupDeviceNonce(ctx, setupDeviceNonce); err != nil {
+		return nil, fmt.Errorf("error storing SetupDevice nonce from TO2.ProveDevice request: %w", err)
+	}
+
+	// Retrieve voucher
+	guid, err := s.Proofs.GUID(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error retrieving associated device GUID of proof session: %w", err)
+	}
+	ov, err := s.Devices.Voucher(ctx, guid)
+	if err != nil {
+		return nil, fmt.Errorf("error retrieving voucher for device %x: %w", guid, err)
+	}
+
+	// Verify request signature based on device certificate chain in voucher
+	devicePublicKey, err := ov.DevicePublicKey()
+	if err != nil {
+		return nil, fmt.Errorf("error parsing device public key from ownership voucher: %w", err)
+	}
+	if ok, err := proof.Verify(devicePublicKey, nil, nil); err != nil {
+		return nil, fmt.Errorf("error verifying signature of device EAT: %w", err)
+	} else if !ok {
+		return nil, fmt.Errorf("device EAT verification failed")
+	}
+
+	// Validate EAT contents
+	proveDeviceNonce, err := s.Nonces.ProveDeviceNonce(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error retrieving ProveDevice nonce for session: %w", err)
+	}
+	eat := proof.Payload.Val
+	nonceClaim, ok := eat[eatNonceClaim].([]byte)
+	if !ok {
+		return nil, fmt.Errorf("missing nonce claim from EAT")
+	}
+	if !bytes.Equal(nonceClaim, proveDeviceNonce[:]) {
+		return nil, fmt.Errorf("nonce claim from EAT does not match ProveDevice nonce")
+	}
+	ueidClaim, ok := eat[eatUeidClaim].([]byte)
+	if !ok {
+		return nil, fmt.Errorf("missing UEID claim from EAT")
+	}
+	if !bytes.Equal(ueidClaim, append([]byte{eatRandUeid}, guid[:]...)) {
+		return nil, fmt.Errorf("claim of UEID in EAT does not match the device GUID")
+	}
+	fdoClaim, ok := eat[eatFdoClaim].([]any)
+	if !ok || len(fdoClaim) != 1 {
+		return nil, fmt.Errorf("missing FDO claim from EAT")
+	}
+
+	// Complete key exchange using EAT FDO claim
+	xB, ok := fdoClaim[0].([]byte)
+	if !ok {
+		return nil, fmt.Errorf("invalid EAT FDO claim: expected one item of type []byte")
+	}
+	token, ok := s.State.TokenFromContext(ctx)
+	if !ok {
+		panic("programming error - token missing from context")
+	}
+	suite, sess, err := s.KeyExchange.Session(ctx, token)
+	if err != nil {
+		return nil, fmt.Errorf("error getting associated key exchange session: %w", err)
+	}
+	if err := sess.SetParameter(xB); err != nil {
+		return nil, fmt.Errorf("error completing key exchange: %w", err)
+	}
+	if err := s.KeyExchange.SetSession(ctx, suite, sess); err != nil {
+		return nil, fmt.Errorf("error updating associated key exchange session: %w", err)
+	}
+
+	// Generate a replacement GUID
+	var replacementGUID GUID
+	if _, err := rand.Read(replacementGUID[:]); err != nil {
+		return nil, fmt.Errorf("error generating replacement GUID for device: %w", err)
+	}
+	if err := s.Replacements.SetReplacementGUID(ctx, replacementGUID); err != nil {
+		return nil, fmt.Errorf("error storing replacement GUID for device: %w", err)
+	}
+
+	// Respond with device setup
+	keyType := ov.Header.Val.ManufacturerKey.Type
+	key, ok := s.OwnerKeys.Signer(keyType)
+	if !ok {
+		return nil, fmt.Errorf("key type %s not supported", keyType)
+	}
+	ownerPublicKey, err := newPublicKey(keyType, key.Public())
+	if err != nil {
+		return nil, fmt.Errorf("error with owner public key: %w", err)
+	}
+	s1 := cose.Sign1[deviceSetup, []byte]{
+		Payload: cbor.NewByteWrap(deviceSetup{
+			RendezvousInfo:  s.RvInfo,
+			GUID:            replacementGUID,
+			NonceTO2SetupDv: setupDeviceNonce,
+			Owner2Key:       *ownerPublicKey,
+		}),
+	}
+	opts, err := signOptsFor(key, keyType == RsaPssKeyType)
+	if err != nil {
+		return nil, fmt.Errorf("error determining signing options for TO2.SetupDevice message: %w", err)
+	}
+	if err := s1.Sign(key, nil, nil, opts); err != nil {
+		return nil, fmt.Errorf("error signing TO2.SetupDevice payload: %w", err)
+	}
+	return s1.Tag(), nil
+}
+
+type deviceServiceInfoReady struct {
+	Hmac                    *Hmac
+	MaxOwnerServiceInfoSize *uint16 // maximum size service info that Device can receive
 }
 
 // DeviceServiceInfoReady(66) -> OwnerServiceInfoReady(67)
@@ -553,12 +678,10 @@ func (c *Client) readyServiceInfo(ctx context.Context, baseURL string, replaceme
 	}
 
 	// Define request structure
-	var msg struct {
-		Hmac                    *Hmac
-		MaxOwnerServiceInfoSize *uint16 // maximum size service info that Device can receive
+	msg := deviceServiceInfoReady{
+		Hmac:                    &replacementHmac,
+		MaxOwnerServiceInfoSize: &c.MaxServiceInfoSizeReceive,
 	}
-	msg.Hmac = &replacementHmac
-	msg.MaxOwnerServiceInfoSize = &c.MaxServiceInfoSizeReceive
 
 	// Make request
 	typ, resp, err := c.Transport.Send(ctx, baseURL, to2DeviceServiceInfoReadyMsgType, msg, session)
@@ -600,7 +723,28 @@ type ownerServiceInfoReady struct {
 
 // DeviceServiceInfoReady(66) -> OwnerServiceInfoReady(67)
 func (s *Server) ownerServiceInfoReady(ctx context.Context, msg io.Reader) (*ownerServiceInfoReady, error) {
-	panic("unimplemented")
+	// Parse request
+	var deviceReady deviceServiceInfoReady
+	if err := cbor.NewDecoder(msg).Decode(&deviceReady); err != nil {
+		return nil, fmt.Errorf("error decoding TO2.DeviceServiceInfoReady request: %w", err)
+	}
+
+	// Store new HMAC for voucher replacement
+	if deviceReady.Hmac == nil {
+		return nil, fmt.Errorf("device did not send a replacement voucher HMAC")
+	}
+	if err := s.Replacements.SetReplacementHmac(ctx, *deviceReady.Hmac); err != nil {
+		return nil, fmt.Errorf("error storing replacement voucher HMAC for device: %w", err)
+	}
+
+	// TODO: Set send MTU
+
+	// Send resposne
+	ownerReady := new(ownerServiceInfoReady)
+	if s.MaxDeviceServiceInfoSize != 0 {
+		ownerReady.MaxDeviceServiceInfoSize = &s.MaxDeviceServiceInfoSize
+	}
+	return ownerReady, nil
 }
 
 // loop[DeviceServiceInfo(68) -> OwnerServiceInfo(69)]

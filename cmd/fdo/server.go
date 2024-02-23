@@ -74,11 +74,12 @@ func server() error {
 		Addr: addr,
 		Handler: &transport.Handler{
 			Responder: &fdo.Server{
-				State:       stateless,
-				NewDevices:  stateless,
-				Proofs:      stateless,
-				KeyExchange: stateless,
-				Nonces:      stateless,
+				State:        stateless,
+				NewDevices:   stateless,
+				Proofs:       stateless,
+				Replacements: stateless,
+				KeyExchange:  stateless,
+				Nonces:       stateless,
 
 				Devices:   inMemory,
 				OwnerKeys: inMemory,

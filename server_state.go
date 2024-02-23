@@ -83,6 +83,22 @@ type VoucherPersistentState interface {
 	Voucher(context.Context, GUID) (*Voucher, error)
 }
 
+// VoucherReplacementState maintains the replacement info for a device
+// performing TO2 before the new voucher is persisted.
+type VoucherReplacementState interface {
+	// SetReplacementGUID stores the device GUID to persist at the end of TO2.
+	SetReplacementGUID(context.Context, GUID) error
+
+	// ReplacementGUID retrieves the device GUID to persist at the end of TO2.
+	ReplacementGUID(context.Context) (GUID, error)
+
+	// SetReplacementHmac stores the voucher HMAC to persist at the end of TO2.
+	SetReplacementHmac(context.Context, Hmac) error
+
+	// ReplacementHmac retrieves the voucher HMAC to persist at the end of TO2.
+	ReplacementHmac(context.Context) (Hmac, error)
+}
+
 // KeyExchangeState maintains the current key exchange/encryption session for
 // TO2 after message 64.
 type KeyExchangeState interface {
@@ -92,7 +108,7 @@ type KeyExchangeState interface {
 
 	// Session returns the current key exchange/encryption session based on an
 	// opaque "authorization" token.
-	Session(context.Context, string) (kex.Session, error)
+	Session(context.Context, string) (kex.Suite, kex.Session, error)
 }
 
 // NonceState tracks the nonces which are used... more than once... across a

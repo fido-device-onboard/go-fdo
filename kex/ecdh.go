@@ -23,11 +23,29 @@ const (
 func init() {
 	RegisterKeyExchangeSuite(
 		string(ECDH256Suite),
-		(&ECDHSession{Curve: elliptic.P256()}).new,
+		func(xA []byte, cipher CipherSuiteID) Session {
+			return &ECDHSession{
+				Curve: elliptic.P256(),
+				xA:    xA,
+				SessionCrypter: SessionCrypter{
+					ID:     cipher,
+					Cipher: cipher.Suite(),
+				},
+			}
+		},
 	)
 	RegisterKeyExchangeSuite(
 		string(ECDH384Suite),
-		(&ECDHSession{Curve: elliptic.P384()}).new,
+		func(xA []byte, cipher CipherSuiteID) Session {
+			return &ECDHSession{
+				Curve: elliptic.P384(),
+				xA:    xA,
+				SessionCrypter: SessionCrypter{
+					ID:     cipher,
+					Cipher: cipher.Suite(),
+				},
+			}
+		},
 	)
 }
 
@@ -42,13 +60,6 @@ type ECDHSession struct {
 
 	// Session encrypt/decrypt data
 	SessionCrypter
-}
-
-func (s *ECDHSession) new(xA []byte, cipher CipherSuiteID) Session {
-	s.xA = xA
-	s.ID = cipher
-	s.Cipher = cipher.Suite()
-	return s
 }
 
 // Parameter generates the private key and exchange parameter to send to
