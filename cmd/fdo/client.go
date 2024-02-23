@@ -213,7 +213,7 @@ func di(cli *fdo.Client) error {
 	}
 	cli.Hmac = blob.Hmac(secret)
 
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	if err != nil {
 		return fmt.Errorf("error generating device key: %w", err)
 	}
@@ -233,11 +233,11 @@ func di(cli *fdo.Client) error {
 
 	// Call the DI server
 	cred, err := cli.DeviceInitialize(context.TODO(), diURL, fdo.DeviceMfgInfo{
-		KeyType:      fdo.Secp384r1KeyType,              // KeyType
-		KeyEncoding:  fdo.X5ChainKeyEnc,                 // KeyEncoding
-		SerialNumber: "123456",                          // string
-		DeviceInfo:   "gotest",                          // string
-		CertInfo:     cbor.X509CertificateRequest(*csr), // cbor.X509CertificateRequest
+		KeyType:      fdo.Secp384r1KeyType, // Must match the key used to generate the CSR
+		KeyEncoding:  fdo.X5ChainKeyEnc,
+		SerialNumber: "123456",
+		DeviceInfo:   "gotest",
+		CertInfo:     cbor.X509CertificateRequest(*csr),
 	})
 	if err != nil {
 		return err

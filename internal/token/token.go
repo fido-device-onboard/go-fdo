@@ -15,6 +15,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"fmt"
+	"io"
 	"math/big"
 	"time"
 
@@ -45,10 +46,41 @@ type to1State struct {
 
 type to2State struct {
 	Unique
-	GUID    fdo.GUID
-	KEx     kex.Session
-	ProveDv fdo.Nonce
-	SetupDv fdo.Nonce
+	GUID        fdo.GUID
+	KeyExchange keyExchange `cbor:",flat2"`
+	ProveDv     fdo.Nonce
+	SetupDv     fdo.Nonce
+}
+
+type keyExchange struct {
+	Suite kex.Suite
+	Sess  kex.Session
+}
+
+func (x keyExchange) FlatMarshalCBOR(w io.Writer) error {
+	if err := cbor.NewEncoder(w).Encode(x.Suite); err != nil {
+		return err
+	}
+	return cbor.NewEncoder(w).Encode(x.Sess)
+}
+
+func (x *keyExchange) FlatUnmarshalCBOR(r io.Reader) error {
+	if err := cbor.NewDecoder(r).Decode(&x.Suite); err != nil {
+		return fmt.Errorf("error decoding key exchange suite: %w", err)
+	}
+
+	// If no suite is set, the next value will be nil
+	if x.Suite == "" {
+		var v struct{}
+		return cbor.NewDecoder(r).Decode(&v)
+	}
+
+	// Initialize a session with a valid cipher suite (any) to decode
+	x.Sess = x.Suite.New(nil, 1)
+	if err := cbor.NewDecoder(r).Decode(&x.Sess); err != nil {
+		return fmt.Errorf("error decoding key exchange session: %w", err)
+	}
+	return nil
 }
 
 // CA for creating a device certificate chain
@@ -291,9 +323,9 @@ func (s Service) GUID(ctx context.Context) (fdo.GUID, error) {
 
 // SetSession updates the current key exchange/encryption session based on an
 // opaque "authorization" token.
-func (s Service) SetSession(ctx context.Context, sess kex.Session) error {
+func (s Service) SetSession(ctx context.Context, suite kex.Suite, sess kex.Session) error {
 	return update[to2State](ctx, s, func(state *to2State) error {
-		state.KEx = sess
+		state.KeyExchange.Suite, state.KeyExchange.Sess = suite, sess
 		return nil
 	})
 }
@@ -305,10 +337,10 @@ func (s Service) Session(ctx context.Context, token string) (kex.Session, error)
 	if err != nil {
 		return nil, err
 	}
-	if state.KEx == nil {
+	if state.KeyExchange.Sess == nil {
 		return nil, errNotFound
 	}
-	return state.KEx, nil
+	return state.KeyExchange.Sess, nil
 }
 
 // SetProveDeviceNonce stores the Nonce used in TO2.ProveDevice for use in

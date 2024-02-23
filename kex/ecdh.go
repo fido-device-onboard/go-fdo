@@ -233,8 +233,8 @@ type ecdhPersist struct {
 	SVK    []byte
 }
 
-// MarshalBinary implements [encoding.BinaryMarshaler].
-func (s *ECDHSession) MarshalBinary() ([]byte, error) {
+// MarshalCBOR implements [cbor.Marshaler].
+func (s *ECDHSession) MarshalCBOR() ([]byte, error) {
 	key, err := x509.MarshalECPrivateKey(s.priv)
 	if err != nil {
 		return nil, err
@@ -250,8 +250,8 @@ func (s *ECDHSession) MarshalBinary() ([]byte, error) {
 	})
 }
 
-// UnmarshalBinary implements [encoding.BinaryUnmarshaler].
-func (s *ECDHSession) UnmarshalBinary(data []byte) error {
+// UnmarshalCBOR implements [cbor.Unmarshaler].
+func (s *ECDHSession) UnmarshalCBOR(data []byte) error {
 	var persist ecdhPersist
 	if err := cbor.Unmarshal(data, &persist); err != nil {
 		return err

@@ -88,7 +88,7 @@ type VoucherPersistentState interface {
 type KeyExchangeState interface {
 	// SetSession updates the current key exchange/encryption session based on
 	// an opaque "authorization" token.
-	SetSession(context.Context, kex.Session) error
+	SetSession(context.Context, kex.Suite, kex.Session) error
 
 	// Session returns the current key exchange/encryption session based on an
 	// opaque "authorization" token.

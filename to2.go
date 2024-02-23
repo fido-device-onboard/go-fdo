@@ -324,14 +324,17 @@ func (s *Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1Tag[
 	if err != nil {
 		return nil, fmt.Errorf("error generating client key exchange parameter: %w", err)
 	}
-	if err := s.KeyExchange.SetSession(ctx, sess); err != nil {
+	if err := s.KeyExchange.SetSession(ctx, hello.KexSuiteName, sess); err != nil {
 		return nil, fmt.Errorf("error storing key exchange session: %w", err)
 	}
 
 	// Send begin proof
 	keyType, opts, err := keyTypeFor(hello.SigInfoA.Type)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error getting key type from device sig info: %w", err)
+	}
+	if mfgKeyType := ov.Header.Val.ManufacturerKey.Type; keyType != mfgKeyType {
+		return nil, fmt.Errorf("device sig info has key type %q, must be %q to match manufacturer key", keyType, mfgKeyType)
 	}
 	key, ok := s.OwnerKeys.Signer(keyType)
 	if !ok {
@@ -419,7 +422,32 @@ type ovEntry struct {
 
 // GetOVNextEntry(62) -> OVNextEntry(63)
 func (s *Server) ovNextEntry(ctx context.Context, msg io.Reader) (*ovEntry, error) {
-	panic("unimplemented")
+	// Parse request
+	var nextEntry struct {
+		OVEntryNum int
+	}
+	if err := cbor.NewDecoder(msg).Decode(&nextEntry); err != nil {
+		return nil, fmt.Errorf("error decoding TO2.GetOVNextEntry request: %w", err)
+	}
+
+	// Retrieve voucher
+	guid, err := s.Proofs.GUID(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error retrieving associated device GUID of proof session: %w", err)
+	}
+	ov, err := s.Devices.Voucher(ctx, guid)
+	if err != nil {
+		return nil, fmt.Errorf("error retrieving voucher for device %x: %w", guid, err)
+	}
+
+	// Return entry
+	if len(ov.Entries) < nextEntry.OVEntryNum {
+		return nil, fmt.Errorf("invalid ownership voucher entry index %d", nextEntry.OVEntryNum)
+	}
+	return &ovEntry{
+		OVEntryNum: nextEntry.OVEntryNum,
+		OVEntry:    ov.Entries[nextEntry.OVEntryNum],
+	}, nil
 }
 
 // ProveDevice(64) -> SetupDevice(65)
