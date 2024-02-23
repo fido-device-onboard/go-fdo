@@ -957,12 +957,12 @@ func (d *Decoder) decodeSimple(rv reflect.Value, lowFiveBits byte, additional []
 		rv.Set(reflect.ValueOf(lowFiveBits == trueVal))
 	case nullVal, undefinedVal:
 		switch {
-		case rv.Kind() == reflect.Pointer:
+		case rv.Kind() == reflect.Pointer || rv.Kind() == reflect.Interface:
 			rv.SetZero()
 		case rv.Kind() == reflect.Struct && rv.NumField() == 0:
 			rv.SetZero()
 		default:
-			return fmt.Errorf("%w: must be a pointer or empty struct to decode null/undefined",
+			return fmt.Errorf("%w: must be a pointer, interface, or empty struct to decode null/undefined",
 				ErrUnsupportedType{typeName: rv.Type().Name()})
 		}
 	case halfFloat, singleFloat, doubleFloat:
