@@ -678,7 +678,7 @@ func (d *Decoder) decodeByteSlice(rv reflect.Value, additional []byte) error {
 		rv.Set(reflect.ValueOf(bs))
 		return nil
 	case isString || rv.Kind() == reflect.String:
-		rv.Set(reflect.ValueOf(string(bs)))
+		rv.Set(reflect.ValueOf(string(bs)).Convert(rv.Type()))
 		return nil
 	}
 

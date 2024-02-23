@@ -1011,6 +1011,28 @@ func TestDecodeString(t *testing.T) {
 	}
 }
 
+func TestDecodeStringNewtype(t *testing.T) {
+	type newstring string
+	var got newstring
+	for _, test := range []struct {
+		input  []byte
+		expect newstring
+	}{
+		{input: []byte{0x60}, expect: ""},
+		{input: []byte{0x61, 0x61}, expect: "a"},
+		{input: []byte{0x64, 0x49, 0x45, 0x54, 0x46}, expect: "IETF"},
+		{input: []byte{0x62, 0x22, 0x5c}, expect: "\"\\"},
+		{input: []byte{0x62, 0xc3, 0xbc}, expect: "ü"},
+		{input: []byte{0x63, 0xe6, 0xb0, 0xb4}, expect: "水"},
+	} {
+		if err := cbor.Unmarshal(test.input, &got); err != nil {
+			t.Errorf("error unmarshaling % x: %v", test.input, err)
+		} else if got != test.expect {
+			t.Errorf("unmarshaling % x; expected %s, got %s", test.input, test.expect, got)
+		}
+	}
+}
+
 func TestDecodeArray(t *testing.T) {
 	t.Run("homogeneous type", func(t *testing.T) {
 		for _, test := range []struct {
