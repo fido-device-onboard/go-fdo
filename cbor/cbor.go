@@ -382,12 +382,21 @@ func NewDecoder(r io.Reader) *Decoder { return &Decoder{r: r} }
 // Decode a single CBOR item from the internal [io.Reader].
 func (d *Decoder) Decode(v any) error {
 	// Use UnmarshalCBOR when value is an interface implementing Unmarshaler
-	if u, ok := v.(Unmarshaler); ok {
-		b, err := d.decodeRaw()
-		if err != nil {
-			return err
+	for rv := reflect.ValueOf(v); (rv.Kind() == reflect.Pointer || rv.Kind() == reflect.Interface) && !rv.IsNil(); rv = rv.Elem() {
+		if u, ok := rv.Interface().(Unmarshaler); ok {
+			b, err := d.decodeRaw()
+			if err != nil {
+				return err
+			}
+
+			// Handle null/undefined
+			if len(b) == 1 && (b[0] == 0xf6 || b[0] == 0xf7) {
+				rv.SetZero()
+				return nil
+			}
+
+			return u.UnmarshalCBOR(b)
 		}
-		return u.UnmarshalCBOR(b)
 	}
 
 	// Ensure that v is a pointer type
