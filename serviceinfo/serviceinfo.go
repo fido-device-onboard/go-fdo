@@ -41,3 +41,25 @@ func cborEncodedLen(b []byte) int {
 		return 3 + len(b)
 	}
 }
+
+// ArraySizeCBOR returns the size of the service info slice once marshaled to
+// CBOR.
+func ArraySizeCBOR(arr []*KV) int64 {
+	if len(arr) > 65535 {
+		panic("service info cannot contain > 65535 KVs")
+	}
+
+	arrayLengthSize := int64(3)
+	switch {
+	case len(arr) < 24:
+		arrayLengthSize = 1
+	case len(arr) < 256:
+		arrayLengthSize = 2
+	}
+
+	var infoSize int64
+	for _, info := range arr {
+		infoSize += int64(info.Size())
+	}
+	return arrayLengthSize + infoSize
+}

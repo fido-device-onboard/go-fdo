@@ -139,3 +139,13 @@ type OwnerKeyPersistentState interface {
 	// Signer returns the private key matching a given key type.
 	Signer(KeyType) (crypto.Signer, bool)
 }
+
+// ServiceInfoState managers owner service info state, including settings such
+// as MTU.
+type ServiceInfoState interface {
+	// SetMTU sets the max service info size the device may receive.
+	SetMTU(context.Context, uint16) error
+
+	// MTU returns the max service info size the device may receive.
+	MTU(context.Context) (uint16, error)
+}

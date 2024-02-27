@@ -4,6 +4,8 @@
 package main
 
 import (
+	"context"
+	"crypto/x509"
 	"flag"
 	"fmt"
 	"net"
@@ -15,6 +17,7 @@ import (
 	transport "github.com/fido-device-onboard/go-fdo/http"
 	"github.com/fido-device-onboard/go-fdo/internal/memory"
 	"github.com/fido-device-onboard/go-fdo/internal/token"
+	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
 
 var serverFlags = flag.NewFlagSet("server", flag.ContinueOnError)
@@ -28,7 +31,7 @@ var (
 func init() {
 	serverFlags.BoolVar(&debug, "debug", false, "Print HTTP contents")
 	serverFlags.StringVar(&extAddr, "ext-http", "", "External `addr`ess devices should connect to (default \"127.0.0.1:${LISTEN_PORT}\")")
-	serverFlags.StringVar(&addr, "http", ":8080", "The `addr`ess to listen on")
+	serverFlags.StringVar(&addr, "http", "localhost:8080", "The `addr`ess to listen on")
 	serverFlags.BoolVar(&rvBypass, "rv-bypass", false, "Skip TO1")
 }
 
@@ -80,11 +83,20 @@ func server() error {
 				Replacements: stateless,
 				KeyExchange:  stateless,
 				Nonces:       stateless,
+				ServiceInfo:  stateless,
 
 				Devices:   inMemory,
 				OwnerKeys: inMemory,
 
 				RvInfo: rvInfo,
+
+				StartFSIMs: func(ctx context.Context, guid fdo.GUID, info string, chain []*x509.Certificate, devmod fdo.Devmod, modules []string) serviceinfo.OwnerModuleList {
+					fmt.Printf("GUID: %x\n", guid)
+					fmt.Printf("Device info: %s\n", info)
+					fmt.Printf("Devmod: %s\n", devmod)
+					fmt.Printf("Modules: %v\n", modules)
+					return fsimList{}
+				},
 			},
 			Debug: debug,
 		},
@@ -98,3 +110,7 @@ func mustMarshal(v any) []byte {
 	}
 	return data
 }
+
+type fsimList []serviceinfo.OwnerModule
+
+func (fsimList) Next() serviceinfo.OwnerModule { return nil }

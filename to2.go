@@ -4,12 +4,12 @@
 package fdo
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -464,21 +464,17 @@ func (c *Client) proveDevice(ctx context.Context, baseURL string, proveDeviceNon
 	if err != nil {
 		return Nonce{}, nil, fmt.Errorf("error generating key exchange session parameters: %w", err)
 	}
-	eatPayload := struct {
-		KeyExchangeB []byte
-	}{
-		KeyExchangeB: paramB,
-	}
-	if err != nil {
-		return Nonce{}, nil, fmt.Errorf("error creating header for EAT int TO2.ProveDevice: %w", err)
-	}
 	token := cose.Sign1[eatoken, []byte]{
 		Header: cose.Header{
 			Unprotected: map[cose.Label]any{
 				eatUnprotectedNonceClaim: setupDeviceNonce,
 			},
 		},
-		Payload: cbor.NewByteWrap(newEAT(c.Cred.GUID, proveDeviceNonce, eatPayload, nil)),
+		Payload: cbor.NewByteWrap(newEAT(c.Cred.GUID, proveDeviceNonce, struct {
+			KeyExchangeB []byte
+		}{
+			KeyExchangeB: paramB,
+		}, nil)),
 	}
 	opts, err := signOptsFor(c.Key, c.PSS)
 	if err != nil {
@@ -737,15 +733,59 @@ func (s *Server) ownerServiceInfoReady(ctx context.Context, msg io.Reader) (*own
 		return nil, fmt.Errorf("error storing replacement voucher HMAC for device: %w", err)
 	}
 
-	// TODO: Set send MTU
+	// Set send MTU
+	mtu := uint16(serviceinfo.DefaultMTU)
+	if deviceReady.MaxOwnerServiceInfoSize != nil {
+		mtu = *deviceReady.MaxOwnerServiceInfoSize
+	}
+	if err := s.ServiceInfo.SetMTU(ctx, mtu); err != nil {
+		return nil, fmt.Errorf("error storing max service info size to send to device: %w", err)
+	}
 
-	// Send resposne
+	// Get voucher and voucher replacement state
+	currentGUID, err := s.Proofs.GUID(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error retrieving associated device GUID of proof session: %w", err)
+	}
+	currentOV, err := s.Devices.Voucher(ctx, currentGUID)
+	if err != nil {
+		return nil, fmt.Errorf("error retrieving voucher for device %x: %w", currentGUID, err)
+	}
+	replacementGUID, err := s.Replacements.ReplacementGUID(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error retrieving replacement GUID for device: %w", err)
+	}
+	info := currentOV.Header.Val.DeviceInfo
+	var deviceCertChain []*x509.Certificate
+	if currentOV.CertChain != nil {
+		deviceCertChain = make([]*x509.Certificate, len(*currentOV.CertChain))
+		for i, cert := range *currentOV.CertChain {
+			deviceCertChain[i] = (*x509.Certificate)(cert)
+		}
+	}
+
+	// Initialize FSIMs
+	var devmod devmodOwnerModule
+	s.mod = &devmod
+	var fsims serviceinfo.OwnerModuleList
+	s.modList = lazyOwnerInfoList(func() serviceinfo.OwnerModuleList {
+		if fsims == nil {
+			fsims = s.StartFSIMs(ctx, replacementGUID, info, deviceCertChain, devmod.Devmod, devmod.Modules)
+		}
+		return fsims
+	})
+
+	// Send response
 	ownerReady := new(ownerServiceInfoReady)
 	if s.MaxDeviceServiceInfoSize != 0 {
 		ownerReady.MaxDeviceServiceInfoSize = &s.MaxDeviceServiceInfoSize
 	}
 	return ownerReady, nil
 }
+
+type lazyOwnerInfoList func() serviceinfo.OwnerModuleList
+
+func (lazy lazyOwnerInfoList) Next() serviceinfo.OwnerModule { return lazy().Next() }
 
 type doneMsg struct {
 	NonceTO2ProveDv Nonce
@@ -762,7 +802,7 @@ func (c *Client) exchangeServiceInfo(ctx context.Context,
 	proveDvNonce, setupDvNonce Nonce,
 	mtu uint16,
 	initInfo *serviceinfo.ChunkReader,
-	fsims map[string]serviceinfo.Module,
+	fsims map[string]serviceinfo.DeviceModule,
 	session kex.Session,
 ) error {
 	defer func() { _ = initInfo.Close() }()
@@ -881,180 +921,25 @@ func (c *Client) exchangeServiceInfo(ctx context.Context,
 	}
 }
 
-// Handle owner service info with FSIMs. This must be run in a goroutine,
-// because the chunking/unchunking pipes are not buffered.
-func handleFSIMs(ctx context.Context, mtu uint16, modules fsimMap, send *serviceinfo.UnchunkWriter, recv *serviceinfo.UnchunkReader) {
-	var writeChans []chan chan struct{}
-	for {
-		// Get next service info from the owner service and handle it.
-		key, messageBody, ok := recv.NextServiceInfo()
-		if !ok {
-			_ = send.Close()
-			break
-		}
-
-		// Automatically receive and respond to active messages. This send is
-		// expected to be buffered until all receives are processed, unlike
-		// modules which must wait for all receives to occur before sending.
-		// This is allowed because the data is small and the send buffer is
-		// large enough for many more "active" responses than is practical to
-		// expect in the real world.
-		moduleName, messageName, _ := strings.Cut(key, ":")
-		fsim, active := modules.Lookup(moduleName)
-		if messageName == "active" {
-			// Receive active message of true or false
-			prevActive, active := active, false
-			if err := cbor.NewDecoder(messageBody).Decode(&active); err != nil {
-				_ = send.CloseWithError(err)
-				return
-			}
-			_, _ = io.Copy(io.Discard, messageBody)
-
-			// Transition internal state
-			modules.active[moduleName] = active
-			fsim.Transition(active)
-
-			// Send active message when appropriate
-			if active && !prevActive {
-				if err := sendActive(ctx, moduleName, active, fsim, send); err != nil {
-					_ = send.CloseWithError(err)
-					return
-				}
-			}
-			continue
-		}
-
-		// Use FSIM handler and provide it a function which can be used to send
-		// zero or more service info KVs. The function returns a writer to
-		// write the value part of the service info KV. This writer is buffered
-		// and automatically flushed when the handler returns or another
-		// service info is to be sent.
-		//
-		// If the FSIM handler returns an error then the pipe will be closed
-		// with an error, causing the error to propagate to the chunk reader,
-		// which is used in the ServiceInfo send loop.
-		//
-		// The FSIM is handled in a goroutine, allowing service info to be read
-		// and processed in parallel, but sends are serialized via a channel
-		// letting it know when to start and indicate back when writing is
-		// complete.
-		readyToWrite := make(chan chan struct{})
-		writeChans = append(writeChans, readyToWrite)
-		go handleFSIM(ctx, fsim, moduleName, messageName, messageBody, send, mtu, readyToWrite)
-	}
-
-	// Synchronize writes by sending one done channel at a time and waiting for
-	// the receiver to send back done.
-	for _, nextWrite := range writeChans {
-		done := make(chan struct{})
-		select {
-		case <-ctx.Done():
-			return
-		case nextWrite <- done:
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-done:
-		}
-	}
-}
-
-func sendActive(ctx context.Context, moduleName string, active bool, fsim serviceinfo.Module, send *serviceinfo.UnchunkWriter) error {
-	if _, isUnknown := fsim.(serviceinfo.UnknownModule); isUnknown && moduleName != devmodModuleName {
-		active = false
-	}
-	if err := send.NextServiceInfo(moduleName, "active"); err != nil {
-		return err
-	}
-	if err := cbor.NewEncoder(send).Encode(active); err != nil {
-		return err
-	}
-	return nil
-}
-
-func handleFSIM(ctx context.Context, fsim serviceinfo.Module,
-	moduleName, messageName string, messageBody io.Reader,
-	send *serviceinfo.UnchunkWriter, mtu uint16, readyToWrite <-chan chan struct{},
-) {
-	var done chan<- struct{}
-	defer func() {
-		if done != nil {
-			close(done)
-		}
-	}()
-	buf := bufio.NewWriterSize(send, int(mtu))
-	if err := fsim.Receive(ctx, moduleName, messageName, messageBody, func(messageName string) io.Writer {
-		_ = buf.Flush()
-		// Drain messageBody and fail by closing writer with error if any
-		// body remains. This is to ensure that writes occur only after
-		// reads, thus allowing all service info to be read while response
-		// writers wait to be signaled to start writing.
-		if _, unsafe := fsim.(serviceinfo.UnsafeModule); !unsafe {
-			if n, err := io.Copy(io.Discard, messageBody); err != nil {
-				_ = send.CloseWithError(err)
-				return send
-			} else if n > 0 {
-				_ = send.CloseWithError(fmt.Errorf(
-					"fsim did not read full body of message '%s:%s'",
-					moduleName, messageName))
-				return send
-			}
-		}
-
-		// Wait on channel to synchronize response order
-		select {
-		case <-ctx.Done():
-			_ = send.CloseWithError(ctx.Err())
-			return send
-		case done = <-readyToWrite:
-		}
-
-		_ = send.NextServiceInfo(moduleName, messageName)
-		return buf
-	}); err != nil {
-		_ = send.CloseWithError(err)
-		return
-	}
-	if err := buf.Flush(); err != nil {
-		_ = send.CloseWithError(err)
-		return
-	}
-
-	// Ensure that buffer was drained, even if an unsafe module was used
-	if n, err := io.Copy(io.Discard, messageBody); err != nil {
-		_ = send.CloseWithError(err)
-		return
-	} else if n > 0 {
-		_ = send.CloseWithError(fmt.Errorf(
-			"fsim did not read full body of message '%s:%s'",
-			moduleName, messageName))
-		return
-	}
-}
-
-type fsimMap struct {
-	modules map[string]serviceinfo.Module
-	active  map[string]bool
-}
-
-func (fm fsimMap) Lookup(moduleName string) (fsim serviceinfo.Module, active bool) {
-	module, known := fm.modules[moduleName]
-	if !known {
-		module = serviceinfo.UnknownModule{}
-	}
-	return module, fm.active[moduleName]
-}
-
 type deviceServiceInfo struct {
 	IsMoreServiceInfo bool
 	ServiceInfo       []*serviceinfo.KV
+}
+
+func (info deviceServiceInfo) String() string {
+	return fmt.Sprintf("More: %t, Info: %v",
+		info.IsMoreServiceInfo, info.ServiceInfo)
 }
 
 type ownerServiceInfo struct {
 	IsMoreServiceInfo bool
 	IsDone            bool
 	ServiceInfo       []*serviceinfo.KV
+}
+
+func (info ownerServiceInfo) String() string {
+	return fmt.Sprintf("More: %t, Done: %t, Info: %v",
+		info.IsMoreServiceInfo, info.IsDone, info.ServiceInfo)
 }
 
 // Perform one iteration of send all device service info (may be across
@@ -1152,15 +1037,76 @@ func (s *Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*ownerSer
 		return nil, fmt.Errorf("error decoding TO2.DeviceServiceInfo request: %w", err)
 	}
 
-	// Print out all service info
-	for _, info := range deviceInfo.ServiceInfo {
-		fmt.Printf("Device service info: %+v\n", info)
+	// Handle data with FSIM
+	if s.mod == nil {
+		s.mod = s.modList.Next()
+	}
+	if s.mod == nil {
+		return &ownerServiceInfo{
+			IsMoreServiceInfo: false,
+			IsDone:            true,
+			ServiceInfo:       nil,
+		}, nil
+	}
+	unchunked, unchunker := serviceinfo.NewChunkInPipe(len(deviceInfo.ServiceInfo))
+	for _, kv := range deviceInfo.ServiceInfo {
+		if err := unchunker.WriteChunk(kv); err != nil {
+			return nil, fmt.Errorf("error unchunking received device service info: %w", err)
+		}
+	}
+	if err := unchunker.Close(); err != nil {
+		return nil, fmt.Errorf("error unchunking received device service info: %w", err)
+	}
+	for {
+		key, messageBody, ok := unchunked.NextServiceInfo()
+		if !ok {
+			break
+		}
+		moduleName, messageName, _ := strings.Cut(key, ":")
+		if err := s.mod.HandleInfo(ctx, moduleName, messageName, messageBody); err != nil {
+			return nil, fmt.Errorf("error handling device service info %q: %w", key, err)
+		}
+		// TODO: Check for unread body
+		if err := messageBody.Close(); err != nil {
+			return nil, fmt.Errorf("error closing unchunked message body for %q: %w", key, err)
+		}
+	}
+	if deviceInfo.IsMoreServiceInfo {
+		return &ownerServiceInfo{
+			IsMoreServiceInfo: false,
+			IsDone:            false,
+			ServiceInfo:       nil,
+		}, nil
 	}
 
+	return s.produceOwnerServiceInfo(ctx, s.mod, len(deviceInfo.ServiceInfo) == 0)
+}
+
+// Allow FSIM to produce data
+func (s *Server) produceOwnerServiceInfo(ctx context.Context, fsim serviceinfo.OwnerModule, lastDeviceInfoEmpty bool) (*ownerServiceInfo, error) {
+	mtu, err := s.ServiceInfo.MTU(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error getting max device service info size: %w", err)
+	}
+
+	producer := serviceinfo.NewProducer(mtu)
+	explicitBlock, isComplete, err := fsim.ProduceInfo(ctx, lastDeviceInfoEmpty, producer)
+	if err != nil {
+		return nil, fmt.Errorf("error producing owner service info from module: %w", err)
+	}
+	if isComplete {
+		s.mod = nil
+	}
+
+	if serviceinfo.ArraySizeCBOR(producer.ServiceInfo()) > int64(mtu) {
+		return nil, fmt.Errorf("owner service info module produced service info exceeding the MTU")
+	}
+
+	// Return chunked data
 	return &ownerServiceInfo{
-		IsMoreServiceInfo: false,
-		IsDone:            !deviceInfo.IsMoreServiceInfo,
-		ServiceInfo:       nil,
+		IsMoreServiceInfo: explicitBlock,
+		IsDone:            false,
+		ServiceInfo:       producer.ServiceInfo(),
 	}, nil
 }
 

@@ -131,7 +131,7 @@ func (c *Client) TransferOwnership1(ctx context.Context, baseURL string) (*cose.
 //
 // It has the side effect of performing FSIMs, which may include actions such
 // as downloading files.
-func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, to1d *cose.Sign1[To1d, []byte], fsims map[string]serviceinfo.Module) (*DeviceCredential, error) {
+func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, to1d *cose.Sign1[To1d, []byte], fsims map[string]serviceinfo.DeviceModule) (*DeviceCredential, error) {
 	ctx = contextWithErrMsg(ctx)
 
 	// Client configuraiton defaults
@@ -145,7 +145,7 @@ func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, to1d *c
 		c.MaxServiceInfoSizeReceive = serviceinfo.DefaultMTU
 	}
 	if fsims == nil {
-		fsims = make(map[string]serviceinfo.Module)
+		fsims = make(map[string]serviceinfo.DeviceModule)
 	}
 
 	// TODO: Validate key exchange options using table in 3.6.5

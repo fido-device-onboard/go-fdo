@@ -26,6 +26,7 @@ type State struct {
 	AutoExtend interface {
 		ExtendVoucher(*fdo.Voucher, crypto.PublicKey) (*fdo.Voucher, error)
 	}
+	PreserveReplacedVouchers bool
 }
 
 var _ fdo.VoucherPersistentState = (*State)(nil)
@@ -78,7 +79,9 @@ func (s *State) NewVoucher(_ context.Context, ov *fdo.Voucher) error {
 // ReplaceVoucher stores a new voucher, possibly deleting or marking the
 // previous voucher as replaced.
 func (s *State) ReplaceVoucher(_ context.Context, oldGUID fdo.GUID, ov *fdo.Voucher) error {
-	delete(s.Vouchers, oldGUID)
+	if !s.PreserveReplacedVouchers {
+		delete(s.Vouchers, oldGUID)
+	}
 	s.Vouchers[ov.Header.Val.GUID] = ov
 	return nil
 }

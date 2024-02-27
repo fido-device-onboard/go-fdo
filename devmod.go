@@ -5,7 +5,9 @@ package fdo
 
 import (
 	"bufio"
+	"context"
 	"fmt"
+	"io"
 	"reflect"
 	"strings"
 
@@ -156,11 +158,41 @@ type devmodModulesChunk struct {
 }
 
 func (c devmodModulesChunk) MarshalCBOR() ([]byte, error) {
-	arr := []interface{}{c.Start, c.Len}
+	arr := []any{c.Start, c.Len}
 	for _, name := range c.Modules {
 		arr = append(arr, name)
 	}
 	return cbor.Marshal(arr)
+}
+
+func (c *devmodModulesChunk) UnmarshalCBOR(data []byte) error {
+	var arr []any
+	if err := cbor.Unmarshal(data, &arr); err != nil {
+		return err
+	}
+	if len(arr) < 2 {
+		return fmt.Errorf("devmod modules info: must have 2 or more array elements")
+	}
+
+	start, ok := arr[0].(int64)
+	if !ok {
+		return fmt.Errorf("devmod modules info: first two elements must be numbers")
+	}
+	length, ok := arr[1].(int64)
+	if !ok {
+		return fmt.Errorf("devmod modules info: first two elements must be numbers")
+	}
+	c.Start, c.Len = int(start), int(length)
+
+	c.Modules = make([]string, len(arr)-2)
+	for i, v := range arr[2:] {
+		mod, ok := v.(string)
+		if !ok {
+			return fmt.Errorf("devmod modules info: modules must be strings")
+		}
+		c.Modules[i] = mod
+	}
+	return nil
 }
 
 func (d *Devmod) writeModuleMessages(modules []string, mtu uint16, w *serviceinfo.UnchunkWriter) error {
@@ -233,3 +265,53 @@ func (d *Devmod) writeModuleMessages(modules []string, mtu uint16, w *serviceinf
 type sizewriter int
 
 func (w *sizewriter) Write(p []byte) (int, error) { *w += sizewriter(len(p)); return len(p), nil }
+
+type devmodOwnerModule struct {
+	Devmod
+	Modules    []string
+	numModules int
+}
+
+func (d *devmodOwnerModule) HandleInfo(ctx context.Context, moduleName, messageName string, messageBody io.Reader) error {
+	if moduleName != devmodModuleName {
+		return fmt.Errorf("device must only send devmod as the first module: got %s:%s", moduleName, messageName)
+	}
+
+	switch messageName {
+	case "active":
+		var ignore bool
+		return cbor.NewDecoder(messageBody).Decode(&ignore)
+	case "nummodules":
+		return cbor.NewDecoder(messageBody).Decode(&d.numModules)
+	case "modules":
+		if d.Modules == nil {
+			d.Modules = make([]string, d.numModules)
+		}
+		var chunk devmodModulesChunk
+		if err := cbor.NewDecoder(messageBody).Decode(&chunk); err != nil {
+			return err
+		}
+		if chunk.Start < 0 || chunk.Len < 0 || chunk.Start+chunk.Len > d.numModules || len(chunk.Modules) != chunk.Len {
+			return fmt.Errorf("invalid devmod module chunk")
+		}
+		copy(d.Modules[chunk.Start:chunk.Start+chunk.Len], chunk.Modules)
+		return nil
+	}
+
+	dm := reflect.ValueOf(&d.Devmod).Elem()
+	for i := 0; i < dm.NumField(); i++ {
+		tag := dm.Type().Field(i).Tag.Get("devmod")
+		fieldMessageName, _, _ := strings.Cut(tag, ",")
+		if fieldMessageName != messageName {
+			continue
+		}
+		return cbor.NewDecoder(messageBody).Decode(dm.Field(i).Addr().Interface())
+	}
+
+	return fmt.Errorf("unknown devmod message name: %s", messageName)
+}
+
+func (d *devmodOwnerModule) ProduceInfo(_ context.Context, lastDeviceInfoEmpty bool, _ *serviceinfo.Producer) (bool, bool, error) {
+	// Produce nothing as an owner module
+	return false, lastDeviceInfoEmpty, nil
+}

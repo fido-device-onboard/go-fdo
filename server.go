@@ -5,8 +5,11 @@ package fdo
 
 import (
 	"context"
+	"crypto/x509"
 	"io"
 	"time"
+
+	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
 
 // Server implements business logic handling for all FDO protocols.
@@ -18,6 +21,7 @@ type Server struct {
 	Replacements VoucherReplacementState
 	KeyExchange  KeyExchangeState
 	Nonces       NonceState
+	ServiceInfo  ServiceInfoState
 
 	// Persistent state
 	Devices   VoucherPersistentState
@@ -25,6 +29,13 @@ type Server struct {
 
 	// Rendezvous directives
 	RvInfo [][]RvInstruction
+
+	// Start FSIMs for a given device
+	StartFSIMs func(_ context.Context, _ GUID, info string, chain []*x509.Certificate, _ Devmod, modules []string) serviceinfo.OwnerModuleList
+
+	// Server affinity state
+	mod     serviceinfo.OwnerModule
+	modList serviceinfo.OwnerModuleList
 
 	// Optional configuration
 	MaxDeviceServiceInfoSize uint16

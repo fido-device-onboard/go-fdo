@@ -47,6 +47,7 @@ type to2State struct {
 	KeyExchange keyExchange `cbor:",flat2"`
 	ProveDv     fdo.Nonce
 	SetupDv     fdo.Nonce
+	MTU         uint16
 }
 
 type keyExchange struct {
@@ -99,6 +100,7 @@ var _ fdo.VoucherProofState = (*Service)(nil)
 var _ fdo.VoucherReplacementState = (*Service)(nil)
 var _ fdo.KeyExchangeState = (*Service)(nil)
 var _ fdo.NonceState = (*Service)(nil)
+var _ fdo.ServiceInfoState = (*Service)(nil)
 
 // NewService initializes a stateless token service with a random HMAC secret
 // and self-signed CAs for the common key types.
@@ -427,4 +429,19 @@ func (s Service) ExtendVoucher(ov *fdo.Voucher, nextOwner crypto.PublicKey) (*fd
 	default:
 		return nil, fmt.Errorf("invalid public key type %T", nextOwner)
 	}
+}
+
+// SetMTU sets the max service info size the device may receive.
+func (s Service) SetMTU(ctx context.Context, mtu uint16) error {
+	return update[to2State](ctx, s, func(state *to2State) error {
+		state.MTU = mtu
+		return nil
+	})
+}
+
+// MTU returns the max service info size the device may receive.
+func (s Service) MTU(ctx context.Context) (uint16, error) {
+	return fetch[to2State, uint16](ctx, s, func(state to2State) (uint16, error) {
+		return state.MTU, nil
+	})
 }

@@ -8,7 +8,7 @@ import (
 	"io"
 )
 
-// A Module handles a single service info key's moduleName (key format:
+// A DeviceModule handles a single service info key's moduleName (key format:
 // "moduleName:messageName"). "active" messages are automatically handled and
 // do not result in a call to Receive method.
 //
@@ -33,7 +33,7 @@ import (
 //
 // Any error returned will cause an ErrorMessage to be sent and TO2 will fail.
 // If a warning should be logged, this must be done within the handler.
-type Module interface {
+type DeviceModule interface {
 	// Transition sets the state of the module to active or inactive. Receive
 	// and Respond will not be called unless Transition has been called at
 	// least once and with the last input of true. Transition, as such, is only
@@ -63,7 +63,7 @@ type Module interface {
 // exception is that devmod should always return active=true.
 type UnknownModule struct{}
 
-var _ Module = (*UnknownModule)(nil)
+var _ DeviceModule = (*UnknownModule)(nil)
 
 // Transition implements Module.
 func (m UnknownModule) Transition(bool) {}

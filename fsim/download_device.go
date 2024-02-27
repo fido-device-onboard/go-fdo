@@ -38,21 +38,21 @@ type Download struct {
 	written int
 }
 
-var _ serviceinfo.Module = (*Download)(nil)
+var _ serviceinfo.DeviceModule = (*Download)(nil)
 
 // Transition implements serviceinfo.Module.
 func (d *Download) Transition(active bool) { d.reset() }
 
 // Receive implements serviceinfo.Module.
 func (d *Download) Receive(ctx context.Context, moduleName, messageName string, messageBody io.Reader, respond func(string) io.Writer) error {
-	if err := d.receive(ctx, moduleName, messageName, messageBody, respond); err != nil {
+	if err := d.receive(moduleName, messageName, messageBody, respond); err != nil {
 		d.reset()
 		return err
 	}
 	return nil
 }
 
-func (d *Download) receive(ctx context.Context, moduleName, messageName string, messageBody io.Reader, respond func(string) io.Writer) error {
+func (d *Download) receive(moduleName, messageName string, messageBody io.Reader, respond func(string) io.Writer) error {
 	switch messageName {
 	case "length":
 		return cbor.NewDecoder(messageBody).Decode(&d.length)

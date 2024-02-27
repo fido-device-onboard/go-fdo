@@ -4,6 +4,7 @@
 package fdo_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -16,6 +17,7 @@ import (
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/blob"
 	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/fsim"
 	"github.com/fido-device-onboard/go-fdo/internal/memory"
 	"github.com/fido-device-onboard/go-fdo/internal/token"
 	"github.com/fido-device-onboard/go-fdo/kex"
@@ -32,6 +34,9 @@ func TestClient(t *testing.T) {
 		t.Fatal(err)
 	}
 	inMemory.AutoExtend = stateless
+	inMemory.PreserveReplacedVouchers = true
+
+	var fsims fsimList
 
 	server := &fdo.Server{
 		State:        stateless,
@@ -43,14 +48,13 @@ func TestClient(t *testing.T) {
 		ServiceInfo:  stateless,
 		Devices:      inMemory,
 		OwnerKeys:    inMemory,
-		StartFSIMs: func(ctx context.Context, guid fdo.GUID, info string, chain []*x509.Certificate,
-			devmod fdo.Devmod, modules []string) serviceinfo.OwnerModuleList {
-			return fsimList{}
+		StartFSIMs: func(context.Context, fdo.GUID, string, []*x509.Certificate, fdo.Devmod, []string) serviceinfo.OwnerModuleList {
+			return &fsims
 		},
 	}
 
 	cli := &fdo.Client{
-		Transport: &Transport{Responder: server},
+		Transport: &Transport{Responder: server, T: t},
 		Cred:      fdo.DeviceCredential{Version: 101},
 		Devmod: fdo.Devmod{
 			Os:      runtime.GOOS,
@@ -122,8 +126,35 @@ func TestClient(t *testing.T) {
 			PrivateKey:       blob.Pkcs8Key{PrivateKey: cli.Key},
 		})
 	})
+
+	t.Run("Transfer Ownership 2 - Download FSIM", func(t *testing.T) {
+		fsims = append(fsims, &fsim.DownloadContents[*bytes.Reader]{
+			Name:         "download.test",
+			Contents:     bytes.NewReader([]byte("Hello world!")),
+			MustDownload: true,
+		})
+		newCred, err := cli.TransferOwnership2(context.TODO(), "", nil, map[string]serviceinfo.DeviceModule{
+			"fdo.download": &fsim.Download{},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("New credential: %s", blob.DeviceCredential{
+			Active:           true,
+			DeviceCredential: *newCred,
+			HmacSecret:       []byte(cli.Hmac.(blob.Hmac)),
+			PrivateKey:       blob.Pkcs8Key{PrivateKey: cli.Key},
+		})
+	})
 }
 
 type fsimList []serviceinfo.OwnerModule
 
-func (fsimList) Next() serviceinfo.OwnerModule { return nil }
+func (list *fsimList) Next() serviceinfo.OwnerModule {
+	if list == nil || len(*list) == 0 {
+		return nil
+	}
+	head, tail := (*list)[0], (*list)[1:]
+	*list = tail
+	return head
+}

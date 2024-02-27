@@ -23,28 +23,28 @@ type Upload struct {
 	needSha bool
 }
 
-var _ serviceinfo.Module = (*Upload)(nil)
+var _ serviceinfo.DeviceModule = (*Upload)(nil)
 
 // Transition implements serviceinfo.Module.
 func (u *Upload) Transition(active bool) { u.reset() }
 
 // Receive implements serviceinfo.Module.
 func (u *Upload) Receive(ctx context.Context, moduleName, messageName string, messageBody io.Reader, respond func(string) io.Writer) error {
-	if err := u.receive(ctx, moduleName, messageName, messageBody, respond); err != nil {
+	if err := u.receive(moduleName, messageName, messageBody, respond); err != nil {
 		u.reset()
 		return err
 	}
 	return nil
 }
 
-func (u *Upload) receive(ctx context.Context, moduleName, messageName string, messageBody io.Reader, respond func(string) io.Writer) error {
+func (u *Upload) receive(moduleName, messageName string, messageBody io.Reader, respond func(string) io.Writer) error {
 	switch messageName {
 	case "name":
 		var name string
 		if err := cbor.NewDecoder(messageBody).Decode(&name); err != nil {
 			return err
 		}
-		return u.upload(ctx, name, respond)
+		return u.upload(name, respond)
 
 	case "need-sha":
 		return cbor.NewDecoder(messageBody).Decode(&u.needSha)
@@ -55,7 +55,7 @@ func (u *Upload) receive(ctx context.Context, moduleName, messageName string, me
 	}
 }
 
-func (u *Upload) upload(ctx context.Context, name string, respond func(string) io.Writer) error {
+func (u *Upload) upload(name string, respond func(string) io.Writer) error {
 	defer u.reset()
 
 	f, err := u.FS.Open(name)

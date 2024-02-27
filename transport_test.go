@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"testing"
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
@@ -20,6 +21,7 @@ type Transport struct {
 	Responder interface {
 		Respond(context.Context, string, uint8, io.Reader) (string, uint8, any)
 	}
+	T *testing.T
 
 	// internal state
 
@@ -38,7 +40,9 @@ func (t *Transport) Send(ctx context.Context, baseURL string, msgType uint8, msg
 		t.token = ""
 	}
 
+	t.T.Logf("Request %d: %v", msgType, msg)
 	newToken, respType, resp := t.Responder.Respond(ctx, t.token, msgType, &msgBody)
+	t.T.Logf("Response %d: %v", respType, resp)
 	t.token = newToken
 	t.prevMsg = msgType
 
