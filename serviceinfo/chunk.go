@@ -165,9 +165,13 @@ func (r *ChunkReader) ReadChunk(size uint16) (*KV, error) {
 		return nil, err
 	}
 
+	// Copy read bytes from the buffer into a new byte slice for the KV
+	val := make([]byte, n)
+	copy(val, r.buffer[:n])
+
 	return &KV{
 		Key: r.key,
-		Val: r.buffer[:n],
+		Val: val,
 	}, nil
 }
 
