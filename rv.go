@@ -72,5 +72,5 @@ type RvMedium uint8
 // RvInstruction contains a paired rendezvous variable identifier and value.
 type RvInstruction struct {
 	Variable RvVar
-	Value    []byte
+	Value    []byte `cbor:",omitempty"`
 }

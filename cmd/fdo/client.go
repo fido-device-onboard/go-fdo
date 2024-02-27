@@ -13,6 +13,7 @@ import (
 	"flag"
 	"fmt"
 	"io/fs"
+	mathrand "math/rand/v2"
 	"net"
 	"os"
 	"path/filepath"
@@ -235,7 +236,7 @@ func di(cli *fdo.Client) error {
 	cred, err := cli.DeviceInitialize(context.TODO(), diURL, fdo.DeviceMfgInfo{
 		KeyType:      fdo.Secp384r1KeyType, // Must match the key used to generate the CSR
 		KeyEncoding:  fdo.X5ChainKeyEnc,
-		SerialNumber: "123456",
+		SerialNumber: strconv.Itoa(mathrand.Int()),
 		DeviceInfo:   "gotest",
 		CertInfo:     cbor.X509CertificateRequest(*csr),
 	})
