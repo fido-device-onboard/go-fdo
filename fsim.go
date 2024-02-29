@@ -4,7 +4,6 @@
 package fdo
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -16,7 +15,9 @@ import (
 
 // Handle owner service info with FSIMs. This must be run in a goroutine,
 // because the chunking/unchunking pipes are not buffered.
-func handleFSIMs(ctx context.Context, mtu uint16, modules fsimMap, send *serviceinfo.UnchunkWriter, recv *serviceinfo.UnchunkReader) {
+func handleFSIMs(ctx context.Context, modules fsimMap, send *serviceinfo.UnchunkWriter, recv *serviceinfo.UnchunkReader) {
+	defer func() { _ = send.Close() }()
+
 	var writeChans []chan chan struct{}
 	for {
 		// Get next service info from the owner service and handle it.
@@ -73,7 +74,7 @@ func handleFSIMs(ctx context.Context, mtu uint16, modules fsimMap, send *service
 		// complete.
 		readyToWrite := make(chan chan struct{})
 		writeChans = append(writeChans, readyToWrite)
-		go handleFSIM(ctx, fsim, moduleName, messageName, messageBody, send, mtu, readyToWrite)
+		go handleFSIM(ctx, fsim, moduleName, messageName, messageBody, send, readyToWrite)
 	}
 
 	// Synchronize writes by sending one done channel at a time and waiting for
@@ -108,7 +109,7 @@ func sendActive(moduleName string, active bool, fsim serviceinfo.DeviceModule, s
 
 func handleFSIM(ctx context.Context, fsim serviceinfo.DeviceModule,
 	moduleName, messageName string, messageBody io.Reader,
-	send *serviceinfo.UnchunkWriter, mtu uint16, readyToWrite <-chan chan struct{},
+	send *serviceinfo.UnchunkWriter, readyToWrite <-chan chan struct{},
 ) {
 	var done chan<- struct{}
 	defer func() {
@@ -116,9 +117,7 @@ func handleFSIM(ctx context.Context, fsim serviceinfo.DeviceModule,
 			close(done)
 		}
 	}()
-	buf := bufio.NewWriterSize(send, int(mtu))
 	if err := fsim.Receive(ctx, moduleName, messageName, messageBody, func(messageName string) io.Writer {
-		_ = buf.Flush()
 		// Drain messageBody and fail by closing writer with error if any
 		// body remains. This is to ensure that writes occur only after
 		// reads, thus allowing all service info to be read while response
@@ -144,12 +143,8 @@ func handleFSIM(ctx context.Context, fsim serviceinfo.DeviceModule,
 		}
 
 		_ = send.NextServiceInfo(moduleName, messageName)
-		return buf
+		return send
 	}); err != nil {
-		_ = send.CloseWithError(err)
-		return
-	}
-	if err := buf.Flush(); err != nil {
 		_ = send.CloseWithError(err)
 		return
 	}

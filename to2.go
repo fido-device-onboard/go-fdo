@@ -853,7 +853,7 @@ func (c *Client) exchangeServiceInfo(ctx context.Context,
 		// The goroutine is started before sending DeviceServiceInfo, which
 		// writes to the owner service info (unbuffered) pipe.
 		modules := fsimMap{modules: fsims, active: make(map[string]bool)}
-		go handleFSIMs(ctx, mtu, modules, deviceServiceInfoIn, ownerServiceInfoOut)
+		go handleFSIMs(ctx, modules, deviceServiceInfoIn, ownerServiceInfoOut)
 
 		// Send all device service info and receive all owner service info into
 		// a buffered chan

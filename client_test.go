@@ -13,6 +13,7 @@ import (
 	"crypto/x509/pkix"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/blob"
@@ -133,7 +134,9 @@ func TestClient(t *testing.T) {
 			Contents:     bytes.NewReader([]byte("Hello world!")),
 			MustDownload: true,
 		})
-		newCred, err := cli.TransferOwnership2(context.TODO(), "", nil, map[string]serviceinfo.DeviceModule{
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		newCred, err := cli.TransferOwnership2(ctx, "", nil, map[string]serviceinfo.DeviceModule{
 			"fdo.download": &fsim.Download{},
 		})
 		if err != nil {

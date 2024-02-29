@@ -31,6 +31,12 @@ type Transport struct {
 
 // Send implements fdo.Transport.
 func (t *Transport) Send(ctx context.Context, baseURL string, msgType uint8, msg any, sess kex.Session) (uint8, io.ReadCloser, error) {
+	select {
+	case <-ctx.Done():
+		return 0, nil, ctx.Err()
+	default:
+	}
+
 	var msgBody bytes.Buffer
 	if err := cbor.NewEncoder(&msgBody).Encode(msg); err != nil {
 		return 0, nil, err

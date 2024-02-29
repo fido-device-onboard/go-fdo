@@ -4,7 +4,6 @@
 package fdo
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -112,17 +111,11 @@ func (d *Devmod) Write(modules []string, mtu uint16, w *serviceinfo.UnchunkWrite
 }
 
 func (d *Devmod) writeDescriptorMessages(w *serviceinfo.UnchunkWriter) error {
-	buf := bufio.NewWriter(w)
-	enc := cbor.NewEncoder(buf)
-
 	// Active must always be true
 	if err := w.NextServiceInfo(devmodModuleName, "active"); err != nil {
 		return err
 	}
-	if err := enc.Encode(true); err != nil {
-		return err
-	}
-	if err := buf.Flush(); err != nil {
+	if err := cbor.NewEncoder(w).Encode(true); err != nil {
 		return err
 	}
 
@@ -140,10 +133,7 @@ func (d *Devmod) writeDescriptorMessages(w *serviceinfo.UnchunkWriter) error {
 		if err := w.NextServiceInfo(devmodModuleName, messageName); err != nil {
 			return err
 		}
-		if err := enc.Encode(dm.Field(i).Interface()); err != nil {
-			return err
-		}
-		if err := buf.Flush(); err != nil {
+		if err := cbor.NewEncoder(w).Encode(dm.Field(i).Interface()); err != nil {
 			return err
 		}
 	}
@@ -196,26 +186,17 @@ func (c *devmodModulesChunk) UnmarshalCBOR(data []byte) error {
 }
 
 func (d *Devmod) writeModuleMessages(modules []string, mtu uint16, w *serviceinfo.UnchunkWriter) error {
-	buf := bufio.NewWriterSize(w, int(mtu))
-	enc := cbor.NewEncoder(buf)
-
 	writeChunk := func(chunk devmodModulesChunk) error {
 		if err := w.NextServiceInfo(devmodModuleName, "modules"); err != nil {
 			return err
 		}
-		if err := enc.Encode(chunk); err != nil {
-			return err
-		}
-		return buf.Flush()
+		return cbor.NewEncoder(w).Encode(chunk)
 	}
 
 	if err := w.NextServiceInfo(devmodModuleName, "nummodules"); err != nil {
 		return err
 	}
-	if err := enc.Encode(len(modules)); err != nil {
-		return err
-	}
-	if err := buf.Flush(); err != nil {
+	if err := cbor.NewEncoder(w).Encode(len(modules)); err != nil {
 		return err
 	}
 

@@ -154,8 +154,8 @@ func (r *ChunkReader) ReadChunk(size uint16) (*KV, error) {
 
 	// Read data, ensuring ServiceInfo will not be larger than size once
 	// marshaled to CBOR
-	n, err := r.r.Read(r.buffer[:size-maxOverhead])
-	if err == io.EOF {
+	n, err := io.ReadFull(r.r, r.buffer[:size-maxOverhead])
+	if err == io.EOF || err == io.ErrUnexpectedEOF {
 		r.r = nil
 		if n == 0 {
 			return r.ReadChunk(size)
