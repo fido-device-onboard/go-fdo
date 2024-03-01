@@ -1074,7 +1074,13 @@ func (s *Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*ownerSer
 		if err := s.mod.HandleInfo(ctx, moduleName, messageName, messageBody); err != nil {
 			return nil, fmt.Errorf("error handling device service info %q: %w", key, err)
 		}
-		// TODO: Check for unread body
+		if n, err := io.Copy(io.Discard, messageBody); err != nil {
+			return nil, err
+		} else if n > 0 {
+			return nil, fmt.Errorf(
+				"fsim did not read full body of message '%s:%s'",
+				moduleName, messageName)
+		}
 		if err := messageBody.Close(); err != nil {
 			return nil, fmt.Errorf("error closing unchunked message body for %q: %w", key, err)
 		}
