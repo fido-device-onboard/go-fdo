@@ -30,21 +30,21 @@ func (u *Upload) Transition(active bool) error { u.reset(); return nil }
 
 // Receive implements serviceinfo.Module.
 func (u *Upload) Receive(ctx context.Context, moduleName, messageName string, messageBody io.Reader, respond func(string) io.Writer, yield func()) error {
-	if err := u.receive(moduleName, messageName, messageBody, respond); err != nil {
+	if err := u.receive(moduleName, messageName, messageBody, respond, yield); err != nil {
 		u.reset()
 		return err
 	}
 	return nil
 }
 
-func (u *Upload) receive(moduleName, messageName string, messageBody io.Reader, respond func(string) io.Writer) error {
+func (u *Upload) receive(moduleName, messageName string, messageBody io.Reader, respond func(string) io.Writer, yield func()) error {
 	switch messageName {
 	case "name":
 		var name string
 		if err := cbor.NewDecoder(messageBody).Decode(&name); err != nil {
 			return err
 		}
-		if err := u.upload(name, respond); err != nil {
+		if err := u.upload(name, respond, yield); err != nil {
 			return fmt.Errorf("error uploading %q: %w", name, err)
 		}
 		return nil
@@ -58,7 +58,7 @@ func (u *Upload) receive(moduleName, messageName string, messageBody io.Reader, 
 	}
 }
 
-func (u *Upload) upload(name string, respond func(string) io.Writer) error {
+func (u *Upload) upload(name string, respond func(string) io.Writer, yield func()) error {
 	defer u.reset()
 
 	f, err := u.FS.Open(name)
@@ -74,6 +74,7 @@ func (u *Upload) upload(name string, respond func(string) io.Writer) error {
 	if err := cbor.NewEncoder(respond("length")).Encode(stat.Size()); err != nil {
 		return err
 	}
+	yield()
 
 	chunk := make([]byte, 1014)
 	hash := sha512.New384()
@@ -91,6 +92,7 @@ func (u *Upload) upload(name string, respond func(string) io.Writer) error {
 		if err := cbor.NewEncoder(respond("data")).Encode(chunk[:n]); err != nil {
 			return err
 		}
+		yield()
 	}
 
 	if !u.needSha {
