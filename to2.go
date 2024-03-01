@@ -836,7 +836,6 @@ func (c *Client) exchangeServiceInfo(ctx context.Context,
 	// Track active modules
 	modules := fsimMap{modules: fsims, active: make(map[string]bool)}
 
-ServiceInfoRounds:
 	// NOTE: done never changes, this is just to skip if devmod took 1e6 rounds
 	for !done {
 		// Handle received owner service info and produce zero or more service
@@ -851,40 +850,25 @@ ServiceInfoRounds:
 		// the owner service without it allowing the device to respond, the
 		// device will deadlock.
 		ownerInfo, ownerInfoIn = serviceinfo.NewChunkInPipe(1000)
-		firstRound := true
-		for {
-			var deviceInfo *serviceinfo.ChunkReader
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case info, ok := <-deviceInfoChan:
-				switch {
-				case firstRound && !ok:
-					noInfo, noInfoIn := serviceinfo.NewChunkOutPipe(0)
-					_ = noInfoIn.Close()
-					deviceInfo = noInfo
-				case ok:
-					deviceInfo = info
-				case !ok:
-					continue ServiceInfoRounds
-				}
-				firstRound = false
-			}
+		deviceInfo, ok := <-deviceInfoChan
+		if !ok {
+			noInfo, noInfoIn := serviceinfo.NewChunkOutPipe(0)
+			_ = noInfoIn.Close()
+			deviceInfo = noInfo
+		}
+		rounds, done, err := c.exchangeServiceInfoRound(ctx, baseURL, mtu, deviceInfo, ownerInfoIn, session)
+		if err != nil {
+			return err
+		}
+		totalRounds += rounds
 
-			rounds, done, err := c.exchangeServiceInfoRound(ctx, baseURL, mtu, deviceInfo, ownerInfoIn, session)
-			if err != nil {
-				_ = ownerInfoIn.CloseWithError(err)
-				return err
-			}
-			if done {
-				break ServiceInfoRounds
-			}
+		if done {
+			break
+		}
 
-			// Limit to 1e6 (1 million) rounds and fail TO2 if exceeded
-			totalRounds += rounds
-			if totalRounds >= 1_000_000 {
-				return fmt.Errorf("exceeded 1e6 rounds of service info exchange")
-			}
+		// Limit to 1e6 (1 million) rounds and fail TO2 if exceeded
+		if totalRounds >= 1_000_000 {
+			return fmt.Errorf("exceeded 1e6 rounds of service info exchange")
 		}
 
 		// If there is no ServiceInfo to send and the last owner response did

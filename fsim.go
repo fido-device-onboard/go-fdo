@@ -8,16 +8,10 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"sync"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
-
-type deviceFSIMSender struct {
-	Chan chan *serviceinfo.UnchunkWriter
-	Done chan struct{}
-}
 
 // Buffer service info send and receive queues. This buffer may grow
 // indefinitely if FSIMs are not well behaved. For example, if an owner service
@@ -44,21 +38,25 @@ type deviceFSIMSender struct {
 func handleFSIMs(ctx context.Context, modules fsimMap, ownerInfo *serviceinfo.UnchunkReader, deviceInfoChan chan<- *serviceinfo.ChunkReader) {
 	defer close(deviceInfoChan)
 
-	var senders []deviceFSIMSender
+	// 1000 service info buffered in and out means up to ~1MB of data for
+	// the default MTU. If both queues fill, the device will deadlock. This
+	// should only happen for a poorly behaved FSIM.
+	deviceInfo, send := serviceinfo.NewChunkOutPipe(1000)
+	select {
+	case <-ctx.Done():
+		return
+	case deviceInfoChan <- deviceInfo:
+	}
+
 	for {
 		// Get next service info from the owner service and handle it.
 		key, messageBody, ok := ownerInfo.NextServiceInfo()
+		fmt.Println(key, ok)
 		if !ok {
-			break
+			_ = send.Close()
+			return
 		}
 		moduleName, messageName, _ := strings.Cut(key, ":")
-
-		// Prepare the next synchronized (ordered, one at a time) sender
-		sender := deviceFSIMSender{
-			Chan: make(chan *serviceinfo.UnchunkWriter),
-			Done: make(chan struct{}),
-		}
-		senders = append(senders, sender)
 
 		// Automatically receive and respond to active messages. This send is
 		// expected to be buffered until all receives are processed, unlike
@@ -68,13 +66,15 @@ func handleFSIMs(ctx context.Context, modules fsimMap, ownerInfo *serviceinfo.Un
 		// expect in the real world.
 		fsim, active := modules.Lookup(moduleName)
 		if messageName == "active" {
-			nextActive := make(chan bool, 1)
-			go handleActive(ctx, active, nextActive, fsim, moduleName, messageBody, sender)
-			modules.active[moduleName] = <-nextActive
+			newActive, err := handleActive(active, fsim, moduleName, messageBody, send)
+			if err != nil {
+				_ = send.CloseWithError(err)
+				return
+			}
+			modules.active[moduleName] = newActive
 			continue
 		}
 		if !active {
-			close(sender.Done)
 			continue
 		}
 
@@ -85,174 +85,69 @@ func handleFSIMs(ctx context.Context, modules fsimMap, ownerInfo *serviceinfo.Un
 		// If the FSIM handler returns an error then the pipe will be closed
 		// with an error, causing the error to propagate to the chunk reader,
 		// which is used in the ServiceInfo send loop.
-		//
-		// The FSIM is handled in a goroutine, allowing service info to be read
-		// and processed in parallel, but sends are serialized via a channel
-		// letting it know when to start and indicate back when writing is
-		// complete.
-		//
-		// TODO: Add a semaphore to limit the max number of goroutines spawned
-		// at a given time?
-		go handleFSIM(ctx, fsim, moduleName, messageName, messageBody, sender)
-	}
-
-	// Synchronize writes by sending one done channel at a time and waiting for
-	// the receiver to send back done.
-	for _, sender := range senders {
-		_, prevSend := serviceinfo.NewChunkOutPipe(0)
-		for {
-			// 1000 service info buffered in and out means up to ~1MB of data for
-			// the default MTU. If both queues fill, the device will deadlock. This
-			// should only happen for a poorly behaved FSIM.
-			deviceInfo, send := serviceinfo.NewChunkOutPipe(1000)
-
-			select {
-			case <-ctx.Done():
-				_ = prevSend.CloseWithError(ctx.Err())
-				return
-
-			// Give the FSIM the current device info writer
-			case sender.Chan <- send:
-				_ = prevSend.Close()
-				prevSend = send
-
-				// Give the protocol back the device info reader
-				select {
-				case <-ctx.Done():
-					return
-				case deviceInfoChan <- deviceInfo:
-				}
-
-			// Sender may finish before needing another writer
-			case <-sender.Done:
-				_ = prevSend.Close()
-				return
-			}
+		if err := handleFSIM(ctx, fsim, moduleName, messageName, messageBody, send); err != nil {
+			_ = send.CloseWithError(err)
+			return
 		}
 	}
 }
 
-func handleActive(ctx context.Context, prevActive bool, nextActive chan<- bool, fsim serviceinfo.DeviceModule, moduleName string, messageBody io.Reader, sender deviceFSIMSender) {
-	defer close(sender.Done)
-
+func handleActive(prevActive bool, fsim serviceinfo.DeviceModule, moduleName string, messageBody io.Reader, send *serviceinfo.UnchunkWriter) (bool, error) {
 	// Receive active message of true or false
 	var active bool
-	err := cbor.NewDecoder(messageBody).Decode(&active)
+	if err := cbor.NewDecoder(messageBody).Decode(&active); err != nil {
+		return false, err
+	}
 	// Check err after getting sender
 	_, _ = io.Copy(io.Discard, messageBody)
-	nextActive <- active
-
-	// Wait for writer to be ready
-	var send *serviceinfo.UnchunkWriter
-	select {
-	case <-ctx.Done():
-		return
-	case send = <-sender.Chan:
-	}
-	if err != nil {
-		_ = send.CloseWithError(err)
-		return
-	}
 
 	// Transition internal state
 	if active != prevActive {
 		if err := fsim.Transition(active); err != nil {
-			_ = send.CloseWithError(err)
-			return
+			return false, err
 		}
 	}
 
 	// Send active message when appropriate
 	if !active || prevActive {
-		return
+		return active, nil
 	}
 	if _, isUnknown := fsim.(serviceinfo.UnknownModule); isUnknown && moduleName != devmodModuleName {
 		active = false
 	}
 	if err := send.NextServiceInfo(moduleName, "active"); err != nil {
-		_ = send.CloseWithError(err)
-		return
+		return false, err
 	}
 	if err := cbor.NewEncoder(send).Encode(active); err != nil {
-		_ = send.CloseWithError(err)
-		return
+		return false, err
 	}
+	return active, nil
 }
 
-func handleFSIM(ctx context.Context, fsim serviceinfo.DeviceModule,
-	moduleName, messageName string, messageBody io.Reader, sender deviceFSIMSender) {
-	defer close(sender.Done)
+func handleFSIM(ctx context.Context, fsim serviceinfo.DeviceModule, moduleName, messageName string, messageBody io.Reader, send *serviceinfo.UnchunkWriter) error {
+	// Construct respond/yield callback functions
+	respond := func(messageName string) io.Writer {
+		_ = send.NextServiceInfo(moduleName, messageName)
+		return send
+	}
+	yield := func() {
+		_ = send.ForceNewMessage()
+	}
 
-	// FIXME: Guarantee order
-	respond, yield, send := respondFns(ctx, fsim, moduleName, messageBody, sender)
+	// Handle message
 	if err := fsim.Receive(ctx, moduleName, messageName, messageBody, respond, yield); err != nil {
-		_ = send().CloseWithError(err)
-		return
+		return err
 	}
 
 	// Ensure that buffer was drained, even if an unsafe module was used
 	if n, err := io.Copy(io.Discard, messageBody); err != nil {
-		_ = send().CloseWithError(err)
-		return
+		return err
 	} else if n > 0 {
-		_ = send().CloseWithError(fmt.Errorf(
+		return fmt.Errorf(
 			"fsim did not read full body of message '%s:%s'",
-			moduleName, messageName))
-		return
+			moduleName, messageName)
 	}
-}
-
-func respondFns(ctx context.Context, fsim serviceinfo.DeviceModule, moduleName string, messageBody io.Reader, sender deviceFSIMSender) (
-	func(string) io.Writer,
-	func(),
-	func() *serviceinfo.UnchunkWriter,
-) {
-	var send *serviceinfo.UnchunkWriter
-	var once sync.Once
-	init := func() {
-		select {
-		case <-ctx.Done():
-			_, send = serviceinfo.NewChunkOutPipe(0)
-		case send = <-sender.Chan:
-		}
-	}
-
-	return func(messageName string) io.Writer {
-			// Wait on channel to synchronize response order
-			once.Do(init)
-			select {
-			case <-ctx.Done():
-				_, send = serviceinfo.NewChunkOutPipe(0)
-				_ = send.CloseWithError(ctx.Err())
-				return send
-			default:
-			}
-
-			// Drain messageBody and fail by closing writer with error if any
-			// body remains. This is to ensure that writes occur only after
-			// reads, thus allowing all service info to be read while response
-			// writers wait to be signaled to start writing.
-			if _, unsafe := fsim.(serviceinfo.UnsafeModule); !unsafe {
-				if n, err := io.Copy(io.Discard, messageBody); err != nil {
-					_ = send.CloseWithError(err)
-					return send
-				} else if n > 0 {
-					_ = send.CloseWithError(fmt.Errorf(
-						"fsim did not read full body of message '%s:%s'",
-						moduleName, messageName))
-					return send
-				}
-			}
-
-			_ = send.NextServiceInfo(moduleName, messageName)
-			return send
-		}, func() {
-			once.Do(init)
-			_ = send.ForceNewMessage()
-		}, func() *serviceinfo.UnchunkWriter {
-			once.Do(init)
-			return send
-		}
+	return nil
 }
 
 type fsimMap struct {

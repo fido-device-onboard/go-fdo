@@ -31,9 +31,10 @@ var MTUKey struct{}
 // implements UnsafeModule. Writing before fully consuming the reader will case
 // the writer to fail.
 //
-// Responses may not be sent immediately, as the receive queue in TO2 is
-// processed in parallel and must be completed, potentially across multiple
-// rounds of 68-69 messages, before sends may occur.
+// Responses may be queued and not sent immediately, as the receive queue in
+// TO2 may still be filling, potentially across multiple rounds of 68-69
+// messages. Sends only occur once the peer has stopped indicating
+// IsMoreServiceInfo.
 //
 // Any error returned will cause an ErrorMessage to be sent and TO2 will fail.
 // If a warning should be logged, this must be done within the handler.
@@ -85,18 +86,4 @@ func (m UnknownModule) Receive(_ context.Context, _, _ string, messageBody io.Re
 	// Ignore message and drain the body
 	_, _ = io.Copy(io.Discard, messageBody)
 	return nil
-}
-
-// UnsafeModule is optionally implemented by Modules in order to allow sending
-// service info before reading the entire body of the received message. Doing
-// so is unsafe, because the TO2 service info subprotocol lets each peer send
-// as many service info KVs as it wants before allowing the other to respond.
-//
-// If service info is not immediately consumed, then responses cannot be sent
-// over the wire, because the peer may have indicated IsMoreServiceInfo.
-// Service info sent from an UnsafeModule will be buffered, but the buffer is
-// not infinite, so the implementer must acknowledge that the implementation
-// may cause deadlocks (or out-of-memory errors).
-type UnsafeModule interface {
-	ThisModuleMayCauseDeadlocks()
 }
