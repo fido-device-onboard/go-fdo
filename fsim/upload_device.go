@@ -44,7 +44,10 @@ func (u *Upload) receive(moduleName, messageName string, messageBody io.Reader, 
 		if err := cbor.NewDecoder(messageBody).Decode(&name); err != nil {
 			return err
 		}
-		return u.upload(name, respond)
+		if err := u.upload(name, respond); err != nil {
+			return fmt.Errorf("error uploading %q: %w", name, err)
+		}
+		return nil
 
 	case "need-sha":
 		return cbor.NewDecoder(messageBody).Decode(&u.needSha)

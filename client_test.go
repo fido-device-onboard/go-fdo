@@ -13,6 +13,7 @@ import (
 	"crypto/x509/pkix"
 	"runtime"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/fido-device-onboard/go-fdo"
@@ -140,6 +141,32 @@ func TestClient(t *testing.T) {
 		defer cancel()
 		newCred, err := cli.TransferOwnership2(ctx, "", nil, map[string]serviceinfo.DeviceModule{
 			"fdo.download": &fsim.Download{},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("New credential: %s", blob.DeviceCredential{
+			Active:           true,
+			DeviceCredential: *newCred,
+			HmacSecret:       []byte(cli.Hmac.(blob.Hmac)),
+			PrivateKey:       blob.Pkcs8Key{PrivateKey: cli.Key},
+		})
+	})
+
+	t.Run("Transfer Ownership 2 - Upload FSIM", func(t *testing.T) {
+		fsims = append(fsims, &fsim.UploadRequest{
+			Dir:  ".",
+			Name: "bigfile.test",
+		})
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		newCred, err := cli.TransferOwnership2(ctx, "", nil, map[string]serviceinfo.DeviceModule{
+			"fdo.upload": &fsim.Upload{FS: fstest.MapFS{
+				"bigfile.test": &fstest.MapFile{
+					Data: bytes.Repeat([]byte("Hello World!\n"), 1024),
+					Mode: 0777,
+				},
+			}},
 		})
 		if err != nil {
 			t.Fatal(err)
