@@ -11,6 +11,7 @@ import (
 	"hash"
 	"io"
 	"os"
+	"time"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
@@ -27,6 +28,8 @@ type Download struct {
 	// the file after downloading to a temporary location.
 	NameToPath func(name string) string
 
+	// TODO: Configurable timeout?
+
 	// Message data
 	name   string
 	length int
@@ -41,18 +44,28 @@ type Download struct {
 var _ serviceinfo.DeviceModule = (*Download)(nil)
 
 // Transition implements serviceinfo.Module.
-func (d *Download) Transition(active bool) { d.reset() }
+func (d *Download) Transition(active bool) (err error) {
+	d.reset()
+
+	if d.CreateTemp != nil {
+		d.temp, err = d.CreateTemp()
+		return err
+	}
+
+	d.temp, err = os.CreateTemp("", "fdo.download_*")
+	return err
+}
 
 // Receive implements serviceinfo.Module.
-func (d *Download) Receive(ctx context.Context, moduleName, messageName string, messageBody io.Reader, respond func(string) io.Writer) error {
-	if err := d.receive(moduleName, messageName, messageBody, respond); err != nil {
+func (d *Download) Receive(ctx context.Context, moduleName, messageName string, messageBody io.Reader, respond func(string) io.Writer, yield func()) error {
+	if err := d.receive(ctx, moduleName, messageName, messageBody, respond, yield); err != nil {
 		d.reset()
 		return err
 	}
 	return nil
 }
 
-func (d *Download) receive(moduleName, messageName string, messageBody io.Reader, respond func(string) io.Writer) error {
+func (d *Download) receive(ctx context.Context, moduleName, messageName string, messageBody io.Reader, respond func(string) io.Writer, yield func()) error {
 	switch messageName {
 	case "length":
 		return cbor.NewDecoder(messageBody).Decode(&d.length)
@@ -61,26 +74,9 @@ func (d *Download) receive(moduleName, messageName string, messageBody io.Reader
 		return cbor.NewDecoder(messageBody).Decode(&d.sha384)
 
 	case "name":
-		if err := cbor.NewDecoder(messageBody).Decode(&d.name); err != nil {
-			return err
-		}
-		createTemp := d.CreateTemp
-		if createTemp == nil {
-			createTemp = func() (*os.File, error) {
-				return os.CreateTemp("", moduleName+"_*")
-			}
-		}
-		file, err := createTemp()
-		if err != nil {
-			return err
-		}
-		d.temp = file
-		return nil
+		return cbor.NewDecoder(messageBody).Decode(&d.name)
 
 	case "data":
-		if d.name == "" {
-			return fmt.Errorf("module %q did not receive a name before data", moduleName)
-		}
 		var chunk []byte
 		if err := cbor.NewDecoder(messageBody).Decode(&chunk); err != nil {
 			d.reset()
@@ -95,14 +91,14 @@ func (d *Download) receive(moduleName, messageName string, messageBody io.Reader
 		if d.written < d.length {
 			return nil
 		}
-		return d.finalize(respond)
+		return d.finalize(ctx, respond, yield)
 
 	default:
 		return fmt.Errorf("unknown message %s:%s", moduleName, messageName)
 	}
 }
 
-func (d *Download) finalize(respond func(string) io.Writer) error {
+func (d *Download) finalize(ctx context.Context, respond func(string) io.Writer, yield func()) error {
 	defer d.reset()
 
 	// Validate file length and checksum
@@ -117,6 +113,13 @@ func (d *Download) finalize(respond func(string) io.Writer) error {
 	resolveName := d.NameToPath
 	if resolveName == nil {
 		resolveName = func(name string) string { return name }
+	}
+	for d.name == "" {
+		yield()
+		select {
+		case <-ctx.Done():
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 	if err := os.Rename(d.temp.Name(), resolveName(d.name)); err != nil {
 		return cbor.NewEncoder(respond("done")).Encode(-1)

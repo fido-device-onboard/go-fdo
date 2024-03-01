@@ -328,11 +328,14 @@ func (w *UnchunkWriter) CloseWithError(err error) error {
 		return io.ErrClosedPipe
 	}
 	w.closed = true
-	close(w.readers)
 
 	if w.w == nil {
-		_, w.w = io.Pipe()
+		pr, pw := io.Pipe()
+		w.readers <- pr
+		w.w = pw
 	}
+
+	close(w.readers)
 	return w.w.CloseWithError(err)
 }
 

@@ -116,7 +116,9 @@ func TestClient(t *testing.T) {
 	})
 
 	t.Run("Transfer Ownership 2 - No FSIMs", func(t *testing.T) {
-		newCred, err := cli.TransferOwnership2(context.TODO(), "", nil, nil)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		newCred, err := cli.TransferOwnership2(ctx, "", nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -134,7 +136,7 @@ func TestClient(t *testing.T) {
 			Contents:     bytes.NewReader([]byte("Hello world!")),
 			MustDownload: true,
 		})
-		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		newCred, err := cli.TransferOwnership2(ctx, "", nil, map[string]serviceinfo.DeviceModule{
 			"fdo.download": &fsim.Download{},

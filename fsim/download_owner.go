@@ -27,9 +27,8 @@ type DownloadContents[T io.ReadSeeker] struct {
 	MustDownload bool
 
 	// internal state
-	prevMsg string
+	started bool
 	index   int64
-	sha384  [48]byte
 	done    bool
 }
 
@@ -77,84 +76,69 @@ func (d *DownloadContents[T]) ProduceInfo(ctx context.Context, lastDeviceInfoEmp
 
 	const moduleName = fdoDownloadModule
 
-	var messageName string
-	var messageBody []byte
-	switch d.prevMsg {
-	case "":
-		messageName = "active"
+	if d.started {
+		return d.sendData(moduleName, producer)
+	}
 
-		var err error
-		messageBody, err = cbor.Marshal(true)
+	// Hash contents and seek back to start
+	sha384 := sha512.New384()
+	length, err := io.Copy(sha384, d.Contents)
+	if err != nil {
+		return false, false, fmt.Errorf("error reading contents of %q: %w", d.Name, err)
+	}
+
+	messageVal := map[string]any{
+		"active":  true,
+		"name":    d.Name,
+		"length":  length,
+		"sha-384": sha384.Sum(nil)[:],
+	}
+	for _, messageName := range []string{"active", "name", "length", "sha-384"} {
+		messageBody, err := cbor.Marshal(messageVal[messageName])
 		if err != nil {
 			return false, false, err
 		}
 
-	case "active":
-		messageName = "name"
+		// Check that there's enough space to send the message
+		if len(messageBody) > producer.Available(moduleName, messageName) {
+			return false, false, fmt.Errorf("not enough buffer space to send non-data service info")
+		}
 
-		var err error
-		messageBody, err = cbor.Marshal(d.Name)
-		if err != nil {
+		// Write the message
+		if err := producer.WriteChunk(moduleName, messageName, messageBody); err != nil {
 			return false, false, err
 		}
+	}
 
-	case "name":
-		messageName = "length"
+	d.started = true
+	return false, false, nil
+}
 
-		// Hash contents and seek back to start
-		sha384 := sha512.New384()
-		n, err := io.Copy(sha384, d.Contents)
-		if err != nil {
-			return false, false, fmt.Errorf("error reading contents of %q: %w", d.Name, err)
-		}
-		sha384.Sum(d.sha384[:0])
-		if _, err := d.Contents.Seek(0, io.SeekStart); err != nil {
-			return false, false, fmt.Errorf("error seeking back to start of %q contents: %w", d.Name, err)
-		}
+func (d *DownloadContents[T]) sendData(moduleName string, producer *serviceinfo.Producer) (blockPeer, fsimDone bool, _ error) {
+	const messageName = "data"
 
-		messageBody, err = cbor.Marshal(n)
-		if err != nil {
-			return false, false, err
-		}
+	// Seek to and read chunk
+	if _, err := d.Contents.Seek(d.index, io.SeekStart); err != nil {
+		return false, false, fmt.Errorf("error seeking to next chunk of %q contents: %w", d.Name, err)
+	}
+	available := producer.Available(moduleName, messageName) - 3 // 3 for the possible length of the byte array
+	if available < 1 {
+		return false, false, fmt.Errorf("not enough buffer space to send data chunk service info")
+	}
+	chunk := make([]byte, min(available, 1014))
+	n, err := d.Contents.Read(chunk)
+	if err != nil && err != io.EOF {
+		return false, false, fmt.Errorf("error reading chunk of %q contents: %w", d.Name, err)
+	} else if n == 0 {
+		return false, false, nil
+	}
+	d.index += int64(n)
+	chunk = chunk[:n]
 
-	case "length":
-		messageName = "sha-384"
-
-		var err error
-		messageBody, err = cbor.Marshal(d.sha384)
-		if err != nil {
-			return false, false, err
-		}
-
-	case "sha-384", "data":
-		messageName = "data"
-
-		// Seek to and read chunk
-		if _, err := d.Contents.Seek(d.index, io.SeekStart); err != nil {
-			return false, false, fmt.Errorf("error seeking to next chunk of %q contents: %w", d.Name, err)
-		}
-		available := producer.Available(moduleName, messageName) - 3 // 3 for the possible length of the byte array
-		if available < 1 {
-			break
-		}
-		chunk := make([]byte, min(available, 1014))
-		if n, err := d.Contents.Read(chunk); err != nil && err != io.EOF {
-			return false, false, fmt.Errorf("error reading chunk of %q contents: %w", d.Name, err)
-		} else if n == 0 {
-			return false, false, nil
-		} else {
-			d.index += int64(n)
-			chunk = chunk[:n]
-		}
-
-		var err error
-		messageBody, err = cbor.Marshal(chunk)
-		if err != nil {
-			return false, false, err
-		}
-
-	default:
-		panic("Programming error - set invalid previous message name")
+	// Marshal chunk
+	messageBody, err := cbor.Marshal(chunk)
+	if err != nil {
+		return false, false, err
 	}
 
 	// Check that there's enough space to send the message
@@ -163,6 +147,5 @@ func (d *DownloadContents[T]) ProduceInfo(ctx context.Context, lastDeviceInfoEmp
 	}
 
 	// Write the message
-	d.prevMsg = messageName
 	return false, false, producer.WriteChunk(moduleName, messageName, messageBody)
 }

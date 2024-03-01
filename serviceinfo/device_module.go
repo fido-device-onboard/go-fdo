@@ -8,6 +8,10 @@ import (
 	"io"
 )
 
+// MTUKey is the context key for the uint16 MTU value. See the description of
+// DeviceModule.Receive.
+var MTUKey struct{}
+
 // A DeviceModule handles a single service info key's moduleName (key format:
 // "moduleName:messageName"). "active" messages are automatically handled and
 // do not result in a call to Receive method.
@@ -38,7 +42,7 @@ type DeviceModule interface {
 	// and Respond will not be called unless Transition has been called at
 	// least once and with the last input of true. Transition, as such, is only
 	// a callback to allow setting up/tearing down state.
-	Transition(active bool)
+	Transition(active bool) error
 
 	// Receive handles received service info. When any message is received
 	// multiple times, the values will automatically be concatenated. For
@@ -52,7 +56,15 @@ type DeviceModule interface {
 	// of writes into a single KV, so each Write will result in at least one
 	// service info KV being sent (possibly in a larger group of KVs per FDO
 	// message).
-	Receive(ctx context.Context, moduleName, messageName string, messageBody io.Reader, respond func(message string) io.Writer) error
+	//
+	// The yield callback will cause the next service info to be sent in a new
+	// message, regardless of how much space is left in the current device
+	// service info array.
+	//
+	// For manual chunking using yield, it may be desirable to know the MTU.
+	// The full negotiated MTU (not the current space left from the MTU) can be
+	// acquired from `ctx.Value(serviceinfo.MTUKey).(uint16)`.
+	Receive(ctx context.Context, moduleName, messageName string, messageBody io.Reader, respond func(message string) io.Writer, yield func()) error
 }
 
 // UnknownModule handles receiving and responding to service info for an
@@ -66,10 +78,10 @@ type UnknownModule struct{}
 var _ DeviceModule = (*UnknownModule)(nil)
 
 // Transition implements Module.
-func (m UnknownModule) Transition(bool) {}
+func (m UnknownModule) Transition(bool) error { return nil }
 
 // Receive implements Module.
-func (m UnknownModule) Receive(_ context.Context, _, _ string, messageBody io.Reader, _ func(string) io.Writer) error {
+func (m UnknownModule) Receive(_ context.Context, _, _ string, messageBody io.Reader, _ func(string) io.Writer, _ func()) error {
 	// Ignore message and drain the body
 	_, _ = io.Copy(io.Discard, messageBody)
 	return nil

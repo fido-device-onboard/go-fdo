@@ -796,7 +796,6 @@ type done2Msg struct {
 }
 
 // loop[DeviceServiceInfo(68) -> OwnerServiceInfo(69)]
-// Done(70) -> Done2(71)
 func (c *Client) exchangeServiceInfo(ctx context.Context,
 	baseURL string,
 	proveDvNonce, setupDvNonce Nonce,
@@ -815,52 +814,77 @@ func (c *Client) exchangeServiceInfo(ctx context.Context,
 	// Subtract 3 bytes from MTU to account for a CBOR header indicating "array
 	// of 256-65535 items" and 2 more bytes for "array of two" plus the first
 	// item indicating "IsMoreServiceInfo"
+	// TODO: Should this only be 3?
 	mtu -= 5
 
-	// TODO: Limit to 1e6 (1 million) rounds and fail TO2 if exceeded
-	deviceServiceInfoOut := initInfo
-	for {
-		// Buffer service info send and receive queues. This buffer may grow
-		// indefinitely if FSIMs are not well behaved. For example, if an owner
-		// service sends 100s of upload requests, the requests will be
-		// processed as they are received and may fill up the send buffer until
-		// the device is out of memory.
-		//
-		// While in this case, it may seem obvious that the upload requests
-		// should be buffered and then processed rather than handled
-		// sequentially, it would be equally unsafe to implement this behavior,
-		// because the request buffer may also grow past the MTU if
-		// IsMoreServiceInfo is used, keeping the device from processing its
-		// received service info.
-		//
-		// In the end, there's no general way to exchange arbitrary data
-		// between two parties where each piece of data one party receives may
-		// cause it to put any number of pieces of data on its send queue and
-		// the other party gets to choose when it may flush its queue.
-		//
-		// Buffering both queues and relying on good behavior of FSIMs is the
-		// best and only real option. Both queues should be buffered because
-		// there can be an asymmetric use of queues in either direction. Many
-		// file upload requests results in a small device receive queue and
-		// large device send queue. Many file downloads result in the opposite.
+	// 1000 service info buffered in and out means up to ~1MB of data for
+	// the default MTU. If both queues fill, the device will deadlock. This
+	// should only happen for a poorly behaved FSIM.
+	ownerInfo, ownerInfoIn := serviceinfo.NewChunkInPipe(1000)
 
-		// 1000 service info buffered in and out means up to ~1MB of data for
-		// the default MTU. If both queues fill, the device will deadlock. This
-		// should only happen for a poorly behaved FSIM.
-		ownerServiceInfoOut, ownerServiceInfoIn := serviceinfo.NewChunkInPipe(1000)
-		nextDeviceServiceInfoOut, deviceServiceInfoIn := serviceinfo.NewChunkOutPipe(1000)
+	// Send initial device info (devmod)
+	totalRounds, done, err := c.exchangeServiceInfoRound(ctx, baseURL, mtu, initInfo, ownerInfoIn, session)
+	if err != nil {
+		return fmt.Errorf("error sending devmod: %w", err)
+	}
 
-		// The goroutine is started before sending DeviceServiceInfo, which
-		// writes to the owner service info (unbuffered) pipe.
-		modules := fsimMap{modules: fsims, active: make(map[string]bool)}
-		go handleFSIMs(ctx, modules, deviceServiceInfoIn, ownerServiceInfoOut)
+	// Limit to 1e6 (1 million) rounds and fail TO2 if exceeded
+	if totalRounds >= 1_000_000 {
+		return fmt.Errorf("exceeded 1e6 rounds of service info exchange")
+	}
+
+	// Track active modules
+	modules := fsimMap{modules: fsims, active: make(map[string]bool)}
+
+ServiceInfoRounds:
+	// NOTE: done never changes, this is just to skip if devmod took 1e6 rounds
+	for !done {
+		// Handle received owner service info and produce zero or more service
+		// info to send. Each service info grouping is automatically chunked
+		// and if it exceeds the MTU will have IsMoreServiceInfo=true.
+		deviceInfoChan := make(chan *serviceinfo.ChunkReader)
+		ctxWithMTU := context.WithValue(ctx, serviceinfo.MTUKey, mtu)
+		go handleFSIMs(ctxWithMTU, modules, ownerInfo, deviceInfoChan)
 
 		// Send all device service info and receive all owner service info into
-		// a buffered chan
-		done, err := c.exchangeServiceInfoRound(ctx, baseURL, mtu, deviceServiceInfoOut, ownerServiceInfoIn, session)
-		if err != nil {
-			_ = ownerServiceInfoIn.CloseWithError(err)
-			return err
+		// a buffered pipe. Note that if >1000 service info are received from
+		// the owner service without it allowing the device to respond, the
+		// device will deadlock.
+		ownerInfo, ownerInfoIn = serviceinfo.NewChunkInPipe(1000)
+		firstRound := true
+		for {
+			var deviceInfo *serviceinfo.ChunkReader
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case info, ok := <-deviceInfoChan:
+				switch {
+				case firstRound && !ok:
+					noInfo, noInfoIn := serviceinfo.NewChunkOutPipe(0)
+					_ = noInfoIn.Close()
+					deviceInfo = noInfo
+				case ok:
+					deviceInfo = info
+				case !ok:
+					continue ServiceInfoRounds
+				}
+				firstRound = false
+			}
+
+			rounds, done, err := c.exchangeServiceInfoRound(ctx, baseURL, mtu, deviceInfo, ownerInfoIn, session)
+			if err != nil {
+				_ = ownerInfoIn.CloseWithError(err)
+				return err
+			}
+			if done {
+				break ServiceInfoRounds
+			}
+
+			// Limit to 1e6 (1 million) rounds and fail TO2 if exceeded
+			totalRounds += rounds
+			if totalRounds >= 1_000_000 {
+				return fmt.Errorf("exceeded 1e6 rounds of service info exchange")
+			}
 		}
 
 		// If there is no ServiceInfo to send and the last owner response did
@@ -870,17 +894,13 @@ func (c *Client) exchangeServiceInfo(ctx context.Context,
 		//
 		// TODO: Wait a few seconds if no service info was sent or received in
 		// the last round.
-
-		// Stop loop only once owner indicates it is done
-		if done {
-			break
-		}
-
-		// Set the device service info to send on the next loop iteration
-		// (populated by the goroutine in this iteration)
-		deviceServiceInfoOut = nextDeviceServiceInfoOut
 	}
 
+	return c.done(ctx, baseURL, proveDvNonce, setupDvNonce, session)
+}
+
+// Done(70) -> Done2(71)
+func (c *Client) done(ctx context.Context, baseURL string, proveDvNonce, setupDvNonce Nonce, session kex.Session) error {
 	// Finalize TO2 by sending Done message
 	msg := doneMsg{
 		NonceTO2ProveDv: proveDvNonce,
@@ -944,9 +964,12 @@ func (info ownerServiceInfo) String() string {
 
 // Perform one iteration of send all device service info (may be across
 // multiple FDO messages) and receive all owner service info (same applies).
+//
+// TODO: Track current round number and stop at 1e6 rather than only checking
+// if exceeded after this recursive function completes.
 func (c *Client) exchangeServiceInfoRound(ctx context.Context, baseURL string, mtu uint16,
 	r *serviceinfo.ChunkReader, w *serviceinfo.ChunkWriter, session kex.Session,
-) (bool, error) {
+) (int, bool, error) {
 	// Create DeviceServiceInfo request structure
 	var msg deviceServiceInfo
 	maxRead := mtu
@@ -956,14 +979,14 @@ func (c *Client) exchangeServiceInfoRound(ctx context.Context, baseURL string, m
 			break
 		}
 		if errors.Is(err, serviceinfo.ErrSizeTooSmall) {
-			if maxRead == mtu {
-				return false, fmt.Errorf("MTU too small to send ServiceInfo: malicious large key string?")
-			}
 			msg.IsMoreServiceInfo = true
+			if maxRead == mtu {
+				msg.IsMoreServiceInfo = false // likely due to a yield... but also could be a malicious large key?
+			}
 			break
 		}
 		if err != nil {
-			return false, fmt.Errorf("error reading KV to send to owner: %w", err)
+			return 0, false, fmt.Errorf("error reading KV to send to owner: %w", err)
 		}
 		maxRead -= chunk.Size()
 		msg.ServiceInfo = append(msg.ServiceInfo, chunk)
@@ -972,28 +995,29 @@ func (c *Client) exchangeServiceInfoRound(ctx context.Context, baseURL string, m
 	// Send request
 	ownerServiceInfo, err := c.deviceServiceInfo(ctx, baseURL, msg, session)
 	if err != nil {
-		return false, err
+		return 0, false, err
 	}
 
 	// Receive all owner service info
 	for _, kv := range ownerServiceInfo.ServiceInfo {
 		if err := w.WriteChunk(kv); err != nil {
-			return false, fmt.Errorf("error piping owner service info to FSIM: %w", err)
+			return 0, false, fmt.Errorf("error piping owner service info to FSIM: %w", err)
 		}
 	}
 
 	// Recurse when there's more service info to send from device or receive
 	// from owner without allowing the other side to respond
 	if msg.IsMoreServiceInfo || ownerServiceInfo.IsMoreServiceInfo {
-		return c.exchangeServiceInfoRound(ctx, baseURL, mtu, r, w, session)
+		rounds, done, err := c.exchangeServiceInfoRound(ctx, baseURL, mtu, r, w, session)
+		return rounds + 1, done, err
 	}
 
 	// If no more owner service info, close the pipe
 	if err := w.Close(); err != nil {
-		return false, fmt.Errorf("error closing owner service info -> FSIM pipe: %w", err)
+		return 0, false, fmt.Errorf("error closing owner service info -> FSIM pipe: %w", err)
 	}
 
-	return ownerServiceInfo.IsDone, nil
+	return 1, ownerServiceInfo.IsDone, nil
 }
 
 // DeviceServiceInfo(68) -> OwnerServiceInfo(69)
