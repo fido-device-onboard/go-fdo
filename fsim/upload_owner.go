@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha512"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -87,14 +88,18 @@ func (u *UploadRequest) HandleInfo(ctx context.Context, moduleName, messageName 
 			return fmt.Errorf("error creating temp file for upload of %q: %w", u.Name, err)
 		}
 		var chunk []byte
-		if err := cbor.NewDecoder(messageBody).Decode(&chunk); err != nil {
-			return fmt.Errorf("error decoding message %s:%s: %w", moduleName, messageName, err)
+		for {
+			if err := cbor.NewDecoder(messageBody).Decode(&chunk); errors.Is(err, io.EOF) {
+				break
+			} else if err != nil {
+				return fmt.Errorf("error decoding message %s:%s: %w", moduleName, messageName, err)
+			}
+			n, err := io.MultiWriter(u.temp, u.hash).Write(chunk)
+			if err != nil {
+				return fmt.Errorf("error writing upload data chunk of %q: %w", u.Name, err)
+			}
+			u.written += int64(n)
 		}
-		n, err := io.MultiWriter(u.temp, u.hash).Write(chunk)
-		if err != nil {
-			return fmt.Errorf("error writing upload data chunk of %q: %w", u.Name, err)
-		}
-		u.written += int64(n)
 		return nil
 
 	case "sha-384":
