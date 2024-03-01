@@ -27,10 +27,12 @@ import (
 var serverFlags = flag.NewFlagSet("server", flag.ContinueOnError)
 
 var (
-	addr      string
-	extAddr   string
-	rvBypass  bool
-	downloads stringList
+	addr       string
+	extAddr    string
+	rvBypass   bool
+	downloads  stringList
+	uploadDir  string
+	uploadReqs stringList
 )
 
 type stringList []string
@@ -50,6 +52,8 @@ func init() {
 	serverFlags.StringVar(&addr, "http", "localhost:8080", "The `addr`ess to listen on")
 	serverFlags.BoolVar(&rvBypass, "rv-bypass", false, "Skip TO1")
 	serverFlags.Var(&downloads, "download", "Use fdo.download FSIM for each `file` (flag may be used multiple times)")
+	serverFlags.StringVar(&uploadDir, "upload-dir", "uploads", "The directory `path` to put file uploads")
+	serverFlags.Var(&uploadReqs, "upload", "Use fdo.upload FSIM for each `file` (flag may be used multiple times)")
 }
 
 func server() error {
@@ -102,6 +106,12 @@ func server() error {
 			Name:         name,
 			Contents:     f,
 			MustDownload: true,
+		})
+	}
+	for _, name := range uploadReqs {
+		list = append(list, &fsim.UploadRequest{
+			Dir:  uploadDir,
+			Name: name,
 		})
 	}
 

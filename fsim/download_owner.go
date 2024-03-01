@@ -41,6 +41,7 @@ func (d *DownloadContents[T]) HandleInfo(ctx context.Context, moduleName, messag
 	}
 	switch messageName {
 	case "active":
+		// TODO: Check that active is true
 		var ignore bool
 		if err := cbor.NewDecoder(messageBody).Decode(&ignore); err != nil {
 			return fmt.Errorf("error decoding message %s:%s: %w", moduleName, messageName, err)

@@ -72,14 +72,22 @@ func (u *Upload) upload(name string, respond func(string) io.Writer) error {
 		return err
 	}
 
+	chunk := make([]byte, 1014)
 	hash := sha512.New384()
 	for i := stat.Size(); i > 0; {
-		w := io.MultiWriter(respond("data"), hash)
-		n, err := io.CopyN(w, f, min(1014, i))
+		n, err := f.Read(chunk[:min(1014, i)])
 		if err != nil {
 			return err
 		}
-		i -= n
+		i -= int64(n)
+
+		if _, err := hash.Write(chunk[:n]); err != nil {
+			return err
+		}
+
+		if err := cbor.NewEncoder(respond("data")).Encode(chunk[:n]); err != nil {
+			return err
+		}
 	}
 
 	if !u.needSha {
