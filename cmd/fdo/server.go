@@ -8,12 +8,16 @@ import (
 	"crypto/x509"
 	"flag"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
+	"strings"
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/fsim"
 	transport "github.com/fido-device-onboard/go-fdo/http"
 	"github.com/fido-device-onboard/go-fdo/internal/memory"
 	"github.com/fido-device-onboard/go-fdo/internal/token"
@@ -23,16 +27,29 @@ import (
 var serverFlags = flag.NewFlagSet("server", flag.ContinueOnError)
 
 var (
-	addr     string
-	extAddr  string
-	rvBypass bool
+	addr      string
+	extAddr   string
+	rvBypass  bool
+	downloads stringList
 )
+
+type stringList []string
+
+func (list *stringList) Set(v string) error {
+	*list = append(*list, v)
+	return nil
+}
+
+func (list *stringList) String() string {
+	return fmt.Sprintf("[%s]", strings.Join(*list, ","))
+}
 
 func init() {
 	serverFlags.BoolVar(&debug, "debug", false, "Print HTTP contents")
 	serverFlags.StringVar(&extAddr, "ext-http", "", "External `addr`ess devices should connect to (default \"127.0.0.1:${LISTEN_PORT}\")")
 	serverFlags.StringVar(&addr, "http", "localhost:8080", "The `addr`ess to listen on")
 	serverFlags.BoolVar(&rvBypass, "rv-bypass", false, "Skip TO1")
+	serverFlags.Var(&downloads, "download", "Use fdo.download FSIM for each `file` (flag may be used multiple times)")
 }
 
 func server() error {
@@ -72,6 +89,22 @@ func server() error {
 		rvInfo[0] = append(rvInfo[0], fdo.RvInstruction{Variable: fdo.RVBypass})
 	}
 
+	// Prepare FSIMs
+	var list fsimList
+	for _, name := range downloads {
+		f, err := os.Open(name)
+		if err != nil {
+			log.Fatalf("error opening %q for download FSIM: %v", name, err)
+		}
+		defer func() { _ = f.Close() }()
+
+		list = append(list, &fsim.DownloadContents[*os.File]{
+			Name:         name,
+			Contents:     f,
+			MustDownload: true,
+		})
+	}
+
 	// Listen and serve
 	return (&http.Server{
 		Addr: addr,
@@ -95,7 +128,7 @@ func server() error {
 					fmt.Printf("Device info: %s\n", info)
 					fmt.Printf("Devmod: %s\n", devmod)
 					fmt.Printf("Modules: %v\n", modules)
-					return fsimList{}
+					return &list
 				},
 			},
 			Debug: debug,
@@ -113,4 +146,11 @@ func mustMarshal(v any) []byte {
 
 type fsimList []serviceinfo.OwnerModule
 
-func (fsimList) Next() serviceinfo.OwnerModule { return nil }
+func (list *fsimList) Next() serviceinfo.OwnerModule {
+	if list == nil || len(*list) == 0 {
+		return nil
+	}
+	head, tail := (*list)[0], (*list)[1:]
+	*list = tail
+	return head
+}

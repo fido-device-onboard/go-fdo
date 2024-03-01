@@ -51,7 +51,6 @@ func handleFSIMs(ctx context.Context, modules fsimMap, ownerInfo *serviceinfo.Un
 	for {
 		// Get next service info from the owner service and handle it.
 		key, messageBody, ok := ownerInfo.NextServiceInfo()
-		fmt.Println(key, ok)
 		if !ok {
 			_ = send.Close()
 			return
