@@ -138,7 +138,7 @@ func handleFSIM(ctx context.Context, fsim serviceinfo.DeviceModule, moduleName, 
 		return err
 	}
 
-	// Ensure that buffer was drained, even if an unsafe module was used
+	// Ensure that buffer was drained
 	if n, err := io.Copy(io.Discard, messageBody); err != nil {
 		return err
 	} else if n > 0 {
