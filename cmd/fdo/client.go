@@ -252,125 +252,68 @@ func di(cli *fdo.Client) error {
 	})
 }
 
-//nolint:gocyclo
 func transferOwnership(cli *fdo.Client, rvInfo [][]fdo.RvInstruction) *fdo.DeviceCredential {
-	// Try TO1 on each RVAddr only once
-	for _, directive := range rvInfo {
-		m := make(map[fdo.RvVar][]byte)
-		for _, instruction := range directive {
-			m[instruction.Variable] = instruction.Value
-		}
+	to1URLs, to2URLs := fdo.BaseHTTP(rvInfo)
 
-		// Check the protocol is HTTP
-		protVal, ok := m[fdo.RVProtocol]
-		if !ok {
-			fmt.Fprintf(os.Stderr, "Skipping RV directive with no protocol: %+v\n", m)
+	// Try TO1 on each address only once
+	var to1d *cose.Sign1[fdo.To1d, []byte]
+	for _, baseURL := range to1URLs {
+		var err error
+		to1d, err = cli.TransferOwnership1(context.TODO(), baseURL)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "TO1 failed for %q: %v\n", baseURL, err)
 			continue
 		}
-		var prot fdo.RvProt
-		if err := cbor.Unmarshal(protVal, &prot); err != nil {
-			fmt.Fprintf(os.Stderr, "error parsing protocol instruction value: %v\n", err)
-			fmt.Fprintf(os.Stderr, "Skipping RV directive with non-uint8 protocol value: %+v\n", m)
-			continue
-		}
-		if prot != fdo.RVProtHTTP {
-			fmt.Fprintf(os.Stderr, "Skipping non-HTTP RV directive: %+v\n", m)
-			continue
-		}
-
-		// Parse the RV server addr
-		dnsAddrVal, isDNS := m[fdo.RVDns]
-		var dnsAddr string
-		if isDNS {
-			if err := cbor.Unmarshal(dnsAddrVal, &dnsAddr); err != nil {
-				fmt.Fprintf(os.Stderr, "error parsing DNS instruction value: %v\n", err)
-				isDNS = false
-			}
-		}
-		ipAddrVal, isIP := m[fdo.RVIPAddress]
-		var ipAddr net.IP
-		if isIP {
-			if err := cbor.Unmarshal(ipAddrVal, &ipAddr); err != nil {
-				fmt.Fprintf(os.Stderr, "error parsing IP instruction value: %v\n", err)
-				isIP = false
-			}
-		}
-		portVal, hasPort := m[fdo.RVDevPort]
-		var port uint16
-		if hasPort {
-			if err := cbor.Unmarshal(portVal, &port); err != nil {
-				fmt.Fprintf(os.Stderr, "error parsing port instruction value: %v\n", err)
-				hasPort = false
-			}
-		}
-		if !hasPort {
-			port = 80
-		}
-
-		// Try DNS then IP
-		if !isDNS && !isIP {
-			fmt.Fprintf(os.Stderr, "Skipping RV directive with no IP or DNS instructions: %+v\n", m)
-			continue
-		}
-		var to1d *cose.Sign1[fdo.To1d, []byte]
-		var to2Addrs []fdo.RvTO2Addr
-		if _, ok := m[fdo.RVBypass]; ok {
-			// Support IP/DNS-based RV Bypass
-			to2Addr := fdo.RvTO2Addr{
-				Port:              port,
-				TransportProtocol: fdo.HTTPTransport,
-			}
-			if isDNS {
-				to2Addr.DNSAddress = &dnsAddr
-			} else {
-				to2Addr.IPAddress = &ipAddr
-			}
-			to2Addrs = []fdo.RvTO2Addr{to2Addr}
-		} else {
-			if isDNS {
-				baseURL := "http://" + net.JoinHostPort(dnsAddr, strconv.Itoa(int(port)))
-				var err error
-				to1d, err = cli.TransferOwnership1(context.TODO(), baseURL)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "error running TO1 on %q: %v\n", baseURL, err)
-					continue
-				}
-			}
-			if to1d == nil && isIP {
-				baseURL := "http://" + net.JoinHostPort(ipAddr.String(), strconv.Itoa(int(port)))
-				var err error
-				to1d, err = cli.TransferOwnership1(context.TODO(), baseURL)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "error running TO1 on %q: %v\n", baseURL, err)
-					continue
-				}
-			}
-			if to1d == nil {
-				fmt.Fprintf(os.Stderr, "Skipping TO1 directive with no found TO2 addrs: %+v\n", m)
+		break
+	}
+	if to1d != nil {
+		for _, to2Addr := range to1d.Payload.Val.RV {
+			var host string
+			switch {
+			case to2Addr.DNSAddress != nil:
+				host = *to2Addr.DNSAddress
+			case to2Addr.IPAddress != nil:
+				host = to2Addr.IPAddress.String()
+			default:
+				// invalid to1d: cannot have addr with null DNS and IP addresses
 				continue
 			}
-			to2Addrs = to1d.Payload.Val.RV
 
-			// Print TO2 addrs if RV-only
-			if rvOnly {
-				fmt.Printf("TO1 Blob: %+v\n", to1d.Payload.Val)
-				return nil
+			var scheme, port string
+			switch to2Addr.TransportProtocol {
+			case fdo.HTTPTransport:
+				scheme, port = "http://", "80"
+			case fdo.HTTPSTransport:
+				scheme, port = "https://", "443"
+			default:
+				continue
 			}
+			if to2Addr.Port != 0 {
+				port = strconv.Itoa(int(to2Addr.Port))
+			}
+
+			to2URLs = append(to2URLs, scheme+net.JoinHostPort(host, port))
 		}
+	}
 
-		// Try TO2
-		for _, addr := range to2Addrs {
-			newDC := transferOwnership2(cli, addr, to1d)
-			if newDC != nil {
-				return newDC
-			}
+	// Print TO2 addrs if RV-only
+	if rvOnly {
+		fmt.Printf("TO1 Blob: %+v\n", to1d.Payload.Val)
+		return nil
+	}
+
+	// Try TO2 on each address only once
+	for _, baseURL := range to2URLs {
+		newDC := transferOwnership2(cli, baseURL, to1d)
+		if newDC != nil {
+			return newDC
 		}
 	}
 
 	return nil
 }
 
-func transferOwnership2(cli *fdo.Client, addr fdo.RvTO2Addr, to1d *cose.Sign1[fdo.To1d, []byte]) *fdo.DeviceCredential {
+func transferOwnership2(cli *fdo.Client, baseURL string, to1d *cose.Sign1[fdo.To1d, []byte]) *fdo.DeviceCredential {
 	fsims := make(map[string]serviceinfo.DeviceModule)
 	if dlDir != "" {
 		fsims["fdo.download"] = &fsim.Download{
@@ -386,20 +329,6 @@ func transferOwnership2(cli *fdo.Client, addr fdo.RvTO2Addr, to1d *cose.Sign1[fd
 		}
 	}
 
-	var host string
-	switch {
-	case addr.DNSAddress != nil:
-		host = *addr.DNSAddress
-	case addr.IPAddress != nil:
-		host = addr.IPAddress.String()
-	default:
-		panic("invalid to1d: cannot have addr with null DNS and IP addresses")
-	}
-	port := addr.Port
-	if port == 0 {
-		port = 80
-	}
-	baseURL := "http://" + net.JoinHostPort(host, strconv.Itoa(int(port)))
 	cred, err := cli.TransferOwnership2(context.TODO(), baseURL, to1d, fsims)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "TO2 failed for %q: %v\n", baseURL, err)

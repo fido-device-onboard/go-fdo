@@ -3,6 +3,13 @@
 
 package fdo
 
+import (
+	"net"
+	"strconv"
+
+	"github.com/fido-device-onboard/go-fdo/cbor"
+)
+
 // Rendezvous Variables
 const (
 	RVDevOnly    RvVar = 0
@@ -73,4 +80,91 @@ type RvMedium uint8
 type RvInstruction struct {
 	Variable RvVar
 	Value    []byte `cbor:",omitempty"`
+}
+
+// BaseHTTP parses the valid HTTP and HTTPS URLs from the RV directives.
+//
+//nolint:gocyclo
+func BaseHTTP(rvInfo [][]RvInstruction) (to1URLs, to2URLs []string) {
+	for _, directive := range rvInfo {
+		m := make(map[RvVar][][]byte)
+		for _, instruction := range directive {
+			m[instruction.Variable] = append(m[instruction.Variable], instruction.Value)
+		}
+
+		// Check the protocol is HTTP(S)
+		var prot RvProt
+		if protVals := m[RVProtocol]; len(protVals) != 1 {
+			// no protocol or too many protocols
+			continue
+		} else if err := cbor.Unmarshal(protVals[0], &prot); err != nil {
+			// bad protocol
+			continue
+		}
+		if prot != RVProtHTTP && prot != RVProtHTTPS {
+			// non-HTTP(S)
+			continue
+		}
+
+		// Parse the RV server addr(s)
+		var dnsAddrs []string
+		for _, dnsAddrVal := range m[RVDns] {
+			var dnsAddr string
+			if err := cbor.Unmarshal(dnsAddrVal, &dnsAddr); err != nil {
+				// must be a string
+				continue
+			}
+			dnsAddrs = append(dnsAddrs, dnsAddr)
+		}
+		var ipAddrs []net.IP
+		for _, ipAddrVal := range m[RVIPAddress] {
+			var ipAddr net.IP
+			if err := cbor.Unmarshal(ipAddrVal, &ipAddr); err != nil || (ipAddr.To4() == nil && ipAddr.To16() == nil) {
+				// must be IPv4 or IPv6
+				continue
+			}
+			ipAddrs = append(ipAddrs, ipAddr)
+		}
+		var portNum uint16
+		switch portVals := m[RVDevPort]; len(portVals) {
+		case 0:
+			portNum = 80
+			if prot == RVProtHTTPS {
+				portNum = 443
+			}
+		case 1:
+			if err := cbor.Unmarshal(portVals[0], &portNum); err != nil {
+				// must be a valid number
+				continue
+			}
+		default:
+			// must have 0 or 1 port specified
+			continue
+		}
+
+		// Construct and collect URLs
+		scheme := "http://"
+		if prot == RVProtHTTPS {
+			scheme = "https://"
+		}
+		port := strconv.Itoa(int(portNum))
+		for _, host := range dnsAddrs {
+			url := scheme + net.JoinHostPort(host, port)
+			if _, rvBypass := m[RVBypass]; rvBypass {
+				to2URLs = append(to2URLs, url)
+			} else {
+				to1URLs = append(to1URLs, url)
+			}
+		}
+		for _, ip := range ipAddrs {
+			url := scheme + net.JoinHostPort(ip.String(), port)
+			if _, rvBypass := m[RVBypass]; rvBypass {
+				to2URLs = append(to2URLs, url)
+			} else {
+				to1URLs = append(to1URLs, url)
+			}
+		}
+	}
+
+	return to1URLs, to2URLs
 }
