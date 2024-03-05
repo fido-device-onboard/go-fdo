@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -93,28 +94,6 @@ func server() error {
 		rvInfo[0] = append(rvInfo[0], fdo.RvInstruction{Variable: fdo.RVBypass})
 	}
 
-	// Prepare FSIMs
-	var list fsimList
-	for _, name := range downloads {
-		f, err := os.Open(name)
-		if err != nil {
-			log.Fatalf("error opening %q for download FSIM: %v", name, err)
-		}
-		defer func() { _ = f.Close() }()
-
-		list = append(list, &fsim.DownloadContents[*os.File]{
-			Name:         name,
-			Contents:     f,
-			MustDownload: true,
-		})
-	}
-	for _, name := range uploadReqs {
-		list = append(list, &fsim.UploadRequest{
-			Dir:  uploadDir,
-			Name: name,
-		})
-	}
-
 	// Listen and serve
 	return (&http.Server{
 		Addr: addr,
@@ -134,10 +113,30 @@ func server() error {
 				RvInfo: rvInfo,
 
 				StartFSIMs: func(ctx context.Context, guid fdo.GUID, info string, chain []*x509.Certificate, devmod fdo.Devmod, modules []string) serviceinfo.OwnerModuleList {
-					fmt.Printf("GUID: %x\n", guid)
-					fmt.Printf("Device info: %s\n", info)
-					fmt.Printf("Devmod: %s\n", devmod)
-					fmt.Printf("Modules: %v\n", modules)
+					var list fsimList
+					if slices.Contains(modules, "fdo.download") {
+						for _, name := range downloads {
+							f, err := os.Open(name)
+							if err != nil {
+								log.Fatalf("error opening %q for download FSIM: %v", name, err)
+							}
+							defer func() { _ = f.Close() }()
+
+							list = append(list, &fsim.DownloadContents[*os.File]{
+								Name:         name,
+								Contents:     f,
+								MustDownload: true,
+							})
+						}
+					}
+					if slices.Contains(modules, "fdo.upload") {
+						for _, name := range uploadReqs {
+							list = append(list, &fsim.UploadRequest{
+								Dir:  uploadDir,
+								Name: name,
+							})
+						}
+					}
 					return &list
 				},
 			},
