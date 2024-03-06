@@ -14,7 +14,6 @@ import (
 	"net/http/httptest"
 	"net/http/httputil"
 	"os"
-	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -76,7 +75,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (h Handler) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// Parse message type from request URL
-	typ, err := strconv.ParseUint(path.Base(r.URL.Path), 10, 8)
+	typ, err := strconv.ParseUint(r.PathValue("msg"), 10, 8)
 	if err != nil {
 		h.error(w, 0, fmt.Errorf("invalid message type"))
 		return

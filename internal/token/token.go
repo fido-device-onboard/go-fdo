@@ -190,11 +190,11 @@ func NewService() (*Service, error) {
 func (s Service) NewToken(ctx context.Context, proto fdo.Protocol) (string, error) {
 	switch proto {
 	case fdo.DIProtocol:
-		return newToken[*diState, diState](s.HmacSecret)
+		return newToken[*diState](s.HmacSecret)
 	case fdo.TO1Protocol:
-		return newToken[*to1State, to1State](s.HmacSecret)
+		return newToken[*to1State](s.HmacSecret)
 	case fdo.TO2Protocol:
-		return newToken[*to2State, to2State](s.HmacSecret)
+		return newToken[*to2State](s.HmacSecret)
 	default:
 		return "", fmt.Errorf("unsupported protocol %s", proto)
 	}
@@ -258,7 +258,7 @@ func (s Service) NewDeviceCertChain(ctx context.Context, info fdo.DeviceMfgInfo)
 	chain := append([]*x509.Certificate{cert}, ca.Chain...)
 
 	// Update state with cert chain
-	if err := update[diState](ctx, s, func(state *diState) error {
+	if err := update(ctx, s, func(state *diState) error {
 		state.Chain = make([]*cbor.X509Certificate, len(chain))
 		for i, cert := range chain {
 			state.Chain[i] = (*cbor.X509Certificate)(cert)
@@ -274,7 +274,7 @@ func (s Service) NewDeviceCertChain(ctx context.Context, info fdo.DeviceMfgInfo)
 // DeviceCertChain gets a device certificate chain from the current
 // session.
 func (s Service) DeviceCertChain(ctx context.Context) ([]*x509.Certificate, error) {
-	return fetch[diState, []*x509.Certificate](ctx, s, func(state diState) ([]*x509.Certificate, error) {
+	return fetch(ctx, s, func(state diState) ([]*x509.Certificate, error) {
 		if len(state.Chain) == 0 {
 			return nil, errNotFound
 		}
@@ -289,7 +289,7 @@ func (s Service) DeviceCertChain(ctx context.Context) ([]*x509.Certificate, erro
 // SetIncompleteVoucherHeader stores an incomplete (missing HMAC) voucher
 // header tied to a session.
 func (s Service) SetIncompleteVoucherHeader(ctx context.Context, ovh *fdo.VoucherHeader) error {
-	return update[diState](ctx, s, func(state *diState) error {
+	return update(ctx, s, func(state *diState) error {
 		state.OVH = ovh
 		return nil
 	})
@@ -298,7 +298,7 @@ func (s Service) SetIncompleteVoucherHeader(ctx context.Context, ovh *fdo.Vouche
 // IncompleteVoucherHeader gets an incomplete (missing HMAC) voucher header
 // which has not yet been persisted.
 func (s Service) IncompleteVoucherHeader(ctx context.Context) (*fdo.VoucherHeader, error) {
-	return fetch[diState, *fdo.VoucherHeader](ctx, s, func(state diState) (*fdo.VoucherHeader, error) {
+	return fetch(ctx, s, func(state diState) (*fdo.VoucherHeader, error) {
 		if state.OVH == nil {
 			return nil, errNotFound
 		}
@@ -308,7 +308,7 @@ func (s Service) IncompleteVoucherHeader(ctx context.Context) (*fdo.VoucherHeade
 
 // SetGUID associates a voucher GUID with a TO2 session.
 func (s Service) SetGUID(ctx context.Context, guid fdo.GUID) error {
-	return update[to2State](ctx, s, func(state *to2State) error {
+	return update(ctx, s, func(state *to2State) error {
 		state.GUID = guid
 		return nil
 	})
@@ -316,14 +316,14 @@ func (s Service) SetGUID(ctx context.Context, guid fdo.GUID) error {
 
 // GUID retrieves the GUID of the voucher associated with the session.
 func (s Service) GUID(ctx context.Context) (fdo.GUID, error) {
-	return fetch[to2State, fdo.GUID](ctx, s, func(state to2State) (fdo.GUID, error) {
+	return fetch(ctx, s, func(state to2State) (fdo.GUID, error) {
 		return state.GUID, nil
 	})
 }
 
 // SetReplacementGUID stores the device GUID to persist at the end of TO2.
 func (s Service) SetReplacementGUID(ctx context.Context, guid fdo.GUID) error {
-	return update[to2State](ctx, s, func(state *to2State) error {
+	return update(ctx, s, func(state *to2State) error {
 		state.Replacement.GUID = guid
 		return nil
 	})
@@ -331,14 +331,14 @@ func (s Service) SetReplacementGUID(ctx context.Context, guid fdo.GUID) error {
 
 // ReplacementGUID retrieves the device GUID to persist at the end of TO2.
 func (s Service) ReplacementGUID(ctx context.Context) (fdo.GUID, error) {
-	return fetch[to2State, fdo.GUID](ctx, s, func(state to2State) (fdo.GUID, error) {
+	return fetch(ctx, s, func(state to2State) (fdo.GUID, error) {
 		return state.Replacement.GUID, nil
 	})
 }
 
 // SetReplacementHmac stores the voucher HMAC to persist at the end of TO2.
 func (s Service) SetReplacementHmac(ctx context.Context, hmac fdo.Hmac) error {
-	return update[to2State](ctx, s, func(state *to2State) error {
+	return update(ctx, s, func(state *to2State) error {
 		state.Replacement.Hmac = hmac
 		return nil
 	})
@@ -346,7 +346,7 @@ func (s Service) SetReplacementHmac(ctx context.Context, hmac fdo.Hmac) error {
 
 // ReplacementHmac retrieves the voucher HMAC to persist at the end of TO2.
 func (s Service) ReplacementHmac(ctx context.Context) (fdo.Hmac, error) {
-	return fetch[to2State, fdo.Hmac](ctx, s, func(state to2State) (fdo.Hmac, error) {
+	return fetch(ctx, s, func(state to2State) (fdo.Hmac, error) {
 		return state.Replacement.Hmac, nil
 	})
 }
@@ -354,7 +354,7 @@ func (s Service) ReplacementHmac(ctx context.Context) (fdo.Hmac, error) {
 // SetSession updates the current key exchange/encryption session based on an
 // opaque "authorization" token.
 func (s Service) SetSession(ctx context.Context, suite kex.Suite, sess kex.Session) error {
-	return update[to2State](ctx, s, func(state *to2State) error {
+	return update(ctx, s, func(state *to2State) error {
 		state.KeyExchange.Suite, state.KeyExchange.Sess = suite, sess
 		return nil
 	})
@@ -376,7 +376,7 @@ func (s Service) Session(ctx context.Context, token string) (kex.Suite, kex.Sess
 // SetProveDeviceNonce stores the Nonce used in TO2.ProveDevice for use in
 // TO2.Done.
 func (s Service) SetProveDeviceNonce(ctx context.Context, nonce fdo.Nonce) error {
-	return update[to2State](ctx, s, func(state *to2State) error {
+	return update(ctx, s, func(state *to2State) error {
 		state.ProveDv = nonce
 		return nil
 	})
@@ -384,7 +384,7 @@ func (s Service) SetProveDeviceNonce(ctx context.Context, nonce fdo.Nonce) error
 
 // ProveDeviceNonce returns the Nonce used in TO2.ProveDevice and TO2.Done.
 func (s Service) ProveDeviceNonce(ctx context.Context) (fdo.Nonce, error) {
-	return fetch[to2State, fdo.Nonce](ctx, s, func(state to2State) (fdo.Nonce, error) {
+	return fetch(ctx, s, func(state to2State) (fdo.Nonce, error) {
 		if state.ProveDv == (fdo.Nonce{}) {
 			return fdo.Nonce{}, errNotFound
 		}
@@ -395,7 +395,7 @@ func (s Service) ProveDeviceNonce(ctx context.Context) (fdo.Nonce, error) {
 // SetSetupDeviceNonce stores the Nonce used in TO2.SetupDevice for use in
 // TO2.Done2.
 func (s Service) SetSetupDeviceNonce(ctx context.Context, nonce fdo.Nonce) error {
-	return update[to2State](ctx, s, func(state *to2State) error {
+	return update(ctx, s, func(state *to2State) error {
 		state.SetupDv = nonce
 		return nil
 	})
@@ -403,7 +403,7 @@ func (s Service) SetSetupDeviceNonce(ctx context.Context, nonce fdo.Nonce) error
 
 // SetupDeviceNonce returns the Nonce used in TO2.SetupDevice and TO2.Done2.
 func (s Service) SetupDeviceNonce(ctx context.Context) (fdo.Nonce, error) {
-	return fetch[to2State, fdo.Nonce](ctx, s, func(state to2State) (fdo.Nonce, error) {
+	return fetch(ctx, s, func(state to2State) (fdo.Nonce, error) {
 		if state.SetupDv == (fdo.Nonce{}) {
 			return fdo.Nonce{}, errNotFound
 		}
@@ -433,7 +433,7 @@ func (s Service) ExtendVoucher(ov *fdo.Voucher, nextOwner crypto.PublicKey) (*fd
 
 // SetMTU sets the max service info size the device may receive.
 func (s Service) SetMTU(ctx context.Context, mtu uint16) error {
-	return update[to2State](ctx, s, func(state *to2State) error {
+	return update(ctx, s, func(state *to2State) error {
 		state.MTU = mtu
 		return nil
 	})
@@ -441,7 +441,7 @@ func (s Service) SetMTU(ctx context.Context, mtu uint16) error {
 
 // MTU returns the max service info size the device may receive.
 func (s Service) MTU(ctx context.Context) (uint16, error) {
-	return fetch[to2State, uint16](ctx, s, func(state to2State) (uint16, error) {
+	return fetch(ctx, s, func(state to2State) (uint16, error) {
 		return state.MTU, nil
 	})
 }
