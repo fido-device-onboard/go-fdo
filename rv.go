@@ -94,11 +94,17 @@ func BaseHTTP(rvInfo [][]RvInstruction) (to1URLs, to2URLs []string) {
 
 		// Check the protocol is HTTP(S)
 		var prot RvProt
-		if protVals := m[RVProtocol]; len(protVals) != 1 {
-			// no protocol or too many protocols
-			continue
-		} else if err := cbor.Unmarshal(protVals[0], &prot); err != nil {
-			// bad protocol
+		switch protVals := m[RVProtocol]; len(protVals) {
+		case 0:
+			// default to HTTPS
+			prot = RVProtHTTPS
+		case 1:
+			if err := cbor.Unmarshal(protVals[0], &prot); err != nil {
+				// bad protocol
+				continue
+			}
+		default:
+			// too many protocols
 			continue
 		}
 		if prot != RVProtHTTP && prot != RVProtHTTPS {
@@ -128,9 +134,9 @@ func BaseHTTP(rvInfo [][]RvInstruction) (to1URLs, to2URLs []string) {
 		var portNum uint16
 		switch portVals := m[RVDevPort]; len(portVals) {
 		case 0:
-			portNum = 80
-			if prot == RVProtHTTPS {
-				portNum = 443
+			portNum = 443
+			if prot == RVProtHTTP {
+				portNum = 80
 			}
 		case 1:
 			if err := cbor.Unmarshal(portVals[0], &portNum); err != nil {
@@ -143,9 +149,9 @@ func BaseHTTP(rvInfo [][]RvInstruction) (to1URLs, to2URLs []string) {
 		}
 
 		// Construct and collect URLs
-		scheme := "http://"
-		if prot == RVProtHTTPS {
-			scheme = "https://"
+		scheme := "https://"
+		if prot == RVProtHTTP {
+			scheme = "http://"
 		}
 		port := strconv.Itoa(int(portNum))
 		for _, host := range dnsAddrs {
