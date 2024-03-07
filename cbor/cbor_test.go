@@ -1,4 +1,4 @@
-// Copyright 2023 Intel Corporation
+// SPDX-FileCopyrightText: (C) 2024 Intel Corporation
 // SPDX-License-Identifier: Apache 2.0
 
 // Tests are partially adapted from https://github.com/r4gus/zbor/blob/0.12.2/src/cbor.zig
