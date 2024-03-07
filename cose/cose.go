@@ -1,4 +1,4 @@
-// Copyright 2023 Intel Corporation
+// SPDX-FileCopyrightText: (C) 2024 Intel Corporation
 // SPDX-License-Identifier: Apache 2.0
 
 // Package cose implements CBOR Object Signing and Encryption (COSE) defined in
