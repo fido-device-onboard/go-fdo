@@ -47,16 +47,9 @@ type Download struct {
 var _ serviceinfo.DeviceModule = (*Download)(nil)
 
 // Transition implements serviceinfo.Module.
-func (d *Download) Transition(active bool) (err error) {
+func (d *Download) Transition(active bool) error {
 	d.reset()
-
-	if d.CreateTemp != nil {
-		d.temp, err = d.CreateTemp()
-		return err
-	}
-
-	d.temp, err = os.CreateTemp("", "fdo.download_*")
-	return err
+	return nil
 }
 
 // Receive implements serviceinfo.Module.
@@ -80,6 +73,18 @@ func (d *Download) receive(moduleName, messageName string, messageBody io.Reader
 		return cbor.NewDecoder(messageBody).Decode(&d.name)
 
 	case "data":
+		if d.temp == nil {
+			var err error
+			if d.CreateTemp != nil {
+				d.temp, err = d.CreateTemp()
+			} else {
+				d.temp, err = os.CreateTemp("", "fdo.download_*")
+			}
+			if err != nil {
+				return fmt.Errorf("error creating temp file for download: %w", err)
+			}
+		}
+
 		var chunk []byte
 		if err := cbor.NewDecoder(messageBody).Decode(&chunk); err != nil {
 			d.reset()

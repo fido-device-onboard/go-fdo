@@ -8,7 +8,6 @@ import (
 	"crypto/sha512"
 	"fmt"
 	"io"
-	"os"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
@@ -32,7 +31,7 @@ type DownloadContents[T io.ReadSeeker] struct {
 	done    bool
 }
 
-var _ serviceinfo.OwnerModule = (*DownloadContents[*os.File])(nil)
+var _ serviceinfo.OwnerModule = (*DownloadContents[io.ReadSeekCloser])(nil)
 
 // HandleInfo implements serviceinfo.OwnerModule.
 func (d *DownloadContents[T]) HandleInfo(ctx context.Context, moduleName, messageName string, messageBody io.Reader) error {
@@ -49,6 +48,11 @@ func (d *DownloadContents[T]) HandleInfo(ctx context.Context, moduleName, messag
 		return nil
 
 	case "done":
+		defer func() {
+			if closer, ok := any(d.Contents).(io.Closer); ok {
+				_ = closer.Close()
+			}
+		}()
 		var errCode int64
 		if err := cbor.NewDecoder(messageBody).Decode(&errCode); err != nil {
 			return fmt.Errorf("error decoding message %s:%s: %w", moduleName, messageName, err)
