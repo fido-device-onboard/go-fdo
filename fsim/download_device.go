@@ -27,6 +27,10 @@ type Download struct {
 	// the file after downloading to a temporary location.
 	NameToPath func(name string) string
 
+	// ErrorLog is optional and any causes of a -1 response will have a
+	// corresponding message written.
+	ErrorLog io.Writer
+
 	// TODO: Configurable timeout?
 
 	// Message data
@@ -79,11 +83,17 @@ func (d *Download) receive(moduleName, messageName string, messageBody io.Reader
 		var chunk []byte
 		if err := cbor.NewDecoder(messageBody).Decode(&chunk); err != nil {
 			d.reset()
+			if d.ErrorLog != nil {
+				fmt.Fprintf(d.ErrorLog, "[file=%s] error decoding data chunk: %v\n", d.name, err)
+			}
 			return cbor.NewEncoder(respond("done")).Encode(-1)
 		}
 		n, err := io.MultiWriter(d.temp, d.hash).Write(chunk)
 		if err != nil {
 			d.reset()
+			if d.ErrorLog != nil {
+				fmt.Fprintf(d.ErrorLog, "[file=%s] error writing data chunk: %v\n", d.name, err)
+			}
 			return cbor.NewEncoder(respond("done")).Encode(-1)
 		}
 		d.written += n
@@ -102,9 +112,15 @@ func (d *Download) finalize(respond func(string) io.Writer) error {
 
 	// Validate file length and checksum
 	if d.written > d.length {
+		if d.ErrorLog != nil {
+			fmt.Fprintf(d.ErrorLog, "[file=%s] %d bytes written, expected a length of %d\n", d.name, d.written, d.length)
+		}
 		return cbor.NewEncoder(respond("done")).Encode(-1)
 	}
 	if hashed := d.hash.Sum(nil); len(d.sha384) > 0 && !bytes.Equal(hashed, d.sha384) {
+		if d.ErrorLog != nil {
+			fmt.Fprintf(d.ErrorLog, "[file=%s] checksum failed verification\n", d.name)
+		}
 		return cbor.NewEncoder(respond("done")).Encode(-1)
 	}
 
@@ -113,10 +129,16 @@ func (d *Download) finalize(respond func(string) io.Writer) error {
 	if resolveName == nil {
 		resolveName = func(name string) string { return name }
 	}
-	for d.name == "" {
+	if d.name == "" {
+		if d.ErrorLog != nil {
+			fmt.Fprintf(d.ErrorLog, "[file=%s] name not sent before data transfer completed\n", d.name)
+		}
 		return fmt.Errorf("name not sent before data transfer completed")
 	}
 	if err := os.Rename(d.temp.Name(), resolveName(d.name)); err != nil {
+		if d.ErrorLog != nil {
+			fmt.Fprintf(d.ErrorLog, "[file=%s] error renaming file: %v\n", d.name, err)
+		}
 		return cbor.NewEncoder(respond("done")).Encode(-1)
 	}
 
