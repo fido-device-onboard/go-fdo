@@ -443,10 +443,8 @@ func (d *Decoder) decodeRawVal(highThreeBits, lowFiveBits byte, additional []byt
 			length = uint64(lowFiveBits)
 		}
 		b := make([]byte, length)
-		if n, err := d.r.Read(b); err != nil && err != io.EOF {
+		if _, err := io.ReadFull(d.r, b); err != nil {
 			return nil, err
-		} else if err == io.EOF && uint64(n) != length {
-			return nil, io.ErrUnexpectedEOF
 		}
 		return append(head, b...), nil
 
@@ -672,10 +670,8 @@ func (d *Decoder) decodeNegative(rv reflect.Value, additional []byte) error {
 func (d *Decoder) decodeByteSlice(rv reflect.Value, additional []byte) error {
 	length := toU64(additional)
 	bs := make([]byte, length)
-	if n, err := d.r.Read(bs); err != nil && err != io.EOF {
+	if _, err := io.ReadFull(d.r, bs); err != nil {
 		return fmt.Errorf("error reading byte/text string: %w", err)
-	} else if err == io.EOF && uint64(n) != length {
-		return io.ErrUnexpectedEOF
 	}
 
 	// Note that setting cannot be done with reflect.Value.SetXXX because the
