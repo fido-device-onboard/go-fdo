@@ -40,14 +40,24 @@ type Producer struct {
 }
 
 // NewProducer creates a new producer instance for the given MTU.
-func NewProducer(mtu uint16) *Producer { return &Producer{mtu: mtu} }
+func NewProducer(mtu uint16) *Producer {
+	return &Producer{
+		// 3 bytes are used by the CBOR message:
+		//
+		//   - 1 byte for "array of 3"
+		//   - 1 byte for IsMoreServiceInfo boolean
+		//   - 1 byte for IsDone boolean
+		mtu: mtu - 3,
+	}
+}
 
 // Available returns the remaining space available for a message body in bytes.
 // If the next service info will not fit in the remaining bytes, then the
 // module should return and on the next ProduceInfo the full MTU will be
 // available.
 func (p *Producer) Available(moduleName, messageName string) int {
-	return int(p.mtu) - int(ArraySizeCBOR(append(p.info, &KV{Key: moduleName + ":" + messageName})))
+	return int(p.mtu) - int(ArraySizeCBOR(append(p.info, &KV{Key: moduleName + ":" + messageName}))) +
+		1 // 1 represents overcounting the size of the last KV, because the Val will be 1 byte
 }
 
 // WriteChunk queues a single service info. If messageBody is larger than the

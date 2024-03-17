@@ -29,3 +29,20 @@ func TestKVSize(t *testing.T) {
 		}
 	}
 }
+
+func TestProducerAvailable(t *testing.T) {
+	mtu := uint16(1<<16 - 1)
+	producer := serviceinfo.NewProducer(mtu)
+	moduleName, messageName := "module", "message"
+	available := producer.Available(moduleName, messageName) - 3 // 3 for array size
+	messageBody := make([]byte, available)
+	if err := producer.WriteChunk(moduleName, messageName, messageBody); err != nil {
+		t.Fatal(err)
+	}
+	if size := serviceinfo.ArraySizeCBOR(producer.ServiceInfo()); size != int64(mtu-3) {
+		t.Fatalf("expected size to be equal to MTU=%d - 3 (message overhead), got %d", mtu-3, size)
+	}
+	if available := producer.Available("", ""); available >= 0 {
+		t.Fatalf("expected available bytes < 0, got %d", available)
+	}
+}

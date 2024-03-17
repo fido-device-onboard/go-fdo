@@ -1112,8 +1112,8 @@ func (s *Server) produceOwnerServiceInfo(ctx context.Context, fsim serviceinfo.O
 		s.mod = nil
 	}
 
-	if serviceinfo.ArraySizeCBOR(producer.ServiceInfo()) > int64(mtu) {
-		return nil, fmt.Errorf("owner service info module produced service info exceeding the MTU")
+	if size := serviceinfo.ArraySizeCBOR(producer.ServiceInfo()); size > int64(mtu) {
+		return nil, fmt.Errorf("owner service info module produced service info exceeding the MTU=%d - 3 (message overhead), size=%d", mtu, size)
 	}
 
 	// Return chunked data

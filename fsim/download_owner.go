@@ -24,9 +24,12 @@ type DownloadContents[T io.ReadSeeker] struct {
 	Name         string
 	Contents     T
 	MustDownload bool
+	// Defaults to 1014, by spec
+	ChunkSize int
 
 	// internal state
 	started bool
+	chunk   []byte
 	index   int64
 	done    bool
 }
@@ -115,6 +118,14 @@ func (d *DownloadContents[T]) ProduceInfo(ctx context.Context, lastDeviceInfoEmp
 		}
 	}
 
+	// Prepare for data to be sent on the next ProduceInfo
+	maxChunkSize := 1014
+	if d.ChunkSize > 0 {
+		maxChunkSize = d.ChunkSize
+	} else if d.ChunkSize < 0 {
+		maxChunkSize = (1 << 16) - 1
+	}
+	d.chunk = make([]byte, maxChunkSize)
 	d.started = true
 	return false, false, nil
 }
@@ -126,22 +137,20 @@ func (d *DownloadContents[T]) sendData(moduleName string, producer *serviceinfo.
 	if _, err := d.Contents.Seek(d.index, io.SeekStart); err != nil {
 		return false, false, fmt.Errorf("error seeking to next chunk of %q contents: %w", d.Name, err)
 	}
-	available := producer.Available(moduleName, messageName) - 3 // 3 for the possible length of the byte array
+	available := producer.Available(moduleName, messageName) - 6 // 3 for each byte array (double-encoded)
 	if available < 1 {
 		return false, false, fmt.Errorf("not enough buffer space to send data chunk service info")
 	}
-	chunk := make([]byte, min(available, 1014))
-	n, err := d.Contents.Read(chunk)
+	n, err := d.Contents.Read(d.chunk[:min(available, len(d.chunk))])
 	if err != nil && err != io.EOF {
 		return false, false, fmt.Errorf("error reading chunk of %q contents: %w", d.Name, err)
 	} else if n == 0 {
 		return false, false, nil
 	}
 	d.index += int64(n)
-	chunk = chunk[:n]
 
 	// Marshal chunk
-	messageBody, err := cbor.Marshal(chunk)
+	messageBody, err := cbor.Marshal(d.chunk[:n])
 	if err != nil {
 		return false, false, err
 	}
