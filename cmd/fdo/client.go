@@ -139,7 +139,7 @@ func client() error {
 			FileSep: ";",
 			Bin:     runtime.GOARCH,
 		},
-		KeyExchange: kex.ECDH256Suite,
+		KeyExchange: kex.ECDH384Suite,
 		CipherSuite: kex.A128GcmCipher,
 	}
 
