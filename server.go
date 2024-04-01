@@ -6,7 +6,9 @@ package fdo
 import (
 	"context"
 	"crypto/x509"
+	"fmt"
 	"io"
+	"os"
 	"time"
 
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
@@ -127,5 +129,8 @@ func (s *Server) Respond(ctx context.Context, token string, msgType uint8, msg i
 	if errMsg.Timestamp == 0 {
 		errMsg.Timestamp = time.Now().Unix()
 	}
-	return newToken, ErrorMsgType, errMsg
+	if err := s.State.InvalidateToken(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "[WARNING] error invalidating token: %v\n", err)
+	}
+	return "", ErrorMsgType, errMsg
 }

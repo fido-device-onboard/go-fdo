@@ -7,6 +7,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/x509"
+	"encoding"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -27,9 +28,12 @@ func init() {
 			return &ECDHSession{
 				Curve: elliptic.P256(),
 				xA:    xA,
+				xB:    []byte{},
 				SessionCrypter: SessionCrypter{
 					ID:     cipher,
 					Cipher: cipher.Suite(),
+					SEK:    []byte{},
+					SVK:    []byte{},
 				},
 			}
 		},
@@ -40,9 +44,12 @@ func init() {
 			return &ECDHSession{
 				Curve: elliptic.P384(),
 				xA:    xA,
+				xB:    []byte{},
 				SessionCrypter: SessionCrypter{
 					ID:     cipher,
 					Cipher: cipher.Suite(),
+					SEK:    []byte{},
+					SVK:    []byte{},
 				},
 			}
 		},
@@ -246,15 +253,19 @@ type ecdhPersist struct {
 
 // MarshalCBOR implements [cbor.Marshaler].
 func (s *ECDHSession) MarshalCBOR() ([]byte, error) {
-	key, err := x509.MarshalECPrivateKey(s.priv)
-	if err != nil {
-		return nil, err
+	var keyBytes []byte
+	if s.priv != nil {
+		key, err := x509.MarshalECPrivateKey(s.priv)
+		if err != nil {
+			return nil, err
+		}
+		keyBytes = key
 	}
 	return cbor.Marshal(ecdhPersist{
 		Is384:  s.Curve == elliptic.P384(),
 		ParamA: s.xA,
 		ParamB: s.xB,
-		Key:    key,
+		Key:    keyBytes,
 		Cipher: s.ID,
 		SEK:    s.SEK,
 		SVK:    s.SVK,
@@ -293,3 +304,12 @@ func (s *ECDHSession) UnmarshalCBOR(data []byte) error {
 	}
 	return nil
 }
+
+var _ encoding.BinaryMarshaler = (*ECDHSession)(nil)
+var _ encoding.BinaryUnmarshaler = (*ECDHSession)(nil)
+
+// MarshalBinary implements encoding.BinaryMarshaler
+func (s *ECDHSession) MarshalBinary() ([]byte, error) { return s.MarshalCBOR() }
+
+// UnmarshalBinary implements encoding.BinaryUnmarshaler
+func (s *ECDHSession) UnmarshalBinary(data []byte) error { return s.UnmarshalCBOR(data) }

@@ -56,7 +56,7 @@ func fromToken[T state](s string, secret []byte) (*T, error) {
 		return nil, err
 	}
 	if len(macAndPayload) < 48 {
-		return nil, errInvalidToken
+		return nil, ErrInvalidToken
 	}
 
 	mac1, payload := macAndPayload[:48], macAndPayload[48:]
@@ -64,7 +64,7 @@ func fromToken[T state](s string, secret []byte) (*T, error) {
 	_, _ = verify.Write(payload)
 	mac2 := verify.Sum(nil)[:]
 	if !hmac.Equal(mac1, mac2) {
-		return nil, errInvalidToken
+		return nil, ErrInvalidToken
 	}
 
 	v := new(T)
@@ -78,7 +78,7 @@ func fetch[S state, T any](ctx context.Context, s Service, f func(S) (T, error))
 	var result T
 	token, ok := s.TokenFromContext(ctx)
 	if !ok {
-		return result, errInvalidToken
+		return result, ErrInvalidToken
 	}
 	state, err := fromToken[S](token, s.HmacSecret)
 	if err != nil {
@@ -90,7 +90,7 @@ func fetch[S state, T any](ctx context.Context, s Service, f func(S) (T, error))
 func update[S state](ctx context.Context, s Service, f func(*S) error) error {
 	token, ok := ctx.Value(key).(*string)
 	if !ok {
-		return errInvalidToken
+		return ErrInvalidToken
 	}
 	state, err := fromToken[S](*token, s.HmacSecret)
 	if err != nil {

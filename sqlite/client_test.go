@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: (C) 2024 Intel Corporation
 // SPDX-License-Identifier: Apache 2.0
 
-package fdo_test
+package sqlite_test
 
 import (
 	"bytes"
@@ -20,37 +20,29 @@ import (
 	"github.com/fido-device-onboard/go-fdo/blob"
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/fsim"
-	"github.com/fido-device-onboard/go-fdo/internal/memory"
 	"github.com/fido-device-onboard/go-fdo/internal/mock"
-	"github.com/fido-device-onboard/go-fdo/internal/token"
 	"github.com/fido-device-onboard/go-fdo/kex"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
 
 func TestClient(t *testing.T) {
-	stateless, err := token.NewService()
-	if err != nil {
-		t.Fatal(err)
-	}
-	inMemory, err := memory.NewState()
-	if err != nil {
-		t.Fatal(err)
-	}
-	inMemory.AutoExtend = stateless
-	inMemory.PreserveReplacedVouchers = true
+	state, cleanup := newDB(t)
+	defer func() { _ = cleanup() }()
+
+	state.AutoExtend = true
+	state.PreserveReplacedVouchers = true
 
 	var fsims fsimList
-
 	server := &fdo.Server{
-		State:        stateless,
-		NewDevices:   stateless,
-		Proofs:       stateless,
-		Replacements: stateless,
-		KeyExchange:  stateless,
-		Nonces:       stateless,
-		ServiceInfo:  stateless,
-		Devices:      inMemory,
-		OwnerKeys:    inMemory,
+		State:        state,
+		NewDevices:   state,
+		Proofs:       state,
+		Replacements: state,
+		KeyExchange:  state,
+		Nonces:       state,
+		ServiceInfo:  state,
+		Devices:      state,
+		OwnerKeys:    state,
 		StartFSIMs: func(context.Context, fdo.GUID, string, []*x509.Certificate, fdo.Devmod, []string) serviceinfo.OwnerModuleList {
 			return &fsims
 		},

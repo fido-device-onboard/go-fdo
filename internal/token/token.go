@@ -24,8 +24,11 @@ import (
 	"github.com/fido-device-onboard/go-fdo/kex"
 )
 
-var errInvalidToken = fmt.Errorf("invalid token")
-var errNotFound = fmt.Errorf("not found")
+// ErrInvalidToken is used when the token validation fails.
+var ErrInvalidToken = fmt.Errorf("invalid token")
+
+// ErrNotFound is used when a resource does not exist in the token state.
+var ErrNotFound = fmt.Errorf("not found")
 
 type diState struct {
 	Unique
@@ -221,6 +224,14 @@ func (s Service) TokenFromContext(ctx context.Context) (string, bool) {
 	return *token, true
 }
 
+// InvalidateToken destroys the state associated with a given token.
+func (s Service) InvalidateToken(ctx context.Context) error {
+	if token, ok := ctx.Value(key).(*string); ok && token != nil {
+		*token = ""
+	}
+	return nil
+}
+
 // NewDeviceCertChain creates a device certificate chain based on info
 // provided in the (non-normative) DI.AppStart message and also stores it
 // in session state.
@@ -276,7 +287,7 @@ func (s Service) NewDeviceCertChain(ctx context.Context, info fdo.DeviceMfgInfo)
 func (s Service) DeviceCertChain(ctx context.Context) ([]*x509.Certificate, error) {
 	return fetch(ctx, s, func(state diState) ([]*x509.Certificate, error) {
 		if len(state.Chain) == 0 {
-			return nil, errNotFound
+			return nil, ErrNotFound
 		}
 		chain := make([]*x509.Certificate, len(state.Chain))
 		for i, cert := range state.Chain {
@@ -300,7 +311,7 @@ func (s Service) SetIncompleteVoucherHeader(ctx context.Context, ovh *fdo.Vouche
 func (s Service) IncompleteVoucherHeader(ctx context.Context) (*fdo.VoucherHeader, error) {
 	return fetch(ctx, s, func(state diState) (*fdo.VoucherHeader, error) {
 		if state.OVH == nil {
-			return nil, errNotFound
+			return nil, ErrNotFound
 		}
 		return state.OVH, nil
 	})
@@ -368,7 +379,7 @@ func (s Service) Session(ctx context.Context, token string) (kex.Suite, kex.Sess
 		return "", nil, err
 	}
 	if state.KeyExchange.Sess == nil {
-		return "", nil, errNotFound
+		return "", nil, ErrNotFound
 	}
 	return state.KeyExchange.Suite, state.KeyExchange.Sess, nil
 }
@@ -386,7 +397,7 @@ func (s Service) SetProveDeviceNonce(ctx context.Context, nonce fdo.Nonce) error
 func (s Service) ProveDeviceNonce(ctx context.Context) (fdo.Nonce, error) {
 	return fetch(ctx, s, func(state to2State) (fdo.Nonce, error) {
 		if state.ProveDv == (fdo.Nonce{}) {
-			return fdo.Nonce{}, errNotFound
+			return fdo.Nonce{}, ErrNotFound
 		}
 		return state.ProveDv, nil
 	})
@@ -405,7 +416,7 @@ func (s Service) SetSetupDeviceNonce(ctx context.Context, nonce fdo.Nonce) error
 func (s Service) SetupDeviceNonce(ctx context.Context) (fdo.Nonce, error) {
 	return fetch(ctx, s, func(state to2State) (fdo.Nonce, error) {
 		if state.SetupDv == (fdo.Nonce{}) {
-			return fdo.Nonce{}, errNotFound
+			return fdo.Nonce{}, ErrNotFound
 		}
 		return state.SetupDv, nil
 	})

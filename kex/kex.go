@@ -13,8 +13,8 @@ import (
 // binary.Unmarshaler so that owner service implementations can load balance on
 // a per-message basis without any affinity.
 //
-// All Sessions from Suites in this package implement binary.Marshaler and
-// binary.Unmarshaler.
+// All Sessions from Suites in this package implement encoding.BinaryMarshaler
+// and encoding.BinaryUnmarshaler.
 type Session interface {
 	// Parameter generates the private key and exchange parameter to send to
 	// its peer. This function will generate a new key every time it is called.

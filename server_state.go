@@ -32,6 +32,9 @@ type TokenService interface {
 	// associated token.
 	NewToken(context.Context, Protocol) (string, error)
 
+	// InvalidateToken destroys the state associated with a given token.
+	InvalidateToken(context.Context) error
+
 	// TokenContext injects a context with a token value so that it may be used
 	// for any of the XXXState interfaces.
 	TokenContext(context.Context, string) context.Context

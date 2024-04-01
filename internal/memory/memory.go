@@ -18,6 +18,9 @@ import (
 	"github.com/fido-device-onboard/go-fdo"
 )
 
+// ErrNotFound is used when a resource does not exist in the memory state.
+var ErrNotFound = fmt.Errorf("not found")
+
 // State implements interfaces for state which must be persisted between
 // protocol sessions, but not between server processes.
 type State struct {
@@ -90,7 +93,7 @@ func (s *State) ReplaceVoucher(_ context.Context, oldGUID fdo.GUID, ov *fdo.Vouc
 func (s *State) Voucher(_ context.Context, guid fdo.GUID) (*fdo.Voucher, error) {
 	ov, ok := s.Vouchers[guid]
 	if !ok {
-		return nil, fmt.Errorf("not found")
+		return nil, ErrNotFound
 	}
 	return ov, nil
 }

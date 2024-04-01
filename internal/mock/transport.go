@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: (C) 2024 Intel Corporation
 // SPDX-License-Identifier: Apache 2.0
 
-package fdo_test
+package mock
 
 import (
 	"bytes"

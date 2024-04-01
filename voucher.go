@@ -4,6 +4,7 @@
 package fdo
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/hmac"
@@ -14,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"hash"
+	"slices"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
@@ -68,6 +70,49 @@ type VoucherHeader struct {
 	DeviceInfo      string
 	ManufacturerKey PublicKey
 	CertChainHash   *Hash
+}
+
+// Equal compares two ownership voucher headers for equality.
+//
+//nolint:gocyclo
+func (ovh *VoucherHeader) Equal(otherOVH *VoucherHeader) bool {
+	if ovh.Version != otherOVH.Version {
+		return false
+	}
+	if !bytes.Equal(ovh.GUID[:], otherOVH.GUID[:]) {
+		return false
+	}
+	if !slices.EqualFunc(ovh.RvInfo, otherOVH.RvInfo, func(directivesA, directivesB []RvInstruction) bool {
+		return slices.EqualFunc(directivesA, directivesB, func(instA, instB RvInstruction) bool {
+			return instA.Variable == instB.Variable && bytes.Equal(instA.Value, instB.Value)
+		})
+	}) {
+		return false
+	}
+	if ovh.DeviceInfo != otherOVH.DeviceInfo {
+		return false
+	}
+	if ovh.ManufacturerKey.Type != otherOVH.ManufacturerKey.Type {
+		return false
+	}
+	if ovh.ManufacturerKey.Encoding != otherOVH.ManufacturerKey.Encoding {
+		return false
+	}
+	if !bytes.Equal(ovh.ManufacturerKey.Body, otherOVH.ManufacturerKey.Body) {
+		return false
+	}
+	if (ovh.CertChainHash == nil && otherOVH.CertChainHash != nil) || (ovh.CertChainHash != nil && otherOVH.CertChainHash == nil) {
+		return false
+	}
+	if ovh.CertChainHash != nil {
+		if ovh.CertChainHash.Algorithm != otherOVH.CertChainHash.Algorithm {
+			return false
+		}
+		if !bytes.Equal(ovh.CertChainHash.Value, otherOVH.CertChainHash.Value) {
+			return false
+		}
+	}
+	return true
 }
 
 // VoucherEntryPayload is an entry in a voucher's list of recorded transfers.

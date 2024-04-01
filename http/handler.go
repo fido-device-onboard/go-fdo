@@ -145,6 +145,16 @@ func (h Handler) handleRequest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, token string, msgType uint8, msg io.Reader) {
+	// Immediately respond to an error
+	if msgType == fdo.ErrorMsgType && token != "" {
+		ctx := h.Responder.State.TokenContext(ctx, token)
+		if err := h.Responder.State.InvalidateToken(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "[WARNING] error invalidating token: %v\n", err)
+		}
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	// Perform business logic of message handling
 	newToken, respType, resp := h.Responder.Respond(ctx, token, msgType, msg)
 
@@ -165,6 +175,15 @@ func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, token
 		if err != nil {
 			h.error(w, msgType, fmt.Errorf("error encrypting message %d: %w", respType, err))
 			return
+		}
+	}
+
+	// Invalidate token when finishing a protocol or erroring
+	switch respType {
+	case 13, 32, 71, fdo.ErrorMsgType:
+		ctx := h.Responder.State.TokenContext(ctx, newToken)
+		if err := h.Responder.State.InvalidateToken(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "[WARNING] error invalidating token: %v\n", err)
 		}
 	}
 
