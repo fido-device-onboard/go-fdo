@@ -1,4 +1,4 @@
-module github.com/fido-device-onboard/go-fdo/cmd/fdo
+module github.com/fido-device-onboard/go-fdo/examples/cmd
 
 go 1.22.0
 
