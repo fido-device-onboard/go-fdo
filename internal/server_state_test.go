@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: (C) 2024 Intel Corporation
 // SPDX-License-Identifier: Apache 2.0
 
-package fdo_test
+package internal_test
 
 import (
 	"bytes"
@@ -214,7 +214,7 @@ func TestServerState(t *testing.T) {
 
 	t.Run("VoucherPersistentState", func(t *testing.T) {
 		// Parse ownership voucher from testdata
-		b, err := os.ReadFile(filepath.Join("testdata", "ov.pem"))
+		b, err := os.ReadFile(filepath.Join("..", "testdata", "ov.pem"))
 		if err != nil {
 			t.Fatalf("error opening voucher test data: %v", err)
 		}
