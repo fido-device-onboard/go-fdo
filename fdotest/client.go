@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: (C) 2024 Intel Corporation
 // SPDX-License-Identifier: Apache 2.0
 
-package fdo_test
+package fdotest
 
 import (
 	"bytes"
@@ -11,7 +11,6 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"runtime"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -20,57 +19,27 @@ import (
 	"github.com/fido-device-onboard/go-fdo/blob"
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/fsim"
-	"github.com/fido-device-onboard/go-fdo/internal/memory"
-	"github.com/fido-device-onboard/go-fdo/internal/mock"
-	"github.com/fido-device-onboard/go-fdo/internal/token"
-	"github.com/fido-device-onboard/go-fdo/kex"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
 
-func TestClient(t *testing.T) {
-	stateless, err := token.NewService()
-	if err != nil {
-		t.Fatal(err)
-	}
-	inMemory, err := memory.NewState()
-	if err != nil {
-		t.Fatal(err)
-	}
-	inMemory.AutoExtend = stateless
-	inMemory.PreserveReplacedVouchers = true
+// FSIMList is a simple one-time-use server FSIM execution list.
+type FSIMList []serviceinfo.OwnerModule
 
-	var fsims fsimList
-
-	server := &fdo.Server{
-		State:        stateless,
-		NewDevices:   stateless,
-		Proofs:       stateless,
-		Replacements: stateless,
-		KeyExchange:  stateless,
-		Nonces:       stateless,
-		ServiceInfo:  stateless,
-		Devices:      inMemory,
-		OwnerKeys:    inMemory,
-		StartFSIMs: func(context.Context, fdo.GUID, string, []*x509.Certificate, fdo.Devmod, []string) serviceinfo.OwnerModuleList {
-			return &fsims
-		},
+// Next implements serviceinfo.OwnerModuleList.
+func (list *FSIMList) Next() serviceinfo.OwnerModule {
+	if list == nil || len(*list) == 0 {
+		return nil
 	}
+	head, tail := (*list)[0], (*list)[1:]
+	*list = tail
+	return head
+}
 
-	cli := &fdo.Client{
-		Transport: &mock.Transport{Responder: server, T: t},
-		Cred:      fdo.DeviceCredential{Version: 101},
-		Devmod: fdo.Devmod{
-			Os:      runtime.GOOS,
-			Arch:    runtime.GOARCH,
-			Version: "Debian Bookworm",
-			Device:  "go-validation",
-			FileSep: ";",
-			Bin:     runtime.GOARCH,
-		},
-		KeyExchange: kex.ECDH256Suite,
-		CipherSuite: kex.A128GcmCipher,
-	}
-
+// TestClient is used to test different implementations of server state
+// methods at an almost end-to-end level (transport is mocked).
+//
+//nolint:gocyclo
+func TestClient(cli *fdo.Client, addFSIM func(serviceinfo.OwnerModule), t *testing.T) {
 	t.Run("Device Initialization", func(t *testing.T) {
 		secret := make([]byte, 32)
 		if _, err := rand.Read(secret); err != nil {
@@ -117,6 +86,27 @@ func TestClient(t *testing.T) {
 		})
 	})
 
+	t.Run("Transfer Ownership 1 and Transfer Ownership 2", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		to1d, err := cli.TransferOwnership1(ctx, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("RV Blob: %+v", to1d)
+
+		newCred, err := cli.TransferOwnership2(ctx, "", to1d, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("New credential: %s", blob.DeviceCredential{
+			Active:           true,
+			DeviceCredential: *newCred,
+			HmacSecret:       []byte(cli.Hmac.(blob.Hmac)),
+			PrivateKey:       blob.Pkcs8Key{PrivateKey: cli.Key},
+		})
+	})
+
 	t.Run("Transfer Ownership 2 - No FSIMs", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -133,7 +123,7 @@ func TestClient(t *testing.T) {
 	})
 
 	t.Run("Transfer Ownership 2 - Download FSIM", func(t *testing.T) {
-		fsims = append(fsims, &fsim.DownloadContents[*bytes.Reader]{
+		addFSIM(&fsim.DownloadContents[*bytes.Reader]{
 			Name:         "download.test",
 			Contents:     bytes.NewReader([]byte("Hello world!")),
 			MustDownload: true,
@@ -155,7 +145,7 @@ func TestClient(t *testing.T) {
 	})
 
 	t.Run("Transfer Ownership 2 - Upload FSIM", func(t *testing.T) {
-		fsims = append(fsims, &fsim.UploadRequest{
+		addFSIM(&fsim.UploadRequest{
 			Dir:  ".",
 			Name: "bigfile.test",
 		})
@@ -179,15 +169,4 @@ func TestClient(t *testing.T) {
 			PrivateKey:       blob.Pkcs8Key{PrivateKey: cli.Key},
 		})
 	})
-}
-
-type fsimList []serviceinfo.OwnerModule
-
-func (list *fsimList) Next() serviceinfo.OwnerModule {
-	if list == nil || len(*list) == 0 {
-		return nil
-	}
-	head, tail := (*list)[0], (*list)[1:]
-	*list = tail
-	return head
 }

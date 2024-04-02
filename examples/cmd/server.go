@@ -139,17 +139,15 @@ func newServer(
 	inMemory.AutoExtend = stateless
 
 	return &fdo.Server{
-		State:        stateless,
-		NewDevices:   stateless,
-		Proofs:       stateless,
-		Replacements: stateless,
-		KeyExchange:  stateless,
-		Nonces:       stateless,
-		ServiceInfo:  stateless,
-		Devices:      inMemory,
-		OwnerKeys:    inMemory,
-		RvInfo:       rvInfo,
-		StartFSIMs:   startFSIMs,
+		Tokens:     stateless,
+		DI:         stateless,
+		TO1:        stateless,
+		TO2:        stateless,
+		RVBlobs:    inMemory,
+		Vouchers:   inMemory,
+		OwnerKeys:  inMemory,
+		RvInfo:     rvInfo,
+		StartFSIMs: startFSIMs,
 	}, nil
 }
 
@@ -249,17 +247,15 @@ func newPersistentServer(
 	}
 
 	return &fdo.Server{
-		State:        state,
-		NewDevices:   state,
-		Proofs:       state,
-		Replacements: state,
-		KeyExchange:  state,
-		Nonces:       state,
-		ServiceInfo:  state,
-		Devices:      state,
-		OwnerKeys:    state,
-		RvInfo:       rvInfo,
-		StartFSIMs:   startFSIMs,
+		Tokens:     state,
+		DI:         state,
+		TO1:        state,
+		TO2:        state,
+		RVBlobs:    state,
+		Vouchers:   state,
+		OwnerKeys:  state,
+		RvInfo:     rvInfo,
+		StartFSIMs: startFSIMs,
 	}, nil
 }
 

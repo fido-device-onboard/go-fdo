@@ -298,10 +298,10 @@ func (s *Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1Tag[
 	}
 
 	// Retrieve voucher
-	if err := s.Proofs.SetGUID(ctx, hello.GUID); err != nil {
+	if err := s.TO2.SetGUID(ctx, hello.GUID); err != nil {
 		return nil, fmt.Errorf("error associating device GUID to proof session: %w", err)
 	}
-	ov, err := s.Devices.Voucher(ctx, hello.GUID)
+	ov, err := s.Vouchers.Voucher(ctx, hello.GUID)
 	if err != nil {
 		captureErr(ctx, resourceNotFound, "")
 		return nil, fmt.Errorf("error retrieving voucher for device %x: %w", hello.GUID, err)
@@ -312,7 +312,7 @@ func (s *Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1Tag[
 	if _, err := rand.Read(proveDeviceNonce[:]); err != nil {
 		return nil, fmt.Errorf("error generating new nonce for TO2.ProveOVHdr response: %w", err)
 	}
-	if err := s.Nonces.SetProveDeviceNonce(ctx, proveDeviceNonce); err != nil {
+	if err := s.TO2.SetProveDeviceNonce(ctx, proveDeviceNonce); err != nil {
 		return nil, fmt.Errorf("error storing nonce for later use in TO2.Done: %w", err)
 	}
 
@@ -325,7 +325,7 @@ func (s *Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1Tag[
 	if err != nil {
 		return nil, fmt.Errorf("error generating client key exchange parameter: %w", err)
 	}
-	if err := s.KeyExchange.SetSession(ctx, hello.KexSuiteName, sess); err != nil {
+	if err := s.TO2.SetSession(ctx, hello.KexSuiteName, sess); err != nil {
 		return nil, fmt.Errorf("error storing key exchange session: %w", err)
 	}
 
@@ -432,11 +432,11 @@ func (s *Server) ovNextEntry(ctx context.Context, msg io.Reader) (*ovEntry, erro
 	}
 
 	// Retrieve voucher
-	guid, err := s.Proofs.GUID(ctx)
+	guid, err := s.TO2.GUID(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving associated device GUID of proof session: %w", err)
 	}
-	ov, err := s.Devices.Voucher(ctx, guid)
+	ov, err := s.Vouchers.Voucher(ctx, guid)
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving voucher for device %x: %w", guid, err)
 	}
@@ -548,16 +548,16 @@ func (s *Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1Tag
 	} else if !ok {
 		return nil, fmt.Errorf("TO2.ProveDevice request missing SetupDevice nonce in unprotected headers")
 	}
-	if err := s.Nonces.SetSetupDeviceNonce(ctx, setupDeviceNonce); err != nil {
+	if err := s.TO2.SetSetupDeviceNonce(ctx, setupDeviceNonce); err != nil {
 		return nil, fmt.Errorf("error storing SetupDevice nonce from TO2.ProveDevice request: %w", err)
 	}
 
 	// Retrieve voucher
-	guid, err := s.Proofs.GUID(ctx)
+	guid, err := s.TO2.GUID(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving associated device GUID of proof session: %w", err)
 	}
-	ov, err := s.Devices.Voucher(ctx, guid)
+	ov, err := s.Vouchers.Voucher(ctx, guid)
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving voucher for device %x: %w", guid, err)
 	}
@@ -574,7 +574,7 @@ func (s *Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1Tag
 	}
 
 	// Validate EAT contents
-	proveDeviceNonce, err := s.Nonces.ProveDeviceNonce(ctx)
+	proveDeviceNonce, err := s.TO2.ProveDeviceNonce(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving ProveDevice nonce for session: %w", err)
 	}
@@ -603,18 +603,18 @@ func (s *Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1Tag
 	if !ok {
 		return nil, fmt.Errorf("invalid EAT FDO claim: expected one item of type []byte")
 	}
-	token, ok := s.State.TokenFromContext(ctx)
+	token, ok := s.Tokens.TokenFromContext(ctx)
 	if !ok {
 		panic("programming error - token missing from context")
 	}
-	suite, sess, err := s.KeyExchange.Session(ctx, token)
+	suite, sess, err := s.TO2.Session(ctx, token)
 	if err != nil {
 		return nil, fmt.Errorf("error getting associated key exchange session: %w", err)
 	}
 	if err := sess.SetParameter(xB); err != nil {
 		return nil, fmt.Errorf("error completing key exchange: %w", err)
 	}
-	if err := s.KeyExchange.SetSession(ctx, suite, sess); err != nil {
+	if err := s.TO2.SetSession(ctx, suite, sess); err != nil {
 		return nil, fmt.Errorf("error updating associated key exchange session: %w", err)
 	}
 
@@ -623,7 +623,7 @@ func (s *Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1Tag
 	if _, err := rand.Read(replacementGUID[:]); err != nil {
 		return nil, fmt.Errorf("error generating replacement GUID for device: %w", err)
 	}
-	if err := s.Replacements.SetReplacementGUID(ctx, replacementGUID); err != nil {
+	if err := s.TO2.SetReplacementGUID(ctx, replacementGUID); err != nil {
 		return nil, fmt.Errorf("error storing replacement GUID for device: %w", err)
 	}
 
@@ -729,7 +729,7 @@ func (s *Server) ownerServiceInfoReady(ctx context.Context, msg io.Reader) (*own
 	if deviceReady.Hmac == nil {
 		return nil, fmt.Errorf("device did not send a replacement voucher HMAC")
 	}
-	if err := s.Replacements.SetReplacementHmac(ctx, *deviceReady.Hmac); err != nil {
+	if err := s.TO2.SetReplacementHmac(ctx, *deviceReady.Hmac); err != nil {
 		return nil, fmt.Errorf("error storing replacement voucher HMAC for device: %w", err)
 	}
 
@@ -738,20 +738,20 @@ func (s *Server) ownerServiceInfoReady(ctx context.Context, msg io.Reader) (*own
 	if deviceReady.MaxOwnerServiceInfoSize != nil {
 		mtu = *deviceReady.MaxOwnerServiceInfoSize
 	}
-	if err := s.ServiceInfo.SetMTU(ctx, mtu); err != nil {
+	if err := s.TO2.SetMTU(ctx, mtu); err != nil {
 		return nil, fmt.Errorf("error storing max service info size to send to device: %w", err)
 	}
 
 	// Get voucher and voucher replacement state
-	currentGUID, err := s.Proofs.GUID(ctx)
+	currentGUID, err := s.TO2.GUID(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving associated device GUID of proof session: %w", err)
 	}
-	currentOV, err := s.Devices.Voucher(ctx, currentGUID)
+	currentOV, err := s.Vouchers.Voucher(ctx, currentGUID)
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving voucher for device %x: %w", currentGUID, err)
 	}
-	replacementGUID, err := s.Replacements.ReplacementGUID(ctx)
+	replacementGUID, err := s.TO2.ReplacementGUID(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving replacement GUID for device: %w", err)
 	}
@@ -1098,7 +1098,7 @@ func (s *Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*ownerSer
 
 // Allow FSIM to produce data
 func (s *Server) produceOwnerServiceInfo(ctx context.Context, fsim serviceinfo.OwnerModule, lastDeviceInfoEmpty bool) (*ownerServiceInfo, error) {
-	mtu, err := s.ServiceInfo.MTU(ctx)
+	mtu, err := s.TO2.MTU(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error getting max device service info size: %w", err)
 	}
@@ -1133,11 +1133,11 @@ func (s *Server) to2Done2(ctx context.Context, msg io.Reader) (*done2Msg, error)
 	}
 
 	// Get session nonces
-	proveDeviceNonce, err := s.Nonces.ProveDeviceNonce(ctx)
+	proveDeviceNonce, err := s.TO2.ProveDeviceNonce(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving ProveDevice nonce for session: %w", err)
 	}
-	setupDeviceNonce, err := s.Nonces.SetupDeviceNonce(ctx)
+	setupDeviceNonce, err := s.TO2.SetupDeviceNonce(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving SetupDevice nonce for session: %w", err)
 	}
@@ -1148,19 +1148,19 @@ func (s *Server) to2Done2(ctx context.Context, msg io.Reader) (*done2Msg, error)
 	}
 
 	// Get voucher and voucher replacement state
-	currentGUID, err := s.Proofs.GUID(ctx)
+	currentGUID, err := s.TO2.GUID(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving associated device GUID of proof session: %w", err)
 	}
-	currentOV, err := s.Devices.Voucher(ctx, currentGUID)
+	currentOV, err := s.Vouchers.Voucher(ctx, currentGUID)
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving voucher for device %x: %w", currentGUID, err)
 	}
-	replacementGUID, err := s.Replacements.ReplacementGUID(ctx)
+	replacementGUID, err := s.TO2.ReplacementGUID(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving replacement GUID for device: %w", err)
 	}
-	replacementHmac, err := s.Replacements.ReplacementHmac(ctx)
+	replacementHmac, err := s.TO2.ReplacementHmac(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving replacement Hmac for device: %w", err)
 	}
@@ -1189,7 +1189,7 @@ func (s *Server) to2Done2(ctx context.Context, msg io.Reader) (*done2Msg, error)
 		CertChain: currentOV.CertChain,
 		Entries:   nil,
 	}
-	if err := s.Devices.ReplaceVoucher(ctx, currentGUID, ov); err != nil {
+	if err := s.Vouchers.ReplaceVoucher(ctx, currentGUID, ov); err != nil {
 		return nil, fmt.Errorf("error replacing persisted voucher: %w", err)
 	}
 

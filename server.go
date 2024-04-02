@@ -17,16 +17,14 @@ import (
 // Server implements business logic handling for all FDO protocols.
 type Server struct {
 	// Protocol session state
-	State        TokenService
-	NewDevices   VoucherCreationState
-	Proofs       VoucherProofState
-	Replacements VoucherReplacementState
-	KeyExchange  KeyExchangeState
-	Nonces       NonceState
-	ServiceInfo  ServiceInfoState
+	Tokens TokenService
+	DI     DISessionState
+	TO1    TO1SessionState
+	TO2    TO2SessionState
 
 	// Persistent state
-	Devices   VoucherPersistentState
+	RVBlobs   RendezvousBlobPersistentState
+	Vouchers  VoucherPersistentState
 	OwnerKeys OwnerKeyPersistentState
 
 	// Rendezvous directives
@@ -57,11 +55,11 @@ func (s *Server) Respond(ctx context.Context, token string, msgType uint8, msg i
 	var err error
 	switch msgType {
 	case diAppStartMsgType:
-		token, err = s.State.NewToken(ctx, DIProtocol)
+		token, err = s.Tokens.NewToken(ctx, DIProtocol)
 	case to1HelloRVMsgType:
-		token, err = s.State.NewToken(ctx, TO1Protocol)
+		token, err = s.Tokens.NewToken(ctx, TO1Protocol)
 	case to2HelloDeviceMsgType:
-		token, err = s.State.NewToken(ctx, TO2Protocol)
+		token, err = s.Tokens.NewToken(ctx, TO2Protocol)
 	}
 	if err != nil {
 		return "", ErrorMsgType, ErrorMessage{
@@ -72,7 +70,7 @@ func (s *Server) Respond(ctx context.Context, token string, msgType uint8, msg i
 			CorrelationID: nil,
 		}
 	}
-	ctx = s.State.TokenContext(ctx, token)
+	ctx = s.Tokens.TokenContext(ctx, token)
 
 	// Handle each message type
 	switch msgType {
@@ -112,7 +110,7 @@ func (s *Server) Respond(ctx context.Context, token string, msgType uint8, msg i
 		respType = to2Done2MsgType
 		resp, err = s.to2Done2(ctx, msg)
 	}
-	newToken, _ = s.State.TokenFromContext(ctx)
+	newToken, _ = s.Tokens.TokenFromContext(ctx)
 	if err == nil {
 		return newToken, respType, resp
 	}
@@ -129,7 +127,7 @@ func (s *Server) Respond(ctx context.Context, token string, msgType uint8, msg i
 	if errMsg.Timestamp == 0 {
 		errMsg.Timestamp = time.Now().Unix()
 	}
-	if err := s.State.InvalidateToken(ctx); err != nil {
+	if err := s.Tokens.InvalidateToken(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "[WARNING] error invalidating token: %v\n", err)
 	}
 	return "", ErrorMsgType, errMsg

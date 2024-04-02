@@ -107,7 +107,7 @@ func (s *Server) setCredentials(ctx context.Context, msg io.Reader) (*setCredent
 		return nil, fmt.Errorf("error decoding device manufacturing info: %w", err)
 	}
 	info := appStart.DeviceMfgInfo.Val
-	chain, err := s.NewDevices.NewDeviceCertChain(ctx, info)
+	chain, err := s.DI.NewDeviceCertChain(ctx, info)
 	if err != nil {
 		return nil, fmt.Errorf("error creating device certificate chain: %w", err)
 	}
@@ -134,7 +134,7 @@ func (s *Server) setCredentials(ctx context.Context, msg io.Reader) (*setCredent
 			Value:     certChainHash.Sum(nil),
 		},
 	}
-	if err := s.NewDevices.SetIncompleteVoucherHeader(ctx, ovh); err != nil {
+	if err := s.DI.SetIncompleteVoucherHeader(ctx, ovh); err != nil {
 		return nil, fmt.Errorf("error storing incomplete voucher header: %w", err)
 	}
 	return &setCredentialsMsg{
@@ -196,11 +196,11 @@ func (s *Server) diDone(ctx context.Context, msg io.Reader) (struct{}, error) {
 	if err := cbor.NewDecoder(msg).Decode(&req); err != nil {
 		return struct{}{}, fmt.Errorf("error parsing DI.SetHMAC request: %w", err)
 	}
-	ovh, err := s.NewDevices.IncompleteVoucherHeader(ctx)
+	ovh, err := s.DI.IncompleteVoucherHeader(ctx)
 	if err != nil {
 		return struct{}{}, fmt.Errorf("voucher header not found for session: %w", err)
 	}
-	deviceCertChain, err := s.NewDevices.DeviceCertChain(ctx)
+	deviceCertChain, err := s.DI.DeviceCertChain(ctx)
 	if err != nil {
 		return struct{}{}, fmt.Errorf("device certificate chain not found for session: %w", err)
 	}
@@ -208,7 +208,7 @@ func (s *Server) diDone(ctx context.Context, msg io.Reader) (struct{}, error) {
 	for i, cert := range deviceCertChain {
 		certChain[i] = (*cbor.X509Certificate)(cert)
 	}
-	if err := s.Devices.NewVoucher(ctx, &Voucher{
+	if err := s.Vouchers.NewVoucher(ctx, &Voucher{
 		Version:   101,
 		Header:    *cbor.NewBstr(*ovh),
 		Hmac:      req.Hmac,

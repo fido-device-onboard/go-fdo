@@ -4,8 +4,11 @@
 package fdo
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -43,6 +46,11 @@ func (a RvTO2Addr) String() string {
 	return fmt.Sprintf("%s://%s:%d", a.TransportProtocol, addr, a.Port)
 }
 
+type helloRV struct {
+	GUID     GUID
+	ASigInfo sigInfo
+}
+
 // HelloRV(30) -> HelloRVAck(31)
 func (c *Client) helloRv(ctx context.Context, baseURL string) (Nonce, error) {
 	eASigInfo, err := sigInfoFor(c.Key, c.PSS)
@@ -51,12 +59,10 @@ func (c *Client) helloRv(ctx context.Context, baseURL string) (Nonce, error) {
 	}
 
 	// Define request structure
-	var msg struct {
-		GUID     GUID
-		ASigInfo sigInfo
+	msg := helloRV{
+		GUID:     c.Cred.GUID,
+		ASigInfo: *eASigInfo,
 	}
-	msg.GUID = c.Cred.GUID
-	msg.ASigInfo = *eASigInfo
 
 	// Make request
 	typ, resp, err := c.Transport.Send(ctx, baseURL, to1HelloRVMsgType, msg, nil)
@@ -95,8 +101,33 @@ type rvAck struct {
 }
 
 // HelloRV(30) -> HelloRVAck(31)
-func (s *Server) helloRVAck(ctx context.Context, msg io.Reader) (rvAck, error) {
-	panic("unimplemented")
+func (s *Server) helloRVAck(ctx context.Context, msg io.Reader) (*rvAck, error) {
+	var hello helloRV
+	if err := cbor.NewDecoder(msg).Decode(&hello); err != nil {
+		return nil, fmt.Errorf("error decoding TO1.HelloRV request: %w", err)
+	}
+
+	// Check if device has been registered
+	if _, err := s.RVBlobs.RVBlob(ctx, hello.GUID); errors.Is(err, ErrNotFound) {
+		captureErr(ctx, resourceNotFound, "")
+		return nil, ErrNotFound
+	} else if err != nil {
+		return nil, fmt.Errorf("error looking up device: %w", err)
+	}
+
+	// Generate and store nonce
+	var nonce Nonce
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return nil, fmt.Errorf("error generating nonce for TO1 proof: %w", err)
+	}
+	if err := s.TO1.SetTO1ProofNonce(ctx, nonce); err != nil {
+		return nil, fmt.Errorf("error storing nonce for TO1.ProveToRV: %w", err)
+	}
+
+	return &rvAck{
+		NonceTO1Proof: nonce,
+		BSigInfo:      hello.ASigInfo,
+	}, nil
 }
 
 // To1d is a "blob" that indicates a network address (RVTO2Addr) where the
@@ -165,6 +196,67 @@ func (c *Client) proveToRv(ctx context.Context, baseURL string, nonce Nonce) (*c
 }
 
 // ProveToRV(32) -> RVRedirect(33)
-func (s *Server) rvRedirect(ctx context.Context, msg io.Reader) (cose.Sign1Tag[To1d, []byte], error) {
-	panic("unimplemented")
+func (s *Server) rvRedirect(ctx context.Context, msg io.Reader) (*cose.Sign1Tag[To1d, []byte], error) {
+	var token cose.Sign1Tag[eatoken, []byte]
+	if err := cbor.NewDecoder(msg).Decode(&token); err != nil {
+		return nil, fmt.Errorf("error decoding TO1.ProveToRV request: %w", err)
+	}
+
+	// Check EAT nonce
+	proofNonce, err := s.TO1.TO1ProofNonce(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error getting TO1 proof nonce: %w", err)
+	}
+	nonce, ok := token.Payload.Val[eatNonceClaim].([]byte)
+	if !ok {
+		captureErr(ctx, invalidMessageErrCode, "")
+		return nil, fmt.Errorf("EAT missing nonce claim")
+	}
+	if !bytes.Equal(nonce, proofNonce[:]) {
+		captureErr(ctx, invalidMessageErrCode, "")
+		return nil, fmt.Errorf("EAT nonce does not match")
+	}
+
+	// Get GUID from EAT
+	ueid, ok := token.Payload.Val[eatUeidClaim].([]byte)
+	if !ok {
+		captureErr(ctx, invalidMessageErrCode, "")
+		return nil, fmt.Errorf("EAT missing UEID claim")
+	}
+	if len(ueid) != 1+len(GUID{}) {
+		captureErr(ctx, invalidMessageErrCode, "")
+		return nil, fmt.Errorf("EAT UEID claim is not a valid length")
+	}
+	if ueid[0] != eatRandUeid {
+		captureErr(ctx, invalidMessageErrCode, "")
+		return nil, fmt.Errorf("EAT UEID type must be RAND")
+	}
+	var guid GUID
+	_ = copy(guid[:], ueid[1:])
+
+	// Get device public key from ownership voucher
+	ov, err := s.Vouchers.Voucher(ctx, guid)
+	if err != nil {
+		return nil, fmt.Errorf("error looking up ownership voucher: %w", err)
+	}
+	pub, err := ov.DevicePublicKey()
+	if err != nil {
+		return nil, fmt.Errorf("error getting device public key from ownership voucher: %w", err)
+	}
+
+	// Verify EAT signature
+	if ok, err := token.Verify(pub, nil, nil); err != nil {
+		captureErr(ctx, invalidMessageErrCode, "")
+		return nil, fmt.Errorf("error verifying EAT signature: %w", err)
+	} else if !ok {
+		captureErr(ctx, invalidMessageErrCode, "")
+		return nil, fmt.Errorf("%w: EAT signature verification failed", ErrCryptoVerifyFailed)
+	}
+
+	// Return RV blob
+	blob, err := s.RVBlobs.RVBlob(ctx, guid)
+	if err != nil {
+		return nil, fmt.Errorf("error looking up rendezvous blob: %w", err)
+	}
+	return blob.Tag(), nil
 }

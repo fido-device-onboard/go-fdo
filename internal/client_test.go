@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: (C) 2024 Intel Corporation
 // SPDX-License-Identifier: Apache 2.0
 
-package sqlite_test
+package internal_test
 
 import (
 	"context"
@@ -12,21 +12,28 @@ import (
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/fdotest"
+	"github.com/fido-device-onboard/go-fdo/internal/memory"
+	"github.com/fido-device-onboard/go-fdo/internal/token"
 	"github.com/fido-device-onboard/go-fdo/kex"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
 
 func TestClient(t *testing.T) {
-	state, cleanup := newDB(t)
-	defer func() { _ = cleanup() }()
-
-	state.AutoExtend = true
-	state.PreserveReplacedVouchers = true
+	stateless, err := token.NewService()
+	if err != nil {
+		t.Fatal(err)
+	}
+	inMemory, err := memory.NewState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	inMemory.AutoExtend = stateless
+	inMemory.PreserveReplacedVouchers = true
 
 	// TODO: Remove when TO0 is implemented
 	dnsAddr := "owner.fidoalliance.org"
 	fakeHash := sha256.Sum256([]byte("fake blob"))
-	state.AutoRegisterRV = &fdo.To1d{
+	inMemory.AutoRegisterRV = &fdo.To1d{
 		RV: []fdo.RvTO2Addr{
 			{
 				DNSAddress:        &dnsAddr,
@@ -41,14 +48,15 @@ func TestClient(t *testing.T) {
 	}
 
 	var fsims fdotest.FSIMList
+
 	server := &fdo.Server{
-		Tokens:    state,
-		DI:        state,
-		TO1:       state,
-		TO2:       state,
-		RVBlobs:   state,
-		Vouchers:  state,
-		OwnerKeys: state,
+		Tokens:    stateless,
+		DI:        stateless,
+		TO1:       stateless,
+		TO2:       stateless,
+		RVBlobs:   inMemory,
+		Vouchers:  inMemory,
+		OwnerKeys: inMemory,
 		StartFSIMs: func(context.Context, fdo.GUID, string, []*x509.Certificate, fdo.Devmod, []string) serviceinfo.OwnerModuleList {
 			return &fsims
 		},

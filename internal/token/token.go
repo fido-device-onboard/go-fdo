@@ -21,14 +21,9 @@ import (
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/cose"
 	"github.com/fido-device-onboard/go-fdo/kex"
 )
-
-// ErrInvalidToken is used when the token validation fails.
-var ErrInvalidToken = fmt.Errorf("invalid token")
-
-// ErrNotFound is used when a resource does not exist in the token state.
-var ErrNotFound = fmt.Errorf("not found")
 
 type diState struct {
 	Unique
@@ -38,6 +33,8 @@ type diState struct {
 
 type to1State struct {
 	Unique
+	Nonce  fdo.Nonce
+	SigAlg cose.SignatureAlgorithm
 }
 
 type to2State struct {
@@ -98,12 +95,9 @@ type Service struct {
 }
 
 var _ fdo.TokenService = (*Service)(nil)
-var _ fdo.VoucherCreationState = (*Service)(nil)
-var _ fdo.VoucherProofState = (*Service)(nil)
-var _ fdo.VoucherReplacementState = (*Service)(nil)
-var _ fdo.KeyExchangeState = (*Service)(nil)
-var _ fdo.NonceState = (*Service)(nil)
-var _ fdo.ServiceInfoState = (*Service)(nil)
+var _ fdo.DISessionState = (*Service)(nil)
+var _ fdo.TO1SessionState = (*Service)(nil)
+var _ fdo.TO2SessionState = (*Service)(nil)
 
 // NewService initializes a stateless token service with a random HMAC secret
 // and self-signed CAs for the common key types.
@@ -287,7 +281,7 @@ func (s Service) NewDeviceCertChain(ctx context.Context, info fdo.DeviceMfgInfo)
 func (s Service) DeviceCertChain(ctx context.Context) ([]*x509.Certificate, error) {
 	return fetch(ctx, s, func(state diState) ([]*x509.Certificate, error) {
 		if len(state.Chain) == 0 {
-			return nil, ErrNotFound
+			return nil, fdo.ErrNotFound
 		}
 		chain := make([]*x509.Certificate, len(state.Chain))
 		for i, cert := range state.Chain {
@@ -311,9 +305,27 @@ func (s Service) SetIncompleteVoucherHeader(ctx context.Context, ovh *fdo.Vouche
 func (s Service) IncompleteVoucherHeader(ctx context.Context) (*fdo.VoucherHeader, error) {
 	return fetch(ctx, s, func(state diState) (*fdo.VoucherHeader, error) {
 		if state.OVH == nil {
-			return nil, ErrNotFound
+			return nil, fdo.ErrNotFound
 		}
 		return state.OVH, nil
+	})
+}
+
+// SetTO1ProofNonce sets the Nonce expected in TO1.ProveToRV.
+func (s Service) SetTO1ProofNonce(ctx context.Context, nonce fdo.Nonce) error {
+	return update(ctx, s, func(state *to1State) error {
+		state.Nonce = nonce
+		return nil
+	})
+}
+
+// TO1ProofNonce returns the Nonce expected in TO1.ProveToRV.
+func (s Service) TO1ProofNonce(ctx context.Context) (fdo.Nonce, error) {
+	return fetch(ctx, s, func(state to1State) (fdo.Nonce, error) {
+		if state.Nonce == (fdo.Nonce{}) {
+			return fdo.Nonce{}, fdo.ErrNotFound
+		}
+		return state.Nonce, nil
 	})
 }
 
@@ -328,6 +340,9 @@ func (s Service) SetGUID(ctx context.Context, guid fdo.GUID) error {
 // GUID retrieves the GUID of the voucher associated with the session.
 func (s Service) GUID(ctx context.Context) (fdo.GUID, error) {
 	return fetch(ctx, s, func(state to2State) (fdo.GUID, error) {
+		if state.GUID == (fdo.GUID{}) {
+			return fdo.GUID{}, fdo.ErrNotFound
+		}
 		return state.GUID, nil
 	})
 }
@@ -343,6 +358,9 @@ func (s Service) SetReplacementGUID(ctx context.Context, guid fdo.GUID) error {
 // ReplacementGUID retrieves the device GUID to persist at the end of TO2.
 func (s Service) ReplacementGUID(ctx context.Context) (fdo.GUID, error) {
 	return fetch(ctx, s, func(state to2State) (fdo.GUID, error) {
+		if state.Replacement.GUID == (fdo.GUID{}) {
+			return fdo.GUID{}, fdo.ErrNotFound
+		}
 		return state.Replacement.GUID, nil
 	})
 }
@@ -358,6 +376,9 @@ func (s Service) SetReplacementHmac(ctx context.Context, hmac fdo.Hmac) error {
 // ReplacementHmac retrieves the voucher HMAC to persist at the end of TO2.
 func (s Service) ReplacementHmac(ctx context.Context) (fdo.Hmac, error) {
 	return fetch(ctx, s, func(state to2State) (fdo.Hmac, error) {
+		if state.Replacement.Hmac.Algorithm == 0 {
+			return fdo.Hmac{}, fdo.ErrNotFound
+		}
 		return state.Replacement.Hmac, nil
 	})
 }
@@ -379,7 +400,7 @@ func (s Service) Session(ctx context.Context, token string) (kex.Suite, kex.Sess
 		return "", nil, err
 	}
 	if state.KeyExchange.Sess == nil {
-		return "", nil, ErrNotFound
+		return "", nil, fdo.ErrNotFound
 	}
 	return state.KeyExchange.Suite, state.KeyExchange.Sess, nil
 }
@@ -397,7 +418,7 @@ func (s Service) SetProveDeviceNonce(ctx context.Context, nonce fdo.Nonce) error
 func (s Service) ProveDeviceNonce(ctx context.Context) (fdo.Nonce, error) {
 	return fetch(ctx, s, func(state to2State) (fdo.Nonce, error) {
 		if state.ProveDv == (fdo.Nonce{}) {
-			return fdo.Nonce{}, ErrNotFound
+			return fdo.Nonce{}, fdo.ErrNotFound
 		}
 		return state.ProveDv, nil
 	})
@@ -416,7 +437,7 @@ func (s Service) SetSetupDeviceNonce(ctx context.Context, nonce fdo.Nonce) error
 func (s Service) SetupDeviceNonce(ctx context.Context) (fdo.Nonce, error) {
 	return fetch(ctx, s, func(state to2State) (fdo.Nonce, error) {
 		if state.SetupDv == (fdo.Nonce{}) {
-			return fdo.Nonce{}, ErrNotFound
+			return fdo.Nonce{}, fdo.ErrNotFound
 		}
 		return state.SetupDv, nil
 	})
@@ -453,6 +474,9 @@ func (s Service) SetMTU(ctx context.Context, mtu uint16) error {
 // MTU returns the max service info size the device may receive.
 func (s Service) MTU(ctx context.Context) (uint16, error) {
 	return fetch(ctx, s, func(state to2State) (uint16, error) {
+		if state.MTU == 0 {
+			return 0, fdo.ErrNotFound
+		}
 		return state.MTU, nil
 	})
 }

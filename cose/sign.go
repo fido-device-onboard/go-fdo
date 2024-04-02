@@ -61,7 +61,7 @@ func (s1 *Sign1[P, A]) Sign(key crypto.Signer, payload *P, additionalData A, opt
 	if s1.Protected == nil {
 		s1.Protected = make(map[Label]any)
 	}
-	s1.Protected[AlgLabel] = algID
+	s1.Protected[AlgLabel] = int64(algID)
 	body, err := newEmptyOrSerializedMap(s1.Protected)
 	if err != nil {
 		return fmt.Errorf("error marshaling signature protected body: %W", err)
@@ -83,6 +83,12 @@ func (s1 *Sign1[P, A]) Sign(key crypto.Signer, payload *P, additionalData A, opt
 		return err
 	}
 	s1.Signature = sigBytes
+
+	// Set Unprotected headers to non-nil to help when using reflect.DeepEqual
+	// to compare a payload after signing
+	if s1.Unprotected == nil {
+		s1.Unprotected = HeaderMap{}
+	}
 
 	return nil
 }
@@ -226,7 +232,7 @@ func SignatureAlgorithmFor(key crypto.PublicKey, opts crypto.SignerOpts) (Signat
 		return ecSigAlg(pub)
 
 	case *rsa.PublicKey:
-		return rsaSigAlg(pub, opts)
+		return rsaSigAlg(opts)
 
 	default:
 		return 0, fmt.Errorf("unsupported public key type: %T", key)
@@ -245,7 +251,7 @@ func ecSigAlg(pub *ecdsa.PublicKey) (SignatureAlgorithm, error) {
 	return 0, fmt.Errorf("unsupported curve: %s", pub.Params().Name)
 }
 
-func rsaSigAlg(pub *rsa.PublicKey, opts crypto.SignerOpts) (SignatureAlgorithm, error) {
+func rsaSigAlg(opts crypto.SignerOpts) (SignatureAlgorithm, error) {
 	// Ensure that a hash func was specified
 	if opts == nil {
 		return 0, errors.New("required signer opts were missing; must specify hash type")

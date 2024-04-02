@@ -10,6 +10,7 @@ import (
 	"crypto/sha512"
 	"encoding/base64"
 
+	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
 )
 
@@ -56,7 +57,7 @@ func fromToken[T state](s string, secret []byte) (*T, error) {
 		return nil, err
 	}
 	if len(macAndPayload) < 48 {
-		return nil, ErrInvalidToken
+		return nil, fdo.ErrInvalidSession
 	}
 
 	mac1, payload := macAndPayload[:48], macAndPayload[48:]
@@ -64,7 +65,7 @@ func fromToken[T state](s string, secret []byte) (*T, error) {
 	_, _ = verify.Write(payload)
 	mac2 := verify.Sum(nil)[:]
 	if !hmac.Equal(mac1, mac2) {
-		return nil, ErrInvalidToken
+		return nil, fdo.ErrInvalidSession
 	}
 
 	v := new(T)
@@ -78,7 +79,7 @@ func fetch[S state, T any](ctx context.Context, s Service, f func(S) (T, error))
 	var result T
 	token, ok := s.TokenFromContext(ctx)
 	if !ok {
-		return result, ErrInvalidToken
+		return result, fdo.ErrInvalidSession
 	}
 	state, err := fromToken[S](token, s.HmacSecret)
 	if err != nil {
@@ -90,7 +91,7 @@ func fetch[S state, T any](ctx context.Context, s Service, f func(S) (T, error))
 func update[S state](ctx context.Context, s Service, f func(*S) error) error {
 	token, ok := ctx.Value(key).(*string)
 	if !ok {
-		return ErrInvalidToken
+		return fdo.ErrInvalidSession
 	}
 	state, err := fromToken[S](*token, s.HmacSecret)
 	if err != nil {

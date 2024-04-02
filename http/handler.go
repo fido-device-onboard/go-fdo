@@ -120,7 +120,7 @@ func (h Handler) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 	// Decrypt TO2 messages after 64
 	if 64 < msgType && msgType < fdo.ErrorMsgType {
-		_, sess, err := h.Responder.KeyExchange.Session(r.Context(), token)
+		_, sess, err := h.Responder.TO2.Session(r.Context(), token)
 		if err != nil {
 			h.error(w, msgType, err)
 			return
@@ -147,8 +147,8 @@ func (h Handler) handleRequest(w http.ResponseWriter, r *http.Request) {
 func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, token string, msgType uint8, msg io.Reader) {
 	// Immediately respond to an error
 	if msgType == fdo.ErrorMsgType && token != "" {
-		ctx := h.Responder.State.TokenContext(ctx, token)
-		if err := h.Responder.State.InvalidateToken(ctx); err != nil {
+		ctx := h.Responder.Tokens.TokenContext(ctx, token)
+		if err := h.Responder.Tokens.InvalidateToken(ctx); err != nil {
 			fmt.Fprintf(os.Stderr, "[WARNING] error invalidating token: %v\n", err)
 		}
 		w.WriteHeader(http.StatusOK)
@@ -160,7 +160,7 @@ func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, token
 
 	// Encrypt TO2 messages beginning with 64
 	if 64 < respType && respType < fdo.ErrorMsgType {
-		_, sess, err := h.Responder.KeyExchange.Session(ctx, newToken)
+		_, sess, err := h.Responder.TO2.Session(ctx, newToken)
 		if err != nil {
 			h.error(w, msgType, err)
 			return
@@ -181,8 +181,8 @@ func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, token
 	// Invalidate token when finishing a protocol or erroring
 	switch respType {
 	case 13, 32, 71, fdo.ErrorMsgType:
-		ctx := h.Responder.State.TokenContext(ctx, newToken)
-		if err := h.Responder.State.InvalidateToken(ctx); err != nil {
+		ctx := h.Responder.Tokens.TokenContext(ctx, newToken)
+		if err := h.Responder.Tokens.InvalidateToken(ctx); err != nil {
 			fmt.Fprintf(os.Stderr, "[WARNING] error invalidating token: %v\n", err)
 		}
 	}

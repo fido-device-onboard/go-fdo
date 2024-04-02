@@ -28,27 +28,14 @@ import (
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/cose"
 	"github.com/fido-device-onboard/go-fdo/kex"
 )
-
-// ErrInvalidSession is used when the token is invalid or the DB fails during
-// validation.
-var ErrInvalidSession = fmt.Errorf("invalid session")
-
-// ErrNotFound is used when the resource does not exist for the session.
-var ErrNotFound = fmt.Errorf("not found")
-
-// ErrUnsupportedKeyType is used when no key of the given type has been added
-// to the server.
-type ErrUnsupportedKeyType fdo.KeyType
-
-func (err ErrUnsupportedKeyType) Error() string {
-	return "unsupported key type " + fdo.KeyType(err).String()
-}
 
 // DB implements FDO server state persistence.
 type DB struct {
 	AutoExtend               bool
+	AutoRegisterRV           *fdo.To1d
 	PreserveReplacedVouchers bool
 
 	conn *sqlite3.Conn
@@ -90,11 +77,13 @@ func New(filename string) (*DB, error) {
 			, pkcs8 BLOB NOT NULL
 			, x509_chain BLOB
 			)`,
+		`CREATE TABLE IF NOT EXISTS rv_blobs
+			( guid BLOB PRIMARY KEY
+			, rv BLOB NOT NULL
+			)`,
 		`CREATE TABLE IF NOT EXISTS sessions
 			( id BLOB PRIMARY KEY
 			, protocol INTEGER NOT NULL
-			, guid BLOB
-			, mtu INTEGER
 			)`,
 		`CREATE TABLE IF NOT EXISTS device_info
 			( session BLOB
@@ -111,6 +100,20 @@ func New(filename string) (*DB, error) {
 			, header BLOB NOT NULL
 			, FOREIGN KEY(session) REFERENCES sessions(id) ON DELETE CASCADE
 			)`,
+		`CREATE TABLE IF NOT EXISTS to1_sessions
+			( session BLOB UNIQUE NOT NULL
+			, nonce BLOB
+			, alg INTEGER
+			, FOREIGN KEY(session) REFERENCES sessions(id) ON DELETE CASCADE
+			)`,
+		`CREATE TABLE IF NOT EXISTS to2_sessions
+			( session BLOB UNIQUE NOT NULL
+			, guid BLOB
+			, prove_device BLOB
+			, setup_device BLOB
+			, mtu INTEGER
+			, FOREIGN KEY(session) REFERENCES sessions(id) ON DELETE CASCADE
+			)`,
 		`CREATE TABLE IF NOT EXISTS vouchers
 			( guid BLOB PRIMARY KEY
 			, cbor BLOB NOT NULL
@@ -125,12 +128,6 @@ func New(filename string) (*DB, error) {
 			( session BLOB UNIQUE NOT NULL
 			, suite TEXT NOT NULL
 			, cbor BLOB NOT NULL
-			, FOREIGN KEY(session) REFERENCES sessions(id) ON DELETE CASCADE
-			)`,
-		`CREATE TABLE IF NOT EXISTS nonces
-			( session BLOB UNIQUE NOT NULL
-			, prove_device BLOB
-			, setup_device BLOB
 			, FOREIGN KEY(session) REFERENCES sessions(id) ON DELETE CASCADE
 			)`,
 	}
@@ -154,14 +151,12 @@ func (db *DB) Close() error { return db.conn.Close() }
 // Compile-time check for interface implementation correctness
 var _ interface {
 	fdo.TokenService
-	fdo.VoucherCreationState
-	fdo.VoucherProofState
+	fdo.DISessionState
+	fdo.TO1SessionState
+	fdo.TO2SessionState
+	fdo.RendezvousBlobPersistentState
 	fdo.VoucherPersistentState
-	fdo.VoucherReplacementState
-	fdo.KeyExchangeState
-	fdo.NonceState
 	fdo.OwnerKeyPersistentState
-	fdo.ServiceInfoState
 } = (*DB)(nil)
 
 const sessionIDSize = 16
@@ -200,7 +195,7 @@ func (db *DB) loadOrStoreSecret() ([]byte, error) {
 	defer func() { _ = tx.Rollback() }()
 
 	var readSecret []byte
-	if err := db.query("secrets", []string{"secret"}, map[string]any{"type": "hmac"}, &readSecret); err != nil && !errors.Is(err, ErrNotFound) {
+	if err := db.query("secrets", []string{"secret"}, map[string]any{"type": "hmac"}, &readSecret); err != nil && !errors.Is(err, fdo.ErrNotFound) {
 		return nil, fmt.Errorf("error reading hmac secret: %w", err)
 	}
 	if len(readSecret) > 0 {
@@ -243,7 +238,7 @@ func (db *DB) TokenFromContext(ctx context.Context) (string, bool) {
 func (db *DB) InvalidateToken(ctx context.Context) error {
 	sessID, ok := db.sessionID(ctx)
 	if !ok {
-		return ErrNotFound
+		return fdo.ErrNotFound
 	}
 
 	stmt, _, err := db.conn.Prepare(`DELETE FROM sessions WHERE id = ?`)
@@ -394,6 +389,7 @@ func (db *DB) update(table string, kvs, where map[string]any) error {
 	return update.Exec()
 }
 
+//nolint:gocyclo
 func (db *DB) query(table string, columns []string, where map[string]any, into ...any) error {
 	if len(columns) != len(into) {
 		panic("programming error - query must have the same number of columns and values")
@@ -436,7 +432,13 @@ func (db *DB) query(table string, columns []string, where map[string]any, into .
 		if err := query.Err(); err != nil {
 			return fmt.Errorf("error querying DB: %w", err)
 		}
-		return ErrNotFound
+		return fdo.ErrNotFound
+	}
+
+	for i := 0; i < len(into); i++ {
+		if query.ColumnType(i) == sqlite3.NULL {
+			return fdo.ErrNotFound
+		}
 	}
 
 	for i := 0; i < len(into); i++ {
@@ -500,7 +502,7 @@ func (db *DB) NewDeviceCertChain(ctx context.Context, info fdo.DeviceMfgInfo) ([
 	// Sign CSR
 	key, chain, err := db.manufacturerKey(info.KeyType)
 	if err != nil {
-		var unsupportedErr ErrUnsupportedKeyType
+		var unsupportedErr fdo.ErrUnsupportedKeyType
 		if errors.As(err, &unsupportedErr) {
 			return nil, unsupportedErr
 		}
@@ -532,7 +534,7 @@ func (db *DB) NewDeviceCertChain(ctx context.Context, info fdo.DeviceMfgInfo) ([
 	// Store device info and associate it with session
 	sessID, ok := db.sessionID(ctx)
 	if !ok {
-		return nil, ErrInvalidSession
+		return nil, fdo.ErrInvalidSession
 	}
 	if err := db.insert("device_info", map[string]any{
 		"key_type":      int(info.KeyType),
@@ -561,7 +563,7 @@ func derEncode(certs []*x509.Certificate) (der []byte) {
 func (db *DB) DeviceCertChain(ctx context.Context) ([]*x509.Certificate, error) {
 	sessID, ok := db.sessionID(ctx)
 	if !ok {
-		return nil, ErrInvalidSession
+		return nil, fdo.ErrInvalidSession
 	}
 
 	var der []byte
@@ -578,7 +580,7 @@ func (db *DB) DeviceCertChain(ctx context.Context) ([]*x509.Certificate, error) 
 func (db *DB) SetIncompleteVoucherHeader(ctx context.Context, ovh *fdo.VoucherHeader) error {
 	sessID, ok := db.sessionID(ctx)
 	if !ok {
-		return ErrInvalidSession
+		return fdo.ErrInvalidSession
 	}
 
 	ovhCBOR, err := cbor.Marshal(ovh)
@@ -597,7 +599,7 @@ func (db *DB) SetIncompleteVoucherHeader(ctx context.Context, ovh *fdo.VoucherHe
 func (db *DB) IncompleteVoucherHeader(ctx context.Context) (*fdo.VoucherHeader, error) {
 	sessID, ok := db.sessionID(ctx)
 	if !ok {
-		return nil, ErrInvalidSession
+		return nil, fdo.ErrInvalidSession
 	}
 
 	var ovhCBOR []byte
@@ -614,27 +616,67 @@ func (db *DB) IncompleteVoucherHeader(ctx context.Context) (*fdo.VoucherHeader, 
 	return &ovh, nil
 }
 
+// SetTO1ProofNonce sets the Nonce expected in TO1.ProveToRV.
+func (db *DB) SetTO1ProofNonce(ctx context.Context, nonce fdo.Nonce) error {
+	sessID, ok := db.sessionID(ctx)
+	if !ok {
+		return fdo.ErrInvalidSession
+	}
+	return db.insert("to1_sessions",
+		map[string]any{
+			"session": sessID,
+			"nonce":   nonce[:],
+		},
+		map[string]any{
+			"session": sessID,
+		})
+}
+
+// TO1ProofNonce returns the Nonce expected in TO1.ProveToRV.
+func (db *DB) TO1ProofNonce(ctx context.Context) (fdo.Nonce, error) {
+	sessID, ok := db.sessionID(ctx)
+	if !ok {
+		return fdo.Nonce{}, fdo.ErrInvalidSession
+	}
+
+	var into []byte
+	if err := db.query("to1_sessions", []string{"nonce"}, map[string]any{
+		"session": sessID,
+	}, &into); err != nil {
+		return fdo.Nonce{}, err
+	}
+
+	var nonce fdo.Nonce
+	_ = copy(nonce[:], into)
+	return nonce, nil
+}
+
 // SetGUID associates a voucher GUID with a TO2 session.
 func (db *DB) SetGUID(ctx context.Context, guid fdo.GUID) error {
 	sessID, ok := db.sessionID(ctx)
 	if !ok {
-		return ErrInvalidSession
+		return fdo.ErrInvalidSession
 	}
-	return db.update("sessions",
-		map[string]any{"guid": guid[:]},
-		map[string]any{"id": sessID})
+	return db.insert("to2_sessions",
+		map[string]any{
+			"session": sessID,
+			"guid":    guid[:],
+		},
+		map[string]any{
+			"session": sessID,
+		})
 }
 
 // GUID retrieves the GUID of the voucher associated with the session.
 func (db *DB) GUID(ctx context.Context) (fdo.GUID, error) {
 	sessID, ok := db.sessionID(ctx)
 	if !ok {
-		return fdo.GUID{}, ErrInvalidSession
+		return fdo.GUID{}, fdo.ErrInvalidSession
 	}
 
 	var result []byte
-	if err := db.query("sessions", []string{"guid"}, map[string]any{
-		"id": sessID,
+	if err := db.query("to2_sessions", []string{"guid"}, map[string]any{
+		"session": sessID,
 	}, &result); err != nil {
 		return fdo.GUID{}, err
 	}
@@ -651,33 +693,14 @@ func (db *DB) GUID(ctx context.Context) (fdo.GUID, error) {
 // NewVoucher creates and stores a new voucher.
 func (db *DB) NewVoucher(ctx context.Context, ov *fdo.Voucher) error {
 	if db.AutoExtend {
-		keyType := ov.Header.Val.ManufacturerKey.Type
-		owner, _, err := db.manufacturerKey(keyType)
-		if err != nil {
-			return fmt.Errorf("auto extend: error getting %s manufacturer key: %w", keyType, err)
-		}
-		nextOwner, _, err := db.ownerKey(keyType)
-		if err != nil {
-			return fmt.Errorf("auto extend: error getting %s owner key: %w", keyType, err)
-		}
-		switch owner := owner.(type) {
-		case *ecdsa.PrivateKey:
-			nextOwner, ok := nextOwner.(*ecdsa.PrivateKey)
-			if !ok {
-				return fmt.Errorf("owner key must be %s", keyType)
-			}
-			ov, err = fdo.ExtendVoucher(ov, owner, &nextOwner.PublicKey, nil)
-		case *rsa.PrivateKey:
-			nextOwner, ok := nextOwner.(*rsa.PrivateKey)
-			if !ok {
-				return fmt.Errorf("owner key must be %s", keyType)
-			}
-			ov, err = fdo.ExtendVoucher(ov, owner, &nextOwner.PublicKey, nil)
-		default:
-			return fmt.Errorf("invalid key type %T", owner)
-		}
-		if err != nil {
+		if err := db.autoExtend(ov); err != nil {
 			return fmt.Errorf("auto extend: %w", err)
+		}
+
+		if db.AutoRegisterRV != nil {
+			if err := db.autoRegisterRV(ctx, ov); err != nil {
+				return fmt.Errorf("auto register RV blob: %w", err)
+			}
 		}
 	}
 
@@ -689,6 +712,84 @@ func (db *DB) NewVoucher(ctx context.Context, ov *fdo.Voucher) error {
 		"guid": ov.Header.Val.GUID[:],
 		"cbor": data,
 	}, nil)
+}
+
+func (db *DB) autoExtend(ov *fdo.Voucher) error {
+	keyType := ov.Header.Val.ManufacturerKey.Type
+	owner, _, err := db.manufacturerKey(keyType)
+	if err != nil {
+		return fmt.Errorf("error getting %s manufacturer key: %w", keyType, err)
+	}
+	nextOwner, _, err := db.ownerKey(keyType)
+	if err != nil {
+		return fmt.Errorf("error getting %s owner key: %w", keyType, err)
+	}
+	switch owner := owner.(type) {
+	case *ecdsa.PrivateKey:
+		nextOwner, ok := nextOwner.(*ecdsa.PrivateKey)
+		if !ok {
+			return fmt.Errorf("owner key must be %s", keyType)
+		}
+		extended, err := fdo.ExtendVoucher(ov, owner, &nextOwner.PublicKey, nil)
+		if err != nil {
+			return err
+		}
+		*ov = *extended
+	case *rsa.PrivateKey:
+		nextOwner, ok := nextOwner.(*rsa.PrivateKey)
+		if !ok {
+			return fmt.Errorf("owner key must be %s", keyType)
+		}
+		extended, err := fdo.ExtendVoucher(ov, owner, &nextOwner.PublicKey, nil)
+		if err != nil {
+			return err
+		}
+		*ov = *extended
+	default:
+		return fmt.Errorf("invalid key type %T", owner)
+	}
+
+	return nil
+}
+
+func (db *DB) autoRegisterRV(ctx context.Context, ov *fdo.Voucher) error {
+	keyType := ov.Header.Val.ManufacturerKey.Type
+	nextOwner, _, err := db.ownerKey(keyType)
+	if err != nil {
+		return fmt.Errorf("error getting %s owner key: %w", keyType, err)
+	}
+
+	var opts crypto.SignerOpts
+	switch keyType {
+	case fdo.Rsa2048RestrKeyType, fdo.RsaPkcsKeyType, fdo.RsaPssKeyType:
+		switch rsaPub := nextOwner.Public().(*rsa.PublicKey); rsaPub.Size() {
+		case 2048 / 8:
+			opts = crypto.SHA256
+		case 3072 / 8:
+			opts = crypto.SHA384
+		default:
+			return fmt.Errorf("unsupported RSA key size: %d bits", rsaPub.Size()*8)
+		}
+
+		if keyType == fdo.RsaPssKeyType {
+			opts = &rsa.PSSOptions{
+				SaltLength: rsa.PSSSaltLengthEqualsHash,
+				Hash:       opts.(crypto.Hash),
+			}
+		}
+	}
+
+	sign1 := cose.Sign1[fdo.To1d, []byte]{
+		Payload: cbor.NewByteWrap(*db.AutoRegisterRV),
+	}
+	if err := sign1.Sign(nextOwner, nil, nil, opts); err != nil {
+		return fmt.Errorf("error signing to1d: %w", err)
+	}
+	if err := db.SetRVBlob(ctx, ov.Header.Val.GUID, &sign1); err != nil {
+		return fmt.Errorf("error storing to1d: %w", err)
+	}
+
+	return nil
 }
 
 // ReplaceVoucher stores a new voucher, possibly deleting or marking the
@@ -737,7 +838,7 @@ func (db *DB) Voucher(ctx context.Context, guid fdo.GUID) (*fdo.Voucher, error) 
 func (db *DB) SetReplacementGUID(ctx context.Context, guid fdo.GUID) error {
 	sessID, ok := db.sessionID(ctx)
 	if !ok {
-		return ErrInvalidSession
+		return fdo.ErrInvalidSession
 	}
 	return db.insert("replacement_vouchers",
 		map[string]any{
@@ -754,7 +855,7 @@ func (db *DB) SetReplacementGUID(ctx context.Context, guid fdo.GUID) error {
 func (db *DB) ReplacementGUID(ctx context.Context) (fdo.GUID, error) {
 	sessID, ok := db.sessionID(ctx)
 	if !ok {
-		return fdo.GUID{}, ErrInvalidSession
+		return fdo.GUID{}, fdo.ErrInvalidSession
 	}
 
 	var into []byte
@@ -776,7 +877,7 @@ func (db *DB) ReplacementGUID(ctx context.Context) (fdo.GUID, error) {
 func (db *DB) SetReplacementHmac(ctx context.Context, hmac fdo.Hmac) error {
 	sessID, ok := db.sessionID(ctx)
 	if !ok {
-		return ErrInvalidSession
+		return fdo.ErrInvalidSession
 	}
 	return db.insert("replacement_vouchers",
 		map[string]any{
@@ -793,7 +894,7 @@ func (db *DB) SetReplacementHmac(ctx context.Context, hmac fdo.Hmac) error {
 func (db *DB) ReplacementHmac(ctx context.Context) (fdo.Hmac, error) {
 	sessID, ok := db.sessionID(ctx)
 	if !ok {
-		return fdo.Hmac{}, ErrInvalidSession
+		return fdo.Hmac{}, fdo.ErrInvalidSession
 	}
 
 	var hmac []byte
@@ -824,7 +925,7 @@ func (db *DB) ReplacementHmac(ctx context.Context) (fdo.Hmac, error) {
 func (db *DB) SetSession(ctx context.Context, suite kex.Suite, sess kex.Session) error {
 	sessID, ok := db.sessionID(ctx)
 	if !ok {
-		return ErrInvalidSession
+		return fdo.ErrInvalidSession
 	}
 
 	stateMarshaler, ok := sess.(encoding.BinaryMarshaler)
@@ -853,7 +954,7 @@ func (db *DB) SetSession(ctx context.Context, suite kex.Suite, sess kex.Session)
 func (db *DB) Session(ctx context.Context, token string) (kex.Suite, kex.Session, error) {
 	sessID, ok := db.sessionID(db.TokenContext(ctx, token))
 	if !ok {
-		return "", nil, ErrInvalidSession
+		return "", nil, fdo.ErrInvalidSession
 	}
 
 	var suite string
@@ -881,9 +982,9 @@ func (db *DB) Session(ctx context.Context, token string) (kex.Suite, kex.Session
 func (db *DB) SetProveDeviceNonce(ctx context.Context, nonce fdo.Nonce) error {
 	sessID, ok := db.sessionID(ctx)
 	if !ok {
-		return ErrInvalidSession
+		return fdo.ErrInvalidSession
 	}
-	return db.insert("nonces",
+	return db.insert("to2_sessions",
 		map[string]any{
 			"session":      sessID,
 			"prove_device": nonce[:],
@@ -898,11 +999,11 @@ func (db *DB) SetProveDeviceNonce(ctx context.Context, nonce fdo.Nonce) error {
 func (db *DB) ProveDeviceNonce(ctx context.Context) (fdo.Nonce, error) {
 	sessID, ok := db.sessionID(ctx)
 	if !ok {
-		return fdo.Nonce{}, ErrInvalidSession
+		return fdo.Nonce{}, fdo.ErrInvalidSession
 	}
 
 	var into []byte
-	if err := db.query("nonces", []string{"prove_device"}, map[string]any{
+	if err := db.query("to2_sessions", []string{"prove_device"}, map[string]any{
 		"session": sessID,
 	}, &into); err != nil {
 		return fdo.Nonce{}, err
@@ -921,9 +1022,9 @@ func (db *DB) ProveDeviceNonce(ctx context.Context) (fdo.Nonce, error) {
 func (db *DB) SetSetupDeviceNonce(ctx context.Context, nonce fdo.Nonce) error {
 	sessID, ok := db.sessionID(ctx)
 	if !ok {
-		return ErrInvalidSession
+		return fdo.ErrInvalidSession
 	}
-	return db.update("nonces",
+	return db.insert("to2_sessions",
 		map[string]any{
 			"session":      sessID,
 			"setup_device": nonce[:],
@@ -939,11 +1040,11 @@ func (db *DB) SetSetupDeviceNonce(ctx context.Context, nonce fdo.Nonce) error {
 func (db *DB) SetupDeviceNonce(ctx context.Context) (fdo.Nonce, error) {
 	sessID, ok := db.sessionID(ctx)
 	if !ok {
-		return fdo.Nonce{}, ErrInvalidSession
+		return fdo.Nonce{}, fdo.ErrInvalidSession
 	}
 
 	var into []byte
-	if err := db.query("nonces", []string{"setup_device"}, map[string]any{
+	if err := db.query("to2_sessions", []string{"setup_device"}, map[string]any{
 		"session": sessID,
 	}, &into); err != nil {
 		return fdo.Nonce{}, err
@@ -977,7 +1078,7 @@ func (db *DB) AddOwnerKey(keyType fdo.KeyType, key crypto.PrivateKey, chain []*x
 	})
 }
 
-func (db *DB) ownerKey(keyType fdo.KeyType) (crypto.PrivateKey, []*x509.Certificate, error) {
+func (db *DB) ownerKey(keyType fdo.KeyType) (crypto.Signer, []*x509.Certificate, error) {
 	query, _, err := db.conn.Prepare(`SELECT pkcs8, x509_chain FROM owner_keys WHERE type = ?`)
 	if err != nil {
 		return nil, nil, fmt.Errorf("error preparing query: %w", err)
@@ -990,7 +1091,7 @@ func (db *DB) ownerKey(keyType fdo.KeyType) (crypto.PrivateKey, []*x509.Certific
 		if err := query.Err(); err != nil {
 			return nil, nil, fmt.Errorf("error querying DB: %w", err)
 		}
-		return nil, nil, ErrNotFound
+		return nil, nil, fdo.ErrNotFound
 	}
 
 	// TODO: Randomize result? Return multiple?
@@ -1003,7 +1104,7 @@ func (db *DB) ownerKey(keyType fdo.KeyType) (crypto.PrivateKey, []*x509.Certific
 	if err != nil {
 		return nil, nil, fmt.Errorf("error parsing owner certificate chain: %w", err)
 	}
-	return key, chain, nil
+	return key.(crypto.Signer), chain, nil
 }
 
 // Signer returns the private key matching a given key type.
@@ -1012,34 +1113,68 @@ func (db *DB) Signer(keyType fdo.KeyType) (crypto.Signer, bool) {
 	if err != nil {
 		return nil, false
 	}
-	signer, ok := key.(crypto.Signer)
-	return signer, ok
+	return key, true
 }
 
 // SetMTU sets the max service info size the device may receive.
 func (db *DB) SetMTU(ctx context.Context, mtu uint16) error {
 	sessID, ok := db.sessionID(ctx)
 	if !ok {
-		return ErrInvalidSession
+		return fdo.ErrInvalidSession
 	}
-	return db.update("sessions",
-		map[string]any{"mtu": int(mtu)},
-		map[string]any{"id": sessID})
+	return db.insert("to2_sessions",
+		map[string]any{
+			"session": sessID,
+			"mtu":     int(mtu),
+		},
+		map[string]any{
+			"session": sessID,
+		})
 }
 
 // MTU returns the max service info size the device may receive.
 func (db *DB) MTU(ctx context.Context) (uint16, error) {
 	sessID, ok := db.sessionID(ctx)
 	if !ok {
-		return 0, ErrInvalidSession
+		return 0, fdo.ErrInvalidSession
 	}
 
 	var mtu int
-	if err := db.query("sessions", []string{"mtu"}, map[string]any{
-		"id": sessID,
+	if err := db.query("to2_sessions", []string{"mtu"}, map[string]any{
+		"session": sessID,
 	}, &mtu); err != nil {
 		return 0, err
 	}
 
 	return uint16(mtu), nil
+}
+
+// SetRVBlob sets the owner rendezvous blob for a device.
+func (db *DB) SetRVBlob(ctx context.Context, guid fdo.GUID, to1d *cose.Sign1[fdo.To1d, []byte]) error {
+	blob, err := cbor.Marshal(to1d)
+	if err != nil {
+		return fmt.Errorf("error marshaling rendezvous blob: %w", err)
+	}
+	return db.insert("rv_blobs",
+		map[string]any{
+			"guid": guid[:],
+			"rv":   blob,
+		},
+		nil)
+}
+
+// RVBlob returns the owner rendezvous blob for a device.
+func (db *DB) RVBlob(ctx context.Context, guid fdo.GUID) (*cose.Sign1[fdo.To1d, []byte], error) {
+	var blob []byte
+	if err := db.query("rv_blobs", []string{"rv"}, map[string]any{
+		"guid": guid[:],
+	}, &blob); err != nil {
+		return nil, err
+	}
+
+	var to1d cose.Sign1[fdo.To1d, []byte]
+	if err := cbor.Unmarshal(blob, &to1d); err != nil {
+		return nil, fmt.Errorf("error unmarshaling rendezvous blob: %w", err)
+	}
+	return &to1d, nil
 }

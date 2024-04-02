@@ -16,22 +16,24 @@ import (
 	"fmt"
 
 	"github.com/fido-device-onboard/go-fdo"
+	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/cose"
 )
-
-// ErrNotFound is used when a resource does not exist in the memory state.
-var ErrNotFound = fmt.Errorf("not found")
 
 // State implements interfaces for state which must be persisted between
 // protocol sessions, but not between server processes.
 type State struct {
+	RVBlobs    map[fdo.GUID]*cose.Sign1[fdo.To1d, []byte]
 	Vouchers   map[fdo.GUID]*fdo.Voucher
 	OwnerKeys  map[fdo.KeyType]crypto.Signer
 	AutoExtend interface {
 		ExtendVoucher(*fdo.Voucher, crypto.PublicKey) (*fdo.Voucher, error)
 	}
+	AutoRegisterRV           *fdo.To1d
 	PreserveReplacedVouchers bool
 }
 
+var _ fdo.RendezvousBlobPersistentState = (*State)(nil)
 var _ fdo.VoucherPersistentState = (*State)(nil)
 var _ fdo.OwnerKeyPersistentState = (*State)(nil)
 
@@ -50,6 +52,7 @@ func NewState() (*State, error) {
 		return nil, err
 	}
 	return &State{
+		RVBlobs:  make(map[fdo.GUID]*cose.Sign1[fdo.To1d, []byte]),
 		Vouchers: make(map[fdo.GUID]*fdo.Voucher),
 		OwnerKeys: map[fdo.KeyType]crypto.Signer{
 			fdo.Rsa2048RestrKeyType: rsaKey,
@@ -74,6 +77,41 @@ func (s *State) NewVoucher(_ context.Context, ov *fdo.Voucher) error {
 			return err
 		}
 		ov = ex
+
+		if s.AutoRegisterRV != nil {
+			keyType := ov.Header.Val.ManufacturerKey.Type
+			key, ok := s.OwnerKeys[keyType]
+			if !ok {
+				return fmt.Errorf("auto register RV blob: no owner key of type %s", keyType)
+			}
+			var opts crypto.SignerOpts
+			switch keyType {
+			case fdo.Rsa2048RestrKeyType, fdo.RsaPkcsKeyType, fdo.RsaPssKeyType:
+				switch rsaPub := key.Public().(*rsa.PublicKey); rsaPub.Size() {
+				case 2048 / 8:
+					opts = crypto.SHA256
+				case 3072 / 8:
+					opts = crypto.SHA384
+				default:
+					return fmt.Errorf("unsupported RSA key size: %d bits", rsaPub.Size()*8)
+				}
+
+				if keyType == fdo.RsaPssKeyType {
+					opts = &rsa.PSSOptions{
+						SaltLength: rsa.PSSSaltLengthEqualsHash,
+						Hash:       opts.(crypto.Hash),
+					}
+				}
+			}
+
+			sign1 := cose.Sign1[fdo.To1d, []byte]{
+				Payload: cbor.NewByteWrap(*s.AutoRegisterRV),
+			}
+			if err := sign1.Sign(key, nil, nil, opts); err != nil {
+				return fmt.Errorf("auto register RV blob: %w", err)
+			}
+			s.RVBlobs[ov.Header.Val.GUID] = &sign1
+		}
 	}
 	s.Vouchers[ov.Header.Val.GUID] = ov
 	return nil
@@ -93,7 +131,7 @@ func (s *State) ReplaceVoucher(_ context.Context, oldGUID fdo.GUID, ov *fdo.Vouc
 func (s *State) Voucher(_ context.Context, guid fdo.GUID) (*fdo.Voucher, error) {
 	ov, ok := s.Vouchers[guid]
 	if !ok {
-		return nil, ErrNotFound
+		return nil, fdo.ErrNotFound
 	}
 	return ov, nil
 }
@@ -102,4 +140,19 @@ func (s *State) Voucher(_ context.Context, guid fdo.GUID) (*fdo.Voucher, error) 
 func (s *State) Signer(keyType fdo.KeyType) (crypto.Signer, bool) {
 	key, ok := s.OwnerKeys[keyType]
 	return key, ok
+}
+
+// SetRVBlob sets the owner rendezvous blob for a device.
+func (s *State) SetRVBlob(ctx context.Context, guid fdo.GUID, to1d *cose.Sign1[fdo.To1d, []byte]) error {
+	s.RVBlobs[guid] = to1d
+	return nil
+}
+
+// RVBlob returns the owner rendezvous blob for a device.
+func (s *State) RVBlob(ctx context.Context, guid fdo.GUID) (*cose.Sign1[fdo.To1d, []byte], error) {
+	to1d, ok := s.RVBlobs[guid]
+	if !ok {
+		return nil, fdo.ErrNotFound
+	}
+	return to1d, nil
 }
