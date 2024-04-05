@@ -14,6 +14,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"fmt"
+	"time"
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
@@ -143,7 +144,8 @@ func (s *State) Signer(keyType fdo.KeyType) (crypto.Signer, bool) {
 }
 
 // SetRVBlob sets the owner rendezvous blob for a device.
-func (s *State) SetRVBlob(ctx context.Context, guid fdo.GUID, to1d *cose.Sign1[fdo.To1d, []byte]) error {
+func (s *State) SetRVBlob(ctx context.Context, guid fdo.GUID, to1d *cose.Sign1[fdo.To1d, []byte], exp time.Time) error {
+	// TODO: Handle expiration
 	s.RVBlobs[guid] = to1d
 	return nil
 }

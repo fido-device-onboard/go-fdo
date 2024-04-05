@@ -31,6 +31,11 @@ type diState struct {
 	Chain []*cbor.X509Certificate
 }
 
+type to0State struct {
+	Unique
+	Nonce fdo.Nonce
+}
+
 type to1State struct {
 	Unique
 	Nonce  fdo.Nonce
@@ -96,6 +101,7 @@ type Service struct {
 
 var _ fdo.TokenService = (*Service)(nil)
 var _ fdo.DISessionState = (*Service)(nil)
+var _ fdo.TO0SessionState = (*Service)(nil)
 var _ fdo.TO1SessionState = (*Service)(nil)
 var _ fdo.TO2SessionState = (*Service)(nil)
 
@@ -188,6 +194,8 @@ func (s Service) NewToken(ctx context.Context, proto fdo.Protocol) (string, erro
 	switch proto {
 	case fdo.DIProtocol:
 		return newToken[*diState](s.HmacSecret)
+	case fdo.TO0Protocol:
+		return newToken[*to0State](s.HmacSecret)
 	case fdo.TO1Protocol:
 		return newToken[*to1State](s.HmacSecret)
 	case fdo.TO2Protocol:
@@ -308,6 +316,24 @@ func (s Service) IncompleteVoucherHeader(ctx context.Context) (*fdo.VoucherHeade
 			return nil, fdo.ErrNotFound
 		}
 		return state.OVH, nil
+	})
+}
+
+// SetTO0SignNonce sets the Nonce expected in TO0.OwnerSign.
+func (s Service) SetTO0SignNonce(ctx context.Context, nonce fdo.Nonce) error {
+	return update(ctx, s, func(state *to0State) error {
+		state.Nonce = nonce
+		return nil
+	})
+}
+
+// TO0SignNonce returns the Nonce expected in TO0.OwnerSign.
+func (s Service) TO0SignNonce(ctx context.Context) (fdo.Nonce, error) {
+	return fetch(ctx, s, func(state to0State) (fdo.Nonce, error) {
+		if state.Nonce == (fdo.Nonce{}) {
+			return fdo.Nonce{}, fdo.ErrNotFound
+		}
+		return state.Nonce, nil
 	})
 }
 

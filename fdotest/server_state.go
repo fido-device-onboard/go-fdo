@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
@@ -31,6 +32,7 @@ import (
 type AllServerState interface {
 	fdo.TokenService
 	fdo.DISessionState
+	fdo.TO0SessionState
 	fdo.TO1SessionState
 	fdo.TO2SessionState
 	fdo.RendezvousBlobPersistentState
@@ -47,7 +49,7 @@ func TestServerState(state AllServerState, t *testing.T) {
 		// Shadow state to limit testable functions
 		var state fdo.TokenService = state
 
-		for _, protocol := range []fdo.Protocol{fdo.DIProtocol, fdo.TO1Protocol, fdo.TO2Protocol} {
+		for _, protocol := range []fdo.Protocol{fdo.DIProtocol, fdo.TO0Protocol, fdo.TO1Protocol, fdo.TO2Protocol} {
 			token, err := state.NewToken(context.Background(), protocol)
 			if err != nil {
 				t.Fatalf("error creating token for %s: %v", protocol, err)
@@ -178,6 +180,37 @@ func TestServerState(state AllServerState, t *testing.T) {
 		}
 		if !ovh.Equal(gotOVH) {
 			t.Fatal("incomplete voucher header state does not match expected")
+		}
+	})
+
+	t.Run("TO0SessionState", func(t *testing.T) {
+		token, err := state.NewToken(context.TODO(), fdo.TO0Protocol)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx := state.TokenContext(context.TODO(), token)
+		defer func() { _ = state.InvalidateToken(ctx) }()
+
+		// Shadow state to limit testable functions
+		var state fdo.TO0SessionState = state
+
+		// Store and retrieve proof nonce
+		if _, err := state.TO0SignNonce(ctx); !errors.Is(err, fdo.ErrNotFound) {
+			t.Fatalf("expected ErrNotFound, got %v", err)
+		}
+		var nonce fdo.Nonce
+		if _, err := rand.Read(nonce[:]); err != nil {
+			t.Fatal(err)
+		}
+		if err := state.SetTO0SignNonce(ctx, nonce); err != nil {
+			t.Fatal(err)
+		}
+		gotNonce, err := state.TO0SignNonce(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(nonce[:], gotNonce[:]) {
+			t.Fatal("TO0 sign nonce state did not match expected")
 		}
 	})
 
@@ -451,7 +484,8 @@ func TestServerState(state AllServerState, t *testing.T) {
 		if _, err := state.RVBlob(context.TODO(), guid); !errors.Is(err, fdo.ErrNotFound) {
 			t.Fatalf("expected ErrNotFound, got %v", err)
 		}
-		if err := state.SetRVBlob(context.TODO(), guid, &expect); err != nil {
+		exp := time.Now().Add(time.Hour)
+		if err := state.SetRVBlob(context.TODO(), guid, &expect, exp); err != nil {
 			t.Fatal(err)
 		}
 		got, err := state.RVBlob(context.TODO(), guid)

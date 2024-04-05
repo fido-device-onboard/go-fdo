@@ -80,6 +80,7 @@ func New(filename string) (*DB, error) {
 		`CREATE TABLE IF NOT EXISTS rv_blobs
 			( guid BLOB PRIMARY KEY
 			, rv BLOB NOT NULL
+			, exp INTEGER NOT NULL
 			)`,
 		`CREATE TABLE IF NOT EXISTS sessions
 			( id BLOB PRIMARY KEY
@@ -98,6 +99,11 @@ func New(filename string) (*DB, error) {
 		`CREATE TABLE IF NOT EXISTS incomplete_vouchers
 			( session BLOB UNIQUE NOT NULL
 			, header BLOB NOT NULL
+			, FOREIGN KEY(session) REFERENCES sessions(id) ON DELETE CASCADE
+			)`,
+		`CREATE TABLE IF NOT EXISTS to0_sessions
+			( session BLOB UNIQUE NOT NULL
+			, nonce BLOB
 			, FOREIGN KEY(session) REFERENCES sessions(id) ON DELETE CASCADE
 			)`,
 		`CREATE TABLE IF NOT EXISTS to1_sessions
@@ -152,6 +158,7 @@ func (db *DB) Close() error { return db.conn.Close() }
 var _ interface {
 	fdo.TokenService
 	fdo.DISessionState
+	fdo.TO0SessionState
 	fdo.TO1SessionState
 	fdo.TO2SessionState
 	fdo.RendezvousBlobPersistentState
@@ -321,6 +328,8 @@ func (db *DB) insertWithinTx(table string, kvs, upsertWhere map[string]any) erro
 		switch value := val.(type) {
 		case int:
 			err = insert.BindInt(insert.BindIndex(":"+key), value)
+		case int64:
+			err = insert.BindInt64(insert.BindIndex(":"+key), value)
 		case string:
 			err = insert.BindText(insert.BindIndex(":"+key), value)
 		case []byte:
@@ -373,6 +382,8 @@ func (db *DB) update(table string, kvs, where map[string]any) error {
 			switch value := val.(type) {
 			case int:
 				err = update.BindInt(update.BindIndex(":"+prefix+key), value)
+			case int64:
+				err = update.BindInt64(update.BindIndex(":"+prefix+key), value)
 			case string:
 				err = update.BindText(update.BindIndex(":"+prefix+key), value)
 			case []byte:
@@ -416,6 +427,8 @@ func (db *DB) query(table string, columns []string, where map[string]any, into .
 		switch value := val.(type) {
 		case int:
 			err = query.BindInt(query.BindIndex(":"+key), value)
+		case int64:
+			err = query.BindInt64(query.BindIndex(":"+key), value)
 		case string:
 			err = query.BindText(query.BindIndex(":"+key), value)
 		case []byte:
@@ -445,6 +458,8 @@ func (db *DB) query(table string, columns []string, where map[string]any, into .
 		switch val := into[i].(type) {
 		case *int:
 			*val = query.ColumnInt(i)
+		case *int64:
+			*val = query.ColumnInt64(i)
 		case *string:
 			*val = query.ColumnText(i)
 		case *[]byte:
@@ -616,6 +631,41 @@ func (db *DB) IncompleteVoucherHeader(ctx context.Context) (*fdo.VoucherHeader, 
 	return &ovh, nil
 }
 
+// SetTO0SignNonce sets the Nonce expected in TO0.OwnerSign.
+func (db *DB) SetTO0SignNonce(ctx context.Context, nonce fdo.Nonce) error {
+	sessID, ok := db.sessionID(ctx)
+	if !ok {
+		return fdo.ErrInvalidSession
+	}
+	return db.insert("to0_sessions",
+		map[string]any{
+			"session": sessID,
+			"nonce":   nonce[:],
+		},
+		map[string]any{
+			"session": sessID,
+		})
+}
+
+// TO0SignNonce returns the Nonce expected in TO0.OwnerSign.
+func (db *DB) TO0SignNonce(ctx context.Context) (fdo.Nonce, error) {
+	sessID, ok := db.sessionID(ctx)
+	if !ok {
+		return fdo.Nonce{}, fdo.ErrInvalidSession
+	}
+
+	var into []byte
+	if err := db.query("to0_sessions", []string{"nonce"}, map[string]any{
+		"session": sessID,
+	}, &into); err != nil {
+		return fdo.Nonce{}, err
+	}
+
+	var nonce fdo.Nonce
+	_ = copy(nonce[:], into)
+	return nonce, nil
+}
+
 // SetTO1ProofNonce sets the Nonce expected in TO1.ProveToRV.
 func (db *DB) SetTO1ProofNonce(ctx context.Context, nonce fdo.Nonce) error {
 	sessID, ok := db.sessionID(ctx)
@@ -785,7 +835,8 @@ func (db *DB) autoRegisterRV(ctx context.Context, ov *fdo.Voucher) error {
 	if err := sign1.Sign(nextOwner, nil, nil, opts); err != nil {
 		return fmt.Errorf("error signing to1d: %w", err)
 	}
-	if err := db.SetRVBlob(ctx, ov.Header.Val.GUID, &sign1); err != nil {
+	exp := time.Now().AddDate(30, 0, 0) // Expire in 30 years
+	if err := db.SetRVBlob(ctx, ov.Header.Val.GUID, &sign1, exp); err != nil {
 		return fmt.Errorf("error storing to1d: %w", err)
 	}
 
@@ -1150,7 +1201,7 @@ func (db *DB) MTU(ctx context.Context) (uint16, error) {
 }
 
 // SetRVBlob sets the owner rendezvous blob for a device.
-func (db *DB) SetRVBlob(ctx context.Context, guid fdo.GUID, to1d *cose.Sign1[fdo.To1d, []byte]) error {
+func (db *DB) SetRVBlob(ctx context.Context, guid fdo.GUID, to1d *cose.Sign1[fdo.To1d, []byte], exp time.Time) error {
 	blob, err := cbor.Marshal(to1d)
 	if err != nil {
 		return fmt.Errorf("error marshaling rendezvous blob: %w", err)
@@ -1159,17 +1210,24 @@ func (db *DB) SetRVBlob(ctx context.Context, guid fdo.GUID, to1d *cose.Sign1[fdo
 		map[string]any{
 			"guid": guid[:],
 			"rv":   blob,
+			"exp":  exp.Unix(),
 		},
-		nil)
+		map[string]any{
+			"guid": guid[:],
+		})
 }
 
 // RVBlob returns the owner rendezvous blob for a device.
 func (db *DB) RVBlob(ctx context.Context, guid fdo.GUID) (*cose.Sign1[fdo.To1d, []byte], error) {
 	var blob []byte
-	if err := db.query("rv_blobs", []string{"rv"}, map[string]any{
+	var exp int64
+	if err := db.query("rv_blobs", []string{"rv", "exp"}, map[string]any{
 		"guid": guid[:],
-	}, &blob); err != nil {
+	}, &blob, &exp); err != nil {
 		return nil, err
+	}
+	if time.Now().After(time.Unix(exp, 0)) {
+		return nil, fdo.ErrNotFound
 	}
 
 	var to1d cose.Sign1[fdo.To1d, []byte]

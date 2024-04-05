@@ -5,7 +5,6 @@ package sqlite_test
 
 import (
 	"context"
-	"crypto/sha256"
 	"crypto/x509"
 	"runtime"
 	"testing"
@@ -23,27 +22,13 @@ func TestClient(t *testing.T) {
 	state.AutoExtend = true
 	state.PreserveReplacedVouchers = true
 
-	// TODO: Remove when TO0 is implemented
 	dnsAddr := "owner.fidoalliance.org"
-	fakeHash := sha256.Sum256([]byte("fake blob"))
-	state.AutoRegisterRV = &fdo.To1d{
-		RV: []fdo.RvTO2Addr{
-			{
-				DNSAddress:        &dnsAddr,
-				Port:              8080,
-				TransportProtocol: fdo.HTTPTransport,
-			},
-		},
-		To0dHash: fdo.Hash{
-			Algorithm: fdo.Sha256Hash,
-			Value:     fakeHash[:],
-		},
-	}
 
 	var fsims fdotest.FSIMList
 	server := &fdo.Server{
 		Tokens:    state,
 		DI:        state,
+		TO0:       state,
 		TO1:       state,
 		TO2:       state,
 		RVBlobs:   state,
@@ -54,8 +39,10 @@ func TestClient(t *testing.T) {
 		},
 	}
 
+	transport := &fdotest.Transport{Responder: server, T: t}
+
 	fdotest.TestClient(&fdo.Client{
-		Transport: &fdotest.Transport{Responder: server, T: t},
+		Transport: transport,
 		Cred:      fdo.DeviceCredential{Version: 101},
 		Devmod: fdo.Devmod{
 			Os:      runtime.GOOS,
@@ -68,6 +55,18 @@ func TestClient(t *testing.T) {
 		KeyExchange: kex.ECDH256Suite,
 		CipherSuite: kex.A128GcmCipher,
 	},
+		&fdo.TO0Client{
+			Transport: transport,
+			Addrs: []fdo.RvTO2Addr{
+				{
+					DNSAddress:        &dnsAddr,
+					Port:              8080,
+					TransportProtocol: fdo.HTTPTransport,
+				},
+			},
+			Vouchers:  state,
+			OwnerKeys: state,
+		},
 		func(fsim serviceinfo.OwnerModule) { fsims = append(fsims, fsim) },
 		t)
 }

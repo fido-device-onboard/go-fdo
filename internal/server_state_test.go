@@ -24,6 +24,7 @@ func TestServerState(t *testing.T) {
 	state := struct {
 		fdo.TokenService
 		fdo.DISessionState
+		fdo.TO0SessionState
 		fdo.TO1SessionState
 		fdo.TO2SessionState
 		fdo.RendezvousBlobPersistentState
@@ -32,6 +33,7 @@ func TestServerState(t *testing.T) {
 	}{
 		TokenService:                  stateless,
 		DISessionState:                stateless,
+		TO0SessionState:               stateless,
 		TO1SessionState:               stateless,
 		TO2SessionState:               stateless,
 		RendezvousBlobPersistentState: inMemory,

@@ -11,6 +11,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -39,7 +40,7 @@ func (list *FSIMList) Next() serviceinfo.OwnerModule {
 // methods at an almost end-to-end level (transport is mocked).
 //
 //nolint:gocyclo
-func TestClient(cli *fdo.Client, addFSIM func(serviceinfo.OwnerModule), t *testing.T) {
+func TestClient(cli *fdo.Client, to0 *fdo.TO0Client, addFSIM func(serviceinfo.OwnerModule), t *testing.T) {
 	t.Run("Device Initialization", func(t *testing.T) {
 		secret := make([]byte, 32)
 		if _, err := rand.Read(secret); err != nil {
@@ -84,6 +85,19 @@ func TestClient(cli *fdo.Client, addFSIM func(serviceinfo.OwnerModule), t *testi
 			HmacSecret:       []byte(cli.Hmac.(blob.Hmac)),
 			PrivateKey:       blob.Pkcs8Key{PrivateKey: cli.Key},
 		})
+	})
+
+	t.Run("Transfer Ownership 0", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if _, err := cli.TransferOwnership1(ctx, ""); !strings.HasSuffix(err.Error(), fdo.ErrNotFound.Error()) {
+			t.Fatalf("expected TO1 to fail with no resource found, got %v", err)
+		}
+		ttl, err := to0.RegisterBlob(ctx, "", cli.Cred.GUID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("RV Blob TTL: %d seconds", ttl)
 	})
 
 	t.Run("Transfer Ownership 1 and Transfer Ownership 2", func(t *testing.T) {

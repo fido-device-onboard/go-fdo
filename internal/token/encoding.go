@@ -27,7 +27,7 @@ type statePtr[T state] interface {
 }
 
 type state interface {
-	diState | to1State | to2State
+	diState | to0State | to1State | to2State
 }
 
 func newToken[P statePtr[T], T state](secret []byte) (string, error) {

@@ -19,6 +19,7 @@ type Server struct {
 	// Protocol session state
 	Tokens TokenService
 	DI     DISessionState
+	TO0    TO0SessionState
 	TO1    TO1SessionState
 	TO2    TO2SessionState
 
@@ -56,6 +57,8 @@ func (s *Server) Respond(ctx context.Context, token string, msgType uint8, msg i
 	switch msgType {
 	case diAppStartMsgType:
 		token, err = s.Tokens.NewToken(ctx, DIProtocol)
+	case to0HelloMsgType:
+		token, err = s.Tokens.NewToken(ctx, TO0Protocol)
 	case to1HelloRVMsgType:
 		token, err = s.Tokens.NewToken(ctx, TO1Protocol)
 	case to2HelloDeviceMsgType:
@@ -81,6 +84,14 @@ func (s *Server) Respond(ctx context.Context, token string, msgType uint8, msg i
 	case diSetHmacMsgType:
 		respType = diDoneMsgType
 		resp, err = s.diDone(ctx, msg)
+
+	// TO0
+	case to0HelloMsgType:
+		respType = to0HelloAckMsgType
+		resp, err = s.helloAck(ctx, msg)
+	case to0OwnerSignMsgType:
+		respType = to0AcceptOwnerMsgType
+		resp, err = s.acceptOwner(ctx, msg)
 
 	// TO1
 	case to1HelloRVMsgType:

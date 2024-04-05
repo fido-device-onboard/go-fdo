@@ -8,6 +8,7 @@ import (
 	"crypto"
 	"crypto/x509"
 	"fmt"
+	"time"
 
 	"github.com/fido-device-onboard/go-fdo/cose"
 	"github.com/fido-device-onboard/go-fdo/kex"
@@ -82,6 +83,15 @@ type DISessionState interface {
 	IncompleteVoucherHeader(context.Context) (*VoucherHeader, error)
 }
 
+// TO0SessionState stores TO0 protocol state for a particular session.
+type TO0SessionState interface {
+	// SetTO0SignNonce sets the Nonce expected in TO0.OwnerSign.
+	SetTO0SignNonce(context.Context, Nonce) error
+
+	// TO0SignNonce returns the Nonce expected in TO0.OwnerSign.
+	TO0SignNonce(context.Context) (Nonce, error)
+}
+
 // TO1SessionState stores TO1 protocol state for a particular session.
 type TO1SessionState interface {
 	// SetTO1ProofNonce sets the Nonce expected in TO1.ProveToRV.
@@ -145,7 +155,7 @@ type TO2SessionState interface {
 // TO0 and TO1.
 type RendezvousBlobPersistentState interface {
 	// SetRVBlob sets the owner rendezvous blob for a device.
-	SetRVBlob(context.Context, GUID, *cose.Sign1[To1d, []byte]) error
+	SetRVBlob(context.Context, GUID, *cose.Sign1[To1d, []byte], time.Time) error
 
 	// RVBlob returns the owner rendezvous blob for a device.
 	RVBlob(context.Context, GUID) (*cose.Sign1[To1d, []byte], error)
