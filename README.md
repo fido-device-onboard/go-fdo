@@ -12,7 +12,7 @@ It implements [FIDO Device Onboard Specification 1.1][fdo] as well as necessary 
 
 The example client and server application can be built with `go build` directly, but requires a Go workspace to build from the root package directory.
 
-```sh
+```console
 $ go work init
 $ go work use -r .
 $ go build -o fdo ./examples/cmd
@@ -58,7 +58,7 @@ Server options:
 
 ## Scaling Considerations
 
-If you are considering horizontal scaling, you're probably "holding it wrong." Device onboarding should be measured in devices per day, not per second. A rendezvous (TO1) server is likely the only piece that will ever need more than verical scaling, due to its centralized nature. (This is contingent on FDO becoming more popular, so it is a "good" problem to have.)
+If you are considering horizontal scaling, you're probably "holding it wrong." Device onboarding should be measured in devices per day, not per second. A rendezvous (TO1) server is likely the only piece that will ever need more than vertical scaling, due to its centralized nature. (This is contingent on FDO becoming more popular, so it is a "good" problem to have.)
 
 That said, a particularly memory usage-heavy FSIM could necessitate horizontal scaling, so here's what's needed:
 
