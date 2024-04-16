@@ -8,6 +8,54 @@ It implements [FIDO Device Onboard Specification 1.1][fdo] as well as necessary 
 [cbor]: https://www.rfc-editor.org/rfc/rfc8949.html
 [cose]: https://datatracker.ietf.org/doc/html/rfc8152
 
+## Building the Example Application
+
+The example client and server application can be built with `go build` directly, but requires a Go workspace to build from the root package directory.
+
+```sh
+$ go work init
+$ go work use -r .
+$ go build -o fdo ./examples/cmd
+$ ./fdo
+
+Usage:
+  fdo [client|server] [--] [options]
+
+Client options:
+  -blob string
+        File path of device credential blob (default "cred.bin")
+  -debug
+        Print HTTP contents
+  -di URL
+        HTTP base URL for DI server
+  -download dir
+        A dir to download files into (FSIM disabled if empty)
+  -print
+        Print device credential blob and stop
+  -rv-only
+        Perform TO1 then stop
+  -upload files
+        List of dirs and files to upload files from, comma-separated and/or flag provided multiple times (FSIM disabled if empty)
+
+Server options:
+  -db string
+        SQLite database file path (defaults to in-memory)
+  -debug
+        Print HTTP contents
+  -download file
+        Use fdo.download FSIM for each file (flag may be used multiple times)
+  -ext-http addr
+        External address devices should connect to (default "127.0.0.1:${LISTEN_PORT}")
+  -http addr
+        The address to listen on (default "localhost:8080")
+  -rv-bypass
+        Skip TO1
+  -upload file
+        Use fdo.upload FSIM for each file (flag may be used multiple times)
+  -upload-dir path
+        The directory path to put file uploads (default "uploads")
+```
+
 ## Scaling Considerations
 
 If you are considering horizontal scaling, you're probably "holding it wrong." Device onboarding should be measured in devices per day, not per second. A rendezvous (TO1) server is likely the only piece that will ever need more than verical scaling, due to its centralized nature. (This is contingent on FDO becoming more popular, so it is a "good" problem to have.)
