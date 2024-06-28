@@ -11,12 +11,13 @@ linters:
     - govet
     - revive
     - staticcheck
+    - gosec
 
 linters-settings:
-    gocyclo:
-      min-complexity: 15
-    goimports:
-      local-prefixes: github.com/intel-innersource/
+  gocyclo:
+    min-complexity: 15
+  goimports:
+    local-prefixes: github.com/intel-innersource/
 
 issues:
   exclude-use-default: false
@@ -24,8 +25,9 @@ issues:
   max-same-issues: 0
   exclude:
     - 'declaration of "(err|ctx)" shadows declaration at'
-    - '^unused-parameter: '
+    - "^unused-parameter: "
   exclude-rules:
     - path: _test\.go
       linters:
         - gocyclo
+        - gosec

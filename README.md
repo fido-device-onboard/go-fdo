@@ -55,15 +55,3 @@ Server options:
   -upload-dir path
         The directory path to put file uploads (default "uploads")
 ```
-
-## Scaling Considerations
-
-If you are considering horizontal scaling, you're probably "holding it wrong." Device onboarding should be measured in devices per day, not per second. A rendezvous (TO1) server is likely the only piece that will ever need more than vertical scaling, due to its centralized nature. (This is contingent on FDO becoming more popular, so it is a "good" problem to have.)
-
-That said, a particularly memory usage-heavy FSIM could necessitate horizontal scaling, so here's what's needed:
-
-TO2 state is mostly handled with a JWT-like Authorization token. Like JWTs, the HMAC secret must be shared between all instances.
-
-The remaining state to be shared is Owner Key and Voucher persistence, To1d (RV) blobs, and FSIM state. These few methods should be implemented with a distributed database backend. See `server_state.go`.
-
-Unfortunately, FSIM state is not yet setup to be shared and may never be. A reasonable workaround to this is to base server selection in the reverse proxy by using a hash of the Authorization token (or even creating true client-server affinity for the whole protocol). A hash of the Authorization token works, because when performing a message loop 68->69 for service info exchange, the Authorization token will not change. FSIM state is only relevant for this loop. All other TO2 state is embedded in the Authorization token.

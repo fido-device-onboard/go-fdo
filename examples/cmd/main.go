@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: (C) 2024 Intel Corporation
 // SPDX-License-Identifier: Apache 2.0
 
-// fdo implements client and server modes.
+// Package main implements client and server modes.
 package main
 
 import (

@@ -144,7 +144,7 @@ type helloDeviceMsg struct {
 
 // HelloDevice(60) -> ProveOVHdr(61)
 //
-//nolint:gocyclo, This is very complex validation that is better understood linearly
+//nolint:gocyclo // This is very complex validation that is better understood linearly
 func (c *Client) helloDevice(ctx context.Context, baseURL string) (Nonce, *ovhValidationContext, kex.Session, error) {
 	// Generate a new nonce
 	var proveOVNonce Nonce
@@ -533,7 +533,7 @@ type deviceSetup struct {
 
 // ProveDevice(64) -> SetupDevice(65)
 //
-//nolint:gocyclo, This is very complex validation that is better understood linearly
+//nolint:gocyclo // This is very complex validation that is better understood linearly
 func (s *Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1Tag[deviceSetup, []byte], error) {
 	// Parse request
 	var proof cose.Sign1Tag[eatoken, []byte]
