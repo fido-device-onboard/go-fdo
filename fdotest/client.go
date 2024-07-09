@@ -11,6 +11,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"os"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -145,7 +146,11 @@ func TestClient(cli *fdo.Client, to0 *fdo.TO0Client, addFSIM func(serviceinfo.Ow
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		newCred, err := cli.TransferOwnership2(ctx, "", nil, map[string]serviceinfo.DeviceModule{
-			"fdo.download": &fsim.Download{},
+			"fdo.download": &fsim.Download{
+				CreateTemp: func() (*os.File, error) {
+					return os.CreateTemp(".", "fdo.download_*")
+				},
+			},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -162,6 +167,9 @@ func TestClient(cli *fdo.Client, to0 *fdo.TO0Client, addFSIM func(serviceinfo.Ow
 		addFSIM(&fsim.UploadRequest{
 			Dir:  ".",
 			Name: "bigfile.test",
+			CreateTemp: func() (*os.File, error) {
+				return os.CreateTemp(".", "fdo.upload_*")
+			},
 		})
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()

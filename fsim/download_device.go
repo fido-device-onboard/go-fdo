@@ -89,7 +89,7 @@ func (d *Download) receive(moduleName, messageName string, messageBody io.Reader
 		if err := cbor.NewDecoder(messageBody).Decode(&chunk); err != nil {
 			d.reset()
 			if d.ErrorLog != nil {
-				fmt.Fprintf(d.ErrorLog, "[file=%s] error decoding data chunk: %v\n", d.name, err)
+				_, _ = fmt.Fprintf(d.ErrorLog, "[file=%s] error decoding data chunk: %v\n", d.name, err)
 			}
 			return cbor.NewEncoder(respond("done")).Encode(-1)
 		}
@@ -97,7 +97,7 @@ func (d *Download) receive(moduleName, messageName string, messageBody io.Reader
 		if err != nil {
 			d.reset()
 			if d.ErrorLog != nil {
-				fmt.Fprintf(d.ErrorLog, "[file=%s] error writing data chunk: %v\n", d.name, err)
+				_, _ = fmt.Fprintf(d.ErrorLog, "[file=%s] error writing data chunk: %v\n", d.name, err)
 			}
 			return cbor.NewEncoder(respond("done")).Encode(-1)
 		}
@@ -118,13 +118,13 @@ func (d *Download) finalize(respond func(string) io.Writer) error {
 	// Validate file length and checksum
 	if d.written > d.length {
 		if d.ErrorLog != nil {
-			fmt.Fprintf(d.ErrorLog, "[file=%s] %d bytes written, expected a length of %d\n", d.name, d.written, d.length)
+			_, _ = fmt.Fprintf(d.ErrorLog, "[file=%s] %d bytes written, expected a length of %d\n", d.name, d.written, d.length)
 		}
 		return cbor.NewEncoder(respond("done")).Encode(-1)
 	}
 	if hashed := d.hash.Sum(nil); len(d.sha384) > 0 && !bytes.Equal(hashed, d.sha384) {
 		if d.ErrorLog != nil {
-			fmt.Fprintf(d.ErrorLog, "[file=%s] checksum failed verification\n", d.name)
+			_, _ = fmt.Fprintf(d.ErrorLog, "[file=%s] checksum failed verification\n", d.name)
 		}
 		return cbor.NewEncoder(respond("done")).Encode(-1)
 	}
@@ -136,13 +136,13 @@ func (d *Download) finalize(respond func(string) io.Writer) error {
 	}
 	if d.name == "" {
 		if d.ErrorLog != nil {
-			fmt.Fprintf(d.ErrorLog, "[file=%s] name not sent before data transfer completed\n", d.name)
+			_, _ = fmt.Fprintf(d.ErrorLog, "[file=%s] name not sent before data transfer completed\n", d.name)
 		}
 		return fmt.Errorf("name not sent before data transfer completed")
 	}
 	if err := os.Rename(d.temp.Name(), resolveName(d.name)); err != nil {
 		if d.ErrorLog != nil {
-			fmt.Fprintf(d.ErrorLog, "[file=%s] error renaming file: %v\n", d.name, err)
+			_, _ = fmt.Fprintf(d.ErrorLog, "[file=%s] error renaming file: %v\n", d.name, err)
 		}
 		return cbor.NewEncoder(respond("done")).Encode(-1)
 	}
