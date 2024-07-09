@@ -48,6 +48,9 @@ func (b *Bstr[T]) UnmarshalCBOR(p []byte) error {
 	if err := Unmarshal(p, &data); err != nil {
 		return err
 	}
+	if data == nil {
+		return nil // decoded null or undefined
+	}
 	return Unmarshal(data, &b.Val)
 }
 

@@ -204,6 +204,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"math/bits"
 	"reflect"
 	"slices"
@@ -211,6 +212,10 @@ import (
 	"strconv"
 	"strings"
 )
+
+// MaxArrayDecodeLength limits the max size of an array, string, byte slice, or
+// map (where each key-value pair counts as two items).
+const MaxArrayDecodeLength = 100_000
 
 // Major types (high 3 bits)
 const (
@@ -390,10 +395,12 @@ func (d *Decoder) Decode(v any) error {
 			}
 
 			// Handle null/undefined
-			if len(b) == 1 && (b[0] == 0xf6 || b[0] == 0xf7) {
-				rv.SetZero()
-				return nil
-			}
+			/*
+				if len(b) == 1 && (b[0] == 0xf6 || b[0] == 0xf7) {
+					rv.SetZero()
+					return nil
+				}
+			*/
 
 			return u.UnmarshalCBOR(b)
 		}
@@ -438,10 +445,11 @@ func (d *Decoder) decodeRawVal(highThreeBits, lowFiveBits byte, additional []byt
 
 	// Types containing a well-known size without decoding nested types
 	case byteStringMajorType, textStringMajorType:
-		length := toU64(additional)
-		if lowFiveBits < 0x18 {
-			length = uint64(lowFiveBits)
+		length, err := decodeLen(highThreeBits, lowFiveBits, additional)
+		if err != nil {
+			return nil, err
 		}
+
 		b := make([]byte, length)
 		if _, err := io.ReadFull(d.r, b); err != nil {
 			return nil, err
@@ -450,12 +458,9 @@ func (d *Decoder) decodeRawVal(highThreeBits, lowFiveBits byte, additional []byt
 
 	// Types which must be fully decoded to know their size
 	case arrayMajorType, mapMajorType:
-		length := toU64(additional)
-		if lowFiveBits < 0x18 {
-			length = uint64(lowFiveBits)
-		}
-		if highThreeBits == mapMajorType {
-			length *= 2
+		length, err := decodeLen(highThreeBits, lowFiveBits, additional)
+		if err != nil {
+			return nil, err
 		}
 
 		decoded := head
@@ -478,6 +483,20 @@ func (d *Decoder) decodeRawVal(highThreeBits, lowFiveBits byte, additional []byt
 	}
 
 	panic("unreachable")
+}
+
+func decodeLen(highThreeBits, lowFiveBits byte, additional []byte) (int, error) {
+	length := toU64(additional)
+	if lowFiveBits < 0x18 {
+		length = uint64(lowFiveBits)
+	}
+	if highThreeBits == mapMajorType {
+		length *= 2
+	}
+	if length > math.MaxInt || length >= MaxArrayDecodeLength {
+		return 0, fmt.Errorf("length exceeds max size: %d", length)
+	}
+	return int(length), nil
 }
 
 // Decode one item into a settable value
@@ -669,6 +688,9 @@ func (d *Decoder) decodeNegative(rv reflect.Value, additional []byte) error {
 
 func (d *Decoder) decodeByteSlice(rv reflect.Value, additional []byte) error {
 	length := toU64(additional)
+	if length > math.MaxInt || length >= MaxArrayDecodeLength {
+		return fmt.Errorf("byte array exceeds max size: %d", length)
+	}
 	bs := make([]byte, length)
 	if _, err := io.ReadFull(d.r, bs); err != nil {
 		return fmt.Errorf("error reading byte/text string: %w", err)
@@ -733,11 +755,14 @@ func (d *Decoder) decodeArrayToStruct(rv reflect.Value, additional []byte) error
 		return fmt.Errorf("%w: expected a struct type",
 			ErrUnsupportedType{typeName: rv.Type().String()})
 	}
-	length := int(toU64(additional))
+	length := toU64(additional)
+	if length > math.MaxInt || length >= MaxArrayDecodeLength {
+		return fmt.Errorf("array exceeds max size: %d", length)
+	}
 
 	// Get order of fields and filter out up to one if necessary
 	indices, omittable := fieldOrder(rv.NumField(), rv.Type().Field)
-	if length != len(indices) {
+	if int(length) != len(indices) {
 		omittedOne := false
 		for i, idx := range indices {
 			if omittable(idx) {
@@ -751,7 +776,7 @@ func (d *Decoder) decodeArrayToStruct(rv reflect.Value, additional []byte) error
 			}
 		}
 	}
-	if length != len(indices) {
+	if int(length) != len(indices) {
 		return fmt.Errorf("%w: struct has an incorrect number of fields: has %d, expected %d",
 			ErrUnsupportedType{typeName: rv.Type().String()}, len(indices), length)
 	}
@@ -802,11 +827,6 @@ func (d *Decoder) decodeStructField(rv reflect.Value, idx []int) error {
 	// Allocate addressable memory for field
 	newVal := reflect.New(f.Type())
 
-	// Allocate underlying memory for pointer fields
-	if f.Kind() == reflect.Pointer {
-		newVal.Elem().Set(reflect.New(f.Type().Elem()))
-	}
-
 	// Decode into new value and then set the field
 	if err := d.Decode(newVal.Interface()); err != nil {
 		return fmt.Errorf("error decoding array item %+v: %w", idx, err)
@@ -829,26 +849,29 @@ func (d *Decoder) decodeArrayToSlice(rv reflect.Value, additional []byte) error 
 	// For addressable slices, we can grow them to the correct size. For
 	// interface types, we must instead set them to a slice created with the
 	// correct size.
-	length := int(toU64(additional))
+	length := toU64(additional)
+	if length > math.MaxInt || length >= MaxArrayDecodeLength {
+		return fmt.Errorf("array exceeds max size: %d", length)
+	}
 	slice := rv
 	switch slice.Kind() {
 	case reflect.Slice:
 		// Set slice to the correct length
-		slice.Grow(length)
-		slice.SetLen(length)
+		slice.Grow(int(length))
+		slice.SetLen(int(length))
 
 	case reflect.Array:
 		// Check array is long enough and clear extra elements
-		if rv.Len() < length {
+		if rv.Len() < int(length) {
 			return fmt.Errorf("fixed-size array is too small: must be at least length %d", length)
 		}
 		zeroVal := reflect.Zero(slice.Type().Elem())
-		for i := length; i < rv.Len(); i++ {
+		for i := int(length); i < rv.Len(); i++ {
 			slice.Index(i).Set(zeroVal)
 		}
 
 	case reflect.Interface:
-		slice.Set(reflect.MakeSlice(slice.Elem().Type(), length, length))
+		slice.Set(reflect.MakeSlice(slice.Elem().Type(), int(length), int(length)))
 		slice = slice.Elem()
 
 	default:
@@ -858,7 +881,7 @@ func (d *Decoder) decodeArrayToSlice(rv reflect.Value, additional []byte) error 
 
 	// Decode each item into the correctly sized slice
 	itemType := slice.Type().Elem()
-	for i := 0; i < length; i++ {
+	for i := 0; i < int(length); i++ {
 		newVal := reflect.New(itemType)
 		if err := d.Decode(newVal.Interface()); err != nil {
 			return fmt.Errorf("error decoding array item %d: %w", i, err)
@@ -894,8 +917,11 @@ func (d *Decoder) decodeMap(rv reflect.Value, additional []byte) error {
 	valType := rmap.Type().Elem()
 
 	// Iteratively decode each key-value pair
-	length := int(toU64(additional))
-	for i := 0; i < length; i++ {
+	length := toU64(additional)
+	if length > math.MaxInt || length >= MaxArrayDecodeLength/2 {
+		return fmt.Errorf("map exceeds max size: %d", length)
+	}
+	for i := 0; i < int(length); i++ {
 		newKey := reflect.New(keyType)
 		if err := d.Decode(newKey.Interface()); err != nil {
 			return fmt.Errorf("error decoding map key %d: %w", i, err)
@@ -906,6 +932,16 @@ func (d *Decoder) decodeMap(rv reflect.Value, additional []byte) error {
 			return fmt.Errorf("error decoding map val %d: %w", i, err)
 		}
 
+		actualKeyType := keyType
+		if keyType.Kind() == reflect.Interface {
+			if !newKey.Elem().Elem().IsValid() {
+				return fmt.Errorf("map key cannot be null or undefined")
+			}
+			actualKeyType = newKey.Elem().Elem().Type()
+		}
+		if !actualKeyType.Comparable() {
+			return fmt.Errorf("map key type (%s) not comparable", actualKeyType.String())
+		}
 		rmap.SetMapIndex(newKey.Elem(), newVal.Elem())
 	}
 
@@ -962,12 +998,12 @@ func (d *Decoder) decodeSimple(rv reflect.Value, lowFiveBits byte, additional []
 		rv.Set(reflect.ValueOf(lowFiveBits == trueVal))
 	case nullVal, undefinedVal:
 		switch {
-		case rv.Kind() == reflect.Pointer || rv.Kind() == reflect.Interface:
+		case rv.Kind() == reflect.Pointer || rv.Kind() == reflect.Interface || rv.Kind() == reflect.Slice:
 			rv.SetZero()
 		case rv.Kind() == reflect.Struct && rv.NumField() == 0:
 			rv.SetZero()
 		default:
-			return fmt.Errorf("%w: must be a pointer, interface, or empty struct to decode null/undefined",
+			return fmt.Errorf("%w: must be a pointer, interface, slice, or empty struct to decode null/undefined",
 				ErrUnsupportedType{typeName: rv.Type().Name()})
 		}
 	case halfFloat, singleFloat, doubleFloat:

@@ -289,6 +289,12 @@ func TestEncodeString(t *testing.T) {
 
 func TestEncodeArray(t *testing.T) {
 	t.Run("homogeneous type", func(t *testing.T) {
+		type a struct {
+			A string
+			B []byte
+		}
+		a1 := a{A: "hello", B: []byte("world")}
+		a2 := a{A: "goodbye", B: nil}
 		for _, test := range []struct {
 			expect []byte
 			input  any
@@ -298,6 +304,10 @@ func TestEncodeArray(t *testing.T) {
 			{input: []int{1}, expect: []byte{0x81, 0x01}},
 			{input: []int{1, 15}, expect: []byte{0x82, 0x01, 0x0f}},
 			{input: []string{"IETF"}, expect: []byte{0x81, 0x64, 0x49, 0x45, 0x54, 0x46}},
+			{input: []*a{&a1, nil, &a2, nil}, expect: []byte{
+				0x84, 0x82, 0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x45, 0x77, 0x6f, 0x72, 0x6c,
+				0x64, 0xf6, 0x82, 0x67, 0x67, 0x6f, 0x6f, 0x64, 0x62, 0x79, 0x65, 0x40, 0xf6,
+			}},
 		} {
 			if got, err := cbor.Marshal(test.input); err != nil {
 				t.Errorf("error marshaling %#v: %v", test.input, err)
@@ -662,6 +672,11 @@ func TestDecodeAny(t *testing.T) {
 					A int
 					B string
 				}{A: 1, B: "hello"},
+			},
+			{
+				input:     []byte{0xc2, 0xf6},
+				expectNum: 2,
+				expectVal: []byte(nil),
 			},
 			{
 				input:     []byte{0xc4, 0xa1, 0x65, 0x68, 0x65, 0x6C, 0x6C, 0x6F, 0x44, 0x01, 0x02, 0x03, 0x04},
@@ -1035,6 +1050,13 @@ func TestDecodeStringNewtype(t *testing.T) {
 
 func TestDecodeArray(t *testing.T) {
 	t.Run("homogeneous type", func(t *testing.T) {
+		type a struct {
+			A string
+			B []byte
+		}
+		a1 := a{A: "hello", B: []byte("world")}
+		a2 := a{A: "goodbye", B: []byte{}}
+
 		for _, test := range []struct {
 			input  []byte
 			expect any
@@ -1044,6 +1066,10 @@ func TestDecodeArray(t *testing.T) {
 			{expect: []int{1, 15}, input: []byte{0x82, 0x01, 0x0f}},
 			{expect: []string{"IETF"}, input: []byte{0x81, 0x64, 0x49, 0x45, 0x54, 0x46}},
 			{expect: []any{int64(1), "IETF"}, input: []byte{0x82, 0x01, 0x64, 0x49, 0x45, 0x54, 0x46}},
+			{expect: []*a{&a1, nil, &a2, nil}, input: []byte{
+				0x84, 0x82, 0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x45, 0x77, 0x6f, 0x72, 0x6c,
+				0x64, 0xf6, 0x82, 0x67, 0x67, 0x6f, 0x6f, 0x64, 0x62, 0x79, 0x65, 0x40, 0xf6,
+			}},
 		} {
 			gotAddr := reflect.New(reflect.TypeOf(test.expect)).Interface()
 			if err := cbor.Unmarshal(test.input, gotAddr); err != nil {
@@ -1052,6 +1078,20 @@ func TestDecodeArray(t *testing.T) {
 			}
 			got := reflect.ValueOf(gotAddr).Elem().Interface()
 			if !reflect.DeepEqual(got, test.expect) {
+				arr := reflect.ValueOf(gotAddr).Elem()
+				expect := reflect.ValueOf(test.expect)
+
+				for i := range arr.Len() {
+					t.Logf("got[%d]=%#v", i, arr.Index(i))
+					t.Logf("exp[%d]=%#v", i, expect.Index(i))
+					if !reflect.DeepEqual(arr.Index(i).Interface(), expect.Index(i).Interface()) {
+						t.Errorf("not equal at index %d", i)
+					}
+				}
+
+				if arr.Len() != expect.Len() {
+					t.Errorf("expected array len %d, got %d", expect.Len(), arr.Len())
+				}
 				t.Errorf("unmarshaling %#v; expected %#v, got %#v", test.input, test.expect, got)
 			}
 		}
@@ -1505,14 +1545,16 @@ func TestDecodeBstr(t *testing.T) {
 			},
 		}
 		for _, test := range tests {
-			var got a
-			if err := cbor.Unmarshal(test.input, &got); err != nil {
-				t.Errorf("error unmarshaling % x: %v", test.input, err)
-				return
-			}
-			if !reflect.DeepEqual(got, test.expect) {
-				t.Errorf("unmarshaling % x; expected %#v, got %#v", test.input, test.expect, got)
-			}
+			t.Run(hex.EncodeToString(test.input), func(t *testing.T) {
+				var got a
+				if err := cbor.Unmarshal(test.input, &got); err != nil {
+					t.Errorf("error unmarshaling % x: %v", test.input, err)
+					return
+				}
+				if !reflect.DeepEqual(got, test.expect) {
+					t.Errorf("unmarshaling % x; expected %#v, got %#v", test.input, test.expect, got)
+				}
+			})
 		}
 	})
 }
@@ -2017,5 +2059,14 @@ func TestMarshalEmbeddedPointer(t *testing.T) {
 		if !reflect.DeepEqual(expect, got) {
 			t.Errorf("expected %+v, got %+v", expect, got)
 		}
+	})
+}
+
+// Trivial check-for-panic fuzz testing
+func FuzzUnmarshal(f *testing.F) {
+	f.Fuzz(func(t *testing.T, data []byte) {
+		t.Logf("%x", data)
+		var v any
+		_ = cbor.Unmarshal(data, &v)
 	})
 }
