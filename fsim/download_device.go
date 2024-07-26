@@ -162,3 +162,8 @@ func (d *Download) reset() {
 	d.hash.Reset()
 	d.name, d.length, d.sha384, d.temp, d.written = "", 0, nil, nil, 0
 }
+
+// Yield implements DeviceModule.
+func (d *Download) Yield(ctx context.Context, respond func(message string) io.Writer, yield func()) error {
+	return nil
+}

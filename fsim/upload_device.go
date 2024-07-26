@@ -102,3 +102,8 @@ func (u *Upload) upload(name string, respond func(string) io.Writer, yield func(
 }
 
 func (u *Upload) reset() { u.needSha = false }
+
+// Yield implements DeviceModule.
+func (u *Upload) Yield(ctx context.Context, respond func(message string) io.Writer, yield func()) error {
+	return nil
+}

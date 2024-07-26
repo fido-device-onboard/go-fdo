@@ -66,6 +66,13 @@ type DeviceModule interface {
 	// The full negotiated MTU (not the current space left from the MTU) can be
 	// acquired from `ctx.Value(serviceinfo.MTUKey).(uint16)`.
 	Receive(ctx context.Context, moduleName, messageName string, messageBody io.Reader, respond func(message string) io.Writer, yield func()) error
+
+	// Yield indicates that all service info key value pairs have been received
+	// from the owner module, possibly across multiple messages with
+	// IsMoreServiceInfo set.
+	//
+	// The respond and yield callbacks behave the same as for Receive.
+	Yield(ctx context.Context, respond func(message string) io.Writer, yield func()) error
 }
 
 // UnknownModule handles receiving and responding to service info for an
@@ -78,12 +85,17 @@ type UnknownModule struct{}
 
 var _ DeviceModule = (*UnknownModule)(nil)
 
-// Transition implements Module.
+// Transition implements DeviceModule.
 func (m UnknownModule) Transition(bool) error { return nil }
 
-// Receive implements Module.
+// Receive implements DeviceModule.
 func (m UnknownModule) Receive(_ context.Context, _, _ string, messageBody io.Reader, _ func(string) io.Writer, _ func()) error {
 	// Ignore message and drain the body
 	_, _ = io.Copy(io.Discard, messageBody)
+	return nil
+}
+
+// Yield implements DeviceModule.
+func (m UnknownModule) Yield(ctx context.Context, respond func(message string) io.Writer, yield func()) error {
 	return nil
 }

@@ -48,11 +48,21 @@ func handleFSIMs(ctx context.Context, modules fsimMap, ownerInfo *serviceinfo.Un
 	case deviceInfoChan <- deviceInfo:
 	}
 
+	var prevModuleName string
+	var prevFSIM serviceinfo.DeviceModule
 	for {
 		// Get next service info from the owner service and handle it.
 		key, messageBody, ok := ownerInfo.NextServiceInfo()
 		if !ok {
-			_ = send.Close()
+			var err error
+			if prevModuleName != "" {
+				err = handleFsimYield(ctx, prevFSIM, prevModuleName, send)
+			}
+			if err != nil {
+				_ = send.CloseWithError(err)
+			} else {
+				_ = send.Close()
+			}
 			return
 		}
 		moduleName, messageName, _ := strings.Cut(key, ":")
@@ -77,6 +87,9 @@ func handleFSIMs(ctx context.Context, modules fsimMap, ownerInfo *serviceinfo.Un
 			continue
 		}
 
+		// TODO: Should prevModuleName == (moduleName || "") be asserted?
+		prevFSIM, prevModuleName = fsim, moduleName
+
 		// Use FSIM handler and provide it a function which can be used to send
 		// zero or more service info KVs. The function returns a writer to
 		// write the value part of the service info KV.
@@ -84,7 +97,7 @@ func handleFSIMs(ctx context.Context, modules fsimMap, ownerInfo *serviceinfo.Un
 		// If the FSIM handler returns an error then the pipe will be closed
 		// with an error, causing the error to propagate to the chunk reader,
 		// which is used in the ServiceInfo send loop.
-		if err := handleFSIM(ctx, fsim, moduleName, messageName, messageBody, send); err != nil {
+		if err := handleFsimMessage(ctx, fsim, moduleName, messageName, messageBody, send); err != nil {
 			_ = send.CloseWithError(err)
 			return
 		}
@@ -123,7 +136,18 @@ func handleActive(prevActive bool, fsim serviceinfo.DeviceModule, moduleName str
 	return active, nil
 }
 
-func handleFSIM(ctx context.Context, fsim serviceinfo.DeviceModule, moduleName, messageName string, messageBody io.Reader, send *serviceinfo.UnchunkWriter) error {
+func handleFsimYield(ctx context.Context, fsim serviceinfo.DeviceModule, moduleName string, send *serviceinfo.UnchunkWriter) error {
+	respond := func(messageName string) io.Writer {
+		_ = send.NextServiceInfo(moduleName, messageName)
+		return send
+	}
+	yield := func() {
+		_ = send.ForceNewMessage()
+	}
+	return fsim.Yield(ctx, respond, yield)
+}
+
+func handleFsimMessage(ctx context.Context, fsim serviceinfo.DeviceModule, moduleName, messageName string, messageBody io.Reader, send *serviceinfo.UnchunkWriter) error {
 	// Construct respond/yield callback functions
 	respond := func(messageName string) io.Writer {
 		_ = send.NextServiceInfo(moduleName, messageName)
