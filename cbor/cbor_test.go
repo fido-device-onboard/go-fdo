@@ -742,6 +742,19 @@ func TestDecodeAny(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("null", func(t *testing.T) {
+		var got any
+		var (
+			input  = []byte{0xf6}
+			expect interface{}
+		)
+		if err := cbor.Unmarshal(input, &got); err != nil {
+			t.Errorf("error unmarshaling % x: %v", input, err)
+		} else if got != expect {
+			t.Errorf("unmarshaling % x; expected %+v, got %+v", input, expect, got)
+		}
+	})
 }
 
 func TestDecodeInt(t *testing.T) {
