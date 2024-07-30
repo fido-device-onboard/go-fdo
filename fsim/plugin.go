@@ -4,6 +4,7 @@
 package fsim
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -11,7 +12,6 @@ import (
 	"io"
 	"os/exec"
 	"sync"
-	"unicode/utf8"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
@@ -19,64 +19,100 @@ import (
 
 // PluginName returns the module name of a plugin.
 func PluginName(cmd *exec.Cmd) (string, error) {
-	// Start plugin
-	plug, err := newPlugin(cmd)
+	in, err := cmd.StdinPipe()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("error opening stdin pipe to plugin executable: %w", err)
 	}
-	defer func() { _ = plug.Stop() }()
-
-	return pluginModuleName(plug)
-}
-
-func pluginModuleName(plug *plugin) (string, error) {
-	// Request and receive the module name
-	if err := plug.Send(cModuleName, nil); err != nil {
-		return "", fmt.Errorf("error sending module name command: %w", err)
-	}
-	c, val, err := plug.Recv()
-	if c != cModuleName {
-		return "", fmt.Errorf("plugin responded incorrectly to module name command: received %q command", c)
-	}
+	out, err := cmd.StdoutPipe()
 	if err != nil {
-		return "", fmt.Errorf("error receiving module name response: %w", err)
+		return "", fmt.Errorf("error opening stdout pipe to plugin executable: %w", err)
 	}
-	name := val.(string) // safe due to internal parsing in Recv()
 
-	// Validate and return module name
-	if !utf8.ValidString(name) {
-		return "", fmt.Errorf("plugin returned a module name that was not valid UTF-8")
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("error starting plugin executable: %w", err)
 	}
-	return string(name), nil
+	defer func() { _ = cmd.Process.Kill() }()
+
+	return (&pluginProtocol{in: in, out: bufio.NewScanner(out)}).ModuleName()
 }
 
 // PluginDeviceModule adapts an executable plugin to the internal module
 // interface.
 type PluginDeviceModule struct {
-	Exec func() *exec.Cmd
+	// Start is required and is called when the module is activated to
+	// initialize the plugin.
+	Start func() (io.Writer, io.Reader, error)
 
-	plug *plugin
+	// Stop is optional and is called after all modules have been completed.
+	Stop func() error
+
+	// GracefulStop is optional and will be called before Stop. Stop will not
+	// be called until at least the context provided has expired.
+	GracefulStop func(context.Context) error
+
+	once  sync.Once
+	proto *pluginProtocol
+	err   error
 }
 
 var _ serviceinfo.DeviceModule = (*PluginDeviceModule)(nil)
 
+// NewPluginDeviceModuleFromCmd creates a device service info module from a
+// lazily executed command.
+func NewPluginDeviceModuleFromCmd(f func() *exec.Cmd) *PluginDeviceModule {
+	var cmd *exec.Cmd
+	return &PluginDeviceModule{
+		Start: func() (io.Writer, io.Reader, error) {
+			cmd = f()
+
+			in, err := cmd.StdinPipe()
+			if err != nil {
+				return nil, nil, fmt.Errorf("error opening stdin pipe to plugin executable: %w", err)
+			}
+			out, err := cmd.StdoutPipe()
+			if err != nil {
+				return nil, nil, fmt.Errorf("error opening stdout pipe to plugin executable: %w", err)
+			}
+
+			if err := cmd.Start(); err != nil {
+				return nil, nil, fmt.Errorf("error starting plugin executable: %w", err)
+			}
+
+			return in, out, nil
+		},
+		Stop: func() error {
+			if cmd == nil {
+				return nil
+			}
+			if err := cmd.Process.Kill(); err != nil {
+				return err
+			}
+			return cmd.Wait()
+		},
+	}
+}
+
 // Transition implements serviceinfo.DeviceModule.
 func (m *PluginDeviceModule) Transition(active bool) error {
 	if !active {
-		if m.plug == nil {
-			return nil
-		}
-		return m.plug.Stop()
+		return nil
 	}
 
-	var err error
-	m.plug, err = newPlugin(m.Exec())
-	return err
+	m.once.Do(func() {
+		in, out, err := m.Start()
+		if err != nil {
+			m.err = err
+			return
+		}
+		m.proto = &pluginProtocol{in: in, out: bufio.NewScanner(out)}
+	})
+
+	return m.err
 }
 
 // Receive implements serviceinfo.DeviceModule.
 func (m *PluginDeviceModule) Receive(ctx context.Context, moduleName, messageName string, messageBody io.Reader, respond func(message string) io.Writer, yield func()) error {
-	if m.plug == nil {
+	if m.proto == nil {
 		return errors.New("plugin module not activated")
 	}
 
@@ -87,10 +123,10 @@ func (m *PluginDeviceModule) Receive(ctx context.Context, moduleName, messageNam
 	if err := cbor.NewDecoder(messageBody).Decode(&val); err != nil {
 		return fmt.Errorf("error decoding message %q body: %w", name, err)
 	}
-	if err := m.plug.Send(dKey, base64.StdEncoding.EncodeToString([]byte(messageName))); err != nil {
+	if err := m.proto.Send(dKey, base64.StdEncoding.EncodeToString([]byte(messageName))); err != nil {
 		return fmt.Errorf("error sending message %q to plugin: %w", name, err)
 	}
-	if err := m.plug.EncodeValue(val); err != nil {
+	if err := m.proto.EncodeValue(val); err != nil {
 		return fmt.Errorf("error encoding message %q body: %w", name, err)
 	}
 
@@ -99,18 +135,18 @@ func (m *PluginDeviceModule) Receive(ctx context.Context, moduleName, messageNam
 
 // Yield implements serviceinfo.DeviceModule.
 func (m *PluginDeviceModule) Yield(ctx context.Context, respond func(message string) io.Writer, yield func()) error {
-	if m.plug == nil {
+	if m.proto == nil {
 		return errors.New("plugin module not activated")
 	}
 
 	// Send yield to plugin
-	if err := m.plug.Send(dYield, nil); err != nil {
+	if err := m.proto.Send(dYield, nil); err != nil {
 		return err
 	}
 
 	// Read messages until plugin yields
 	for {
-		c, param, err := m.plug.Recv()
+		c, param, err := m.proto.Recv()
 		if err != nil {
 			return err
 		}
@@ -127,7 +163,7 @@ func (m *PluginDeviceModule) Yield(ctx context.Context, respond func(message str
 			message := param.(string)
 			w := respond(message)
 
-			val, err := m.plug.DecodeValue()
+			val, err := m.proto.DecodeValue()
 			if err != nil {
 				return err
 			}
@@ -142,15 +178,59 @@ func (m *PluginDeviceModule) Yield(ctx context.Context, respond func(message str
 // PluginOwnerModule adapts an executable plugin to the internal module
 // interface.
 type PluginOwnerModule struct {
-	Exec func() *exec.Cmd
+	// Start is required and is called when the module is activated to
+	// initialize the plugin.
+	Start func() (io.Writer, io.Reader, error)
 
-	once sync.Once
-	plug *plugin
+	// Stop is optional and is called after all modules have been completed.
+	Stop func() error
 
-	name string
+	// GracefulStop is optional and will be called before Stop. Stop will not
+	// be called until at least the context provided has expired.
+	GracefulStop func(context.Context) error
+
+	once  sync.Once
+	proto *pluginProtocol
+	name  string
+	err   error
 }
 
 var _ serviceinfo.OwnerModule = (*PluginOwnerModule)(nil)
+
+// NewPluginOwnerModuleFromCmd creates an owner service info module from a
+// lazily executed command.
+func NewPluginOwnerModuleFromCmd(f func() *exec.Cmd) *PluginOwnerModule {
+	var cmd *exec.Cmd
+	return &PluginOwnerModule{
+		Start: func() (io.Writer, io.Reader, error) {
+			cmd = f()
+
+			in, err := cmd.StdinPipe()
+			if err != nil {
+				return nil, nil, fmt.Errorf("error opening stdin pipe to plugin executable: %w", err)
+			}
+			out, err := cmd.StdoutPipe()
+			if err != nil {
+				return nil, nil, fmt.Errorf("error opening stdout pipe to plugin executable: %w", err)
+			}
+
+			if err := cmd.Start(); err != nil {
+				return nil, nil, fmt.Errorf("error starting plugin executable: %w", err)
+			}
+
+			return in, out, nil
+		},
+		Stop: func() error {
+			if cmd == nil {
+				return nil
+			}
+			if err := cmd.Process.Kill(); err != nil {
+				return err
+			}
+			return cmd.Wait()
+		},
+	}
+}
 
 // HandleInfo implements serviceinfo.OwnerModule.
 //
@@ -163,10 +243,10 @@ func (m *PluginOwnerModule) HandleInfo(ctx context.Context, moduleName, messageN
 	if err := cbor.NewDecoder(messageBody).Decode(&val); err != nil {
 		return fmt.Errorf("error decoding message %q body: %w", name, err)
 	}
-	if err := m.plug.Send(dKey, base64.StdEncoding.EncodeToString([]byte(messageName))); err != nil {
+	if err := m.proto.Send(dKey, base64.StdEncoding.EncodeToString([]byte(messageName))); err != nil {
 		return fmt.Errorf("error sending message %q key: %w", name, err)
 	}
-	if err := m.plug.EncodeValue(val); err != nil {
+	if err := m.proto.EncodeValue(val); err != nil {
 		return fmt.Errorf("error encoding message %q body: %w", name, err)
 	}
 
@@ -177,23 +257,29 @@ func (m *PluginOwnerModule) HandleInfo(ctx context.Context, moduleName, messageN
 func (m *PluginOwnerModule) ProduceInfo(ctx context.Context, lastDeviceInfoEmpty bool, producer *serviceinfo.Producer) (blockPeer, fsimDone bool, err error) {
 	// Perform plugin startup sequence the first time
 	m.once.Do(func() {
-		m.plug, err = newPlugin(m.Exec())
+		in, out, err := m.Start()
 		if err != nil {
-			m.name, err = pluginModuleName(m.plug)
+			m.err = err
+			return
+		}
+		m.proto = &pluginProtocol{in: in, out: bufio.NewScanner(out)}
+
+		if m.name, m.err = m.proto.ModuleName(); m.err != nil {
+			return
 		}
 	})
-	if err != nil {
+	if m.err != nil {
 		return false, false, err
 	}
 
 	// Send a yield to let owner know it can start sending info
-	if err := m.plug.Send(dYield, nil); err != nil {
+	if err := m.proto.Send(dYield, nil); err != nil {
 		return false, false, err
 	}
 
 	// Read data commands from plugin until break, yield, or error and produce info
 	for {
-		c, param, err := m.plug.Recv()
+		c, param, err := m.proto.Recv()
 		if err != nil {
 			return false, false, err
 		}
@@ -210,22 +296,7 @@ func (m *PluginOwnerModule) ProduceInfo(ctx context.Context, lastDeviceInfoEmpty
 
 		case dKey:
 			moduleName, messageName := m.name, param.(string)
-
-			val, err := m.plug.DecodeValue()
-			if err != nil {
-				return false, false, err
-			}
-
-			messageBody, err := cbor.Marshal(val)
-			if err != nil {
-				return false, false, err
-			}
-
-			if len(messageBody) > producer.Available(moduleName, messageName) {
-				return false, false, errors.New("plugin produced a message too large to send")
-			}
-
-			if err := producer.WriteChunk(moduleName, messageName, messageBody); err != nil {
+			if err := m.decodeAndProduce(moduleName, messageName, producer); err != nil {
 				return false, false, err
 			}
 
@@ -235,12 +306,24 @@ func (m *PluginOwnerModule) ProduceInfo(ctx context.Context, lastDeviceInfoEmpty
 	}
 }
 
-// TODO: Implement GracefulStop
-
-// Stop ungracefully kills the plugin executable.
-func (m *PluginOwnerModule) Stop() error {
-	if m.plug == nil {
-		return nil
+func (m *PluginOwnerModule) decodeAndProduce(moduleName, messageName string, producer *serviceinfo.Producer) error {
+	val, err := m.proto.DecodeValue()
+	if err != nil {
+		return err
 	}
-	return m.plug.Stop()
+
+	messageBody, err := cbor.Marshal(val)
+	if err != nil {
+		return err
+	}
+
+	if len(messageBody) > producer.Available(moduleName, messageName) {
+		return errors.New("plugin produced a message too large to send")
+	}
+
+	if err := producer.WriteChunk(moduleName, messageName, messageBody); err != nil {
+		return err
+	}
+
+	return nil
 }

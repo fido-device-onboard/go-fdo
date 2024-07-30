@@ -9,9 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os/exec"
 	"reflect"
 	"strconv"
+	"unicode/utf8"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 )
@@ -152,36 +152,13 @@ func (c pluginCommand) ParseParam(b []byte) (interface{}, error) { //nolint:gocy
 	panic("programming error - invalid pluginCommand")
 }
 
-type plugin struct {
-	cmd    *exec.Cmd
-	input  io.Writer
-	output *bufio.Scanner
+type pluginProtocol struct {
+	in     io.Writer
+	out    *bufio.Scanner
 	peeked bool
 }
 
-func newPlugin(cmd *exec.Cmd) (*plugin, error) {
-	input, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, fmt.Errorf("error opening stdin pipe to plugin executable: %w", err)
-	}
-
-	output, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("error opening stdout pipe to plugin executable: %w", err)
-	}
-
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("error starting plugin executable: %w", err)
-	}
-
-	return &plugin{
-		cmd:    cmd,
-		input:  input,
-		output: bufio.NewScanner(output),
-	}, nil
-}
-
-func (p *plugin) Send(c pluginCommand, param interface{}) error {
+func (p *pluginProtocol) Send(c pluginCommand, param interface{}) error {
 	// Validate and write command character
 	if !c.Valid() {
 		return fmt.Errorf("invalid command: %q", c)
@@ -189,7 +166,7 @@ func (p *plugin) Send(c pluginCommand, param interface{}) error {
 	if !c.ValidParamType(param) {
 		return fmt.Errorf("invalid parameter [type=%T] for command %q", param, c)
 	}
-	if _, err := p.input.Write([]byte{byte(c)}); err != nil {
+	if _, err := p.in.Write([]byte{byte(c)}); err != nil {
 		return err
 	}
 
@@ -199,44 +176,44 @@ func (p *plugin) Send(c pluginCommand, param interface{}) error {
 		if param {
 			val = 1
 		}
-		if _, err := fmt.Fprintln(p.input, val); err != nil {
+		if _, err := fmt.Fprintln(p.in, val); err != nil {
 			return err
 		}
 
 	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
-		if _, err := fmt.Fprintln(p.input, param); err != nil {
+		if _, err := fmt.Fprintln(p.in, param); err != nil {
 			return err
 		}
 
 	case string:
-		if _, err := base64.NewEncoder(base64.StdEncoding, p.input).Write([]byte(param)); err != nil {
+		if _, err := base64.NewEncoder(base64.StdEncoding, p.in).Write([]byte(param)); err != nil {
 			return err
 		}
 
 	case []byte:
-		if _, err := base64.NewEncoder(base64.StdEncoding, p.input).Write(param); err != nil {
+		if _, err := base64.NewEncoder(base64.StdEncoding, p.in).Write(param); err != nil {
 			return err
 		}
 	}
 
 	// Write newline
-	if _, err := fmt.Fprint(p.input, "\n"); err != nil {
+	if _, err := fmt.Fprint(p.in, "\n"); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (p *plugin) Peek() (pluginCommand, []byte, error) {
+func (p *pluginProtocol) Peek() (pluginCommand, []byte, error) {
 	// Only read a line if the line hasn't already been peeked at
-	if !p.peeked && !p.output.Scan() {
-		if err := p.output.Err(); err != nil {
+	if !p.peeked && !p.out.Scan() {
+		if err := p.out.Err(); err != nil {
 			return invalidPluginCommand, nil, fmt.Errorf("error reading from plugin: %w", err)
 		}
 		return invalidPluginCommand, nil, fmt.Errorf("plugin exited")
 	}
 
 	// Skip empty lines
-	line := p.output.Bytes()
+	line := p.out.Bytes()
 	if len(line) == 0 {
 		return p.Peek()
 	}
@@ -252,7 +229,7 @@ func (p *plugin) Peek() (pluginCommand, []byte, error) {
 	return c, rest, nil
 }
 
-func (p *plugin) Recv() (pluginCommand, interface{}, error) {
+func (p *pluginProtocol) Recv() (pluginCommand, interface{}, error) {
 	c, line, err := p.Peek()
 	if err != nil {
 		return invalidPluginCommand, nil, err
@@ -269,7 +246,7 @@ func (p *plugin) Recv() (pluginCommand, interface{}, error) {
 
 var errEndCollection = errors.New("unexpected end of collection command")
 
-func (p *plugin) DecodeValue() (interface{}, error) {
+func (p *pluginProtocol) DecodeValue() (interface{}, error) {
 	c, param, err := p.Recv()
 	if err != nil {
 		return nil, err
@@ -328,7 +305,7 @@ func (p *plugin) DecodeValue() (interface{}, error) {
 	}
 }
 
-func (p *plugin) EncodeValue(v interface{}) error {
+func (p *pluginProtocol) EncodeValue(v interface{}) error {
 	if v == nil {
 		return p.Send(dNull, nil)
 	}
@@ -365,7 +342,7 @@ func (p *plugin) EncodeValue(v interface{}) error {
 	panic(fmt.Sprintf("invalid type for encoding to plugin protocol value: %T", v))
 }
 
-func (p *plugin) encodeArray(v interface{}) error {
+func (p *pluginProtocol) encodeArray(v interface{}) error {
 	if err := p.Send(dArray, nil); err != nil {
 		return fmt.Errorf("error sending start of array to plugin: %w", err)
 	}
@@ -384,7 +361,7 @@ func (p *plugin) encodeArray(v interface{}) error {
 	return nil
 }
 
-func (p *plugin) encodeMap(v interface{}) error {
+func (p *pluginProtocol) encodeMap(v interface{}) error {
 	if err := p.Send(dMap, nil); err != nil {
 		return fmt.Errorf("error sending start of map to plugin: %w", err)
 	}
@@ -408,4 +385,23 @@ func (p *plugin) encodeMap(v interface{}) error {
 	return nil
 }
 
-func (p *plugin) Stop() error { return p.cmd.Process.Kill() }
+func (p *pluginProtocol) ModuleName() (string, error) {
+	// Request and receive the module name
+	if err := p.Send(cModuleName, nil); err != nil {
+		return "", fmt.Errorf("error sending module name command: %w", err)
+	}
+	c, val, err := p.Recv()
+	if c != cModuleName {
+		return "", fmt.Errorf("plugin responded incorrectly to module name command: received %q command", c)
+	}
+	if err != nil {
+		return "", fmt.Errorf("error receiving module name response: %w", err)
+	}
+	name := val.(string) // safe due to internal parsing in Recv()
+
+	// Validate and return module name
+	if !utf8.ValidString(name) {
+		return "", fmt.Errorf("plugin returned a module name that was not valid UTF-8")
+	}
+	return string(name), nil
+}
