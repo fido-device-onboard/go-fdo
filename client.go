@@ -134,7 +134,7 @@ func (c *Client) TransferOwnership1(ctx context.Context, baseURL string) (*cose.
 func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, to1d *cose.Sign1[To1d, []byte], fsims map[string]serviceinfo.DeviceModule) (*DeviceCredential, error) {
 	ctx = contextWithErrMsg(ctx)
 
-	// Client configuraiton defaults
+	// Client configuration defaults
 	if c.KeyExchange == "" {
 		c.KeyExchange = kex.ECDH384Suite
 	}

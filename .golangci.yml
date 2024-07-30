@@ -12,12 +12,15 @@ linters:
     - revive
     - staticcheck
     - gosec
+    - misspell
 
 linters-settings:
   gocyclo:
     min-complexity: 15
   goimports:
     local-prefixes: github.com/intel-innersource/
+  misspell:
+    locale: US
 
 issues:
   exclude-use-default: false
