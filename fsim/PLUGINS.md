@@ -6,7 +6,7 @@ FSIMs can either be implemented using the "internal" Go interfaces ([Device][IDe
 
 FDO clients use plugin device service info modules the same way as statically compiled ones. `(*fdo.Client).TransferOwnership2(...)` takes a `map[string]serviceinfo.DeviceModule` argument.
 
-If a `devmod` module is provided, then the value of `(*Client).Devmod` will be ignored.
+If a `devmod` module is provided, then the value of `(*Client).Devmod` will be ignored. However, any `devmod` plugin module must NOT write serviceinfo for the `devmod:nummodules` and `devmod:modules` keys as these are handled by the library.
 
 ## Using Plugin Owner FSIMs
 
@@ -16,7 +16,7 @@ FDO owner services use plugin owner service info modules the same way as statica
 
 Plugins are native operating system executables. They may be OS and/or architecture dependent, in which case the client or server is required to only use the correct version at runtime.
 
-Any shared libraries or executables that the plugin requires must be available at runtime. `NewPluginDeviceModuleFromCmd` and `NewPluginOwnerModuleFromCmd` both require a callback to construct a `*exec.Cmd`, which allows the plugin consumer to set the appropriate `PATH` and `LD_LIBRARY_PATH` environment variables.
+Any shared libraries or executables that the plugin requires must be available at runtime. The `*exec.Cmd` provided to `fsim.NewCommandPlugin` may have its `Env` field modified to set the appropriate `PATH` and `LD_LIBRARY_PATH` environment variables.
 
 ## Plugin API
 
