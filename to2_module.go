@@ -10,13 +10,15 @@ import (
 	"strings"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/plugin"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
 
 // Buffer service info send and receive queues. This buffer may grow
-// indefinitely if FSIMs are not well behaved. For example, if an owner service
-// sends 100s of upload requests, the requests will be processed as they are
-// received and may fill up the send buffer until the device is out of memory.
+// indefinitely if owner modules are not well behaved. For example, if an
+// owner service sends 100s of upload requests, the requests will be processed
+// as they are received and may fill up the send buffer until the device is out
+// of memory.
 //
 // While in this case, it may seem obvious that the upload requests should be
 // buffered and then processed rather than handled sequentially, it would be
@@ -29,18 +31,18 @@ import (
 // number of pieces of data on its send queue and the other party gets to
 // choose when it may flush its queue.
 //
-// Buffering both queues and relying on good behavior of FSIMs is the best and
-// only real option. Both queues should be buffered because there can be an
-// asymmetric use of queues in either direction. Many file upload requests
-// results in a small device receive queue and large device send queue. Many
-// file downloads result in the opposite.
+// Buffering both queues and relying on good behavior of owner modules is the
+// best and only real option. Both queues should be buffered because there can
+// be an asymmetric use of queues in either direction. Many file upload
+// requests results in a small device receive queue and large device send
+// queue. Many file downloads result in the opposite.
 
-func handleFSIMs(ctx context.Context, modules fsimMap, ownerInfo *serviceinfo.UnchunkReader, deviceInfoChan chan<- *serviceinfo.ChunkReader) {
+func handleOwnerModuleMessages(ctx context.Context, modules deviceModuleMap, ownerInfo *serviceinfo.UnchunkReader, deviceInfoChan chan<- *serviceinfo.ChunkReader) {
 	defer close(deviceInfoChan)
 
 	// 1000 service info buffered in and out means up to ~1MB of data for
 	// the default MTU. If both queues fill, the device will deadlock. This
-	// should only happen for a poorly behaved FSIM.
+	// should only happen for a poorly behaved owner module.
 	deviceInfo, send := serviceinfo.NewChunkOutPipe(1000)
 	select {
 	case <-ctx.Done():
@@ -49,14 +51,14 @@ func handleFSIMs(ctx context.Context, modules fsimMap, ownerInfo *serviceinfo.Un
 	}
 
 	var prevModuleName string
-	var prevFSIM serviceinfo.DeviceModule
+	var prevMod serviceinfo.DeviceModule
 	for {
 		// Get next service info from the owner service and handle it.
 		key, messageBody, ok := ownerInfo.NextServiceInfo()
 		if !ok {
 			var err error
 			if prevModuleName != "" {
-				err = handleFsimYield(ctx, prevFSIM, prevModuleName, send)
+				err = handleOwnerModuleYield(ctx, prevMod, prevModuleName, send)
 			}
 			if err != nil {
 				_ = send.CloseWithError(err)
@@ -73,12 +75,15 @@ func handleFSIMs(ctx context.Context, modules fsimMap, ownerInfo *serviceinfo.Un
 		// This is allowed because the data is small and the send buffer is
 		// large enough for many more "active" responses than is practical to
 		// expect in the real world.
-		fsim, active := modules.Lookup(moduleName)
+		mod, active := modules.Lookup(moduleName)
 		if messageName == "active" {
-			newActive, err := handleActive(active, fsim, moduleName, messageBody, send)
+			newActive, err := handleActive(active, mod, moduleName, messageBody, send)
 			if err != nil {
 				_ = send.CloseWithError(err)
 				return
+			}
+			if _, isPlugin := mod.(plugin.Module); isPlugin && !active && newActive {
+				// TODO: Store for later stopping
 			}
 			modules.active[moduleName] = newActive
 			continue
@@ -88,23 +93,23 @@ func handleFSIMs(ctx context.Context, modules fsimMap, ownerInfo *serviceinfo.Un
 		}
 
 		// TODO: Should prevModuleName == (moduleName || "") be asserted?
-		prevFSIM, prevModuleName = fsim, moduleName
+		prevMod, prevModuleName = mod, moduleName
 
-		// Use FSIM handler and provide it a function which can be used to send
-		// zero or more service info KVs. The function returns a writer to
+		// Call device module and provide it a function which can be used to
+		// send zero or more service info KVs. The function returns a writer to
 		// write the value part of the service info KV.
 		//
-		// If the FSIM handler returns an error then the pipe will be closed
+		// If the device module returns an error then the pipe will be closed
 		// with an error, causing the error to propagate to the chunk reader,
 		// which is used in the ServiceInfo send loop.
-		if err := handleFsimMessage(ctx, fsim, moduleName, messageName, messageBody, send); err != nil {
+		if err := handleOwnerModuleMessage(ctx, mod, moduleName, messageName, messageBody, send); err != nil {
 			_ = send.CloseWithError(err)
 			return
 		}
 	}
 }
 
-func handleActive(prevActive bool, fsim serviceinfo.DeviceModule, moduleName string, messageBody io.Reader, send *serviceinfo.UnchunkWriter) (bool, error) {
+func handleActive(prevActive bool, mod serviceinfo.DeviceModule, moduleName string, messageBody io.Reader, send *serviceinfo.UnchunkWriter) (bool, error) {
 	// Receive active message of true or false
 	var active bool
 	if err := cbor.NewDecoder(messageBody).Decode(&active); err != nil {
@@ -115,7 +120,7 @@ func handleActive(prevActive bool, fsim serviceinfo.DeviceModule, moduleName str
 
 	// Transition internal state
 	if active != prevActive {
-		if err := fsim.Transition(active); err != nil {
+		if err := mod.Transition(active); err != nil {
 			return false, err
 		}
 	}
@@ -124,7 +129,7 @@ func handleActive(prevActive bool, fsim serviceinfo.DeviceModule, moduleName str
 	if !active || prevActive {
 		return active, nil
 	}
-	if _, isUnknown := fsim.(serviceinfo.UnknownModule); isUnknown && moduleName != devmodModuleName {
+	if _, isUnknown := mod.(serviceinfo.UnknownModule); isUnknown && moduleName != devmodModuleName {
 		active = false
 	}
 	if err := send.NextServiceInfo(moduleName, "active"); err != nil {
@@ -136,7 +141,7 @@ func handleActive(prevActive bool, fsim serviceinfo.DeviceModule, moduleName str
 	return active, nil
 }
 
-func handleFsimYield(ctx context.Context, fsim serviceinfo.DeviceModule, moduleName string, send *serviceinfo.UnchunkWriter) error {
+func handleOwnerModuleYield(ctx context.Context, mod serviceinfo.DeviceModule, moduleName string, send *serviceinfo.UnchunkWriter) error {
 	respond := func(messageName string) io.Writer {
 		_ = send.NextServiceInfo(moduleName, messageName)
 		return send
@@ -144,10 +149,10 @@ func handleFsimYield(ctx context.Context, fsim serviceinfo.DeviceModule, moduleN
 	yield := func() {
 		_ = send.ForceNewMessage()
 	}
-	return fsim.Yield(ctx, respond, yield)
+	return mod.Yield(ctx, respond, yield)
 }
 
-func handleFsimMessage(ctx context.Context, fsim serviceinfo.DeviceModule, moduleName, messageName string, messageBody io.Reader, send *serviceinfo.UnchunkWriter) error {
+func handleOwnerModuleMessage(ctx context.Context, mod serviceinfo.DeviceModule, moduleName, messageName string, messageBody io.Reader, send *serviceinfo.UnchunkWriter) error {
 	// Construct respond/yield callback functions
 	respond := func(messageName string) io.Writer {
 		_ = send.NextServiceInfo(moduleName, messageName)
@@ -158,7 +163,7 @@ func handleFsimMessage(ctx context.Context, fsim serviceinfo.DeviceModule, modul
 	}
 
 	// Handle message
-	if err := fsim.Receive(ctx, moduleName, messageName, messageBody, respond, yield); err != nil {
+	if err := mod.Receive(ctx, moduleName, messageName, messageBody, respond, yield); err != nil {
 		return err
 	}
 
@@ -167,18 +172,18 @@ func handleFsimMessage(ctx context.Context, fsim serviceinfo.DeviceModule, modul
 		return err
 	} else if n > 0 {
 		return fmt.Errorf(
-			"fsim did not read full body of message '%s:%s'",
+			"device module did not read full body of message '%s:%s'",
 			moduleName, messageName)
 	}
 	return nil
 }
 
-type fsimMap struct {
+type deviceModuleMap struct {
 	modules map[string]serviceinfo.DeviceModule
 	active  map[string]bool
 }
 
-func (fm fsimMap) Lookup(moduleName string) (fsim serviceinfo.DeviceModule, active bool) {
+func (fm deviceModuleMap) Lookup(moduleName string) (mod serviceinfo.DeviceModule, active bool) {
 	module, known := fm.modules[moduleName]
 	if !known {
 		module = serviceinfo.UnknownModule{}

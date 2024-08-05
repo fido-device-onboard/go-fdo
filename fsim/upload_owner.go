@@ -24,7 +24,7 @@ import (
 
 const fdoUploadModule = "fdo.upload"
 
-// UploadRequest implements the fdo.upload owner FSIM.
+// UploadRequest implements the fdo.upload owner module.
 type UploadRequest struct {
 	// Directory to place uploaded file
 	Dir string
@@ -35,7 +35,7 @@ type UploadRequest struct {
 	// Optional name to use on local filesystem
 	Rename string
 
-	// CreateTemp optionally overrides the behavior of how the FSIM creates a
+	// CreateTemp optionally overrides the behavior of how the module creates a
 	// temporary file to download to.
 	CreateTemp func() (*os.File, error)
 
@@ -114,7 +114,7 @@ func (u *UploadRequest) HandleInfo(ctx context.Context, moduleName, messageName 
 }
 
 // ProduceInfo implements serviceinfo.OwnerModule.
-func (u *UploadRequest) ProduceInfo(ctx context.Context, lastDeviceInfoEmpty bool, producer *serviceinfo.Producer) (blockPeer, fsimDone bool, _ error) {
+func (u *UploadRequest) ProduceInfo(ctx context.Context, lastDeviceInfoEmpty bool, producer *serviceinfo.Producer) (blockPeer, moduleDone bool, _ error) {
 	if !u.requested {
 		return u.request(producer)
 	}
@@ -124,7 +124,7 @@ func (u *UploadRequest) ProduceInfo(ctx context.Context, lastDeviceInfoEmpty boo
 	return false, false, nil
 }
 
-func (u *UploadRequest) request(producer *serviceinfo.Producer) (blockPeer, fsimDone bool, _ error) {
+func (u *UploadRequest) request(producer *serviceinfo.Producer) (blockPeer, moduleDone bool, _ error) {
 	const moduleName = "fdo.upload"
 
 	// Marshal message bodies
@@ -152,7 +152,7 @@ func (u *UploadRequest) request(producer *serviceinfo.Producer) (blockPeer, fsim
 	return false, false, nil
 }
 
-func (u *UploadRequest) finalize() (blockPeer, fsimDone bool, _ error) {
+func (u *UploadRequest) finalize() (blockPeer, moduleDone bool, _ error) {
 	if u.written > u.length {
 		return false, false, fmt.Errorf("uploaded file %q: received %d bytes, expected %d", u.Name, u.written, u.length)
 	}

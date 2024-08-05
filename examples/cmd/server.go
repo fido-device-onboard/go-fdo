@@ -12,8 +12,10 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"errors"
 	"flag"
 	"fmt"
+	"iter"
 	"log"
 	"math/big"
 	"net"
@@ -28,8 +30,6 @@ import (
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/fsim"
 	transport "github.com/fido-device-onboard/go-fdo/http"
-	"github.com/fido-device-onboard/go-fdo/internal/memory"
-	"github.com/fido-device-onboard/go-fdo/internal/token"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 	"github.com/fido-device-onboard/go-fdo/sqlite"
 )
@@ -58,7 +58,7 @@ func (list *stringList) String() string {
 }
 
 func init() {
-	serverFlags.StringVar(&dbPath, "db", "", "SQLite database file path (defaults to in-memory)")
+	serverFlags.StringVar(&dbPath, "db", "", "SQLite database file path")
 	serverFlags.BoolVar(&debug, "debug", false, "Print HTTP contents")
 	serverFlags.StringVar(&extAddr, "ext-http", "", "External `addr`ess devices should connect to (default \"127.0.0.1:${LISTEN_PORT}\")")
 	serverFlags.StringVar(&addr, "http", "localhost:8080", "The `addr`ess to listen on")
@@ -95,10 +95,11 @@ func server() error {
 	}
 
 	// Create FDO responder
-	srv, err := newServer(rvInfo, startFSIMs)
+	srv, err := newServer(rvInfo)
 	if err != nil {
 		return err
 	}
+	srv.OwnerModules = ownerModules
 
 	// Listen and serve
 	handler := http.NewServeMux()
@@ -107,8 +108,9 @@ func server() error {
 		Responder: srv,
 	})
 	return (&http.Server{
-		Addr:    addr,
-		Handler: handler,
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 3 * time.Second,
 	}).ListenAndServe()
 }
 
@@ -120,42 +122,11 @@ func mustMarshal(v any) []byte {
 	return data
 }
 
-func newServer(
-	rvInfo [][]fdo.RvInstruction,
-	startFSIMs func(context.Context, fdo.GUID, string, []*x509.Certificate, fdo.Devmod, []string) serviceinfo.OwnerModuleList,
-) (*fdo.Server, error) {
-	if dbPath != "" {
-		return newPersistentServer(rvInfo, startFSIMs)
-	}
-
-	stateless, err := token.NewService()
-	if err != nil {
-		return nil, err
-	}
-	inMemory, err := memory.NewState()
-	if err != nil {
-		return nil, err
-	}
-	inMemory.AutoExtend = stateless
-
-	return &fdo.Server{
-		Tokens:     stateless,
-		DI:         stateless,
-		TO1:        stateless,
-		TO2:        stateless,
-		RVBlobs:    inMemory,
-		Vouchers:   inMemory,
-		OwnerKeys:  inMemory,
-		RvInfo:     rvInfo,
-		StartFSIMs: startFSIMs,
-	}, nil
-}
-
 //nolint:gocyclo
-func newPersistentServer(
-	rvInfo [][]fdo.RvInstruction,
-	startFSIMs func(context.Context, fdo.GUID, string, []*x509.Certificate, fdo.Devmod, []string) serviceinfo.OwnerModuleList,
-) (*fdo.Server, error) {
+func newServer(rvInfo [][]fdo.RvInstruction) (*fdo.Server, error) {
+	if dbPath == "" {
+		return nil, errors.New("db flag is required")
+	}
 	state, err := sqlite.New(dbPath)
 	if err != nil {
 		return nil, err
@@ -247,53 +218,46 @@ func newPersistentServer(
 	}
 
 	return &fdo.Server{
-		Tokens:     state,
-		DI:         state,
-		TO1:        state,
-		TO2:        state,
-		RVBlobs:    state,
-		Vouchers:   state,
-		OwnerKeys:  state,
-		RvInfo:     rvInfo,
-		StartFSIMs: startFSIMs,
+		Tokens:    state,
+		DI:        state,
+		TO1:       state,
+		TO2:       state,
+		RVBlobs:   state,
+		Vouchers:  state,
+		OwnerKeys: state,
+		RvInfo:    rvInfo,
 	}, nil
 }
 
-func startFSIMs(ctx context.Context, guid fdo.GUID, info string, chain []*x509.Certificate, devmod fdo.Devmod, modules []string) serviceinfo.OwnerModuleList {
-	var list fsimList
-	if slices.Contains(modules, "fdo.download") {
-		for _, name := range downloads {
-			f, err := os.Open(name)
-			if err != nil {
-				log.Fatalf("error opening %q for download FSIM: %v", name, err)
+func ownerModules(ctx context.Context, guid fdo.GUID, info string, chain []*x509.Certificate, devmod fdo.Devmod, modules []string) iter.Seq[serviceinfo.OwnerModule] {
+	return func(yield func(serviceinfo.OwnerModule) bool) {
+		if slices.Contains(modules, "fdo.download") {
+			for _, name := range downloads {
+				f, err := os.Open(name)
+				if err != nil {
+					log.Fatalf("error opening %q for download FSIM: %v", name, err)
+				}
+				defer func() { _ = f.Close() }()
+
+				if !yield(&fsim.DownloadContents[*os.File]{
+					Name:         name,
+					Contents:     f,
+					MustDownload: true,
+				}) {
+					return
+				}
 			}
-			defer func() { _ = f.Close() }()
+		}
 
-			list = append(list, &fsim.DownloadContents[*os.File]{
-				Name:         name,
-				Contents:     f,
-				MustDownload: true,
-			})
+		if slices.Contains(modules, "fdo.upload") {
+			for _, name := range uploadReqs {
+				if !yield(&fsim.UploadRequest{
+					Dir:  uploadDir,
+					Name: name,
+				}) {
+					return
+				}
+			}
 		}
 	}
-	if slices.Contains(modules, "fdo.upload") {
-		for _, name := range uploadReqs {
-			list = append(list, &fsim.UploadRequest{
-				Dir:  uploadDir,
-				Name: name,
-			})
-		}
-	}
-	return &list
-}
-
-type fsimList []serviceinfo.OwnerModule
-
-func (list *fsimList) Next() serviceinfo.OwnerModule {
-	if list == nil || len(*list) == 0 {
-		return nil
-	}
-	head, tail := (*list)[0], (*list)[1:]
-	*list = tail
-	return head
 }

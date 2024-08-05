@@ -18,7 +18,7 @@ import (
 
 const fdoDownloadModule = "fdo.download"
 
-// DownloadContents implements an owner FSIM for fdo.download using a seekable
+// DownloadContents implements an owner module for fdo.download using a seekable
 // reader, such as an [*os.File].
 type DownloadContents[T io.ReadSeeker] struct {
 	Name         string
@@ -77,7 +77,7 @@ func (d *DownloadContents[T]) HandleInfo(ctx context.Context, moduleName, messag
 // ProduceInfo implements serviceinfo.OwnerModule.
 //
 //nolint:gocyclo // Message dispatch has a high score, but is easy to understand
-func (d *DownloadContents[T]) ProduceInfo(ctx context.Context, lastDeviceInfoEmpty bool, producer *serviceinfo.Producer) (blockPeer, fsimDone bool, _ error) {
+func (d *DownloadContents[T]) ProduceInfo(ctx context.Context, lastDeviceInfoEmpty bool, producer *serviceinfo.Producer) (blockPeer, moduleDone bool, _ error) {
 	if d.done {
 		return false, true, nil
 	}
@@ -130,7 +130,7 @@ func (d *DownloadContents[T]) ProduceInfo(ctx context.Context, lastDeviceInfoEmp
 	return false, false, nil
 }
 
-func (d *DownloadContents[T]) sendData(moduleName string, producer *serviceinfo.Producer) (blockPeer, fsimDone bool, _ error) {
+func (d *DownloadContents[T]) sendData(moduleName string, producer *serviceinfo.Producer) (blockPeer, moduleDone bool, _ error) {
 	const messageName = "data"
 
 	// Seek to and read chunk

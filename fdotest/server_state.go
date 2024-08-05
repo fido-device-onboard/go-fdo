@@ -16,8 +16,6 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
-	"os"
-	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -25,7 +23,10 @@ import (
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
+	"github.com/fido-device-onboard/go-fdo/fdotest/internal/memory"
+	"github.com/fido-device-onboard/go-fdo/fdotest/internal/token"
 	"github.com/fido-device-onboard/go-fdo/kex"
+	"github.com/fido-device-onboard/go-fdo/testdata"
 )
 
 // AllServerState includes all server state interfaces.
@@ -40,11 +41,28 @@ type AllServerState interface {
 	fdo.OwnerKeyPersistentState
 }
 
-// TestServerState is used to test different implementations of all server
+// RunServerStateSuite is used to test different implementations of all server
 // state methods.
 //
 //nolint:gocyclo
-func TestServerState(state AllServerState, t *testing.T) {
+func RunServerStateSuite(t *testing.T, state AllServerState) {
+	if state == nil {
+		stateless, err := token.NewService()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		inMemory, err := memory.NewState()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		state = struct {
+			*token.Service
+			*memory.State
+		}{stateless, inMemory}
+	}
+
 	t.Run("TokenService", func(t *testing.T) {
 		// Shadow state to limit testable functions
 		var state fdo.TokenService = state
@@ -499,7 +517,7 @@ func TestServerState(state AllServerState, t *testing.T) {
 
 	t.Run("VoucherPersistentState", func(t *testing.T) {
 		// Parse ownership voucher from testdata
-		b, err := os.ReadFile(filepath.Join("..", "testdata", "ov.pem"))
+		b, err := testdata.Files.ReadFile("ov.pem")
 		if err != nil {
 			t.Fatalf("error opening voucher test data: %v", err)
 		}

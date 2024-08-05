@@ -17,8 +17,26 @@ import (
 	"time"
 
 	"github.com/fido-device-onboard/go-fdo"
+	"github.com/fido-device-onboard/go-fdo/fdotest"
 	"github.com/fido-device-onboard/go-fdo/sqlite"
 )
+
+func TestClient(t *testing.T) {
+	state, cleanup := newDB(t)
+	defer func() { _ = cleanup() }()
+
+	state.AutoExtend = true
+	state.PreserveReplacedVouchers = true
+
+	fdotest.RunClientTestSuite(t, state, nil, nil)
+}
+
+func TestServerState(t *testing.T) {
+	state, cleanup := newDB(t)
+	defer func() { _ = cleanup() }()
+
+	fdotest.RunServerStateSuite(t, state)
+}
 
 func newDB(t *testing.T) (_ *sqlite.DB, cleanup func() error) {
 	cleanup = func() error { return os.Remove("db.test") }

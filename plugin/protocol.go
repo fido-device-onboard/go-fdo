@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: (C) 2024 Intel Corporation
 // SPDX-License-Identifier: Apache 2.0
 
-package fsim
+package plugin
 
 import (
 	"bufio"
@@ -16,7 +16,7 @@ import (
 	"github.com/fido-device-onboard/go-fdo/cbor"
 )
 
-type pluginCommand byte
+type command byte
 
 const invalidPluginCommand = '%'
 
@@ -29,8 +29,8 @@ Control Commands
 	| V    | Module Version |                            | Version (base64 string) |
 */
 const (
-	cModuleName    pluginCommand = 'M'
-	cModuleVersion pluginCommand = 'V'
+	cModuleName    command = 'M'
+	cModuleVersion command = 'V'
 )
 
 /*
@@ -54,23 +54,23 @@ Data Commands
 	| 9    | End Array/Map |                                |
 */
 const (
-	dDone          pluginCommand = 'D'
-	dError         pluginCommand = 'E'
-	dKey           pluginCommand = 'K'
-	dBreak         pluginCommand = 'B'
-	dYield         pluginCommand = 'Y'
-	dInt           pluginCommand = '1'
-	dBytes         pluginCommand = '2'
-	dString        pluginCommand = '3'
-	dArray         pluginCommand = '4'
-	dMap           pluginCommand = '5'
-	dTag           pluginCommand = '6'
-	dBool          pluginCommand = '7'
-	dNull          pluginCommand = '8'
-	dEndCollection pluginCommand = '9'
+	dDone          command = 'D'
+	dError         command = 'E'
+	dKey           command = 'K'
+	dBreak         command = 'B'
+	dYield         command = 'Y'
+	dInt           command = '1'
+	dBytes         command = '2'
+	dString        command = '3'
+	dArray         command = '4'
+	dMap           command = '5'
+	dTag           command = '6'
+	dBool          command = '7'
+	dNull          command = '8'
+	dEndCollection command = '9'
 )
 
-func (c pluginCommand) Valid() bool {
+func (c command) Valid() bool {
 	switch c {
 	case cModuleName, cModuleVersion:
 		return true
@@ -81,7 +81,7 @@ func (c pluginCommand) Valid() bool {
 	}
 }
 
-func (c pluginCommand) ValidParamType(param interface{}) bool {
+func (c command) ValidParamType(param interface{}) bool {
 	switch c {
 	case cModuleName, cModuleVersion:
 		_, isString := param.(string)
@@ -109,7 +109,7 @@ func (c pluginCommand) ValidParamType(param interface{}) bool {
 	panic("programming error - invalid pluginCommand")
 }
 
-func (c pluginCommand) ParseParam(b []byte) (interface{}, error) { //nolint:gocyclo
+func (c command) ParseParam(b []byte) (interface{}, error) { //nolint:gocyclo
 	switch c {
 	case cModuleName, cModuleVersion:
 		if len(b) == 0 {
@@ -152,13 +152,13 @@ func (c pluginCommand) ParseParam(b []byte) (interface{}, error) { //nolint:gocy
 	panic("programming error - invalid pluginCommand")
 }
 
-type pluginProtocol struct {
+type protocol struct {
 	in     io.Writer
 	out    *bufio.Scanner
 	peeked bool
 }
 
-func (p *pluginProtocol) Send(c pluginCommand, param interface{}) error {
+func (p *protocol) Send(c command, param interface{}) error {
 	// Validate and write command character
 	if !c.Valid() {
 		return fmt.Errorf("invalid command: %q", c)
@@ -203,7 +203,7 @@ func (p *pluginProtocol) Send(c pluginCommand, param interface{}) error {
 	return nil
 }
 
-func (p *pluginProtocol) Peek() (pluginCommand, []byte, error) {
+func (p *protocol) Peek() (command, []byte, error) {
 	// Only read a line if the line hasn't already been peeked at
 	if !p.peeked && !p.out.Scan() {
 		if err := p.out.Err(); err != nil {
@@ -219,7 +219,7 @@ func (p *pluginProtocol) Peek() (pluginCommand, []byte, error) {
 	}
 
 	// Parse the command
-	c, rest := pluginCommand(line[0]), line[1:]
+	c, rest := command(line[0]), line[1:]
 	if !c.Valid() {
 		return invalidPluginCommand, nil, fmt.Errorf("invalid command: %q", c)
 	}
@@ -229,7 +229,7 @@ func (p *pluginProtocol) Peek() (pluginCommand, []byte, error) {
 	return c, rest, nil
 }
 
-func (p *pluginProtocol) Recv() (pluginCommand, interface{}, error) {
+func (p *protocol) Recv() (command, interface{}, error) {
 	c, line, err := p.Peek()
 	if err != nil {
 		return invalidPluginCommand, nil, err
@@ -246,7 +246,7 @@ func (p *pluginProtocol) Recv() (pluginCommand, interface{}, error) {
 
 var errEndCollection = errors.New("unexpected end of collection command")
 
-func (p *pluginProtocol) DecodeValue() (interface{}, error) {
+func (p *protocol) DecodeValue() (interface{}, error) {
 	c, param, err := p.Recv()
 	if err != nil {
 		return nil, err
@@ -305,7 +305,7 @@ func (p *pluginProtocol) DecodeValue() (interface{}, error) {
 	}
 }
 
-func (p *pluginProtocol) EncodeValue(v interface{}) error {
+func (p *protocol) EncodeValue(v interface{}) error {
 	if v == nil {
 		return p.Send(dNull, nil)
 	}
@@ -342,7 +342,7 @@ func (p *pluginProtocol) EncodeValue(v interface{}) error {
 	panic(fmt.Sprintf("invalid type for encoding to plugin protocol value: %T", v))
 }
 
-func (p *pluginProtocol) encodeArray(v interface{}) error {
+func (p *protocol) encodeArray(v interface{}) error {
 	if err := p.Send(dArray, nil); err != nil {
 		return fmt.Errorf("error sending start of array to plugin: %w", err)
 	}
@@ -361,7 +361,7 @@ func (p *pluginProtocol) encodeArray(v interface{}) error {
 	return nil
 }
 
-func (p *pluginProtocol) encodeMap(v interface{}) error {
+func (p *protocol) encodeMap(v interface{}) error {
 	if err := p.Send(dMap, nil); err != nil {
 		return fmt.Errorf("error sending start of map to plugin: %w", err)
 	}
@@ -385,7 +385,7 @@ func (p *pluginProtocol) encodeMap(v interface{}) error {
 	return nil
 }
 
-func (p *pluginProtocol) ModuleName() (string, error) {
+func (p *protocol) ModuleName() (string, error) {
 	// Request and receive the module name
 	if err := p.Send(cModuleName, nil); err != nil {
 		return "", fmt.Errorf("error sending module name command: %w", err)

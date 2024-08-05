@@ -129,9 +129,9 @@ func (c *Client) TransferOwnership1(ctx context.Context, baseURL string) (*cose.
 // replaced GUID, rendezvous info, and owner public key. It requires that a
 // device credential, hmac secret, and key are all configured on the client.
 //
-// It has the side effect of performing FSIMs, which may include actions such
-// as downloading files.
-func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, to1d *cose.Sign1[To1d, []byte], fsims map[string]serviceinfo.DeviceModule) (*DeviceCredential, error) {
+// It has the side effect of performing service info modules, which may include
+// actions such as downloading files.
+func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, to1d *cose.Sign1[To1d, []byte], deviceModules map[string]serviceinfo.DeviceModule) (*DeviceCredential, error) {
 	ctx = contextWithErrMsg(ctx)
 
 	// Client configuration defaults
@@ -144,8 +144,8 @@ func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, to1d *c
 	if c.MaxServiceInfoSizeReceive == 0 {
 		c.MaxServiceInfoSizeReceive = serviceinfo.DefaultMTU
 	}
-	if fsims == nil {
-		fsims = make(map[string]serviceinfo.DeviceModule)
+	if deviceModules == nil {
+		deviceModules = make(map[string]serviceinfo.DeviceModule)
 	}
 
 	// TODO: Validate key exchange options using table in 3.6.5
@@ -188,14 +188,14 @@ func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, to1d *c
 
 	// Send devmod KVs in initial ServiceInfo
 	var modules []string
-	for key := range fsims {
+	for key := range deviceModules {
 		module, _, _ := strings.Cut(key, ":")
 		modules = append(modules, module)
 	}
 	go c.Devmod.Write(modules, sendMTU, serviceInfoWriter)
 
 	// Loop, sending and receiving service info until done
-	if err := c.exchangeServiceInfo(ctx, baseURL, proveDeviceNonce, setupDeviceNonce, sendMTU, serviceInfoReader, fsims, session); err != nil {
+	if err := c.exchangeServiceInfo(ctx, baseURL, proveDeviceNonce, setupDeviceNonce, sendMTU, serviceInfoReader, deviceModules, session); err != nil {
 		c.errorMsg(ctx, baseURL, err)
 		return nil, err
 	}

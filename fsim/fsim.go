@@ -3,5 +3,5 @@
 
 // Package fsim implements common FSIM modules defined in
 // https://github.com/fido-alliance/fdo-sim/tree/main/fsim-repository as well
-// as plugin modules as defined in PLUGINS.md.
+// as plugin modules as defined in plugin/README.md.
 package fsim

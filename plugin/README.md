@@ -1,22 +1,22 @@
 # Service Info Module Plugin Interface
 
-FSIMs can either be implemented using the "internal" Go interfaces ([Device][IDevice] and [Owner][IOwner]) and be statically compiled or they may be provided as plugins conforming to the "external" plugin interfaces.
+Service info modules can either be implemented using the "internal" Go interfaces ([Device][IDevice] and [Owner][IOwner]) and be statically compiled or they may be provided as plugins conforming to the "external" plugin interfaces.
 
-## Using Plugin Device FSIMs
+## Using Plugin Device Modules
 
 FDO clients use plugin device service info modules the same way as statically compiled ones. `(*fdo.Client).TransferOwnership2(...)` takes a `map[string]serviceinfo.DeviceModule` argument.
 
 If a `devmod` module is provided, then the value of `(*Client).Devmod` will be ignored. However, any `devmod` plugin module must NOT write serviceinfo for the `devmod:nummodules` and `devmod:modules` keys as these are handled by the library.
 
-## Using Plugin Owner FSIMs
+## Using Plugin Owner Modules
 
-FDO owner services use plugin owner service info modules the same way as statically compiled ones. `(*fdo.Server).StartFSIMs` is a required field that must be set to a function returning a `serviceinfo.OwnerModuleList`. However this interface is satisfied - it is just an iterator - plugin FSIMs may be included side by side with compiled FSIMs.
+FDO owner services use plugin owner service info modules the same way as statically compiled ones. `(*fdo.Server).StartFSIMs` is a required field that must be set to a function returning a `serviceinfo.OwnerModuleList`. However this interface is satisfied - it is just an iterator - plugin modules may be included side by side with compiled modules.
 
 ## Plugin Format
 
 Plugins are native operating system executables. They may be OS and/or architecture dependent, in which case the client or server is required to only use the correct version at runtime.
 
-Any shared libraries or executables that the plugin requires must be available at runtime. The `*exec.Cmd` provided to `fsim.NewCommandPlugin` may have its `Env` field modified to set the appropriate `PATH` and `LD_LIBRARY_PATH` environment variables.
+Any shared libraries or executables that the plugin requires must be available at runtime. The `*exec.Cmd` provided to `plugin.NewCommandPluginModule` may have its `Env` field modified to set the appropriate `PATH` and `LD_LIBRARY_PATH` environment variables.
 
 ## Plugin API
 

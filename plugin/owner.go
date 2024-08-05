@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: (C) 2024 Intel Corporation
 // SPDX-License-Identifier: Apache 2.0
 
-package fsim
+package plugin
 
 import (
 	"bufio"
@@ -16,23 +16,22 @@ import (
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
 
-// PluginOwnerModule adapts an executable plugin to the internal module
-// interface.
-type PluginOwnerModule struct {
-	Plugin
+// OwnerModule adapts an executable plugin to the internal module interface.
+type OwnerModule struct {
+	Module
 
 	once  sync.Once
-	proto *pluginProtocol
+	proto *protocol
 	name  string
 	err   error
 }
 
-var _ serviceinfo.OwnerModule = (*PluginOwnerModule)(nil)
+var _ serviceinfo.OwnerModule = (*OwnerModule)(nil)
 
 // HandleInfo implements serviceinfo.OwnerModule.
 //
 // TODO: Allow plugin to declare maximum chunk size?
-func (m *PluginOwnerModule) HandleInfo(ctx context.Context, moduleName, messageName string, messageBody io.Reader) error {
+func (m *OwnerModule) HandleInfo(ctx context.Context, moduleName, messageName string, messageBody io.Reader) error {
 	name := moduleName + ":" + messageName
 
 	// Decode CBOR and encode to plugin protocol
@@ -51,7 +50,7 @@ func (m *PluginOwnerModule) HandleInfo(ctx context.Context, moduleName, messageN
 }
 
 // ProduceInfo implements serviceinfo.OwnerModule.
-func (m *PluginOwnerModule) ProduceInfo(ctx context.Context, lastDeviceInfoEmpty bool, producer *serviceinfo.Producer) (blockPeer, fsimDone bool, err error) {
+func (m *OwnerModule) ProduceInfo(ctx context.Context, lastDeviceInfoEmpty bool, producer *serviceinfo.Producer) (blockPeer, moduleDone bool, err error) {
 	// Perform plugin startup sequence the first time
 	m.once.Do(func() {
 		w, r, err := m.Start()
@@ -59,7 +58,7 @@ func (m *PluginOwnerModule) ProduceInfo(ctx context.Context, lastDeviceInfoEmpty
 			m.err = err
 			return
 		}
-		m.proto = &pluginProtocol{in: w, out: bufio.NewScanner(r)}
+		m.proto = &protocol{in: w, out: bufio.NewScanner(r)}
 
 		if m.name, m.err = m.proto.ModuleName(); m.err != nil {
 			return
@@ -103,7 +102,7 @@ func (m *PluginOwnerModule) ProduceInfo(ctx context.Context, lastDeviceInfoEmpty
 	}
 }
 
-func (m *PluginOwnerModule) decodeAndProduce(moduleName, messageName string, producer *serviceinfo.Producer) error {
+func (m *OwnerModule) decodeAndProduce(moduleName, messageName string, producer *serviceinfo.Producer) error {
 	val, err := m.proto.DecodeValue()
 	if err != nil {
 		return err

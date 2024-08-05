@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"io"
+	"iter"
 	"os"
 	"time"
 
@@ -31,12 +32,12 @@ type Server struct {
 	// Rendezvous directives
 	RvInfo [][]RvInstruction
 
-	// Start FSIMs for a given device
-	StartFSIMs func(_ context.Context, _ GUID, info string, chain []*x509.Certificate, _ Devmod, modules []string) serviceinfo.OwnerModuleList
+	// Create an iterator of service info modules for a given device
+	OwnerModules func(ctx context.Context, replacementGUID GUID, info string, chain []*x509.Certificate, devmod Devmod, modules []string) iter.Seq[serviceinfo.OwnerModule]
 
 	// Server affinity state
-	mod     serviceinfo.OwnerModule
-	modList serviceinfo.OwnerModuleList
+	nextModule func() (serviceinfo.OwnerModule, bool)
+	stop       func()
 
 	// Optional configuration
 	MaxDeviceServiceInfoSize uint16
@@ -124,6 +125,11 @@ func (s *Server) Respond(ctx context.Context, token string, msgType uint8, msg i
 	newToken, _ = s.Tokens.TokenFromContext(ctx)
 	if err == nil {
 		return newToken, respType, resp
+	}
+
+	// Close owner module iterator
+	if s.stop != nil {
+		s.stop()
 	}
 
 	// Default to error code 500, error message of err parameter, and timestamp

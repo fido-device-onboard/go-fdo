@@ -1,6 +1,6 @@
 module github.com/fido-device-onboard/go-fdo/sqlite
 
-go 1.22.0
+go 1.23rc2
 
 replace github.com/fido-device-onboard/go-fdo => ../
 

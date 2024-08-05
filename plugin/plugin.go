@@ -1,7 +1,10 @@
 // SPDX-FileCopyrightText: (C) 2024 Intel Corporation
 // SPDX-License-Identifier: Apache 2.0
 
-package fsim
+// Package plugin defines a line-based protocol and implements service info
+// device and owner module adapters to plugins communicating over a reader-
+// writer pair (i.e. pipe).
+package plugin
 
 import (
 	"bufio"
@@ -11,9 +14,9 @@ import (
 	"os/exec"
 )
 
-// Plugin controls the generic start/stop behavior of the (usually OS
+// Module controls the generic start/stop behavior of the (usually OS
 // executable) service info module plugin, whether an owner or device module.
-type Plugin interface {
+type Module interface {
 	// Start is called when the module is activated to initialize the plugin.
 	Start() (io.Writer, io.Reader, error)
 
@@ -25,10 +28,22 @@ type Plugin interface {
 	GracefulStop(context.Context) error
 }
 
-// NewCommandPlugin constructs a Plugin from an OS executable.
+// ModuleName returns the module name of a plugin.
+func ModuleName(p Module) (string, error) {
+	w, r, err := p.Start()
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = p.Stop() }()
+
+	proto := &protocol{in: w, out: bufio.NewScanner(r)}
+	return proto.ModuleName()
+}
+
+// NewCommandPluginModule constructs a plugin.Module from an OS executable.
 //
-// For graceful stop behavior, a custom Plugin implementation should be used.
-func NewCommandPlugin(cmd *exec.Cmd) Plugin {
+// For graceful stop behavior, a custom plugin.Module implementation should be used.
+func NewCommandPluginModule(cmd *exec.Cmd) Module {
 	return plugin{
 		StartFunc: func() (io.Writer, io.Reader, error) {
 			in, err := cmd.StdinPipe()
@@ -58,18 +73,6 @@ func NewCommandPlugin(cmd *exec.Cmd) Plugin {
 	}
 }
 
-// PluginName returns the module name of a plugin.
-func PluginName(p Plugin) (string, error) {
-	w, r, err := p.Start()
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = p.Stop() }()
-
-	proto := &pluginProtocol{in: w, out: bufio.NewScanner(r)}
-	return proto.ModuleName()
-}
-
 type plugin struct {
 	// required
 	StartFunc func() (io.Writer, io.Reader, error)
@@ -81,7 +84,7 @@ type plugin struct {
 	GracefulStopFunc func(context.Context) error
 }
 
-var _ Plugin = plugin{}
+var _ Module = plugin{}
 
 func (p plugin) Start() (io.Writer, io.Reader, error) { return p.StartFunc() }
 

@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: (C) 2024 Intel Corporation
 // SPDX-License-Identifier: Apache 2.0
 
-// Package serviceinfo handles FDO Service Info and Service Info Modules
-// (FSIMs).
+// Package serviceinfo handles FDO Service Info and Service Info Modules.
 package serviceinfo
 
 import "fmt"

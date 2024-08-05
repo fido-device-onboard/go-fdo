@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"strings"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
@@ -764,16 +765,21 @@ func (s *Server) ownerServiceInfoReady(ctx context.Context, msg io.Reader) (*own
 		}
 	}
 
-	// Initialize FSIMs
-	var devmod devmodOwnerModule
-	s.mod = &devmod
-	var fsims serviceinfo.OwnerModuleList
-	s.modList = lazyOwnerInfoList(func() serviceinfo.OwnerModuleList {
-		if fsims == nil {
-			fsims = s.StartFSIMs(ctx, replacementGUID, info, deviceCertChain, devmod.Devmod, devmod.Modules)
+	// Initialize service info modules
+	s.nextModule, s.stop = iter.Pull(func() iter.Seq[serviceinfo.OwnerModule] {
+		var devmod devmodOwnerModule
+		var ownerModules iter.Seq[serviceinfo.OwnerModule]
+
+		return func(yield func(serviceinfo.OwnerModule) bool) {
+			if ownerModules == nil {
+				if !yield(&devmod) {
+					return
+				}
+				ownerModules = s.OwnerModules(ctx, replacementGUID, info, deviceCertChain, devmod.Devmod, devmod.Modules)
+			}
+			ownerModules(yield)
 		}
-		return fsims
-	})
+	}())
 
 	// Send response
 	ownerReady := new(ownerServiceInfoReady)
@@ -782,10 +788,6 @@ func (s *Server) ownerServiceInfoReady(ctx context.Context, msg io.Reader) (*own
 	}
 	return ownerReady, nil
 }
-
-type lazyOwnerInfoList func() serviceinfo.OwnerModuleList
-
-func (lazy lazyOwnerInfoList) Next() serviceinfo.OwnerModule { return lazy().Next() }
 
 type doneMsg struct {
 	NonceTO2ProveDv Nonce
@@ -801,7 +803,7 @@ func (c *Client) exchangeServiceInfo(ctx context.Context,
 	proveDvNonce, setupDvNonce Nonce,
 	mtu uint16,
 	initInfo *serviceinfo.ChunkReader,
-	fsims map[string]serviceinfo.DeviceModule,
+	deviceModules map[string]serviceinfo.DeviceModule,
 	session kex.Session,
 ) error {
 	defer func() { _ = initInfo.Close() }()
@@ -819,7 +821,7 @@ func (c *Client) exchangeServiceInfo(ctx context.Context,
 
 	// 1000 service info buffered in and out means up to ~1MB of data for
 	// the default MTU. If both queues fill, the device will deadlock. This
-	// should only happen for a poorly behaved FSIM.
+	// should only happen for a poorly behaved owner service.
 	ownerInfo, ownerInfoIn := serviceinfo.NewChunkInPipe(1000)
 
 	// Send initial device info (devmod)
@@ -834,7 +836,7 @@ func (c *Client) exchangeServiceInfo(ctx context.Context,
 	}
 
 	// Track active modules
-	modules := fsimMap{modules: fsims, active: make(map[string]bool)}
+	modules := deviceModuleMap{modules: deviceModules, active: make(map[string]bool)}
 
 	// NOTE: done never changes, this is just to skip if devmod took 1e6 rounds
 	for !done {
@@ -843,7 +845,7 @@ func (c *Client) exchangeServiceInfo(ctx context.Context,
 		// and if it exceeds the MTU will have IsMoreServiceInfo=true.
 		deviceInfoChan := make(chan *serviceinfo.ChunkReader)
 		ctxWithMTU := context.WithValue(ctx, serviceinfo.MTUKey, mtu)
-		go handleFSIMs(ctxWithMTU, modules, ownerInfo, deviceInfoChan)
+		go handleOwnerModuleMessages(ctxWithMTU, modules, ownerInfo, deviceInfoChan)
 
 		// Send all device service info and receive all owner service info into
 		// a buffered pipe. Note that if >1000 service info are received from
@@ -985,7 +987,7 @@ func (c *Client) exchangeServiceInfoRound(ctx context.Context, baseURL string, m
 	// Receive all owner service info
 	for _, kv := range ownerServiceInfo.ServiceInfo {
 		if err := w.WriteChunk(kv); err != nil {
-			return 0, false, fmt.Errorf("error piping owner service info to FSIM: %w", err)
+			return 0, false, fmt.Errorf("error piping owner service info to device module: %w", err)
 		}
 	}
 
@@ -998,7 +1000,7 @@ func (c *Client) exchangeServiceInfoRound(ctx context.Context, baseURL string, m
 
 	// If no more owner service info, close the pipe
 	if err := w.Close(); err != nil {
-		return 0, false, fmt.Errorf("error closing owner service info -> FSIM pipe: %w", err)
+		return 0, false, fmt.Errorf("error closing owner service info -> device module pipe: %w", err)
 	}
 
 	return 1, ownerServiceInfo.IsDone, nil
@@ -1045,17 +1047,17 @@ func (s *Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*ownerSer
 		return nil, fmt.Errorf("error decoding TO2.DeviceServiceInfo request: %w", err)
 	}
 
-	// Handle data with FSIM
-	if s.mod == nil {
-		s.mod = s.modList.Next()
-	}
-	if s.mod == nil {
+	// Get next owner service info module
+	mod, ok := s.nextModule()
+	if !ok {
 		return &ownerServiceInfo{
 			IsMoreServiceInfo: false,
 			IsDone:            true,
 			ServiceInfo:       nil,
 		}, nil
 	}
+
+	// Handle data with owner module
 	unchunked, unchunker := serviceinfo.NewChunkInPipe(len(deviceInfo.ServiceInfo))
 	for _, kv := range deviceInfo.ServiceInfo {
 		if err := unchunker.WriteChunk(kv); err != nil {
@@ -1071,20 +1073,21 @@ func (s *Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*ownerSer
 			break
 		}
 		moduleName, messageName, _ := strings.Cut(key, ":")
-		if err := s.mod.HandleInfo(ctx, moduleName, messageName, messageBody); err != nil {
+		if err := mod.HandleInfo(ctx, moduleName, messageName, messageBody); err != nil {
 			return nil, fmt.Errorf("error handling device service info %q: %w", key, err)
 		}
 		if n, err := io.Copy(io.Discard, messageBody); err != nil {
 			return nil, err
 		} else if n > 0 {
 			return nil, fmt.Errorf(
-				"fsim did not read full body of message '%s:%s'",
+				"owner module did not read full body of message '%s:%s'",
 				moduleName, messageName)
 		}
 		if err := messageBody.Close(); err != nil {
 			return nil, fmt.Errorf("error closing unchunked message body for %q: %w", key, err)
 		}
 	}
+
 	if deviceInfo.IsMoreServiceInfo {
 		return &ownerServiceInfo{
 			IsMoreServiceInfo: false,
@@ -1093,23 +1096,26 @@ func (s *Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*ownerSer
 		}, nil
 	}
 
-	return s.produceOwnerServiceInfo(ctx, s.mod, len(deviceInfo.ServiceInfo) == 0)
-}
-
-// Allow FSIM to produce data
-func (s *Server) produceOwnerServiceInfo(ctx context.Context, fsim serviceinfo.OwnerModule, lastDeviceInfoEmpty bool) (*ownerServiceInfo, error) {
+	// Allow owner module to produce data
 	mtu, err := s.TO2.MTU(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error getting max device service info size: %w", err)
 	}
 
+	lastDeviceInfoEmpty := len(deviceInfo.ServiceInfo) == 0
 	producer := serviceinfo.NewProducer(mtu)
-	explicitBlock, isComplete, err := fsim.ProduceInfo(ctx, lastDeviceInfoEmpty, producer)
+	explicitBlock, isComplete, err := mod.ProduceInfo(ctx, lastDeviceInfoEmpty, producer)
 	if err != nil {
 		return nil, fmt.Errorf("error producing owner service info from module: %w", err)
 	}
-	if isComplete {
-		s.mod = nil
+
+	// If module is not yet complete, override nextModule to return it again
+	if !isComplete {
+		nextModule := s.nextModule
+		s.nextModule = func() (serviceinfo.OwnerModule, bool) {
+			s.nextModule = nextModule
+			return mod, true
+		}
 	}
 
 	if size := serviceinfo.ArraySizeCBOR(producer.ServiceInfo()); size > int64(mtu) {

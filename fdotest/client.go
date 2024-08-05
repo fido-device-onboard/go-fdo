@@ -4,44 +4,113 @@
 package fdotest
 
 import (
-	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"os"
+	"iter"
+	"runtime"
 	"strings"
 	"testing"
-	"testing/fstest"
 	"time"
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/blob"
 	"github.com/fido-device-onboard/go-fdo/cbor"
-	"github.com/fido-device-onboard/go-fdo/fsim"
+	"github.com/fido-device-onboard/go-fdo/fdotest/internal/memory"
+	"github.com/fido-device-onboard/go-fdo/fdotest/internal/token"
+	"github.com/fido-device-onboard/go-fdo/kex"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
 
-// FSIMList is a simple one-time-use server FSIM execution list.
-type FSIMList []serviceinfo.OwnerModule
-
-// Next implements serviceinfo.OwnerModuleList.
-func (list *FSIMList) Next() serviceinfo.OwnerModule {
-	if list == nil || len(*list) == 0 {
-		return nil
-	}
-	head, tail := (*list)[0], (*list)[1:]
-	*list = tail
-	return head
-}
-
-// TestClient is used to test different implementations of server state
+// RunClientTestSuite is used to test different implementations of server state
 // methods at an almost end-to-end level (transport is mocked).
 //
+// The server state implementation must auto-extend vouchers so that TO2 can
+// occur immediately after DI. It also must NOT remove vouchers after TO2 so
+// that TO2 may occur with the same device many times in succession.
+//
+// If state is nil, then an in-memory implementation will be used. This is
+// useful for only testing service info modules.
+//
 //nolint:gocyclo
-func TestClient(cli *fdo.Client, to0 *fdo.TO0Client, addFSIM func(serviceinfo.OwnerModule), t *testing.T) {
+func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[string]serviceinfo.DeviceModule, ownerModules []serviceinfo.OwnerModule) {
+	if state == nil {
+		stateless, err := token.NewService()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		inMemory, err := memory.NewState()
+		if err != nil {
+			t.Fatal(err)
+		}
+		inMemory.AutoExtend = stateless
+		inMemory.PreserveReplacedVouchers = true
+
+		state = struct {
+			*token.Service
+			*memory.State
+		}{stateless, inMemory}
+	}
+
+	server := &fdo.Server{
+		Tokens:    state,
+		DI:        state,
+		TO0:       state,
+		TO1:       state,
+		TO2:       state,
+		RVBlobs:   state,
+		Vouchers:  state,
+		OwnerKeys: state,
+		OwnerModules: func(_ context.Context, _ fdo.GUID, _ string, _ []*x509.Certificate, _ fdo.Devmod, supportedMods []string) iter.Seq[serviceinfo.OwnerModule] {
+			return func(yield func(serviceinfo.OwnerModule) bool) {
+				if len(supportedMods) == 0 {
+					return
+				}
+
+				for _, mod := range ownerModules {
+					if !yield(mod) {
+						return
+					}
+				}
+			}
+		},
+	}
+
+	transport := &Transport{Responder: server, T: t}
+	dnsAddr := "owner.fidoalliance.org"
+
+	to0 := &fdo.TO0Client{
+		Transport: transport,
+		Addrs: []fdo.RvTO2Addr{
+			{
+				DNSAddress:        &dnsAddr,
+				Port:              8080,
+				TransportProtocol: fdo.HTTPTransport,
+			},
+		},
+		Vouchers:  state,
+		OwnerKeys: state,
+	}
+
+	cli := &fdo.Client{
+		Transport: transport,
+		Cred:      fdo.DeviceCredential{Version: 101},
+		Devmod: fdo.Devmod{
+			Os:      runtime.GOOS,
+			Arch:    runtime.GOARCH,
+			Version: "Debian Bookworm",
+			Device:  "go-validation",
+			FileSep: ";",
+			Bin:     runtime.GOARCH,
+		},
+		KeyExchange: kex.ECDH256Suite,
+		CipherSuite: kex.A128GcmCipher,
+	}
+
 	t.Run("Device Initialization", func(t *testing.T) {
 		secret := make([]byte, 32)
 		if _, err := rand.Read(secret); err != nil {
@@ -122,7 +191,7 @@ func TestClient(cli *fdo.Client, to0 *fdo.TO0Client, addFSIM func(serviceinfo.Ow
 		})
 	})
 
-	t.Run("Transfer Ownership 2 - No FSIMs", func(t *testing.T) {
+	t.Run("Transfer Ownership 2 Only", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		newCred, err := cli.TransferOwnership2(ctx, "", nil, nil)
@@ -137,50 +206,10 @@ func TestClient(cli *fdo.Client, to0 *fdo.TO0Client, addFSIM func(serviceinfo.Ow
 		})
 	})
 
-	t.Run("Transfer Ownership 2 - Download FSIM", func(t *testing.T) {
-		addFSIM(&fsim.DownloadContents[*bytes.Reader]{
-			Name:         "download.test",
-			Contents:     bytes.NewReader([]byte("Hello world!")),
-			MustDownload: true,
-		})
+	t.Run("Transfer Ownership 2 w/ Modules", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		newCred, err := cli.TransferOwnership2(ctx, "", nil, map[string]serviceinfo.DeviceModule{
-			"fdo.download": &fsim.Download{
-				CreateTemp: func() (*os.File, error) {
-					return os.CreateTemp(".", "fdo.download_*")
-				},
-			},
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Logf("New credential: %s", blob.DeviceCredential{
-			Active:           true,
-			DeviceCredential: *newCred,
-			HmacSecret:       []byte(cli.Hmac.(blob.Hmac)),
-			PrivateKey:       blob.Pkcs8Key{PrivateKey: cli.Key},
-		})
-	})
-
-	t.Run("Transfer Ownership 2 - Upload FSIM", func(t *testing.T) {
-		addFSIM(&fsim.UploadRequest{
-			Dir:  ".",
-			Name: "bigfile.test",
-			CreateTemp: func() (*os.File, error) {
-				return os.CreateTemp(".", "fdo.upload_*")
-			},
-		})
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		newCred, err := cli.TransferOwnership2(ctx, "", nil, map[string]serviceinfo.DeviceModule{
-			"fdo.upload": &fsim.Upload{FS: fstest.MapFS{
-				"bigfile.test": &fstest.MapFile{
-					Data: bytes.Repeat([]byte("Hello World!\n"), 1024),
-					Mode: 0777,
-				},
-			}},
-		})
+		newCred, err := cli.TransferOwnership2(ctx, "", nil, deviceModules)
 		if err != nil {
 			t.Fatal(err)
 		}

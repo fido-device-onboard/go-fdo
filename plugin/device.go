@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: (C) 2024 Intel Corporation
 // SPDX-License-Identifier: Apache 2.0
 
-package fsim
+package plugin
 
 import (
 	"bufio"
@@ -16,20 +16,19 @@ import (
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
 
-// PluginDeviceModule adapts an executable plugin to the internal module
-// interface.
-type PluginDeviceModule struct {
-	Plugin
+// DeviceModule adapts an executable plugin to the internal module interface.
+type DeviceModule struct {
+	Module
 
 	once  sync.Once
-	proto *pluginProtocol
+	proto *protocol
 	err   error
 }
 
-var _ serviceinfo.DeviceModule = (*PluginDeviceModule)(nil)
+var _ serviceinfo.DeviceModule = (*DeviceModule)(nil)
 
 // Transition implements serviceinfo.DeviceModule.
-func (m *PluginDeviceModule) Transition(active bool) error {
+func (m *DeviceModule) Transition(active bool) error {
 	if !active {
 		return nil
 	}
@@ -40,14 +39,14 @@ func (m *PluginDeviceModule) Transition(active bool) error {
 			m.err = err
 			return
 		}
-		m.proto = &pluginProtocol{in: w, out: bufio.NewScanner(r)}
+		m.proto = &protocol{in: w, out: bufio.NewScanner(r)}
 	})
 
 	return m.err
 }
 
 // Receive implements serviceinfo.DeviceModule.
-func (m *PluginDeviceModule) Receive(ctx context.Context, moduleName, messageName string, messageBody io.Reader, respond func(message string) io.Writer, yield func()) error {
+func (m *DeviceModule) Receive(ctx context.Context, moduleName, messageName string, messageBody io.Reader, respond func(message string) io.Writer, yield func()) error {
 	if m.proto == nil {
 		return errors.New("plugin module not activated")
 	}
@@ -70,7 +69,7 @@ func (m *PluginDeviceModule) Receive(ctx context.Context, moduleName, messageNam
 }
 
 // Yield implements serviceinfo.DeviceModule.
-func (m *PluginDeviceModule) Yield(ctx context.Context, respond func(message string) io.Writer, yield func()) error {
+func (m *DeviceModule) Yield(ctx context.Context, respond func(message string) io.Writer, yield func()) error {
 	if m.proto == nil {
 		return errors.New("plugin module not activated")
 	}

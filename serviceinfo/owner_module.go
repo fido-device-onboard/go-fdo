@@ -8,12 +8,6 @@ import (
 	"io"
 )
 
-// OwnerModuleList implements a possibly dynamic list (i.e. a generator) of
-// service info modules. When no more modules should be run, Next returns nil.
-type OwnerModuleList interface {
-	Next() OwnerModule
-}
-
 // OwnerModule implements a service info module.
 type OwnerModule interface {
 	// HandleInfo is called once for each service info KV received from the
@@ -26,10 +20,10 @@ type OwnerModule interface {
 	//
 	// If `blockPeer` is true, the owner service will indicate
 	// IsMoreServiceInfo to keep the device from sending service info in the
-	// next exchange. If `fsimDone` is true, then IsMoreServiceInfo will not be
-	// set true, regardless of the value of `more`, and this FSIM will no
+	// next exchange. If `moduleDone` is true, then IsMoreServiceInfo will not
+	// be set true, regardless of the value of `more`, and this module will no
 	// longer be used in the TO2 protocol.
-	ProduceInfo(ctx context.Context, lastDeviceInfoEmpty bool, producer *Producer) (blockPeer, fsimDone bool, _ error)
+	ProduceInfo(ctx context.Context, lastDeviceInfoEmpty bool, producer *Producer) (blockPeer, moduleDone bool, _ error)
 }
 
 // Producer allows an owner service info module to produce service info either
