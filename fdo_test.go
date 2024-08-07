@@ -4,6 +4,8 @@
 package fdo_test
 
 import (
+	"context"
+	"io"
 	"testing"
 	"time"
 
@@ -16,6 +18,36 @@ const mockModuleName = "fdotest.mock"
 
 func TestClient(t *testing.T) {
 	fdotest.RunClientTestSuite(t, nil, nil, nil)
+}
+
+func TestClientWithMockModule(t *testing.T) {
+	deviceModule := &fdotest.MockDeviceModule{
+		ReceiveFunc: func(ctx context.Context, moduleName, messageName string, messageBody io.Reader, respond func(message string) io.Writer, yield func()) error {
+			_, _ = io.Copy(io.Discard, messageBody)
+			return nil
+		},
+	}
+	ownerModule := &fdotest.MockOwnerModule{
+		ProduceInfoFunc: func(ctx context.Context, producer *serviceinfo.Producer) (blockPeer, moduleDone bool, _ error) {
+			if err := producer.WriteChunk(mockModuleName, "active", []byte{0xf5}); err != nil {
+				return false, false, err
+			}
+			if err := producer.WriteChunk(mockModuleName, "message", []byte{0xf4}); err != nil {
+				return false, false, err
+			}
+			return false, true, nil
+		},
+	}
+
+	fdotest.RunClientTestSuite(t, nil, map[string]serviceinfo.DeviceModule{
+		mockModuleName: deviceModule,
+	}, func(yield func(string, serviceinfo.OwnerModule) bool) {
+		yield(mockModuleName, ownerModule)
+	})
+
+	if !deviceModule.ActiveState {
+		t.Error("device module should be active")
+	}
 }
 
 func TestClientWithPluginModule(t *testing.T) {
