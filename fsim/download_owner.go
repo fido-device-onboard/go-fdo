@@ -77,7 +77,7 @@ func (d *DownloadContents[T]) HandleInfo(ctx context.Context, moduleName, messag
 // ProduceInfo implements serviceinfo.OwnerModule.
 //
 //nolint:gocyclo // Message dispatch has a high score, but is easy to understand
-func (d *DownloadContents[T]) ProduceInfo(ctx context.Context, lastDeviceInfoEmpty bool, producer *serviceinfo.Producer) (blockPeer, moduleDone bool, _ error) {
+func (d *DownloadContents[T]) ProduceInfo(ctx context.Context, producer *serviceinfo.Producer) (blockPeer, moduleDone bool, _ error) {
 	if d.done {
 		return false, true, nil
 	}

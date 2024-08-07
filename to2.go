@@ -1098,6 +1098,13 @@ func (s *Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*ownerSer
 	}
 
 	if deviceInfo.IsMoreServiceInfo {
+		// Override nextModule so that the same module is used in the next round
+		nextModule := s.nextModule
+		s.nextModule = func() (serviceinfo.OwnerModule, bool) {
+			s.nextModule = nextModule
+			return mod, true
+		}
+
 		return &ownerServiceInfo{
 			IsMoreServiceInfo: false,
 			IsDone:            false,
@@ -1111,11 +1118,14 @@ func (s *Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*ownerSer
 		return nil, fmt.Errorf("error getting max device service info size: %w", err)
 	}
 
-	lastDeviceInfoEmpty := len(deviceInfo.ServiceInfo) == 0
 	producer := serviceinfo.NewProducer(mtu)
-	explicitBlock, isComplete, err := mod.ProduceInfo(ctx, lastDeviceInfoEmpty, producer)
+	explicitBlock, isComplete, err := mod.ProduceInfo(ctx, producer)
 	if err != nil {
 		return nil, fmt.Errorf("error producing owner service info from module: %w", err)
+	}
+
+	if size := serviceinfo.ArraySizeCBOR(producer.ServiceInfo()); size > int64(mtu) {
+		return nil, fmt.Errorf("owner service info module produced service info exceeding the MTU=%d - 3 (message overhead), size=%d", mtu, size)
 	}
 
 	// If module is not yet complete, override nextModule to return it again
@@ -1125,10 +1135,6 @@ func (s *Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*ownerSer
 			s.nextModule = nextModule
 			return mod, true
 		}
-	}
-
-	if size := serviceinfo.ArraySizeCBOR(producer.ServiceInfo()); size > int64(mtu) {
-		return nil, fmt.Errorf("owner service info module produced service info exceeding the MTU=%d - 3 (message overhead), size=%d", mtu, size)
 	}
 
 	// Return chunked data

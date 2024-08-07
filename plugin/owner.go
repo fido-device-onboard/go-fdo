@@ -50,7 +50,7 @@ func (m *OwnerModule) HandleInfo(ctx context.Context, moduleName, messageName st
 }
 
 // ProduceInfo implements serviceinfo.OwnerModule.
-func (m *OwnerModule) ProduceInfo(ctx context.Context, lastDeviceInfoEmpty bool, producer *serviceinfo.Producer) (blockPeer, moduleDone bool, err error) {
+func (m *OwnerModule) ProduceInfo(ctx context.Context, producer *serviceinfo.Producer) (blockPeer, moduleDone bool, err error) {
 	// Perform plugin startup sequence the first time
 	m.once.Do(func() {
 		w, r, err := m.Start()

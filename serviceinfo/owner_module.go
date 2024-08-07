@@ -23,7 +23,7 @@ type OwnerModule interface {
 	// next exchange. If `moduleDone` is true, then IsMoreServiceInfo will not
 	// be set true, regardless of the value of `more`, and this module will no
 	// longer be used in the TO2 protocol.
-	ProduceInfo(ctx context.Context, lastDeviceInfoEmpty bool, producer *Producer) (blockPeer, moduleDone bool, _ error)
+	ProduceInfo(ctx context.Context, producer *Producer) (blockPeer, moduleDone bool, _ error)
 }
 
 // Producer allows an owner service info module to produce service info either

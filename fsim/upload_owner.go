@@ -114,7 +114,7 @@ func (u *UploadRequest) HandleInfo(ctx context.Context, moduleName, messageName 
 }
 
 // ProduceInfo implements serviceinfo.OwnerModule.
-func (u *UploadRequest) ProduceInfo(ctx context.Context, lastDeviceInfoEmpty bool, producer *serviceinfo.Producer) (blockPeer, moduleDone bool, _ error) {
+func (u *UploadRequest) ProduceInfo(ctx context.Context, producer *serviceinfo.Producer) (blockPeer, moduleDone bool, _ error) {
 	if !u.requested {
 		return u.request(producer)
 	}

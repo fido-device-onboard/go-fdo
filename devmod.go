@@ -251,6 +251,7 @@ type devmodOwnerModule struct {
 	Devmod
 	Modules    []string
 	numModules int
+	done       bool
 }
 
 func (d *devmodOwnerModule) HandleInfo(ctx context.Context, moduleName, messageName string, messageBody io.Reader) error {
@@ -276,6 +277,7 @@ func (d *devmodOwnerModule) HandleInfo(ctx context.Context, moduleName, messageN
 			return fmt.Errorf("invalid devmod module chunk")
 		}
 		copy(d.Modules[chunk.Start:chunk.Start+chunk.Len], chunk.Modules)
+		d.done = chunk.Start+chunk.Len == d.numModules
 		return nil
 	}
 
@@ -292,7 +294,7 @@ func (d *devmodOwnerModule) HandleInfo(ctx context.Context, moduleName, messageN
 	return fmt.Errorf("unknown devmod message name: %s", messageName)
 }
 
-func (d *devmodOwnerModule) ProduceInfo(_ context.Context, lastDeviceInfoEmpty bool, _ *serviceinfo.Producer) (bool, bool, error) {
+func (d *devmodOwnerModule) ProduceInfo(_ context.Context, _ *serviceinfo.Producer) (bool, bool, error) {
 	// Produce nothing as an owner module
-	return false, lastDeviceInfoEmpty, nil
+	return false, d.done, nil
 }

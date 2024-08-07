@@ -127,7 +127,7 @@ func (s *Server) Respond(ctx context.Context, token string, msgType uint8, msg i
 	}
 
 	// Stop any running plugins if TO2 ended (possibly by error)
-	if (msgType == to2DeviceServiceInfoMsgType && err != nil) || msgType == to2Done2MsgType {
+	if (msgType == to2DeviceServiceInfoMsgType && err != nil) || msgType == to2DoneMsgType {
 		// Close owner module iterator
 		s.stop()
 

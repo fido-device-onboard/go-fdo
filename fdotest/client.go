@@ -67,10 +67,6 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 		OwnerKeys: state,
 		OwnerModules: func(_ context.Context, _ fdo.GUID, _ string, _ []*x509.Certificate, _ fdo.Devmod, supportedMods []string) iter.Seq[serviceinfo.OwnerModule] {
 			return func(yield func(serviceinfo.OwnerModule) bool) {
-				if len(supportedMods) == 0 {
-					return
-				}
-
 				for _, mod := range ownerModules {
 					if !yield(mod) {
 						return
