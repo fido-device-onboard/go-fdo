@@ -6,12 +6,14 @@ package fdo
 import (
 	"context"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
 	"iter"
 	"os"
 	"time"
 
+	"github.com/fido-device-onboard/go-fdo/plugin"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
 
@@ -38,6 +40,7 @@ type Server struct {
 	// Server affinity state
 	nextModule func() (serviceinfo.OwnerModule, bool)
 	stop       func()
+	plugins    []plugin.Module
 
 	// Optional configuration
 	MaxDeviceServiceInfoSize uint16
@@ -122,14 +125,42 @@ func (s *Server) Respond(ctx context.Context, token string, msgType uint8, msg i
 		respType = to2Done2MsgType
 		resp, err = s.to2Done2(ctx, msg)
 	}
+
+	// Stop any running plugins if TO2 ended (possibly by error)
+	if (msgType == to2DeviceServiceInfoMsgType && err != nil) || msgType == to2Done2MsgType {
+		// Close owner module iterator
+		s.stop()
+
+		// Start goroutines to gracefully/forcefully stop plugins. Stopping is
+		// given an absolute timeout not tied to the expiration of the request
+		// context.
+		//
+		// TODO: Make timeout configurable?
+		pluginStopCtx, _ := context.WithTimeout(context.Background(), 5*time.Second)
+		for _, p := range s.plugins {
+			pluginGracefulStopCtx, done := context.WithCancel(pluginStopCtx)
+
+			// Allow Graceful stop up to the original shared timeout
+			go func() {
+				defer done()
+				if err := p.GracefulStop(pluginStopCtx); err != nil && !errors.Is(err, context.Canceled) {
+					// TODO: Write to error log
+				}
+			}()
+
+			// Force stop after the shared timeout expires or graceful stop
+			// completes
+			go func() {
+				<-pluginGracefulStopCtx.Done()
+				_ = p.Stop()
+			}()
+		}
+	}
+
+	// Return response with possibly altered token
 	newToken, _ = s.Tokens.TokenFromContext(ctx)
 	if err == nil {
 		return newToken, respType, resp
-	}
-
-	// Close owner module iterator
-	if s.stop != nil {
-		s.stop()
 	}
 
 	// Default to error code 500, error message of err parameter, and timestamp

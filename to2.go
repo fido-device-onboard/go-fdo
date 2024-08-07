@@ -19,6 +19,7 @@ import (
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
 	"github.com/fido-device-onboard/go-fdo/kex"
+	"github.com/fido-device-onboard/go-fdo/plugin"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
 
@@ -766,6 +767,7 @@ func (s *Server) ownerServiceInfoReady(ctx context.Context, msg io.Reader) (*own
 	}
 
 	// Initialize service info modules
+	s.plugins = nil
 	s.nextModule, s.stop = iter.Pull(func() iter.Seq[serviceinfo.OwnerModule] {
 		var devmod devmodOwnerModule
 		var ownerModules iter.Seq[serviceinfo.OwnerModule]
@@ -777,7 +779,14 @@ func (s *Server) ownerServiceInfoReady(ctx context.Context, msg io.Reader) (*own
 				}
 				ownerModules = s.OwnerModules(ctx, replacementGUID, info, deviceCertChain, devmod.Devmod, devmod.Modules)
 			}
-			ownerModules(yield)
+
+			ownerModules(func(mod serviceinfo.OwnerModule) bool {
+				if p, ok := mod.(plugin.Module); ok {
+					// Collect plugins before yielding the module
+					s.plugins = append(s.plugins, p)
+				}
+				return yield(mod)
+			})
 		}
 	}())
 
