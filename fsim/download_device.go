@@ -46,13 +46,13 @@ type Download struct {
 
 var _ serviceinfo.DeviceModule = (*Download)(nil)
 
-// Transition implements serviceinfo.Module.
+// Transition implements serviceinfo.DeviceModule.
 func (d *Download) Transition(active bool) error {
 	d.reset()
 	return nil
 }
 
-// Receive implements serviceinfo.Module.
+// Receive implements serviceinfo.DeviceModule.
 func (d *Download) Receive(ctx context.Context, moduleName, messageName string, messageBody io.Reader, respond func(string) io.Writer, yield func()) error {
 	if err := d.receive(moduleName, messageName, messageBody, respond); err != nil {
 		d.reset()
@@ -102,6 +102,7 @@ func (d *Download) receive(moduleName, messageName string, messageBody io.Reader
 			return cbor.NewEncoder(respond("done")).Encode(-1)
 		}
 		d.written += n
+		fmt.Printf("written: %d, length: %d\n", d.written, d.length)
 		if d.written < d.length {
 			return nil
 		}
@@ -163,7 +164,7 @@ func (d *Download) reset() {
 	d.name, d.length, d.sha384, d.temp, d.written = "", 0, nil, nil, 0
 }
 
-// Yield implements DeviceModule.
+// Yield implements serviceinfo.DeviceModule.
 func (d *Download) Yield(ctx context.Context, respond func(message string) io.Writer, yield func()) error {
 	return nil
 }

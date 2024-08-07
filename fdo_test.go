@@ -29,14 +29,14 @@ func TestClientWithPluginModule(t *testing.T) {
 			Module:       devicePlugin,
 			DeviceModule: &fdotest.MockDeviceModule{},
 		},
-	}, []serviceinfo.OwnerModule{
-		struct {
+	}, func(yield func(string, serviceinfo.OwnerModule) bool) {
+		yield(mockModuleName, struct {
 			plugin.Module
 			serviceinfo.OwnerModule
 		}{
 			Module:      ownerPlugin,
 			OwnerModule: &fdotest.MockOwnerModule{},
-		},
+		})
 	})
 
 	if !devicePlugin.GracefulStopped {

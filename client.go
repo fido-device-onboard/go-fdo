@@ -198,38 +198,11 @@ func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, to1d *c
 	go c.Devmod.Write(modules, sendMTU, serviceInfoWriter)
 
 	// Loop, sending and receiving service info until done
+	defer c.stopPlugins(deviceModules)
 	if err := c.exchangeServiceInfo(ctx, baseURL, proveDeviceNonce, setupDeviceNonce, sendMTU, serviceInfoReader, deviceModules, session); err != nil {
 		c.errorMsg(ctx, baseURL, err)
 		return nil, err
 	}
-
-	// Stop any plugin device modules
-	pluginStopCtx, cancel := context.WithTimeout(ctx, 5*time.Second) // TODO: Make timeout configurable?
-	defer cancel()
-	var pluginStopWg sync.WaitGroup
-	for _, mod := range deviceModules {
-		if p, ok := mod.(plugin.Module); ok {
-			pluginStopWg.Add(1)
-			pluginGracefulStopCtx, done := context.WithCancel(pluginStopCtx)
-
-			// Allow Graceful stop up to the original shared timeout
-			go func() {
-				defer done()
-				if err := p.GracefulStop(pluginStopCtx); err != nil && !errors.Is(err, context.Canceled) {
-					// TODO: Write to error log
-				}
-			}()
-
-			// Force stop after the shared timeout expires or graceful stop
-			// completes
-			go func() {
-				<-pluginGracefulStopCtx.Done()
-				_ = p.Stop()
-				pluginStopWg.Done()
-			}()
-		}
-	}
-	pluginStopWg.Wait()
 
 	// Hash new initial owner public key and return replacement device
 	// credential
@@ -282,4 +255,35 @@ func (c *Client) errorMsg(ctx context.Context, baseURL string, err error) {
 	if err == nil {
 		_ = rc.Close()
 	}
+}
+
+// Stop any plugin device modules
+func (c *Client) stopPlugins(deviceModules map[string]serviceinfo.DeviceModule) {
+	// TODO: Make timeout configurable?
+	pluginStopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var pluginStopWg sync.WaitGroup
+	for _, mod := range deviceModules {
+		if p, ok := mod.(plugin.Module); ok {
+			pluginStopWg.Add(1)
+			pluginGracefulStopCtx, done := context.WithCancel(pluginStopCtx)
+
+			// Allow Graceful stop up to the original shared timeout
+			go func() {
+				defer done()
+				if err := p.GracefulStop(pluginStopCtx); err != nil && !errors.Is(err, context.Canceled) {
+					// TODO: Write to error log
+				}
+			}()
+
+			// Force stop after the shared timeout expires or graceful stop
+			// completes
+			go func() {
+				<-pluginGracefulStopCtx.Done()
+				_ = p.Stop()
+				pluginStopWg.Done()
+			}()
+		}
+	}
+	pluginStopWg.Wait()
 }

@@ -115,14 +115,17 @@ func (r *ChunkReader) ReadChunk(size uint16) (*KV, error) {
 		if err := cbor.NewDecoder(keyReader).Decode(&r.rkey); err != nil {
 			_ = r.r.CloseWithError(err)
 			r.r = nil
-			return nil, fmt.Errorf("read chunk failed: could not read service info key: %w", ErrSizeTooSmall)
+			if errors.Is(err, io.EOF) {
+				err = ErrSizeTooSmall
+			}
+			return nil, fmt.Errorf("could not read service info key: %w", err)
 		}
 
 		// Read key into a string
 		if err := cbor.Unmarshal([]byte(r.rkey), &r.key); err != nil {
 			_ = r.r.CloseWithError(err)
 			r.r = nil
-			return nil, fmt.Errorf("read chunk failed: could not decode service info key: %w", err)
+			return nil, fmt.Errorf("could not decode service info key: %w", err)
 		}
 	}
 

@@ -25,10 +25,10 @@ type Upload struct {
 
 var _ serviceinfo.DeviceModule = (*Upload)(nil)
 
-// Transition implements serviceinfo.Module.
+// Transition implements serviceinfo.DeviceModule.
 func (u *Upload) Transition(active bool) error { u.reset(); return nil }
 
-// Receive implements serviceinfo.Module.
+// Receive implements serviceinfo.DeviceModule.
 func (u *Upload) Receive(ctx context.Context, moduleName, messageName string, messageBody io.Reader, respond func(string) io.Writer, yield func()) error {
 	if err := u.receive(moduleName, messageName, messageBody, respond, yield); err != nil {
 		u.reset()

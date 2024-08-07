@@ -27,18 +27,23 @@ func TestClient(t *testing.T) {
 				Mode: 0777,
 			},
 		}},
-	}, []serviceinfo.OwnerModule{
-		&fsim.DownloadContents[*bytes.Reader]{
+	}, func(yield func(string, serviceinfo.OwnerModule) bool) {
+		if !yield("fdo.download", &fsim.DownloadContents[*bytes.Reader]{
 			Name:         "download.test",
 			Contents:     bytes.NewReader([]byte("Hello world!")),
 			MustDownload: true,
-		},
-		&fsim.UploadRequest{
+		}) {
+			return
+		}
+
+		if !yield("fdo.upload", &fsim.UploadRequest{
 			Dir:  ".",
 			Name: "bigfile.test",
 			CreateTemp: func() (*os.File, error) {
 				return os.CreateTemp(".", "fdo.upload_*")
 			},
-		},
+		}) {
+			return
+		}
 	})
 }

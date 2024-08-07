@@ -85,7 +85,8 @@ func handleOwnerModuleMessages(ctx context.Context, modules deviceModuleMap, own
 			continue
 		}
 		if !active {
-			continue
+			_ = send.CloseWithError(fmt.Errorf("device has not activated module %q", moduleName))
+			return
 		}
 
 		// TODO: Should prevModuleName == (moduleName || "") be asserted?

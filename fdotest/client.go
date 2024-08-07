@@ -12,6 +12,7 @@ import (
 	"crypto/x509/pkix"
 	"iter"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -36,7 +37,7 @@ import (
 // useful for only testing service info modules.
 //
 //nolint:gocyclo
-func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[string]serviceinfo.DeviceModule, ownerModules []serviceinfo.OwnerModule) {
+func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[string]serviceinfo.DeviceModule, ownerModules iter.Seq2[string, serviceinfo.OwnerModule]) {
 	if state == nil {
 		stateless, err := token.NewService()
 		if err != nil {
@@ -67,9 +68,14 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 		OwnerKeys: state,
 		OwnerModules: func(_ context.Context, _ fdo.GUID, _ string, _ []*x509.Certificate, _ fdo.Devmod, supportedMods []string) iter.Seq[serviceinfo.OwnerModule] {
 			return func(yield func(serviceinfo.OwnerModule) bool) {
-				for _, mod := range ownerModules {
-					if !yield(mod) {
-						return
+				if ownerModules == nil {
+					return
+				}
+				for modName, mod := range ownerModules {
+					if slices.Contains(supportedMods, modName) {
+						if !yield(mod) {
+							return
+						}
 					}
 				}
 			}
