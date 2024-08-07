@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
-	"github.com/fido-device-onboard/go-fdo/plugin"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
 
@@ -81,9 +80,6 @@ func handleOwnerModuleMessages(ctx context.Context, modules deviceModuleMap, own
 			if err != nil {
 				_ = send.CloseWithError(err)
 				return
-			}
-			if _, isPlugin := mod.(plugin.Module); isPlugin && !active && newActive {
-				// TODO: Store for later stopping
 			}
 			modules.active[moduleName] = newActive
 			continue

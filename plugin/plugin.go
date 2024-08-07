@@ -20,7 +20,9 @@ type Module interface {
 	// Start is called when the module is activated to initialize the plugin.
 	Start() (io.Writer, io.Reader, error)
 
-	// Stop is called after all modules have been completed.
+	// Stop is called after all modules have been completed. It must return
+	// promptly, generally by sending an OS kill signal, or risk hanging the
+	// client.
 	Stop() error
 
 	// GracefulStop will be called before Stop. Stop will not be called until

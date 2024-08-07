@@ -7,13 +7,16 @@ import (
 	"context"
 	"crypto"
 	"crypto/sha512"
+	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
 	"github.com/fido-device-onboard/go-fdo/kex"
+	"github.com/fido-device-onboard/go-fdo/plugin"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
 
@@ -199,6 +202,34 @@ func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, to1d *c
 		c.errorMsg(ctx, baseURL, err)
 		return nil, err
 	}
+
+	// Stop any plugin device modules
+	pluginStopCtx, cancel := context.WithTimeout(ctx, 5*time.Second) // TODO: Make timeout configurable?
+	defer cancel()
+	var pluginStopWg sync.WaitGroup
+	for _, mod := range deviceModules {
+		if p, ok := mod.(plugin.Module); ok {
+			pluginStopWg.Add(1)
+			pluginGracefulStopCtx, done := context.WithCancel(pluginStopCtx)
+
+			// Allow Graceful stop up to the original shared timeout
+			go func() {
+				defer done()
+				if err := p.GracefulStop(pluginStopCtx); err != nil && !errors.Is(err, context.Canceled) {
+					// TODO: Write to error log
+				}
+			}()
+
+			// Force stop after the shared timeout expires or graceful stop
+			// completes
+			go func() {
+				<-pluginGracefulStopCtx.Done()
+				_ = p.Stop()
+				pluginStopWg.Done()
+			}()
+		}
+	}
+	pluginStopWg.Wait()
 
 	// Hash new initial owner public key and return replacement device
 	// credential
