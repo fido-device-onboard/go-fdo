@@ -853,7 +853,7 @@ func (c *Client) exchangeServiceInfo(ctx context.Context,
 		// info to send. Each service info grouping is automatically chunked
 		// and if it exceeds the MTU will have IsMoreServiceInfo=true.
 		deviceInfoChan := make(chan *serviceinfo.ChunkReader)
-		ctxWithMTU := context.WithValue(ctx, serviceinfo.MTUKey, mtu)
+		ctxWithMTU := context.WithValue(ctx, serviceinfo.MTUKey{}, mtu)
 		go handleOwnerModuleMessages(ctxWithMTU, modules, ownerInfo, deviceInfoChan)
 
 		// Send all device service info and receive all owner service info into
@@ -1070,11 +1070,11 @@ func (s *Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*ownerSer
 	unchunked, unchunker := serviceinfo.NewChunkInPipe(len(deviceInfo.ServiceInfo))
 	for _, kv := range deviceInfo.ServiceInfo {
 		if err := unchunker.WriteChunk(kv); err != nil {
-			return nil, fmt.Errorf("error unchunking received device service info: %w", err)
+			return nil, fmt.Errorf("error unchunking received device service info: write: %w", err)
 		}
 	}
 	if err := unchunker.Close(); err != nil {
-		return nil, fmt.Errorf("error unchunking received device service info: %w", err)
+		return nil, fmt.Errorf("error unchunking received device service info: close: %w", err)
 	}
 	for {
 		key, messageBody, ok := unchunked.NextServiceInfo()
@@ -1098,12 +1098,7 @@ func (s *Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*ownerSer
 	}
 
 	if deviceInfo.IsMoreServiceInfo {
-		// Override nextModule so that the same module is used in the next round
-		nextModule := s.nextModule
-		s.nextModule = func() (serviceinfo.OwnerModule, bool) {
-			s.nextModule = nextModule
-			return mod, true
-		}
+		s.continueWithModule(mod)
 
 		return &ownerServiceInfo{
 			IsMoreServiceInfo: false,
@@ -1112,7 +1107,20 @@ func (s *Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*ownerSer
 		}, nil
 	}
 
-	// Allow owner module to produce data
+	return s.produceOwnerServiceInfo(ctx, mod)
+}
+
+// Override nextModule so that the same module is used in the next round
+func (s *Server) continueWithModule(mod serviceinfo.OwnerModule) {
+	nextModule := s.nextModule
+	s.nextModule = func() (serviceinfo.OwnerModule, bool) {
+		s.nextModule = nextModule
+		return mod, true
+	}
+}
+
+// Allow owner module to produce data
+func (s *Server) produceOwnerServiceInfo(ctx context.Context, mod serviceinfo.OwnerModule) (*ownerServiceInfo, error) {
 	mtu, err := s.TO2.MTU(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error getting max device service info size: %w", err)
@@ -1130,11 +1138,7 @@ func (s *Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*ownerSer
 
 	// If module is not yet complete, override nextModule to return it again
 	if !isComplete {
-		nextModule := s.nextModule
-		s.nextModule = func() (serviceinfo.OwnerModule, bool) {
-			s.nextModule = nextModule
-			return mod, true
-		}
+		s.continueWithModule(mod)
 	}
 
 	// Return chunked data

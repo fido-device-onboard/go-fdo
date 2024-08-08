@@ -136,14 +136,14 @@ func (s *Server) Respond(ctx context.Context, token string, msgType uint8, msg i
 		// context.
 		//
 		// TODO: Make timeout configurable?
-		pluginStopCtx, _ := context.WithTimeout(context.Background(), 5*time.Second)
+		pluginStopCtx, _ := context.WithTimeout(context.Background(), 5*time.Second) //nolint:govet
 		for _, p := range s.plugins {
 			pluginGracefulStopCtx, done := context.WithCancel(pluginStopCtx)
 
 			// Allow Graceful stop up to the original shared timeout
 			go func() {
 				defer done()
-				if err := p.GracefulStop(pluginStopCtx); err != nil && !errors.Is(err, context.Canceled) {
+				if err := p.GracefulStop(pluginStopCtx); err != nil && !errors.Is(err, context.Canceled) { //nolint:revive,staticcheck
 					// TODO: Write to error log
 				}
 			}()

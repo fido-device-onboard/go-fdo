@@ -69,25 +69,34 @@ func (m *MockOwnerModule) ProduceInfo(ctx context.Context, producer *serviceinfo
 
 // MockPlugin implements a trivial plugin.Module.
 type MockPlugin struct {
-	Stopped          bool
-	GracefulStopped  bool
+	Stopped          chan (struct{})
+	GracefulStopped  chan (struct{})
 	GracefulStopFunc func(context.Context) error
 }
 
 var _ plugin.Module = (*MockPlugin)(nil)
+
+// NewMockPlugin initializes channels for checking whether the plugin is
+// stopped.
+func NewMockPlugin() *MockPlugin {
+	return &MockPlugin{
+		Stopped:         make(chan (struct{})),
+		GracefulStopped: make(chan (struct{})),
+	}
+}
 
 // Start implements plugin.Module.
 func (m *MockPlugin) Start() (io.Writer, io.Reader, error) { panic("unimplemented") }
 
 // Stop implements plugin.Module.
 func (m *MockPlugin) Stop() error {
-	m.Stopped = true
+	close(m.Stopped)
 	return nil
 }
 
 // GracefulStop implements plugin.Module.
 func (m *MockPlugin) GracefulStop(ctx context.Context) error {
-	defer func() { m.GracefulStopped = true }()
+	defer close(m.GracefulStopped)
 	if m.GracefulStopFunc != nil {
 		return m.GracefulStopFunc(ctx)
 	}

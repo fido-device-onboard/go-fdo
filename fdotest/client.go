@@ -37,7 +37,7 @@ import (
 // useful for only testing service info modules.
 //
 //nolint:gocyclo
-func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[string]serviceinfo.DeviceModule, ownerModules iter.Seq2[string, serviceinfo.OwnerModule]) {
+func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[string]serviceinfo.DeviceModule, ownerModules iter.Seq2[string, serviceinfo.OwnerModule], customExpect func(*testing.T, error)) {
 	if state == nil {
 		stateless, err := token.NewService()
 		if err != nil {
@@ -212,7 +212,9 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		newCred, err := cli.TransferOwnership2(ctx, "", nil, deviceModules)
-		if err != nil {
+		if customExpect != nil {
+			customExpect(t, err)
+		} else if err != nil {
 			t.Fatal(err)
 		}
 		t.Logf("New credential: %s", blob.DeviceCredential{

@@ -10,7 +10,7 @@ import (
 
 // MTUKey is the context key for the uint16 MTU value. See the description of
 // DeviceModule.Receive.
-var MTUKey struct{}
+type MTUKey struct{}
 
 // A DeviceModule handles a single service info key's moduleName (key format:
 // "moduleName:messageName"). "active" messages are automatically handled and
@@ -64,7 +64,7 @@ type DeviceModule interface {
 	//
 	// For manual chunking using yield, it may be desirable to know the MTU.
 	// The full negotiated MTU (not the current space left from the MTU) can be
-	// acquired from `ctx.Value(serviceinfo.MTUKey).(uint16)`.
+	// acquired from `ctx.Value(serviceinfo.MTUKey{}).(uint16)`.
 	Receive(ctx context.Context, moduleName, messageName string, messageBody io.Reader, respond func(message string) io.Writer, yield func()) error
 
 	// Yield indicates that all service info key value pairs have been received

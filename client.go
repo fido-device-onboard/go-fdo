@@ -271,7 +271,7 @@ func (c *Client) stopPlugins(deviceModules map[string]serviceinfo.DeviceModule) 
 			// Allow Graceful stop up to the original shared timeout
 			go func() {
 				defer done()
-				if err := p.GracefulStop(pluginStopCtx); err != nil && !errors.Is(err, context.Canceled) {
+				if err := p.GracefulStop(pluginStopCtx); err != nil && !errors.Is(err, context.Canceled) { //nolint:revive,staticcheck
 					// TODO: Write to error log
 				}
 			}()
