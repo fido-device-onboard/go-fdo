@@ -115,7 +115,11 @@ func (c command) ParseParam(b []byte) (interface{}, error) { //nolint:gocyclo
 		if len(b) == 0 {
 			return nil, nil
 		}
-		return base64.StdEncoding.AppendDecode(nil, b)
+		decoded, err := base64.StdEncoding.AppendDecode(nil, b)
+		if err != nil {
+			return nil, err
+		}
+		return string(decoded), nil
 
 	case dDone, dBreak, dYield, dArray, dMap, dNull, dEndCollection:
 		if len(b) > 0 {

@@ -6,7 +6,9 @@ package fdotest
 
 import (
 	"context"
+	"errors"
 	"io"
+	"sync"
 
 	"github.com/fido-device-onboard/go-fdo/plugin"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
@@ -69,9 +71,13 @@ func (m *MockOwnerModule) ProduceInfo(ctx context.Context, producer *serviceinfo
 
 // MockPlugin implements a trivial plugin.Module.
 type MockPlugin struct {
+	Routines         func() (func(context.Context, io.Writer) error, func(context.Context, io.Reader) error)
 	Stopped          chan (struct{})
 	GracefulStopped  chan (struct{})
 	GracefulStopFunc func(context.Context) error
+
+	cancel context.CancelFunc
+	errc   <-chan error
 }
 
 var _ plugin.Module = (*MockPlugin)(nil)
@@ -86,16 +92,70 @@ func NewMockPlugin() *MockPlugin {
 }
 
 // Start implements plugin.Module.
-func (m *MockPlugin) Start() (io.Writer, io.Reader, error) { panic("unimplemented") }
+func (m *MockPlugin) Start() (io.Writer, io.Reader, error) {
+	if m.Routines == nil {
+		return nil, nil, errors.New("plugin routines not provided to mock")
+	}
+	writeRoutine, readRoutine := m.Routines()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errc := make(chan error, 1)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		wg.Wait()
+		close(errc)
+	}()
+
+	rIn, wIn := io.Pipe()
+	go func() {
+		defer wg.Done()
+
+		if err := readRoutine(ctx, rIn); err != nil {
+			cancel()
+
+			select {
+			case errc <- err:
+			default:
+			}
+		}
+	}()
+
+	rOut, wOut := io.Pipe()
+	go func() {
+		defer wg.Done()
+
+		if err := writeRoutine(ctx, wOut); err != nil {
+			cancel()
+
+			select {
+			case errc <- err:
+			default:
+			}
+		}
+	}()
+
+	m.cancel = cancel
+	m.errc = errc
+	return wIn, rOut, nil
+}
 
 // Stop implements plugin.Module.
 func (m *MockPlugin) Stop() error {
-	close(m.Stopped)
+	defer close(m.Stopped)
+	if m.errc != nil {
+		return <-m.errc
+	}
 	return nil
 }
 
 // GracefulStop implements plugin.Module.
 func (m *MockPlugin) GracefulStop(ctx context.Context) error {
+	if m.cancel != nil {
+		m.cancel()
+	}
+
 	defer close(m.GracefulStopped)
 	if m.GracefulStopFunc != nil {
 		return m.GracefulStopFunc(ctx)
