@@ -93,16 +93,38 @@ type Devmod struct {
 }
 
 // Write the devmod messages.
-func (d *Devmod) Write(modules []string, mtu uint16, w *serviceinfo.UnchunkWriter) {
+func (d *Devmod) Write(ctx context.Context, deviceModules map[string]serviceinfo.DeviceModule, mtu uint16, w *serviceinfo.UnchunkWriter) {
 	defer func() { _ = w.Close() }()
 
-	if err := d.writeDescriptorMessages(w); err != nil {
-		_ = w.CloseWithError(err)
-		return
+	var modules []string
+	for key := range deviceModules {
+		module, _, _ := strings.Cut(key, ":")
+		modules = append(modules, module)
 	}
 
-	// Always ensure devmod is in the module list
-	modules = append(modules, devmodModuleName)
+	if custom, hasCustom := deviceModules[devmodModuleName]; hasCustom {
+		if err := custom.Yield(ctx, func(messageName string) io.Writer {
+			_ = w.NextServiceInfo(devmodModuleName, messageName)
+			return w
+		}, func() {
+			_ = w.ForceNewMessage()
+		}); err != nil {
+			_ = w.CloseWithError(err)
+			return
+		}
+	} else {
+		if err := d.Validate(); err != nil {
+			_ = w.CloseWithError(err)
+			return
+		}
+
+		if err := d.writeDescriptorMessages(w); err != nil {
+			_ = w.CloseWithError(err)
+			return
+		}
+
+		modules = append(modules, devmodModuleName)
+	}
 
 	if err := d.writeModuleMessages(modules, mtu, w); err != nil {
 		_ = w.CloseWithError(err)
@@ -119,14 +141,11 @@ func (d *Devmod) writeDescriptorMessages(w *serviceinfo.UnchunkWriter) error {
 		return err
 	}
 
-	// Use reflection to get each field and check required fields are not empty
+	// Use reflection to get each field
 	dm := reflect.ValueOf(d).Elem()
 	for i := 0; i < dm.NumField(); i++ {
 		tag := dm.Type().Field(i).Tag.Get("devmod")
-		messageName, opt, _ := strings.Cut(tag, ",")
-		if opt == "required" && dm.Field(i).IsZero() {
-			return fmt.Errorf("missing required devmod field: %s", messageName)
-		}
+		messageName, _, _ := strings.Cut(tag, ",")
 		if dm.Field(i).Len() == 0 {
 			continue
 		}
@@ -135,6 +154,21 @@ func (d *Devmod) writeDescriptorMessages(w *serviceinfo.UnchunkWriter) error {
 		}
 		if err := cbor.NewEncoder(w).Encode(dm.Field(i).Interface()); err != nil {
 			return err
+		}
+	}
+
+	return nil
+}
+
+// Validate checks that all required fields are not their zero value.
+func (d *Devmod) Validate() error {
+	// Use reflection to get each field and check required fields are not empty
+	dm := reflect.ValueOf(d).Elem()
+	for i := 0; i < dm.NumField(); i++ {
+		tag := dm.Type().Field(i).Tag.Get("devmod")
+		messageName, opt, _ := strings.Cut(tag, ",")
+		if opt == "required" && dm.Field(i).IsZero() {
+			return fmt.Errorf("missing required devmod field: %s", messageName)
 		}
 	}
 
@@ -295,6 +329,9 @@ func (d *devmodOwnerModule) HandleInfo(ctx context.Context, moduleName, messageN
 }
 
 func (d *devmodOwnerModule) ProduceInfo(_ context.Context, _ *serviceinfo.Producer) (bool, bool, error) {
-	// Produce nothing as an owner module
-	return false, d.done, nil
+	// Validate required fields were sent before sending IsDone
+	if d.done {
+		return false, true, d.Devmod.Validate()
+	}
+	return false, false, nil
 }

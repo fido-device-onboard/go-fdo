@@ -214,6 +214,9 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 		newCred, err := cli.TransferOwnership2(ctx, "", nil, deviceModules)
 		if customExpect != nil {
 			customExpect(t, err)
+			if err != nil {
+				return
+			}
 		} else if err != nil {
 			t.Fatal(err)
 		}

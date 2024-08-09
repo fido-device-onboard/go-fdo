@@ -4,6 +4,7 @@
 package fdo_test
 
 import (
+	"context"
 	"errors"
 	"io"
 	"runtime"
@@ -32,7 +33,7 @@ func TestDevmodRequired(t *testing.T) {
 			r, w := serviceinfo.NewChunkOutPipe(0)
 			defer func() { _ = w.Close() }()
 
-			go devmod.Write([]string{"devmod"}, mtu, w)
+			go devmod.Write(context.Background(), map[string]serviceinfo.DeviceModule{}, mtu, w)
 
 			for {
 				_, err := r.ReadChunk(mtu)
@@ -61,13 +62,16 @@ func TestDevmod(t *testing.T) {
 		FileSep: ";",
 		Bin:     runtime.GOARCH,
 	}
-	modules := []string{"devmod", "unit-test1", "unit-test2", "unit-test3"}
 
 	r, w := serviceinfo.NewChunkOutPipe(0)
 	defer func() { _ = w.Close() }()
 
 	mtu := uint16(40)
-	go devmod.Write(modules, mtu, w)
+	go devmod.Write(context.Background(), map[string]serviceinfo.DeviceModule{
+		"unit-test1": nil,
+		"unit-test2": nil,
+		"unit-test3": nil,
+	}, mtu, w)
 	var chunks []*serviceinfo.KV
 	for {
 		chunk, err := r.ReadChunk(mtu)

@@ -88,7 +88,7 @@ func TestClientWithCustomDevmod(t *testing.T) {
 		fdotest.RunClientTestSuite(t, nil, map[string]serviceinfo.DeviceModule{
 			"devmod": customDevmod,
 		}, func(yield func(string, serviceinfo.OwnerModule) bool) {}, func(t *testing.T, err error) {
-			if err == nil || !strings.Contains(err.Error(), "invalid devmod") {
+			if err == nil || !strings.Contains(err.Error(), "missing required devmod field: bin") {
 				t.Fatalf("expected invalid devmod error, got: %v", err)
 			}
 		})

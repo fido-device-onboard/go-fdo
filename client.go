@@ -9,7 +9,6 @@ import (
 	"crypto/sha512"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -41,6 +40,9 @@ type Client struct {
 	PSS bool
 
 	// Devmod contains all required and any number of optional messages.
+	// Alternatively to setting this field, a devmod module may be provided in
+	// the arguments to TransferOwnership2 where the module must provide any
+	// devmod messages EXCEPT nummodules and modules via its Yield method.
 	Devmod Devmod
 
 	// Key exchange options, default to the strongest implemented for the Owner
@@ -190,12 +192,7 @@ func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, to1d *c
 	defer func() { _ = serviceInfoWriter.Close() }()
 
 	// Send devmod KVs in initial ServiceInfo
-	var modules []string
-	for key := range deviceModules {
-		module, _, _ := strings.Cut(key, ":")
-		modules = append(modules, module)
-	}
-	go c.Devmod.Write(modules, sendMTU, serviceInfoWriter)
+	go c.Devmod.Write(ctx, deviceModules, sendMTU, serviceInfoWriter)
 
 	// Loop, sending and receiving service info until done
 	defer c.stopPlugins(deviceModules)
