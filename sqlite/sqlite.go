@@ -18,15 +18,16 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"maps"
 	"math/big"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/ncruces/go-sqlite3"
 	_ "github.com/ncruces/go-sqlite3/embed"        // Load sqlite WASM binary
 	_ "github.com/ncruces/go-sqlite3/vfs/adiantum" // Encryption VFS
-	"golang.org/x/exp/maps"
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
@@ -308,7 +309,7 @@ func (db *DB) insertWithinTx(table string, kvs, upsertWhere map[string]any) erro
 		orIgnore = "OR IGNORE "
 	}
 
-	columns := maps.Keys(kvs)
+	columns := slices.Collect(maps.Keys(kvs))
 	sql := fmt.Sprintf(
 		"INSERT %sINTO %s (%s) VALUES (%s)",
 		orIgnore,
