@@ -28,7 +28,7 @@ func TestClient(t *testing.T) {
 	state.AutoExtend = true
 	state.PreserveReplacedVouchers = true
 
-	fdotest.RunClientTestSuite(t, state, nil, nil)
+	fdotest.RunClientTestSuite(t, state, nil, nil, nil)
 }
 
 func TestServerState(t *testing.T) {
@@ -42,7 +42,7 @@ func newDB(t *testing.T) (_ *sqlite.DB, cleanup func() error) {
 	cleanup = func() error { return os.Remove("db.test") }
 	_ = cleanup()
 
-	state, err := sqlite.New("db.test")
+	state, err := sqlite.New("db.test", "test_password")
 	if err != nil {
 		t.Fatal(err)
 	}

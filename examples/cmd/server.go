@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -41,6 +42,7 @@ var serverFlags = flag.NewFlagSet("server", flag.ContinueOnError)
 var (
 	addr       string
 	dbPath     string
+	dbPass     string
 	extAddr    string
 	rvBypass   bool
 	downloads  stringList
@@ -61,6 +63,7 @@ func (list *stringList) String() string {
 
 func init() {
 	serverFlags.StringVar(&dbPath, "db", "", "SQLite database file path")
+	serverFlags.StringVar(&dbPass, "db-pass", "", "SQLite database encryption-at-rest passphrase")
 	serverFlags.BoolVar(&debug, "debug", false, "Print HTTP contents")
 	serverFlags.StringVar(&extAddr, "ext-http", "", "External `addr`ess devices should connect to (default \"127.0.0.1:${LISTEN_PORT}\")")
 	serverFlags.StringVar(&addr, "http", "localhost:8080", "The `addr`ess to listen on")
@@ -129,7 +132,7 @@ func newServer(rvInfo [][]fdo.RvInstruction) (*fdo.Server, error) {
 	if dbPath == "" {
 		return nil, errors.New("db flag is required")
 	}
-	state, err := sqlite.New(dbPath)
+	state, err := sqlite.New(dbPath, dbPass)
 	if err != nil {
 		return nil, err
 	}
@@ -264,7 +267,7 @@ func ownerModules(ctx context.Context, guid fdo.GUID, info string, chain []*x509
 	return func(yield func(serviceinfo.OwnerModule) bool) {
 		if slices.Contains(modules, "fdo.download") {
 			for _, name := range downloads {
-				f, err := os.Open(name)
+				f, err := os.Open(filepath.Clean(name))
 				if err != nil {
 					log.Fatalf("error opening %q for download FSIM: %v", name, err)
 				}

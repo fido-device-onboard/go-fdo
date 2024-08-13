@@ -19,11 +19,13 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/ncruces/go-sqlite3"
-	_ "github.com/ncruces/go-sqlite3/embed" // Load sqlite WASM binary
+	_ "github.com/ncruces/go-sqlite3/embed"        // Load sqlite WASM binary
+	_ "github.com/ncruces/go-sqlite3/vfs/adiantum" // Encryption VFS
 	"golang.org/x/exp/maps"
 
 	"github.com/fido-device-onboard/go-fdo"
@@ -42,23 +44,17 @@ type DB struct {
 }
 
 // New creates or opens a SQLite database file using a single non-pooled
-// connection.
-func New(filename string) (*DB, error) {
+// connection. If a password is specified, then the adiantum VFS will be used
+// with a text key.
+func New(filename, password string) (*DB, error) {
 	// Open a new or existing DB
-	conn, err := sqlite3.Open(filename)
+	query := "?_pragma=foreign_keys(ON)"
+	if password != "" {
+		query += fmt.Sprintf("&vfs=adiantum&_pragma=textkey(%s)", password)
+	}
+	conn, err := sqlite3.Open("file:" + filepath.Clean(filename) + query)
 	if err != nil {
 		return nil, fmt.Errorf("error opening sqlite DB: %w", err)
-	}
-
-	// Ensure required pragma are set
-	pragma := []string{
-		`PRAGMA foreign_keys = ON`,
-	}
-	for _, sql := range pragma {
-		if err := conn.Exec(sql); err != nil {
-			_ = conn.Close()
-			return nil, fmt.Errorf("error setting pragma: %w", err)
-		}
 	}
 
 	// Ensure tables are created
@@ -140,6 +136,9 @@ func New(filename string) (*DB, error) {
 	for _, sql := range stmts {
 		if err := conn.Exec(sql); err != nil {
 			_ = conn.Close()
+			if password != "" && strings.Contains(err.Error(), "file is not a database") {
+				return nil, fmt.Errorf("invalid database password")
+			}
 			return nil, fmt.Errorf("error creating tables: %w", err)
 		}
 	}
