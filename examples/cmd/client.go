@@ -187,7 +187,7 @@ func client() error {
 
 func saveBlob(dc blob.DeviceCredential) error {
 	// Encode device credential to temp file
-	tmp, err := os.CreateTemp("", "fdo_cred_*")
+	tmp, err := os.CreateTemp(".", "fdo_cred_*")
 	if err != nil {
 		return fmt.Errorf("error creating temp file for device credential: %w", err)
 	}

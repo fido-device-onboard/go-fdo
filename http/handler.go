@@ -181,9 +181,11 @@ func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, token
 	// Invalidate token when finishing a protocol or erroring
 	switch respType {
 	case 13, 32, 71, fdo.ErrorMsgType:
-		ctx := h.Responder.Tokens.TokenContext(ctx, newToken)
-		if err := h.Responder.Tokens.InvalidateToken(ctx); err != nil {
-			fmt.Fprintf(os.Stderr, "[WARNING] error invalidating token: %v\n", err)
+		if newToken != "" {
+			ctx := h.Responder.Tokens.TokenContext(ctx, newToken)
+			if err := h.Responder.Tokens.InvalidateToken(ctx); err != nil {
+				fmt.Fprintf(os.Stderr, "[WARNING] error invalidating token: %v\n", err)
+			}
 		}
 	}
 
