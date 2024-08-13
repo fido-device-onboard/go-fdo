@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
@@ -34,16 +35,17 @@ type RvTO2Addr struct {
 }
 
 func (a RvTO2Addr) String() string {
-	var addr any
+	var addr string
 	if a.DNSAddress != nil {
 		addr = *a.DNSAddress
 	} else if a.IPAddress != nil {
-		addr = *a.IPAddress
+		addr = a.IPAddress.String()
 	}
-	if a.Port == 0 {
-		return fmt.Sprintf("%s://%s", a.TransportProtocol, addr)
+	if a.Port > 0 {
+		port := strconv.Itoa(int(a.Port))
+		addr = net.JoinHostPort(addr, port)
 	}
-	return fmt.Sprintf("%s://%s:%d", a.TransportProtocol, addr, a.Port)
+	return fmt.Sprintf("%s://%s", a.TransportProtocol, addr)
 }
 
 type helloRV struct {

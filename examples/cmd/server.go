@@ -10,6 +10,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
@@ -20,6 +21,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"slices"
 	"strconv"
@@ -133,6 +135,35 @@ func newServer(rvInfo [][]fdo.RvInstruction) (*fdo.Server, error) {
 	}
 	state.AutoExtend = true
 	state.PreserveReplacedVouchers = true
+
+	// Auto-register RV blob so that TO1 can be tested
+	if !rvBypass {
+		to1URLs, _ := fdo.BaseHTTP(rvInfo)
+		to1URL, err := url.Parse(to1URLs[0])
+		if err != nil {
+			return nil, fmt.Errorf("error parsing TO1 URL to use for TO2 addr: %w", err)
+		}
+		to1Host := to1URL.Hostname()
+		to1Port, err := strconv.Atoi(to1URL.Port())
+		if err != nil {
+			return nil, fmt.Errorf("error parsing TO1 port to use for TO2: %w", err)
+		}
+
+		fakeHash := sha256.Sum256([]byte("fake blob"))
+		state.AutoRegisterRV = &fdo.To1d{
+			RV: []fdo.RvTO2Addr{
+				{
+					DNSAddress:        &to1Host,
+					Port:              uint16(to1Port),
+					TransportProtocol: fdo.HTTPTransport,
+				},
+			},
+			To0dHash: fdo.Hash{
+				Algorithm: fdo.Sha256Hash,
+				Value:     fakeHash[:],
+			},
+		}
+	}
 
 	// Generate manufacturing component keys
 	rsaMfgKey, err := rsa.GenerateKey(rand.Reader, 2048)
