@@ -13,7 +13,8 @@ import (
 	"flag"
 	"fmt"
 	"io/fs"
-	mathrand "math/rand/v2"
+	"math"
+	"math/big"
 	"net"
 	"os"
 	"path/filepath"
@@ -97,16 +98,16 @@ func (files fsVar) Open(path string) (fs.File, error) {
 
 	// TODO: Enforce chroot-like security
 	if _, rootAccess := files["/"]; rootAccess {
-		return os.Open(path)
+		return os.Open(filepath.Clean(path))
 	}
 
 	name := pathToName(path, "")
 	if abs, ok := files[name]; ok {
-		return os.Open(abs)
+		return os.Open(filepath.Clean(abs))
 	}
 	for dir := filepath.Dir(name); dir != "/" && dir != "."; dir = filepath.Dir(dir) {
 		if abs, ok := files[dir]; ok {
-			return os.Open(abs)
+			return os.Open(filepath.Clean(abs))
 		}
 	}
 	return nil, &fs.PathError{
@@ -149,7 +150,7 @@ func client() error {
 	}
 
 	// Read device credential blob to configure client for TO1/TO2
-	blobFile, err := os.Open(blobPath)
+	blobFile, err := os.Open(filepath.Clean(blobPath))
 	if err != nil {
 		return fmt.Errorf("error opening blob credential %q: %w", blobPath, err)
 	}
@@ -233,10 +234,14 @@ func di(cli *fdo.Client) error {
 	}
 
 	// Call the DI server
+	sn, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
+	if err != nil {
+		return fmt.Errorf("error generating random serial number: %w", err)
+	}
 	cred, err := cli.DeviceInitialize(context.TODO(), diURL, fdo.DeviceMfgInfo{
 		KeyType:      fdo.Secp384r1KeyType, // Must match the key used to generate the CSR
 		KeyEncoding:  fdo.X5ChainKeyEnc,
-		SerialNumber: strconv.Itoa(mathrand.Int()),
+		SerialNumber: strconv.FormatInt(sn.Int64(), 10),
 		DeviceInfo:   "gotest",
 		CertInfo:     cbor.X509CertificateRequest(*csr),
 	})
