@@ -6,7 +6,6 @@ package plugin
 import (
 	"bufio"
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -58,7 +57,7 @@ func (m *DeviceModule) Receive(ctx context.Context, moduleName, messageName stri
 	if err := cbor.NewDecoder(messageBody).Decode(&val); err != nil {
 		return fmt.Errorf("error decoding message %q body: %w", name, err)
 	}
-	if err := m.proto.Send(dKey, base64.StdEncoding.EncodeToString([]byte(messageName))); err != nil {
+	if err := m.proto.Send(dKey, messageName); err != nil {
 		return fmt.Errorf("error sending message %q to plugin: %w", name, err)
 	}
 	if err := m.proto.EncodeValue(val); err != nil {

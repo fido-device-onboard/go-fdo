@@ -88,16 +88,13 @@ func (c command) ValidParamType(param interface{}) bool {
 		return param == nil || isString
 	case dDone, dBreak, dYield, dArray, dMap, dNull, dEndCollection:
 		return param == nil
-	case dInt, dTag:
+	case dInt, dTag, dBool:
 		switch param.(type) {
 		case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
 			return true
 		default:
 			return false
 		}
-	case dBool:
-		_, isBool := param.(bool)
-		return isBool
 	case dError, dKey, dString:
 		_, isString := param.(string)
 		return isString
@@ -189,13 +186,16 @@ func (p *protocol) Send(c command, param interface{}) error {
 			return err
 		}
 
-	case string:
-		if _, err := base64.NewEncoder(base64.StdEncoding, p.in).Write([]byte(param)); err != nil {
+	case string, []byte:
+		data, ok := param.([]byte)
+		if !ok {
+			data = []byte(param.(string))
+		}
+		enc := base64.NewEncoder(base64.StdEncoding, p.in)
+		if _, err := enc.Write(data); err != nil {
 			return err
 		}
-
-	case []byte:
-		if _, err := base64.NewEncoder(base64.StdEncoding, p.in).Write(param); err != nil {
+		if err := enc.Close(); err != nil {
 			return err
 		}
 	}
