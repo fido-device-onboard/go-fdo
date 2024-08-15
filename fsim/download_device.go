@@ -125,7 +125,7 @@ func (d *Download) finalize(respond func(string) io.Writer) error {
 	}
 	if hashed := d.hash.Sum(nil); len(d.sha384) > 0 && !bytes.Equal(hashed, d.sha384) {
 		if d.ErrorLog != nil {
-			_, _ = fmt.Fprintf(d.ErrorLog, "[file=%s] checksum failed verification\n", d.name)
+			_, _ = fmt.Fprintf(d.ErrorLog, "[file=%s] checksum failed verification\nexp: %x\ngot: %x\n", d.name, d.sha384, hashed)
 		}
 		return cbor.NewEncoder(respond("done")).Encode(-1)
 	}

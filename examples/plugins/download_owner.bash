@@ -9,17 +9,30 @@ CHUNKSIZE=1014
 
 # Internal state
 file=
+filename=
 started=false
 index=0
 done=false
 
+# Write line with command char and base64 data
 function b64() {
 	local command data
 	command="${1}"
 	data="${2:-}"
 
 	echo -n "$command"
-	echo -n "${data}" | base64 -w 0
+	echo -n "$data" | base64 -w 0
+	echo
+}
+
+# b64 but from hex input (necessary to allow null bytes in binary input)
+function b64x() {
+	local command data
+	command="${1}"
+	data="${2:-}"
+
+	echo -n "$command"
+	xxd -r -p <<<"$data" | base64 -w 0
 	echo
 }
 
@@ -39,13 +52,13 @@ function produce() {
 		echo "71" # true
 
 		b64 "K" "name"
-		b64 "3" "$file"
+		b64 "3" "$filename"
 
 		b64 "K" "length"
 		echo "1$(wc -c <"$file")"
 
 		b64 "K" "sha-384"
-		b64 "2" "$(sha384sum "$file" | cut -d' ' -f1 | xxd -r -p)"
+		b64x "2" "$(sha384sum "$file" | cut -d' ' -f1)"
 
 		started=true
 	fi
@@ -111,6 +124,7 @@ function handle() {
 
 function main() {
 	file="${1:-}"
+	filename="${2:-$file}"
 
 	if [[ "$file" == "" ]]; then
 		printf "Usage:\n\t%s FILE\n" "$NAME" >&2

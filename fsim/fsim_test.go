@@ -5,7 +5,9 @@ package fsim_test
 
 import (
 	"bytes"
+	"log"
 	"os"
+	"path/filepath"
 	"testing"
 	"testing/fstest"
 
@@ -15,35 +17,64 @@ import (
 )
 
 func TestClient(t *testing.T) {
+	if err := os.MkdirAll("testdata/downloads", 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll("testdata/uploads", 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	data := bytes.Repeat([]byte("Hello World!\n"), 1024)
+
 	fdotest.RunClientTestSuite(t, nil, map[string]serviceinfo.DeviceModule{
 		"fdo.download": &fsim.Download{
 			CreateTemp: func() (*os.File, error) {
-				return os.CreateTemp(".", "fdo.download_*")
+				return os.CreateTemp("testdata", "fdo.download_*")
 			},
+			NameToPath: func(name string) string {
+				return filepath.Join("testdata", "downloads", name)
+			},
+			ErrorLog: fdotest.ErrorLog(t),
 		},
 		"fdo.upload": &fsim.Upload{FS: fstest.MapFS{
 			"bigfile.test": &fstest.MapFile{
-				Data: bytes.Repeat([]byte("Hello World!\n"), 1024),
+				Data: data,
 				Mode: 0777,
 			},
 		}},
 	}, func(yield func(string, serviceinfo.OwnerModule) bool) {
 		if !yield("fdo.download", &fsim.DownloadContents[*bytes.Reader]{
-			Name:         "download.test",
-			Contents:     bytes.NewReader([]byte("Hello world!")),
+			Name:         "bigfile.test",
+			Contents:     bytes.NewReader(data),
 			MustDownload: true,
 		}) {
 			return
 		}
 
 		if !yield("fdo.upload", &fsim.UploadRequest{
-			Dir:  ".",
+			Dir:  "testdata/uploads",
 			Name: "bigfile.test",
 			CreateTemp: func() (*os.File, error) {
-				return os.CreateTemp(".", "fdo.upload_*")
+				return os.CreateTemp("testdata", "fdo.upload_*")
 			},
 		}) {
 			return
 		}
 	}, nil)
+
+	/// Validate contents
+	downloadContents, err := os.ReadFile("testdata/downloads/bigfile.test")
+	if err != nil {
+		log.Fatal(err)
+	}
+	if !bytes.Equal(downloadContents, data) {
+		t.Fatal("download contents did not match expected")
+	}
+	uploadContents, err := os.ReadFile("testdata/uploads/bigfile.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(uploadContents, data) {
+		t.Fatal("upload contents did not match expected")
+	}
 }
