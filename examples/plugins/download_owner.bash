@@ -9,7 +9,8 @@ CHUNKSIZE=1014
 
 # Internal state
 file=
-produced=false
+started=false
+index=0
 done=false
 
 function b64() {
@@ -28,7 +29,12 @@ function error() {
 }
 
 function produce() {
-	if ! "$produced"; then
+	if "$done"; then
+		echo "D"
+		exit 0
+	fi
+
+	if ! "$started"; then
 		b64 "K" "active"
 		echo "71" # true
 
@@ -41,29 +47,26 @@ function produce() {
 		b64 "K" "sha-384"
 		b64 "2" "$(sha384sum "$file" | cut -d' ' -f1 | xxd -r -p)"
 
-		local char chunk
-		while read -r -N 1 char; do
-			chunk+="$char"
-			if [ "$(wc -c <<<"$chunk")" -eq "$CHUNKSIZE" ]; then
-				b64 "K" "data"
-				b64 "2" "$chunk"
-				chunk=
-			fi
-		done <"$file"
-		if [ "$chunk" ]; then
-			b64 "K" "data"
-			b64 "2" "$chunk"
+		started=true
+	fi
+
+	local byte chunk startindex
+	chunk=""
+	startindex="$index"
+	while read -r -N 1 byte; do
+		((index += 1))
+		chunk+="$byte"
+		if [ "$((index - startindex))" -eq "$CHUNKSIZE" ]; then
+			break
 		fi
+	done < <(tail -c +"$((index + 1))" "$file")
 
-		produced=true
+	if [ "$chunk" ]; then
+		b64 "K" "data"
+		b64 "2" "$chunk"
 	fi
 
-	if "$done"; then
-		echo "D"
-		exit 0
-	else
-		echo "Y"
-	fi
+	echo "Y"
 }
 
 function handle() {
@@ -88,7 +91,13 @@ function handle() {
 		if [[ "${next::1}" != "1" ]]; then
 			error "expected integer value after key $key"
 		fi
-		#TODO: Check integer matches file length
+
+		local got expected
+		got="${next:1}"
+		expected="$(wc -c <"$file")"
+		if [ "$got" -ne "$expected" ]; then
+			error "expected device to read $expected bytes, got $got"
+		fi
 
 		done=true
 		;;
