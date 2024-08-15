@@ -4,7 +4,7 @@ set -euo pipefail
 
 VERSION=0.0.1
 MODULE=fdo.download
-NAME=download.bash
+NAME=download_owner.bash
 CHUNKSIZE=1014
 
 # Internal state
@@ -127,7 +127,7 @@ function main() {
 	filename="${2:-$file}"
 
 	if [[ "$file" == "" ]]; then
-		printf "Usage:\n\t%s FILE\n" "$NAME" >&2
+		printf "Usage:\n\t%s FILE [NAME]\n" "$NAME" >&2
 		exit 1
 	fi
 
