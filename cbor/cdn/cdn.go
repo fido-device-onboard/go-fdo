@@ -29,6 +29,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
+	"maps"
+	"slices"
+	"sort"
 	"strconv"
 	"unicode"
 
@@ -116,7 +120,7 @@ func encodeValue(b *bytes.Buffer, v any) error { //nolint:gocyclo
 	case map[interface{}]interface{}:
 		_, _ = b.WriteString("{")
 		c := 0
-		for key, value := range v {
+		for key, value := range sortMap(v) {
 			if c > 0 {
 				_, _ = b.WriteString(", ")
 			}
@@ -498,4 +502,33 @@ func discardSpaces(r *bufio.Reader) error {
 		}
 	}
 
+}
+
+func sortMap(m map[any]any) iter.Seq2[any, any] {
+	keys := slices.Collect(maps.Keys(m))
+
+	cborKeys := make([][]byte, len(keys))
+	for i, k := range keys {
+		cborKey, err := cbor.Marshal(k)
+		if err != nil {
+			panic(err)
+		}
+		cborKeys[i] = cborKey
+	}
+
+	indices := make([]int, len(keys))
+	for i := range keys {
+		indices[i] = i
+	}
+	sort.Slice(indices, cbor.BytewiseLexicalSort(indices, cborKeys))
+
+	return func(yield func(k, v any) bool) {
+		for _, i := range indices {
+			k := keys[i]
+
+			if !yield(k, m[k]) {
+				return
+			}
+		}
+	}
 }

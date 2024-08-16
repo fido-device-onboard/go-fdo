@@ -1339,7 +1339,7 @@ func (e *Encoder) encodeMap(length int, keys []reflect.Value, get func(k reflect
 	// Sort keys deterministically
 	lessFn := e.MapKeySort
 	if lessFn == nil {
-		lessFn = bytewiseLexicalSort
+		lessFn = BytewiseLexicalSort
 	}
 	indices := make([]int, len(keys))
 	for i := range keys {
@@ -1502,9 +1502,12 @@ func collectFieldWeights(parents []int, i, upper int, field func(int) reflect.St
 	}))
 }
 
-// This is the "new" canonical form whereas length-first is the "old" canonical
+// BytewiseLexicalSort is a map key sorting function. It is the default for an
+// `Encoder`.
+//
+// It is the "new" canonical form whereas length-first is the "old" canonical
 // form.
-func bytewiseLexicalSort(indices []int, keys [][]byte) func(i, j int) bool {
+func BytewiseLexicalSort(indices []int, keys [][]byte) func(i, j int) bool {
 	return func(i, j int) bool {
 		left, right := keys[indices[i]], keys[indices[j]]
 		for k := 0; k < len(left); k++ {
