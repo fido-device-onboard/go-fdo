@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/cbor/cdn"
 	"github.com/fido-device-onboard/go-fdo/kex"
 )
 
@@ -68,7 +70,11 @@ func (t *Transport) Send(ctx context.Context, base string, msgType uint8, msg an
 	if sess != nil {
 		if t.Debug {
 			body, _ := cbor.Marshal(msg)
-			fmt.Fprintf(os.Stderr, "Unencrypted request body [msg %d]:\n%x\n", msgType, body)
+			debug, err := cdn.FromCBOR(body)
+			if err != nil {
+				debug = hex.EncodeToString(body)
+			}
+			fmt.Fprintf(os.Stderr, "Unencrypted request body [msg %d]:\n%s\n", msgType, debug)
 		}
 		var err error
 		msg, err = sess.Encrypt(rand.Reader, msg)
@@ -111,7 +117,11 @@ func (t *Transport) Send(ctx context.Context, base string, msgType uint8, msg an
 		if debugReq, err := httputil.DumpRequestOut(req, false); err == nil {
 			fmt.Fprintf(os.Stderr, "[%s] Request:\n%s", time.Now(), string(debugReq))
 		}
-		fmt.Fprintf(os.Stderr, "%x\n", body.Bytes())
+		debug, err := cdn.FromCBOR(body.Bytes())
+		if err != nil {
+			debug = hex.EncodeToString(body.Bytes())
+		}
+		fmt.Fprintln(os.Stderr, debug)
 	}
 	resp, err := t.Client.Do(req)
 	if err != nil {
@@ -123,7 +133,12 @@ func (t *Transport) Send(ctx context.Context, base string, msgType uint8, msg an
 		}
 		var saveBody bytes.Buffer
 		if _, err := saveBody.ReadFrom(resp.Body); err == nil {
-			fmt.Fprintf(os.Stderr, "%x\n", saveBody.Bytes())
+			debug, err := cdn.FromCBOR(saveBody.Bytes())
+			if err != nil {
+				debug = hex.EncodeToString(saveBody.Bytes())
+			}
+			fmt.Fprintln(os.Stderr, debug)
+
 			resp.Body = io.NopCloser(&saveBody)
 		}
 	}

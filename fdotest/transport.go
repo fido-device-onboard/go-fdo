@@ -11,6 +11,7 @@ import (
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/cbor/cdn"
 	"github.com/fido-device-onboard/go-fdo/kex"
 )
 
@@ -46,9 +47,9 @@ func (t *Transport) Send(ctx context.Context, baseURL string, msgType uint8, msg
 		t.token = ""
 	}
 
-	t.T.Logf("Request %d: %v", msgType, msg)
+	t.T.Logf("Request %d: %v", msgType, tryDebugNotation(msg))
 	newToken, respType, resp := t.Responder.Respond(ctx, t.token, msgType, &msgBody)
-	t.T.Logf("Response %d: %v", respType, resp)
+	t.T.Logf("Response %d: %v", respType, tryDebugNotation(resp))
 	t.token = newToken
 	t.prevMsg = msgType
 
@@ -58,4 +59,16 @@ func (t *Transport) Send(ctx context.Context, baseURL string, msgType uint8, msg
 	}
 
 	return respType, io.NopCloser(&respBody), nil
+}
+
+func tryDebugNotation(v any) any {
+	b, err := cbor.Marshal(v)
+	if err != nil {
+		return v
+	}
+	d, err := cdn.FromCBOR(b)
+	if err != nil {
+		return v
+	}
+	return d
 }
