@@ -5,12 +5,15 @@ package fdo_test
 
 import (
 	"context"
+	"crypto/x509"
 	"io"
+	"iter"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/fdotest"
 	"github.com/fido-device-onboard/go-fdo/plugin"
@@ -44,8 +47,10 @@ func TestClientWithMockModule(t *testing.T) {
 
 	fdotest.RunClientTestSuite(t, nil, map[string]serviceinfo.DeviceModule{
 		mockModuleName: deviceModule,
-	}, func(yield func(string, serviceinfo.OwnerModule) bool) {
-		yield(mockModuleName, ownerModule)
+	}, func(ctx context.Context, replacementGUID fdo.GUID, info string, chain []*x509.Certificate, devmod fdo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
+		return func(yield func(string, serviceinfo.OwnerModule) bool) {
+			yield(mockModuleName, ownerModule)
+		}
 	}, nil)
 
 	if !deviceModule.ActiveState {
@@ -87,7 +92,7 @@ func TestClientWithCustomDevmod(t *testing.T) {
 
 		fdotest.RunClientTestSuite(t, nil, map[string]serviceinfo.DeviceModule{
 			"devmod": customDevmod,
-		}, func(yield func(string, serviceinfo.OwnerModule) bool) {}, func(t *testing.T, err error) {
+		}, nil, func(t *testing.T, err error) {
 			if err == nil || !strings.Contains(err.Error(), "missing required devmod field: bin") {
 				t.Fatalf("expected invalid devmod error, got: %v", err)
 			}
@@ -125,7 +130,7 @@ func TestClientWithCustomDevmod(t *testing.T) {
 
 		fdotest.RunClientTestSuite(t, nil, map[string]serviceinfo.DeviceModule{
 			"devmod": customDevmod,
-		}, func(yield func(string, serviceinfo.OwnerModule) bool) {}, nil)
+		}, nil, nil)
 	})
 }
 
@@ -140,14 +145,16 @@ func TestClientWithPluginModule(t *testing.T) {
 			Module:       devicePlugin,
 			DeviceModule: &fdotest.MockDeviceModule{},
 		},
-	}, func(yield func(string, serviceinfo.OwnerModule) bool) {
-		yield(mockModuleName, struct {
-			plugin.Module
-			serviceinfo.OwnerModule
-		}{
-			Module:      ownerPlugin,
-			OwnerModule: &fdotest.MockOwnerModule{},
-		})
+	}, func(ctx context.Context, replacementGUID fdo.GUID, info string, chain []*x509.Certificate, devmod fdo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
+		return func(yield func(string, serviceinfo.OwnerModule) bool) {
+			yield(mockModuleName, struct {
+				plugin.Module
+				serviceinfo.OwnerModule
+			}{
+				Module:      ownerPlugin,
+				OwnerModule: &fdotest.MockOwnerModule{},
+			})
+		}
 	}, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)

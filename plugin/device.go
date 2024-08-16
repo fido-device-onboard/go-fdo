@@ -91,7 +91,6 @@ func (m *DeviceModule) Yield(ctx context.Context, respond func(message string) i
 
 		case dBreak:
 			yield()
-			return nil
 
 		case dKey:
 			message := param.(string)
@@ -101,7 +100,9 @@ func (m *DeviceModule) Yield(ctx context.Context, respond func(message string) i
 			if err != nil {
 				return err
 			}
-			return cbor.NewEncoder(w).Encode(val)
+			if err := cbor.NewEncoder(w).Encode(val); err != nil {
+				return err
+			}
 
 		default:
 			return fmt.Errorf("invalid data: got unexpected command %q while parsing", c)

@@ -26,6 +26,10 @@ import (
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
 
+// OwnerModulesFunc creates an iterator of service info modules for a given
+// device.
+type OwnerModulesFunc func(ctx context.Context, replacementGUID fdo.GUID, info string, chain []*x509.Certificate, devmod fdo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule]
+
 // RunClientTestSuite is used to test different implementations of server state
 // methods at an almost end-to-end level (transport is mocked).
 //
@@ -37,7 +41,7 @@ import (
 // useful for only testing service info modules.
 //
 //nolint:gocyclo
-func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[string]serviceinfo.DeviceModule, ownerModules iter.Seq2[string, serviceinfo.OwnerModule], customExpect func(*testing.T, error)) {
+func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[string]serviceinfo.DeviceModule, ownerModules OwnerModulesFunc, customExpect func(*testing.T, error)) {
 	if state == nil {
 		stateless, err := token.NewService()
 		if err != nil {
@@ -66,12 +70,14 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 		RVBlobs:   state,
 		Vouchers:  state,
 		OwnerKeys: state,
-		OwnerModules: func(_ context.Context, _ fdo.GUID, _ string, _ []*x509.Certificate, _ fdo.Devmod, supportedMods []string) iter.Seq[serviceinfo.OwnerModule] {
+		OwnerModules: func(ctx context.Context, replacementGUID fdo.GUID, info string, chain []*x509.Certificate, devmod fdo.Devmod, supportedMods []string) iter.Seq[serviceinfo.OwnerModule] {
+			if ownerModules == nil {
+				return func(yield func(serviceinfo.OwnerModule) bool) {}
+			}
+
+			mods := ownerModules(ctx, replacementGUID, info, chain, devmod, supportedMods)
 			return func(yield func(serviceinfo.OwnerModule) bool) {
-				if ownerModules == nil {
-					return
-				}
-				for modName, mod := range ownerModules {
+				for modName, mod := range mods {
 					if slices.Contains(supportedMods, modName) {
 						if !yield(mod) {
 							return

@@ -40,9 +40,13 @@ type Client struct {
 	PSS bool
 
 	// Devmod contains all required and any number of optional messages.
+	//
 	// Alternatively to setting this field, a devmod module may be provided in
 	// the arguments to TransferOwnership2 where the module must provide any
 	// devmod messages EXCEPT nummodules and modules via its Yield method.
+	//
+	// Note: The device plugin will be yielded to exactly once and is expected
+	// to provide all required and desired fields and yield. It may then exit.
 	Devmod Devmod
 
 	// Key exchange options, default to the strongest implemented for the Owner

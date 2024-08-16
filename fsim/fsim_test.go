@@ -5,12 +5,16 @@ package fsim_test
 
 import (
 	"bytes"
+	"context"
+	"crypto/x509"
+	"iter"
 	"log"
 	"os"
 	"path/filepath"
 	"testing"
 	"testing/fstest"
 
+	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/fdotest"
 	"github.com/fido-device-onboard/go-fdo/fsim"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
@@ -42,23 +46,25 @@ func TestClient(t *testing.T) {
 				Mode: 0777,
 			},
 		}},
-	}, func(yield func(string, serviceinfo.OwnerModule) bool) {
-		if !yield("fdo.download", &fsim.DownloadContents[*bytes.Reader]{
-			Name:         "bigfile.test",
-			Contents:     bytes.NewReader(data),
-			MustDownload: true,
-		}) {
-			return
-		}
+	}, func(ctx context.Context, replacementGUID fdo.GUID, info string, chain []*x509.Certificate, devmod fdo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
+		return func(yield func(string, serviceinfo.OwnerModule) bool) {
+			if !yield("fdo.download", &fsim.DownloadContents[*bytes.Reader]{
+				Name:         "bigfile.test",
+				Contents:     bytes.NewReader(data),
+				MustDownload: true,
+			}) {
+				return
+			}
 
-		if !yield("fdo.upload", &fsim.UploadRequest{
-			Dir:  "testdata/uploads",
-			Name: "bigfile.test",
-			CreateTemp: func() (*os.File, error) {
-				return os.CreateTemp("testdata", "fdo.upload_*")
-			},
-		}) {
-			return
+			if !yield("fdo.upload", &fsim.UploadRequest{
+				Dir:  "testdata/uploads",
+				Name: "bigfile.test",
+				CreateTemp: func() (*os.File, error) {
+					return os.CreateTemp("testdata", "fdo.upload_*")
+				},
+			}) {
+				return
+			}
 		}
 	}, nil)
 

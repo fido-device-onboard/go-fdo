@@ -103,6 +103,11 @@ func (d *Devmod) Write(ctx context.Context, deviceModules map[string]serviceinfo
 	}
 
 	if custom, hasCustom := deviceModules[devmodModuleName]; hasCustom {
+		if err := custom.Transition(true); err != nil {
+			_ = w.CloseWithError(err)
+			return
+		}
+
 		if err := custom.Yield(ctx, func(messageName string) io.Writer {
 			_ = w.NextServiceInfo(devmodModuleName, messageName)
 			return w

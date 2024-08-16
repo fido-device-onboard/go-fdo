@@ -5,11 +5,18 @@ package plugins_test
 
 import (
 	"bytes"
+	"context"
+	"crypto/x509"
+	"encoding/hex"
+	"iter"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"testing"
 
+	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/fdotest"
 	"github.com/fido-device-onboard/go-fdo/fsim"
 	"github.com/fido-device-onboard/go-fdo/plugin"
@@ -42,9 +49,11 @@ func TestDownloadOwnerPlugin(t *testing.T) {
 			},
 			ErrorLog: fdotest.ErrorLog(t),
 		},
-	}, func(yield func(string, serviceinfo.OwnerModule) bool) {
-		if !yield("fdo.download", downloadOwnerPlugin) {
-			return
+	}, func(ctx context.Context, replacementGUID fdo.GUID, info string, chain []*x509.Certificate, devmod fdo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
+		return func(yield func(string, serviceinfo.OwnerModule) bool) {
+			if !yield("fdo.download", downloadOwnerPlugin) {
+				return
+			}
 		}
 	}, nil)
 
@@ -74,13 +83,15 @@ func TestDownloadDevicePlugin(t *testing.T) {
 
 	fdotest.RunClientTestSuite(t, nil, map[string]serviceinfo.DeviceModule{
 		"fdo.download": downloadDevicePlugin,
-	}, func(yield func(string, serviceinfo.OwnerModule) bool) {
-		if !yield("fdo.download", &fsim.DownloadContents[*bytes.Reader]{
-			Name:         "bigfile.test",
-			Contents:     bytes.NewReader(expected),
-			MustDownload: true,
-		}) {
-			return
+	}, func(ctx context.Context, replacementGUID fdo.GUID, info string, chain []*x509.Certificate, devmod fdo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
+		return func(yield func(string, serviceinfo.OwnerModule) bool) {
+			if !yield("fdo.download", &fsim.DownloadContents[*bytes.Reader]{
+				Name:         "bigfile.test",
+				Contents:     bytes.NewReader(expected),
+				MustDownload: true,
+			}) {
+				return
+			}
 		}
 	}, nil)
 
@@ -91,5 +102,54 @@ func TestDownloadDevicePlugin(t *testing.T) {
 	}
 	if !bytes.Equal(downloadContents, expected) {
 		t.Fatal("download contents did not match expected")
+	}
+}
+
+func TestDevmodPlugin(t *testing.T) {
+	expected := fdo.Devmod{
+		Os:      runtime.GOOS,
+		Arch:    runtime.GOARCH,
+		Version: "TestOS",
+		Device:  "UnitMcUnitFace",
+		Serial:  []byte{0x00, 0x01, 0x02, 0x04},
+		PathSep: "/",
+		FileSep: ";",
+		Newline: "\n",
+		Temp:    "/tmp",
+		Dir:     "/home/fdo",
+		ProgEnv: "bin:go",
+		Bin:     runtime.GOARCH,
+		MudURL:  "",
+	}
+
+	devmodCmd := exec.Command("./devmod.bash",
+		expected.Os,
+		expected.Arch,
+		expected.Version,
+		expected.Device,
+		hex.EncodeToString(expected.Serial),
+		expected.PathSep,
+		expected.FileSep,
+		expected.Newline,
+		expected.Temp,
+		expected.Dir,
+		expected.ProgEnv,
+		expected.Bin,
+		expected.MudURL,
+	)
+	devmodCmd.Stderr = fdotest.ErrorLog(t)
+	devmodPlugin := &plugin.DeviceModule{Module: plugin.NewCommandPluginModule(devmodCmd)}
+
+	var got fdo.Devmod
+
+	fdotest.RunClientTestSuite(t, nil, map[string]serviceinfo.DeviceModule{
+		"devmod": devmodPlugin,
+	}, func(ctx context.Context, replacementGUID fdo.GUID, info string, chain []*x509.Certificate, devmod fdo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
+		got = devmod
+		return func(yield func(string, serviceinfo.OwnerModule) bool) {}
+	}, nil)
+
+	if !reflect.DeepEqual(got, expected) {
+		t.Errorf("devmod did not match expected\nwant %+v\ngot  %+v", expected, got)
 	}
 }
