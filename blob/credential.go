@@ -57,18 +57,8 @@ var _ fdo.KeyedHasher = (*DeviceCredential)(nil)
 
 // NewHmac returns a key-based hash (Hmac) using the given hash function some
 // secret.
-func (dc *DeviceCredential) NewHmac(alg fdo.HashAlg) hash.Hash {
-	return hmac.New(alg.HashFunc().New, dc.HmacSecret)
-}
-
-// Supports returns whether a particular HashAlg is supported.
-func (dc *DeviceCredential) Supports(alg fdo.HashAlg) bool {
-	switch alg {
-	case fdo.HmacSha256Hash, fdo.HmacSha384Hash:
-		return true
-	default:
-		return false
-	}
+func (dc *DeviceCredential) NewHmac(alg fdo.HashAlg) (hash.Hash, error) {
+	return hmac.New(alg.HashFunc().New, dc.HmacSecret), nil
 }
 
 var _ crypto.Signer = (*DeviceCredential)(nil)

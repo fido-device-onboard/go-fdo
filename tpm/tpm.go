@@ -42,12 +42,7 @@ var _ fdo.KeyedHasher = (*DeviceCredential)(nil)
 
 // NewHmac returns a key-based hash (Hmac) using the given hash function some
 // secret.
-func (dc *DeviceCredential) NewHmac(alg fdo.HashAlg) hash.Hash {
-	panic("unimplemented")
-}
-
-// Supports returns whether a particular HashAlg is supported.
-func (dc *DeviceCredential) Supports(alg fdo.HashAlg) bool {
+func (dc *DeviceCredential) NewHmac(alg fdo.HashAlg) (hash.Hash, error) {
 	panic("unimplemented")
 }
 

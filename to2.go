@@ -665,12 +665,7 @@ type deviceServiceInfoReady struct {
 // DeviceServiceInfoReady(66) -> OwnerServiceInfoReady(67)
 func (c *Client) readyServiceInfo(ctx context.Context, baseURL string, replacementOVH *VoucherHeader, session kex.Session) (maxDeviceServiceInfoSiz uint16, err error) {
 	// Calculate the new OVH HMac similar to DI.SetHMAC
-	var replacementHmac Hmac
-	if c.Hmac.Supports(HmacSha384Hash) {
-		replacementHmac, err = hmacHash(c.Hmac, HmacSha384Hash, replacementOVH)
-	} else {
-		replacementHmac, err = hmacHash(c.Hmac, HmacSha256Hash, replacementOVH)
-	}
+	replacementHmac, err := hmacHash(c.Hmac, HmacSha384Hash, replacementOVH)
 	if err != nil {
 		return 0, fmt.Errorf("error computing HMAC of ownership voucher header: %w", err)
 	}

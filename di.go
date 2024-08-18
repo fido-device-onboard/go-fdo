@@ -145,12 +145,7 @@ func (s *Server) setCredentials(ctx context.Context, msg io.Reader) (*setCredent
 
 // SetHMAC(12) -> Done(13)
 func (c *Client) setHmac(ctx context.Context, baseURL string, ovh *VoucherHeader) (err error) {
-	var ovhHash Hmac
-	if c.Hmac.Supports(HmacSha384Hash) {
-		ovhHash, err = hmacHash(c.Hmac, HmacSha384Hash, ovh)
-	} else {
-		ovhHash, err = hmacHash(c.Hmac, HmacSha256Hash, ovh)
-	}
+	ovhHash, err := hmacHash(c.Hmac, HmacSha384Hash, ovh)
 	if err != nil {
 		return fmt.Errorf("error computing HMAC of ownership voucher header: %w", err)
 	}

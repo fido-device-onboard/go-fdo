@@ -17,9 +17,6 @@ var _ fdo.KeyedHasher = Hmac(nil)
 
 // NewHmac returns a key-based hash (Hmac) using the given hash function
 // some secret.
-func (h Hmac) NewHmac(alg fdo.HashAlg) hash.Hash {
-	return hmac.New(alg.HashFunc().New, []byte(h))
+func (h Hmac) NewHmac(alg fdo.HashAlg) (hash.Hash, error) {
+	return hmac.New(alg.HashFunc().New, []byte(h)), nil
 }
-
-// Supports returns whether a particular HashAlg is supported.
-func (h Hmac) Supports(alg fdo.HashAlg) bool { return true }

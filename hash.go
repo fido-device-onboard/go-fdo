@@ -77,18 +77,15 @@ func (alg HashAlg) HashFunc() crypto.Hash {
 type KeyedHasher interface {
 	// NewHmac returns a key-based hash (Hmac) using the given hash function
 	// some secret.
-	NewHmac(HashAlg) hash.Hash
-
-	// Supports returns whether a particular HashAlg is supported.
-	Supports(HashAlg) bool
+	NewHmac(HashAlg) (hash.Hash, error)
 }
 
-// Compute an hmac. This function panics if the given HashAlg is not supported.
+// Compute an hmac.
 func hmacHash(dc KeyedHasher, alg HashAlg, v any) (Hmac, error) {
-	if !dc.Supports(alg) {
-		panic("unsupported algorithm " + alg.String())
+	mac, err := dc.NewHmac(alg)
+	if err != nil {
+		return Hmac{}, fmt.Errorf("error starting new hmac: %w", err)
 	}
-	mac := dc.NewHmac(alg)
 	if err := cbor.NewEncoder(mac).Encode(v); err != nil {
 		return Hmac{}, fmt.Errorf("error computing hmac: marshaling payload: %w", err)
 	}
@@ -102,7 +99,10 @@ func hmacHash(dc KeyedHasher, alg HashAlg, v any) (Hmac, error) {
 // matches it. If the cryptographic portion of verification fails, then
 // ErrCryptoVerifyFailed is wrapped.
 func hmacVerify(dc KeyedHasher, h1 Hmac, v any) error {
-	h2 := dc.NewHmac(h1.Algorithm)
+	h2, err := dc.NewHmac(h1.Algorithm)
+	if err != nil {
+		return fmt.Errorf("error starting new hmac: %w", err)
+	}
 	if err := cbor.NewEncoder(h2).Encode(v); err != nil {
 		return err
 	}
