@@ -13,6 +13,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -44,6 +45,8 @@ var (
 	dbPath     string
 	dbPass     string
 	extAddr    string
+	to0Addr    string
+	to0Guid    string
 	rvBypass   bool
 	downloads  stringList
 	uploadDir  string
@@ -65,6 +68,8 @@ func init() {
 	serverFlags.StringVar(&dbPath, "db", "", "SQLite database file path")
 	serverFlags.StringVar(&dbPass, "db-pass", "", "SQLite database encryption-at-rest passphrase")
 	serverFlags.BoolVar(&debug, "debug", false, "Print HTTP contents")
+	serverFlags.StringVar(&to0Addr, "to0", "", "Rendezvous server `addr`ess to register RV blobs (disables self-registration)")
+	serverFlags.StringVar(&to0Guid, "to0-guid", "", "Device `guid` to immediately register an RV blob (requires to0 flag)")
 	serverFlags.StringVar(&extAddr, "ext-http", "", "External `addr`ess devices should connect to (default \"127.0.0.1:${LISTEN_PORT}\")")
 	serverFlags.StringVar(&addr, "http", "localhost:8080", "The `addr`ess to listen on")
 	serverFlags.BoolVar(&rvBypass, "rv-bypass", false, "Skip TO1")
@@ -74,6 +79,16 @@ func init() {
 }
 
 func server() error {
+	if dbPath == "" {
+		return errors.New("db flag is required")
+	}
+	state, err := sqlite.New(dbPath, dbPass)
+	if err != nil {
+		return err
+	}
+	state.AutoExtend = true
+	state.PreserveReplacedVouchers = true
+
 	// RV Info
 	rvInfo := [][]fdo.RvInstruction{{{Variable: fdo.RVProtocol, Value: mustMarshal(fdo.RVProtHTTP)}}}
 	if extAddr == "" {
@@ -99,8 +114,17 @@ func server() error {
 		rvInfo[0] = append(rvInfo[0], fdo.RvInstruction{Variable: fdo.RVBypass})
 	}
 
+	// Invoke TO0 client if a GUID is specified
+	if to0Guid != "" {
+		return registerRvBlob(host, uint16(portNum), state)
+	}
+
+	return serveHTTP(rvInfo, state)
+}
+
+func serveHTTP(rvInfo [][]fdo.RvInstruction, state *sqlite.DB) error {
 	// Create FDO responder
-	srv, err := newServer(rvInfo)
+	srv, err := newServer(rvInfo, state)
 	if err != nil {
 		return err
 	}
@@ -119,6 +143,42 @@ func server() error {
 	}).ListenAndServe()
 }
 
+func registerRvBlob(host string, port uint16, state *sqlite.DB) error {
+	if to0Addr == "" {
+		return fmt.Errorf("to0-guid depends on to0 flag being set")
+	}
+
+	// Parse to0-guid flag
+	guidBytes, err := hex.DecodeString(to0Guid)
+	if err != nil {
+		return fmt.Errorf("error parsing hex GUID of device to register RV blob: %w", err)
+	}
+	if len(guidBytes) != 16 {
+		return fmt.Errorf("error parsing hex GUID of device to register RV blob: must be 16 bytes")
+	}
+	var guid fdo.GUID
+	copy(guid[:], guidBytes)
+
+	refresh, err := (&fdo.TO0Client{
+		Transport: &transport.Transport{Debug: debug},
+		Addrs: []fdo.RvTO2Addr{
+			{
+				DNSAddress:        &host,
+				Port:              port,
+				TransportProtocol: fdo.HTTPTransport,
+			},
+		},
+		Vouchers:  state,
+		OwnerKeys: state,
+	}).RegisterBlob(context.Background(), to0Addr, guid)
+	if err != nil {
+		return fmt.Errorf("error performing to0: %w", err)
+	}
+	log.Printf("to0 refresh in %s\n", time.Duration(refresh)*time.Second)
+
+	return nil
+}
+
 func mustMarshal(v any) []byte {
 	data, err := cbor.Marshal(v)
 	if err != nil {
@@ -128,19 +188,9 @@ func mustMarshal(v any) []byte {
 }
 
 //nolint:gocyclo
-func newServer(rvInfo [][]fdo.RvInstruction) (*fdo.Server, error) {
-	if dbPath == "" {
-		return nil, errors.New("db flag is required")
-	}
-	state, err := sqlite.New(dbPath, dbPass)
-	if err != nil {
-		return nil, err
-	}
-	state.AutoExtend = true
-	state.PreserveReplacedVouchers = true
-
+func newServer(rvInfo [][]fdo.RvInstruction, state *sqlite.DB) (*fdo.Server, error) {
 	// Auto-register RV blob so that TO1 can be tested
-	if !rvBypass {
+	if to0Addr == "" && !rvBypass {
 		to1URLs, _ := fdo.BaseHTTP(rvInfo)
 		to1URL, err := url.Parse(to1URLs[0])
 		if err != nil {
@@ -254,6 +304,7 @@ func newServer(rvInfo [][]fdo.RvInstruction) (*fdo.Server, error) {
 	return &fdo.Server{
 		Tokens:    state,
 		DI:        state,
+		TO0:       state,
 		TO1:       state,
 		TO2:       state,
 		RVBlobs:   state,

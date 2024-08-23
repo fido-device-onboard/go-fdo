@@ -39,7 +39,9 @@ Client options:
 
 Server options:
   -db string
-        SQLite database file path (defaults to in-memory)
+        SQLite database file path
+  -db-pass string
+        SQLite database encryption-at-rest passphrase
   -debug
         Print HTTP contents
   -download file
@@ -50,8 +52,55 @@ Server options:
         The address to listen on (default "localhost:8080")
   -rv-bypass
         Skip TO1
+  -to0 addr
+        Rendezvous server address to register RV blobs (disables self-registration)
+  -to0-guid guid
+        Device guid to immediately register an RV blob (requires to0 flag)
   -upload file
         Use fdo.upload FSIM for each file (flag may be used multiple times)
   -upload-dir path
         The directory path to put file uploads (default "uploads")
+```
+
+### Testing RV Blob Registration
+
+First, start a server in a separate console.
+
+```console
+$ ./fdo server -http 127.0.0.1:9999 -to0 http://127.0.0.1:9999 -db ./test.db
+```
+
+Next, initialize the device and check that TO1 fails.
+
+```console
+$ ./fdo client -di http://127.0.0.1:9999
+$ ./fdo client -print
+blobcred[
+  ...
+  GUID          d21d841a3f54f4e89a60ed9b9779e9e8
+  ...
+]
+$ ./fdo client -rv-only
+TO1 failed for "http://127.0.0.1:9999": error received from TO1.HelloRV request: 2024-08-23 09:59:20 -0400 EDT [code=6,prevMsgType=30,id=0] not found
+$ ./fdo server -print
+```
+
+Then register an RV blob with the server.
+
+```console
+$ ./fdo server -http 127.0.0.1:9999 -to0 http://127.0.0.1:9999 -to0-guid d21d841a3f54f4e89a60ed9b9779e9e8 -db ./test.db
+2024/08/23 10:03:06 to0 refresh in 1193046h28m15s
+```
+
+Finally, check that TO1 now succeeds.
+
+```console
+$ ./fdo client -rv-only
+TO1 Blob: to1d[
+  RV:
+    - http://127.0.0.1:9999
+  To0dHash:
+    Algorithm: Sha256Hash
+    Value: 340129067ad5839e2a5424baa3e7aa4bb984f610f29123b47b56353f47d71145
+]
 ```

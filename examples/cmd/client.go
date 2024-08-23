@@ -303,7 +303,9 @@ func transferOwnership(cli *fdo.Client, rvInfo [][]fdo.RvInstruction) *fdo.Devic
 
 	// Print TO2 addrs if RV-only
 	if rvOnly {
-		fmt.Printf("TO1 Blob: %+v\n", to1d.Payload.Val)
+		if to1d != nil {
+			fmt.Printf("TO1 Blob: %+v\n", to1d.Payload.Val)
+		}
 		return nil
 	}
 
