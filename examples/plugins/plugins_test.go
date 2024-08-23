@@ -36,7 +36,7 @@ func TestDownloadOwnerPlugin(t *testing.T) {
 	}
 
 	downloadOwnerCmd := exec.Command("./download_owner.bash", "testdata/bigfile", "bigfile.test")
-	downloadOwnerCmd.Stderr = fdotest.ErrorLog(t)
+	downloadOwnerCmd.Stderr = fdotest.TestingLog(t)
 	downloadOwnerPlugin := &plugin.OwnerModule{Module: plugin.NewCommandPluginModule(downloadOwnerCmd)}
 
 	fdotest.RunClientTestSuite(t, nil, map[string]serviceinfo.DeviceModule{
@@ -47,7 +47,7 @@ func TestDownloadOwnerPlugin(t *testing.T) {
 			NameToPath: func(name string) string {
 				return filepath.Join("testdata", "downloads", name)
 			},
-			ErrorLog: fdotest.ErrorLog(t),
+			ErrorLog: fdotest.TestingLog(t),
 		},
 	}, func(ctx context.Context, replacementGUID fdo.GUID, info string, chain []*x509.Certificate, devmod fdo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 		return func(yield func(string, serviceinfo.OwnerModule) bool) {
@@ -78,7 +78,7 @@ func TestDownloadDevicePlugin(t *testing.T) {
 	expected := bytes.Repeat([]byte("Hello World!\n"), 1024)
 
 	downloadDeviceCmd := exec.Command("./download_device.bash", "testdata/downloads")
-	downloadDeviceCmd.Stderr = fdotest.ErrorLog(t)
+	downloadDeviceCmd.Stderr = fdotest.TestingLog(t)
 	downloadDevicePlugin := &plugin.DeviceModule{Module: plugin.NewCommandPluginModule(downloadDeviceCmd)}
 
 	fdotest.RunClientTestSuite(t, nil, map[string]serviceinfo.DeviceModule{
@@ -137,7 +137,7 @@ func TestDevmodPlugin(t *testing.T) {
 		expected.Bin,
 		expected.MudURL,
 	)
-	devmodCmd.Stderr = fdotest.ErrorLog(t)
+	devmodCmd.Stderr = fdotest.TestingLog(t)
 	devmodPlugin := &plugin.DeviceModule{Module: plugin.NewCommandPluginModule(devmodCmd)}
 
 	var got fdo.Devmod

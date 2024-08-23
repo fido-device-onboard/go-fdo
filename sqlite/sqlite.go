@@ -14,10 +14,12 @@ import (
 	"crypto/sha256"
 	"crypto/sha512"
 	"crypto/x509"
+	"database/sql"
 	"encoding"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"math/big"
 	"path/filepath"
@@ -25,7 +27,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ncruces/go-sqlite3"
+	"github.com/ncruces/go-sqlite3/driver"         // Load database/sql driver
 	_ "github.com/ncruces/go-sqlite3/embed"        // Load sqlite WASM binary
 	_ "github.com/ncruces/go-sqlite3/vfs/adiantum" // Encryption VFS
 
@@ -37,11 +39,20 @@ import (
 
 // DB implements FDO server state persistence.
 type DB struct {
-	AutoExtend               bool
-	AutoRegisterRV           *fdo.To1d
+	// When set, NewVoucher will extend the voucher. An owner key of the
+	// appropriate type must already be added.
+	AutoExtend bool
+
+	// When set, NewVoucher will cause an RV blob to be created.
+	AutoRegisterRV *fdo.To1d
+
+	// When set, ReplaceVoucher will not delete the original voucher.
 	PreserveReplacedVouchers bool
 
-	conn *sqlite3.Conn
+	// Log all SQL queries to this optional writer.
+	DebugLog io.Writer
+
+	db *sql.DB
 }
 
 // New creates or opens a SQLite database file using a single non-pooled
@@ -53,10 +64,11 @@ func New(filename, password string) (*DB, error) {
 	if password != "" {
 		query += fmt.Sprintf("&vfs=adiantum&_pragma=textkey(%s)", password)
 	}
-	conn, err := sqlite3.Open("file:" + filepath.Clean(filename) + query)
+	connector, err := (&driver.SQLite{}).OpenConnector("file:" + filepath.Clean(filename) + query)
 	if err != nil {
-		return nil, fmt.Errorf("error opening sqlite DB: %w", err)
+		return nil, fmt.Errorf("error creating sqlite connector: %w", err)
 	}
+	db := sql.OpenDB(connector)
 
 	// Ensure tables are created
 	stmts := []string{
@@ -135,8 +147,8 @@ func New(filename, password string) (*DB, error) {
 			)`,
 	}
 	for _, sql := range stmts {
-		if err := conn.Exec(sql); err != nil {
-			_ = conn.Close()
+		if _, err := db.Exec(sql); err != nil {
+			_ = db.Close()
 			if password != "" && strings.Contains(err.Error(), "file is not a database") {
 				return nil, fmt.Errorf("invalid database password")
 			}
@@ -144,7 +156,7 @@ func New(filename, password string) (*DB, error) {
 		}
 	}
 
-	return &DB{conn: conn}, nil
+	return &DB{db: db}, nil
 }
 
 // Close closes the database connection.
@@ -152,7 +164,25 @@ func New(filename, password string) (*DB, error) {
 // If the database connection is associated with unfinalized prepared
 // statements, open blob handles, and/or unfinished backup objects, Close will
 // leave the database connection open and return [sqlite3.BUSY].
-func (db *DB) Close() error { return db.conn.Close() }
+func (db *DB) Close() error { return db.db.Close() }
+
+// DB returns the underlying database/sql DB.
+func (db *DB) DB() *sql.DB { return db.db }
+
+type debugLogKey struct{}
+
+func (db *DB) debugCtx(parent context.Context) context.Context {
+	return context.WithValue(parent, debugLogKey{}, db.DebugLog)
+}
+
+func debug(ctx context.Context, format string, a ...any) {
+	w, ok := ctx.Value(debugLogKey{}).(io.Writer)
+	if !ok {
+		return
+	}
+	msg := strings.TrimSpace(fmt.Sprintf(format, a...))
+	_, _ = fmt.Fprintln(w, msg)
+}
 
 // Compile-time check for interface implementation correctness
 var _ interface {
@@ -172,7 +202,7 @@ const sessionIDSize = 16
 // associated token.
 func (db *DB) NewToken(ctx context.Context, protocol fdo.Protocol) (string, error) {
 	// Acquire HMAC secret
-	secret, err := db.loadOrStoreSecret()
+	secret, err := db.loadOrStoreSecret(ctx)
 	if err != nil {
 		return "", fmt.Errorf("error loading or storing HMAC secret: %w", err)
 	}
@@ -184,7 +214,7 @@ func (db *DB) NewToken(ctx context.Context, protocol fdo.Protocol) (string, erro
 	}
 
 	// Store session ID
-	if err := db.insert("sessions", map[string]any{
+	if err := insert(ctx, db.db, "sessions", map[string]any{
 		"id":       id,
 		"protocol": int(protocol),
 	}, nil); err != nil {
@@ -197,12 +227,15 @@ func (db *DB) NewToken(ctx context.Context, protocol fdo.Protocol) (string, erro
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(id)), nil
 }
 
-func (db *DB) loadOrStoreSecret() ([]byte, error) {
-	tx := db.conn.Begin()
+func (db *DB) loadOrStoreSecret(ctx context.Context) ([]byte, error) {
+	tx, err := db.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("error starting transaction: %w", err)
+	}
 	defer func() { _ = tx.Rollback() }()
 
 	var readSecret []byte
-	if err := db.query("secrets", []string{"secret"}, map[string]any{"type": "hmac"}, &readSecret); err != nil && !errors.Is(err, fdo.ErrNotFound) {
+	if err := query(db.debugCtx(ctx), tx, "secrets", []string{"secret"}, map[string]any{"type": "hmac"}, &readSecret); err != nil && !errors.Is(err, fdo.ErrNotFound) {
 		return nil, fmt.Errorf("error reading hmac secret: %w", err)
 	}
 	if len(readSecret) > 0 {
@@ -214,7 +247,7 @@ func (db *DB) loadOrStoreSecret() ([]byte, error) {
 	if _, err := rand.Read(secret[:]); err != nil {
 		return nil, err
 	}
-	if err := db.insertWithinTx("secrets", map[string]any{"type": "hmac", "secret": secret[:]}, nil); err != nil {
+	if err := insert(db.debugCtx(ctx), tx, "secrets", map[string]any{"type": "hmac", "secret": secret[:]}, nil); err != nil {
 		return nil, fmt.Errorf("error writing hmac secret: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -248,20 +281,15 @@ func (db *DB) InvalidateToken(ctx context.Context) error {
 		return fdo.ErrNotFound
 	}
 
-	stmt, _, err := db.conn.Prepare(`DELETE FROM sessions WHERE id = ?`)
-	if err != nil {
-		return fmt.Errorf("error preparing delete statement: %w", err)
-	}
-	defer func() { _ = stmt.Close() }()
-	if err := stmt.BindBlob(1, sessID); err != nil {
-		return fmt.Errorf("error binding delete statement parameter: %w", err)
-	}
-	return stmt.Exec()
+	query := `DELETE FROM sessions WHERE id = ?`
+	debug(ctx, "sqlite: %s\n%x", query, sessID)
+	_, err := db.db.ExecContext(ctx, query, sessID)
+	return err
 }
 
 func (db *DB) sessionID(ctx context.Context) ([]byte, bool) {
 	// Get HMAC secret
-	secret, err := db.loadOrStoreSecret()
+	secret, err := db.loadOrStoreSecret(ctx)
 	if err != nil {
 		return nil, false
 	}
@@ -289,184 +317,135 @@ func (db *DB) sessionID(ctx context.Context) ([]byte, bool) {
 	return id, true
 }
 
-func (db *DB) insert(table string, kvs, upsertWhere map[string]any) error {
-	tx := db.conn.Begin()
+func (db *DB) insert(ctx context.Context, table string, kvs, upsertWhere map[string]any) error {
+	if len(upsertWhere) == 0 {
+		return insert(ctx, db.db, table, kvs, upsertWhere)
+	}
+
+	tx, err := db.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("error starting transaction: %w", err)
+	}
 	defer func() { _ = tx.Rollback() }()
 
-	if err := db.insertWithinTx(table, kvs, upsertWhere); err != nil {
+	if err := insert(ctx, tx, table, kvs, upsertWhere); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-func (db *DB) insertOrIgnore(table string, kvs map[string]any) error {
-	return db.insertWithinTx(table, kvs, map[string]any{})
+func (db *DB) insertOrIgnore(ctx context.Context, table string, kvs map[string]any) error {
+	return insert(ctx, db.db, table, kvs, map[string]any{})
 }
 
-func (db *DB) insertWithinTx(table string, kvs, upsertWhere map[string]any) error {
+func (db *DB) update(ctx context.Context, table string, kvs, where map[string]any) error {
+	return update(ctx, db.db, table, kvs, where)
+}
+
+func (db *DB) query(ctx context.Context, table string, columns []string, where map[string]any, into ...any) error {
+	return query(ctx, db.db, table, columns, where, into...)
+}
+
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+type querier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func insert(ctx context.Context, db execer, table string, kvs, upsertWhere map[string]any) error {
 	var orIgnore string
 	if upsertWhere != nil {
 		orIgnore = "OR IGNORE "
 	}
 
 	columns := slices.Collect(maps.Keys(kvs))
-	sql := fmt.Sprintf(
+	args := make([]any, len(columns))
+	for i, name := range columns {
+		args[i] = kvs[name]
+	}
+	markers := slices.Repeat([]string{"?"}, len(columns))
+
+	query := fmt.Sprintf(
 		"INSERT %sINTO %s (%s) VALUES (%s)",
 		orIgnore,
 		table,
-		strings.Join(columns, ", "),
-		":"+strings.Join(columns, ", :"),
+		"`"+strings.Join(columns, "`, `")+"`",
+		strings.Join(markers, ", "),
 	)
-	insert, _, err := db.conn.Prepare(sql)
-	if err != nil {
-		return fmt.Errorf("error preparing insert: %w", err)
-	}
-	defer func() { _ = insert.Close() }()
-
-	for key, val := range kvs {
-		var err error
-		switch value := val.(type) {
-		case int:
-			err = insert.BindInt(insert.BindIndex(":"+key), value)
-		case int64:
-			err = insert.BindInt64(insert.BindIndex(":"+key), value)
-		case string:
-			err = insert.BindText(insert.BindIndex(":"+key), value)
-		case []byte:
-			err = insert.BindBlob(insert.BindIndex(":"+key), value)
-		default:
-			panic(fmt.Sprintf("programming error - unsupported type to bind %q to statement: %T", key, val))
-		}
-		if err != nil {
-			return fmt.Errorf("error binding %q: %w", key, err)
-		}
-	}
-
-	if err := insert.Exec(); err != nil {
+	debug(ctx, "sqlite: %s\n%+v", query, kvs)
+	if _, err := db.ExecContext(ctx, query, args...); err != nil {
 		return err
 	}
 
 	if len(upsertWhere) > 0 {
-		return db.update(table, kvs, upsertWhere)
+		return update(ctx, db, table, kvs, upsertWhere)
 	}
 	return nil
 }
 
-func (db *DB) update(table string, kvs, where map[string]any) error {
-	var vals []string
-	for key := range kvs {
-		vals = append(vals, key+" = :set_"+key)
+func update(ctx context.Context, db execer, table string, kvs, where map[string]any) error {
+	setKeys := slices.Collect(maps.Keys(kvs))
+	setCmds := make([]string, len(setKeys))
+	for i, key := range setKeys {
+		setCmds[i] = "`" + key + "` = ?"
 	}
-	var clauses []string
-	for key := range where {
-		clauses = append(clauses, key+" = :where_"+key)
+	setVals := make([]any, len(setKeys))
+	for i, key := range setKeys {
+		setVals[i] = kvs[key]
 	}
-	sql := fmt.Sprintf(
+
+	whereKeys := slices.Collect(maps.Keys(where))
+	clauses := make([]string, len(whereKeys))
+	for i, key := range whereKeys {
+		clauses[i] = "`" + key + "` = ?"
+	}
+	whereVals := make([]any, len(whereKeys))
+	for i, key := range whereKeys {
+		whereVals[i] = where[key]
+	}
+
+	query := fmt.Sprintf(
 		`UPDATE %s SET %s WHERE %s`,
 		table,
-		strings.Join(vals, ", "),
+		strings.Join(setCmds, ", "),
 		strings.Join(clauses, " AND "),
 	)
-	update, _, err := db.conn.Prepare(sql)
-	if err != nil {
-		return fmt.Errorf("error preparing update: %w", err)
-	}
-	defer func() { _ = update.Close() }()
+	debug(ctx, "sqlite: %s\n%+v", query, kvs)
 
-	for prefix, m := range map[string]map[string]any{
-		"set_":   kvs,
-		"where_": where,
-	} {
-		for key, val := range m {
-			var err error
-			switch value := val.(type) {
-			case int:
-				err = update.BindInt(update.BindIndex(":"+prefix+key), value)
-			case int64:
-				err = update.BindInt64(update.BindIndex(":"+prefix+key), value)
-			case string:
-				err = update.BindText(update.BindIndex(":"+prefix+key), value)
-			case []byte:
-				err = update.BindBlob(update.BindIndex(":"+prefix+key), value)
-			default:
-				panic(fmt.Sprintf("programming error - unsupported type to bind %q to statement: %T", key, val))
-			}
-			if err != nil {
-				return fmt.Errorf("error binding %q: %w", key, err)
-			}
-		}
-	}
-
-	return update.Exec()
+	_, err := db.ExecContext(ctx, query, append(setVals, whereVals...)...)
+	return err
 }
 
-//nolint:gocyclo
-func (db *DB) query(table string, columns []string, where map[string]any, into ...any) error {
+func query(ctx context.Context, db querier, table string, columns []string, where map[string]any, into ...any) error {
 	if len(columns) != len(into) {
 		panic("programming error - query must have the same number of columns and values")
 	}
 
-	var clauses []string
-	for key := range where {
-		clauses = append(clauses, key+" = :"+key)
+	whereKeys := slices.Collect(maps.Keys(where))
+	clauses := make([]string, len(whereKeys))
+	for i, key := range whereKeys {
+		clauses[i] = "`" + key + "` = ?"
 	}
-	sql := fmt.Sprintf(
+	whereVals := make([]any, len(whereKeys))
+	for i, key := range whereKeys {
+		whereVals[i] = where[key]
+	}
+
+	query := fmt.Sprintf(
 		`SELECT %s FROM %s WHERE %s`,
-		strings.Join(columns, ", "),
+		"`"+strings.Join(columns, "`, `")+"`",
 		table,
 		strings.Join(clauses, " AND "),
 	)
-	query, _, err := db.conn.Prepare(sql)
-	if err != nil {
-		return fmt.Errorf("error preparing query: %w", err)
-	}
-	defer func() { _ = query.Close() }()
+	debug(ctx, "sqlite: %s\n%+v", query, where)
 
-	for key, val := range where {
-		var err error
-		switch value := val.(type) {
-		case int:
-			err = query.BindInt(query.BindIndex(":"+key), value)
-		case int64:
-			err = query.BindInt64(query.BindIndex(":"+key), value)
-		case string:
-			err = query.BindText(query.BindIndex(":"+key), value)
-		case []byte:
-			err = query.BindBlob(query.BindIndex(":"+key), value)
-		default:
-			panic(fmt.Sprintf("programming error - unsupported type to bind %q to statement: %T", key, val))
-		}
-		if err != nil {
-			return fmt.Errorf("error binding %q: %w", key, err)
-		}
-	}
-
-	if !query.Step() {
-		if err := query.Err(); err != nil {
-			return fmt.Errorf("error querying DB: %w", err)
-		}
+	row := db.QueryRowContext(ctx, query, whereVals...)
+	if err := row.Scan(into...); errors.Is(err, sql.ErrNoRows) {
 		return fdo.ErrNotFound
-	}
-
-	for i := 0; i < len(into); i++ {
-		if query.ColumnType(i) == sqlite3.NULL {
-			return fdo.ErrNotFound
-		}
-	}
-
-	for i := 0; i < len(into); i++ {
-		switch val := into[i].(type) {
-		case *int:
-			*val = query.ColumnInt(i)
-		case *int64:
-			*val = query.ColumnInt64(i)
-		case *string:
-			*val = query.ColumnText(i)
-		case *[]byte:
-			*val = query.ColumnBlob(i, nil)
-		default:
-			panic(fmt.Sprintf("programming error - unsupported type to query %q into: %T", columns[i], into))
-		}
+	} else if err != nil {
+		return fmt.Errorf("error querying DB: %w", err)
 	}
 	return nil
 }
@@ -478,7 +457,7 @@ func (db *DB) AddManufacturerKey(keyType fdo.KeyType, key crypto.PrivateKey, cha
 	if err != nil {
 		return err
 	}
-	return db.insertOrIgnore("mfg_keys", map[string]any{
+	return db.insertOrIgnore(db.debugCtx(context.Background()), "mfg_keys", map[string]any{
 		"type":       int(keyType),
 		"pkcs8":      der,
 		"x509_chain": derEncode(chain),
@@ -487,10 +466,13 @@ func (db *DB) AddManufacturerKey(keyType fdo.KeyType, key crypto.PrivateKey, cha
 
 func (db *DB) manufacturerKey(keyType fdo.KeyType) (crypto.PrivateKey, []*x509.Certificate, error) {
 	var pkcs8, der []byte
-	if err := db.query("mfg_keys", []string{"pkcs8", "x509_chain"}, map[string]any{
+	if err := db.query(db.debugCtx(context.Background()), "mfg_keys", []string{"pkcs8", "x509_chain"}, map[string]any{
 		"type": int(keyType),
 	}, &pkcs8, &der); err != nil {
 		return nil, nil, err
+	}
+	if pkcs8 == nil || der == nil {
+		return nil, nil, fdo.ErrNotFound
 	}
 
 	key, err := x509.ParsePKCS8PrivateKey(pkcs8)
@@ -551,7 +533,7 @@ func (db *DB) NewDeviceCertChain(ctx context.Context, info fdo.DeviceMfgInfo) ([
 	if !ok {
 		return nil, fdo.ErrInvalidSession
 	}
-	if err := db.insert("device_info", map[string]any{
+	if err := db.insert(db.debugCtx(ctx), "device_info", map[string]any{
 		"key_type":      int(info.KeyType),
 		"key_encoding":  int(info.KeyEncoding),
 		"serial_number": info.SerialNumber,
@@ -582,10 +564,13 @@ func (db *DB) DeviceCertChain(ctx context.Context) ([]*x509.Certificate, error) 
 	}
 
 	var der []byte
-	if err := db.query("device_info", []string{"x509_chain"}, map[string]any{
+	if err := db.query(db.debugCtx(ctx), "device_info", []string{"x509_chain"}, map[string]any{
 		"session": sessID,
 	}, &der); err != nil {
 		return nil, err
+	}
+	if der == nil {
+		return nil, fdo.ErrNotFound
 	}
 	return x509.ParseCertificates(der)
 }
@@ -603,7 +588,7 @@ func (db *DB) SetIncompleteVoucherHeader(ctx context.Context, ovh *fdo.VoucherHe
 		return fmt.Errorf("error marshaling ownership voucher header: %w", err)
 	}
 
-	return db.insert("incomplete_vouchers", map[string]any{
+	return db.insert(db.debugCtx(ctx), "incomplete_vouchers", map[string]any{
 		"session": sessID,
 		"header":  ovhCBOR,
 	}, nil)
@@ -618,10 +603,13 @@ func (db *DB) IncompleteVoucherHeader(ctx context.Context) (*fdo.VoucherHeader, 
 	}
 
 	var ovhCBOR []byte
-	if err := db.query("incomplete_vouchers", []string{"header"}, map[string]any{
+	if err := db.query(db.debugCtx(ctx), "incomplete_vouchers", []string{"header"}, map[string]any{
 		"session": sessID,
 	}, &ovhCBOR); err != nil {
 		return nil, err
+	}
+	if ovhCBOR == nil {
+		return nil, fdo.ErrNotFound
 	}
 
 	var ovh fdo.VoucherHeader
@@ -637,7 +625,7 @@ func (db *DB) SetTO0SignNonce(ctx context.Context, nonce fdo.Nonce) error {
 	if !ok {
 		return fdo.ErrInvalidSession
 	}
-	return db.insert("to0_sessions",
+	return db.insert(db.debugCtx(ctx), "to0_sessions",
 		map[string]any{
 			"session": sessID,
 			"nonce":   nonce[:],
@@ -655,10 +643,13 @@ func (db *DB) TO0SignNonce(ctx context.Context) (fdo.Nonce, error) {
 	}
 
 	var into []byte
-	if err := db.query("to0_sessions", []string{"nonce"}, map[string]any{
+	if err := db.query(db.debugCtx(ctx), "to0_sessions", []string{"nonce"}, map[string]any{
 		"session": sessID,
 	}, &into); err != nil {
 		return fdo.Nonce{}, err
+	}
+	if into == nil {
+		return fdo.Nonce{}, fdo.ErrNotFound
 	}
 
 	var nonce fdo.Nonce
@@ -672,7 +663,7 @@ func (db *DB) SetTO1ProofNonce(ctx context.Context, nonce fdo.Nonce) error {
 	if !ok {
 		return fdo.ErrInvalidSession
 	}
-	return db.insert("to1_sessions",
+	return db.insert(db.debugCtx(ctx), "to1_sessions",
 		map[string]any{
 			"session": sessID,
 			"nonce":   nonce[:],
@@ -690,10 +681,13 @@ func (db *DB) TO1ProofNonce(ctx context.Context) (fdo.Nonce, error) {
 	}
 
 	var into []byte
-	if err := db.query("to1_sessions", []string{"nonce"}, map[string]any{
+	if err := db.query(db.debugCtx(ctx), "to1_sessions", []string{"nonce"}, map[string]any{
 		"session": sessID,
 	}, &into); err != nil {
 		return fdo.Nonce{}, err
+	}
+	if into == nil {
+		return fdo.Nonce{}, fdo.ErrNotFound
 	}
 
 	var nonce fdo.Nonce
@@ -707,7 +701,7 @@ func (db *DB) SetGUID(ctx context.Context, guid fdo.GUID) error {
 	if !ok {
 		return fdo.ErrInvalidSession
 	}
-	return db.insert("to2_sessions",
+	return db.insert(db.debugCtx(ctx), "to2_sessions",
 		map[string]any{
 			"session": sessID,
 			"guid":    guid[:],
@@ -725,10 +719,13 @@ func (db *DB) GUID(ctx context.Context) (fdo.GUID, error) {
 	}
 
 	var result []byte
-	if err := db.query("to2_sessions", []string{"guid"}, map[string]any{
+	if err := db.query(db.debugCtx(ctx), "to2_sessions", []string{"guid"}, map[string]any{
 		"session": sessID,
 	}, &result); err != nil {
 		return fdo.GUID{}, err
+	}
+	if result == nil {
+		return fdo.GUID{}, fdo.ErrNotFound
 	}
 
 	if len(result) != len(fdo.GUID{}) {
@@ -758,7 +755,7 @@ func (db *DB) NewVoucher(ctx context.Context, ov *fdo.Voucher) error {
 	if err != nil {
 		return fmt.Errorf("error marshaling ownership voucher: %w", err)
 	}
-	return db.insert("vouchers", map[string]any{
+	return db.insert(db.debugCtx(ctx), "vouchers", map[string]any{
 		"guid": ov.Header.Val.GUID[:],
 		"cbor": data,
 	}, nil)
@@ -851,13 +848,13 @@ func (db *DB) ReplaceVoucher(ctx context.Context, guid fdo.GUID, ov *fdo.Voucher
 		return fmt.Errorf("error marshaling ownership voucher: %w", err)
 	}
 	if db.PreserveReplacedVouchers {
-		return db.insert("vouchers",
+		return db.insert(db.debugCtx(ctx), "vouchers",
 			map[string]any{
 				"guid": ov.Header.Val.GUID[:],
 				"cbor": data,
 			}, nil)
 	}
-	return db.update("vouchers",
+	return db.update(db.debugCtx(ctx), "vouchers",
 		map[string]any{
 			"guid": ov.Header.Val.GUID[:],
 			"cbor": data,
@@ -871,11 +868,14 @@ func (db *DB) ReplaceVoucher(ctx context.Context, guid fdo.GUID, ov *fdo.Voucher
 // Voucher retrieves a voucher by GUID.
 func (db *DB) Voucher(ctx context.Context, guid fdo.GUID) (*fdo.Voucher, error) {
 	var data []byte
-	if err := db.query("vouchers", []string{"cbor"},
+	if err := db.query(db.debugCtx(ctx), "vouchers", []string{"cbor"},
 		map[string]any{"guid": guid[:]},
 		&data,
 	); err != nil {
 		return nil, err
+	}
+	if data == nil {
+		return nil, fdo.ErrNotFound
 	}
 
 	var ov fdo.Voucher
@@ -891,7 +891,7 @@ func (db *DB) SetReplacementGUID(ctx context.Context, guid fdo.GUID) error {
 	if !ok {
 		return fdo.ErrInvalidSession
 	}
-	return db.insert("replacement_vouchers",
+	return db.insert(db.debugCtx(ctx), "replacement_vouchers",
 		map[string]any{
 			"session": sessID,
 			"guid":    guid[:],
@@ -910,11 +910,15 @@ func (db *DB) ReplacementGUID(ctx context.Context) (fdo.GUID, error) {
 	}
 
 	var into []byte
-	if err := db.query("replacement_vouchers", []string{"guid"},
+	if err := db.query(db.debugCtx(ctx), "replacement_vouchers", []string{"guid"},
 		map[string]any{"session": sessID}, &into,
 	); err != nil {
 		return fdo.GUID{}, err
 	}
+	if into == nil {
+		return fdo.GUID{}, fdo.ErrNotFound
+	}
+
 	if len(into) != len(fdo.GUID{}) {
 		return fdo.GUID{}, fmt.Errorf("invalid sized GUID in DB")
 	}
@@ -930,7 +934,7 @@ func (db *DB) SetReplacementHmac(ctx context.Context, hmac fdo.Hmac) error {
 	if !ok {
 		return fdo.ErrInvalidSession
 	}
-	return db.insert("replacement_vouchers",
+	return db.insert(db.debugCtx(ctx), "replacement_vouchers",
 		map[string]any{
 			"session": sessID,
 			"hmac":    hmac.Value,
@@ -949,10 +953,13 @@ func (db *DB) ReplacementHmac(ctx context.Context) (fdo.Hmac, error) {
 	}
 
 	var hmac []byte
-	if err := db.query("replacement_vouchers", []string{"hmac"},
+	if err := db.query(db.debugCtx(ctx), "replacement_vouchers", []string{"hmac"},
 		map[string]any{"session": sessID}, &hmac,
 	); err != nil {
 		return fdo.Hmac{}, err
+	}
+	if hmac == nil {
+		return fdo.Hmac{}, fdo.ErrNotFound
 	}
 
 	var alg fdo.HashAlg
@@ -988,7 +995,7 @@ func (db *DB) SetSession(ctx context.Context, suite kex.Suite, sess kex.Session)
 		return fmt.Errorf("error marshaling key exchange key exchange state: %w", err)
 	}
 
-	return db.insert("key_exchanges",
+	return db.insert(db.debugCtx(ctx), "key_exchanges",
 		map[string]any{
 			"session": sessID,
 			"suite":   string(suite),
@@ -1010,10 +1017,13 @@ func (db *DB) Session(ctx context.Context, token string) (kex.Suite, kex.Session
 
 	var suite string
 	var sessData []byte
-	if err := db.query("key_exchanges", []string{"suite", "cbor"}, map[string]any{
+	if err := db.query(db.debugCtx(ctx), "key_exchanges", []string{"suite", "cbor"}, map[string]any{
 		"session": sessID,
 	}, &suite, &sessData); err != nil {
 		return "", nil, fmt.Errorf("error querying key exchange session: %w", err)
+	}
+	if suite == "" || sessData == nil {
+		return "", nil, fdo.ErrNotFound
 	}
 
 	sess := kex.Suite(suite).New(nil, 1)
@@ -1035,7 +1045,7 @@ func (db *DB) SetProveDeviceNonce(ctx context.Context, nonce fdo.Nonce) error {
 	if !ok {
 		return fdo.ErrInvalidSession
 	}
-	return db.insert("to2_sessions",
+	return db.insert(db.debugCtx(ctx), "to2_sessions",
 		map[string]any{
 			"session":      sessID,
 			"prove_device": nonce[:],
@@ -1054,10 +1064,13 @@ func (db *DB) ProveDeviceNonce(ctx context.Context) (fdo.Nonce, error) {
 	}
 
 	var into []byte
-	if err := db.query("to2_sessions", []string{"prove_device"}, map[string]any{
+	if err := db.query(db.debugCtx(ctx), "to2_sessions", []string{"prove_device"}, map[string]any{
 		"session": sessID,
 	}, &into); err != nil {
 		return fdo.Nonce{}, err
+	}
+	if into == nil {
+		return fdo.Nonce{}, fdo.ErrNotFound
 	}
 	if len(into) != len(fdo.Nonce{}) {
 		return fdo.Nonce{}, fmt.Errorf("invalid sized nonce in DB")
@@ -1075,7 +1088,7 @@ func (db *DB) SetSetupDeviceNonce(ctx context.Context, nonce fdo.Nonce) error {
 	if !ok {
 		return fdo.ErrInvalidSession
 	}
-	return db.insert("to2_sessions",
+	return db.insert(db.debugCtx(ctx), "to2_sessions",
 		map[string]any{
 			"session":      sessID,
 			"setup_device": nonce[:],
@@ -1095,10 +1108,13 @@ func (db *DB) SetupDeviceNonce(ctx context.Context) (fdo.Nonce, error) {
 	}
 
 	var into []byte
-	if err := db.query("to2_sessions", []string{"setup_device"}, map[string]any{
+	if err := db.query(db.debugCtx(ctx), "to2_sessions", []string{"setup_device"}, map[string]any{
 		"session": sessID,
 	}, &into); err != nil {
 		return fdo.Nonce{}, err
+	}
+	if into == nil {
+		return fdo.Nonce{}, fdo.ErrNotFound
 	}
 	if len(into) != len(fdo.Nonce{}) {
 		return fdo.Nonce{}, fmt.Errorf("invalid sized nonce in DB")
@@ -1117,44 +1133,40 @@ func (db *DB) AddOwnerKey(keyType fdo.KeyType, key crypto.PrivateKey, chain []*x
 		return err
 	}
 	if chain == nil {
-		return db.insertOrIgnore("owner_keys", map[string]any{
+		return db.insertOrIgnore(db.debugCtx(context.Background()), "owner_keys", map[string]any{
 			"type":  int(keyType),
 			"pkcs8": der,
 		})
 	}
-	return db.insertOrIgnore("owner_keys", map[string]any{
+	return db.insertOrIgnore(db.debugCtx(context.Background()), "owner_keys", map[string]any{
 		"type":       int(keyType),
 		"pkcs8":      der,
 		"x509_chain": derEncode(chain),
 	})
 }
 
+// TODO: Randomize result when there are multiple rows?
 func (db *DB) ownerKey(keyType fdo.KeyType) (crypto.Signer, []*x509.Certificate, error) {
-	query, _, err := db.conn.Prepare(`SELECT pkcs8, x509_chain FROM owner_keys WHERE type = ?`)
-	if err != nil {
-		return nil, nil, fmt.Errorf("error preparing query: %w", err)
+	var keyDer, certChainDer []byte
+	if err := db.query(db.debugCtx(context.Background()), "owner_keys", []string{"pkcs8", "x509_chain"}, map[string]any{
+		"type": int(keyType),
+	}, &keyDer, &certChainDer); err != nil {
+		return nil, nil, fmt.Errorf("error querying owner key [type=%s]: %w", keyType, err)
 	}
-	defer func() { _ = query.Close() }()
-	if err := query.BindInt(1, int(keyType)); err != nil {
-		return nil, nil, fmt.Errorf("error binding query parameter: %w", err)
-	}
-	if !query.Step() {
-		if err := query.Err(); err != nil {
-			return nil, nil, fmt.Errorf("error querying DB: %w", err)
-		}
+	if keyDer == nil { // x509_chain may be NULL
 		return nil, nil, fdo.ErrNotFound
 	}
 
-	// TODO: Randomize result? Return multiple?
-
-	key, err := x509.ParsePKCS8PrivateKey(query.ColumnBlob(0, nil))
+	key, err := x509.ParsePKCS8PrivateKey(keyDer)
 	if err != nil {
 		return nil, nil, fmt.Errorf("error parsing owner key: %w", err)
 	}
-	chain, err := x509.ParseCertificates(query.ColumnBlob(1, nil))
+
+	chain, err := x509.ParseCertificates(certChainDer)
 	if err != nil {
 		return nil, nil, fmt.Errorf("error parsing owner certificate chain: %w", err)
 	}
+
 	return key.(crypto.Signer), chain, nil
 }
 
@@ -1173,7 +1185,7 @@ func (db *DB) SetMTU(ctx context.Context, mtu uint16) error {
 	if !ok {
 		return fdo.ErrInvalidSession
 	}
-	return db.insert("to2_sessions",
+	return db.insert(db.debugCtx(ctx), "to2_sessions",
 		map[string]any{
 			"session": sessID,
 			"mtu":     int(mtu),
@@ -1190,14 +1202,17 @@ func (db *DB) MTU(ctx context.Context) (uint16, error) {
 		return 0, fdo.ErrInvalidSession
 	}
 
-	var mtu int
-	if err := db.query("to2_sessions", []string{"mtu"}, map[string]any{
+	var mtu sql.NullInt32
+	if err := db.query(db.debugCtx(ctx), "to2_sessions", []string{"mtu"}, map[string]any{
 		"session": sessID,
 	}, &mtu); err != nil {
 		return 0, err
 	}
+	if !mtu.Valid {
+		return 0, fdo.ErrNotFound
+	}
 
-	return uint16(mtu), nil
+	return uint16(mtu.Int32), nil
 }
 
 // SetRVBlob sets the owner rendezvous blob for a device.
@@ -1206,7 +1221,7 @@ func (db *DB) SetRVBlob(ctx context.Context, guid fdo.GUID, to1d *cose.Sign1[fdo
 	if err != nil {
 		return fmt.Errorf("error marshaling rendezvous blob: %w", err)
 	}
-	return db.insert("rv_blobs",
+	return db.insert(db.debugCtx(ctx), "rv_blobs",
 		map[string]any{
 			"guid": guid[:],
 			"rv":   blob,
@@ -1220,13 +1235,16 @@ func (db *DB) SetRVBlob(ctx context.Context, guid fdo.GUID, to1d *cose.Sign1[fdo
 // RVBlob returns the owner rendezvous blob for a device.
 func (db *DB) RVBlob(ctx context.Context, guid fdo.GUID) (*cose.Sign1[fdo.To1d, []byte], error) {
 	var blob []byte
-	var exp int64
-	if err := db.query("rv_blobs", []string{"rv", "exp"}, map[string]any{
+	var exp sql.NullInt64
+	if err := db.query(db.debugCtx(ctx), "rv_blobs", []string{"rv", "exp"}, map[string]any{
 		"guid": guid[:],
 	}, &blob, &exp); err != nil {
 		return nil, err
 	}
-	if time.Now().After(time.Unix(exp, 0)) {
+	if blob == nil || !exp.Valid {
+		return nil, fdo.ErrNotFound
+	}
+	if time.Now().After(time.Unix(exp.Int64, 0)) {
 		return nil, fdo.ErrNotFound
 	}
 

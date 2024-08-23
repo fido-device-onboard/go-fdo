@@ -46,6 +46,7 @@ func newDB(t *testing.T) (_ *sqlite.DB, cleanup func() error) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	state.DebugLog = fdotest.TestingLog(t)
 
 	// Add manufacturer keys
 	rsaMfgKey, err := rsa.GenerateKey(rand.Reader, 2048)

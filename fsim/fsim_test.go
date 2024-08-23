@@ -38,7 +38,7 @@ func TestClient(t *testing.T) {
 			NameToPath: func(name string) string {
 				return filepath.Join("testdata", "downloads", name)
 			},
-			ErrorLog: fdotest.ErrorLog(t),
+			ErrorLog: fdotest.TestingLog(t),
 		},
 		"fdo.upload": &fsim.Upload{FS: fstest.MapFS{
 			"bigfile.test": &fstest.MapFile{

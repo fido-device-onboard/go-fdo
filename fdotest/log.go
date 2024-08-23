@@ -9,8 +9,8 @@ import (
 	"testing"
 )
 
-// ErrorLog creates a testing logger.
-func ErrorLog(t *testing.T) io.Writer { return (*errorLog)(t) }
+// TestingLog creates a testing logger.
+func TestingLog(t *testing.T) io.Writer { return (*errorLog)(t) }
 
 type errorLog testing.T
 
