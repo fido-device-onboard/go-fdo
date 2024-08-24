@@ -62,7 +62,7 @@ func New(filename, password string) (*DB, error) {
 	// Open a new or existing DB
 	query := "?_pragma=foreign_keys(ON)"
 	if password != "" {
-		query += fmt.Sprintf("&vfs=adiantum&_pragma=textkey(%s)", password)
+		query += fmt.Sprintf("&vfs=adiantum&_pragma=textkey(%q)", password)
 	}
 	connector, err := (&driver.SQLite{}).OpenConnector("file:" + filepath.Clean(filename) + query)
 	if err != nil {
