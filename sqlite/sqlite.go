@@ -1202,7 +1202,7 @@ func (db *DB) MTU(ctx context.Context) (uint16, error) {
 		return 0, fdo.ErrInvalidSession
 	}
 
-	var mtu sql.NullInt32
+	var mtu sql.Null[uint16]
 	if err := db.query(db.debugCtx(ctx), "to2_sessions", []string{"mtu"}, map[string]any{
 		"session": sessID,
 	}, &mtu); err != nil {
@@ -1212,7 +1212,7 @@ func (db *DB) MTU(ctx context.Context) (uint16, error) {
 		return 0, fdo.ErrNotFound
 	}
 
-	return uint16(mtu.Int32), nil
+	return mtu.V, nil
 }
 
 // SetRVBlob sets the owner rendezvous blob for a device.

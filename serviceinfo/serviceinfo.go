@@ -21,23 +21,24 @@ func (kv *KV) String() string {
 
 // Size calculates the number of bytes once marshaled to CBOR.
 func (kv *KV) Size() uint16 {
-	size := 1 // header for overall KV structure
+	size := uint16(1) // header for overall KV structure
 	size += cborEncodedLen([]byte(kv.Key))
 	size += cborEncodedLen([]byte(kv.Val))
-	return uint16(size)
+	return size
 }
 
-func cborEncodedLen(b []byte) int {
-	if len(b) > 65535 {
+func cborEncodedLen(b []byte) uint16 {
+	length := len(b)
+	if length > 65535 {
 		panic("KV cannot have length > max uint16")
 	}
 	switch {
-	case len(b) < 24:
-		return 1 + len(b)
-	case len(b) < 256:
-		return 2 + len(b)
+	case length < 24:
+		return 1 + uint16(length)
+	case length < 256:
+		return 2 + uint16(length)
 	default:
-		return 3 + len(b)
+		return 3 + uint16(length)
 	}
 }
 

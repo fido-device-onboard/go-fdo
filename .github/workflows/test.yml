@@ -1,0 +1,27 @@
+name: Test
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  go:
+    runs-on: ["innersource.prod.amr.dind"]
+    name: Test Go packages
+    container:
+      image: golang:alpine
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v4
+      - name: Test all modules
+        run: |
+          apk add --no-cache bash # Needed for examples/plugins tests
+          go work init
+          go work use -r .
+          go test -v ./...
+          go test -v ./examples/...
+          go test -v ./fsim/...
+          go test -v ./sqlite/...

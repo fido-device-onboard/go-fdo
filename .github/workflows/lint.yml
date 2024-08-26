@@ -1,0 +1,37 @@
+name: Lint
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  golangci-lint:
+    runs-on: ["innersource.prod.amr.dind"]
+    name: Lint Go Source
+    container:
+      image: golangci/golangci-lint:v1.60.1-alpine
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v4
+      - name: Lint Go source files
+        run: |
+          go work init
+          go work use -r .
+          golangci-lint run ./...
+          golangci-lint run ./examples/...
+          golangci-lint run ./fsim/...
+          golangci-lint run ./sqlite/...
+
+  shellcheck:
+    runs-on: ["innersource.prod.amr.dind"]
+    name: Lint Shell Scripts
+    container:
+      image: koalaman/shellcheck-alpine
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v4
+      - name: Run ShellCheck
+        run: find . \( -name "*.sh" -o -name "*.bash" \) -exec shellcheck '{}' +

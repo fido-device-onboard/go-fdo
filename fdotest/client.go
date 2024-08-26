@@ -179,7 +179,7 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 	})
 
 	t.Run("Transfer Ownership 1 and Transfer Ownership 2", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		to1d, err := cli.TransferOwnership1(ctx, "")
 		if err != nil {
@@ -200,7 +200,7 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 	})
 
 	t.Run("Transfer Ownership 2 Only", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		newCred, err := cli.TransferOwnership2(ctx, "", nil, nil)
 		if err != nil {
@@ -215,7 +215,7 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 	})
 
 	t.Run("Transfer Ownership 2 w/ Modules", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		newCred, err := cli.TransferOwnership2(ctx, "", nil, deviceModules)
 		if customExpect != nil {

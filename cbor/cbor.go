@@ -205,7 +205,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"math/bits"
 	"reflect"
 	"slices"
 	"sort"
@@ -597,42 +596,22 @@ func allocateInterface(maybeUnsetVal reflect.Value, newType reflect.Type) {
 	}
 }
 
-//nolint:gocyclo // Dispatch will always have naturally high complexity.
 func (d *Decoder) decodePositive(rv reflect.Value, additional []byte) error {
 	u64 := toU64(additional)
 
 	// Check that value fits
-	overflows := false
 	kind := rv.Kind()
 	if kind == reflect.Interface && !rv.IsNil() {
 		kind = rv.Elem().Kind()
 	}
 	switch kind {
-	case reflect.Uint:
-		overflows = len(additional) > (bits.UintSize / 8)
-	case reflect.Uint8:
-		overflows = len(additional) > 1
-	case reflect.Uint16:
-		overflows = len(additional) > 2
-	case reflect.Uint32:
-		overflows = len(additional) > 4
-	case reflect.Uint64:
-		overflows = len(additional) > 8 // always fits
-	case reflect.Int:
-		overflows = len(additional) > (bits.UintSize/8) || int(u64) < 0
-	case reflect.Int8:
-		overflows = len(additional) > 1 || int8(u64) < 0
-	case reflect.Int16:
-		overflows = len(additional) > 2 || int16(u64) < 0
-	case reflect.Int32:
-		overflows = len(additional) > 4 || int32(u64) < 0
-	case reflect.Int64:
-		overflows = len(additional) > 8 || int64(u64) < 0
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 	default:
 		return fmt.Errorf("%w: only primitive (u)int(N) types supported",
 			ErrUnsupportedType{typeName: rv.Type().String()})
 	}
-	if overflows {
+	if overflows(u64, kind) {
 		return fmt.Errorf("%w: value overflows",
 			ErrUnsupportedType{typeName: rv.Type().String()})
 	}
@@ -647,31 +626,47 @@ func (d *Decoder) decodePositive(rv reflect.Value, additional []byte) error {
 	return nil
 }
 
+func overflows(u64 uint64, kind reflect.Kind) bool {
+	switch kind {
+	case reflect.Uint:
+		return u64 > math.MaxUint
+	case reflect.Uint8:
+		return u64 > math.MaxUint8
+	case reflect.Uint16:
+		return u64 > math.MaxUint16
+	case reflect.Uint32:
+		return u64 > math.MaxUint32
+	case reflect.Uint64:
+		return false
+	case reflect.Int:
+		return u64 > math.MaxInt
+	case reflect.Int8:
+		return u64 > math.MaxInt8
+	case reflect.Int16:
+		return u64 > math.MaxInt16
+	case reflect.Int32:
+		return u64 > math.MaxInt32
+	case reflect.Int64:
+		return u64 > math.MaxInt64
+	}
+	panic("programming error - invalid kind for overflow check")
+}
+
 func (d *Decoder) decodeNegative(rv reflect.Value, additional []byte) error {
 	u64 := toU64(additional)
 
 	// Check that value fits
-	overflows := false
 	kind := rv.Kind()
 	if kind == reflect.Interface && !rv.IsNil() {
 		kind = rv.Elem().Kind()
 	}
 	switch kind {
-	case reflect.Int:
-		overflows = len(additional) > (bits.UintSize/8) || int(u64) < 0
-	case reflect.Int8:
-		overflows = len(additional) > 1 || int8(u64+1) < 0
-	case reflect.Int16:
-		overflows = len(additional) > 2 || int16(u64+1) < 0
-	case reflect.Int32:
-		overflows = len(additional) > 4 || int32(u64+1) < 0
-	case reflect.Int64:
-		overflows = len(additional) > 8 || int64(u64+1) < 0
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 	default:
 		return fmt.Errorf("%w: only primitive int(N) types supported",
 			ErrUnsupportedType{typeName: rv.Type().String()})
 	}
-	if overflows {
+	if u64 >= -math.MinInt64-1 || overflowsInt(-int64(u64)-1, kind) {
 		return fmt.Errorf("%w: value overflows",
 			ErrUnsupportedType{typeName: rv.Type().String()})
 	}
@@ -684,6 +679,22 @@ func (d *Decoder) decodeNegative(rv reflect.Value, additional []byte) error {
 	}
 	rv.Set(newVal.Convert(rv.Type()))
 	return nil
+}
+
+func overflowsInt(i64 int64, kind reflect.Kind) bool {
+	switch kind {
+	case reflect.Int:
+		return i64 < math.MinInt
+	case reflect.Int8:
+		return i64 < math.MinInt8
+	case reflect.Int16:
+		return i64 < math.MinInt16
+	case reflect.Int32:
+		return i64 < math.MinInt32
+	case reflect.Int64:
+		return false
+	}
+	panic("programming error - invalid kind for overflow check")
 }
 
 func (d *Decoder) decodeByteSlice(rv reflect.Value, additional []byte) error {

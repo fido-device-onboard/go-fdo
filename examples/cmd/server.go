@@ -94,7 +94,7 @@ func server() error {
 	if extAddr == "" {
 		extAddr = addr
 	}
-	host, port, err := net.SplitHostPort(extAddr)
+	host, portStr, err := net.SplitHostPort(extAddr)
 	if err != nil {
 		return fmt.Errorf("invalid external addr: %w", err)
 	}
@@ -105,18 +105,19 @@ func server() error {
 	} else {
 		rvInfo[0] = append(rvInfo[0], fdo.RvInstruction{Variable: fdo.RVDns, Value: mustMarshal(host)})
 	}
-	portNum, err := strconv.Atoi(port)
+	portNum, err := strconv.ParseUint(portStr, 10, 16)
 	if err != nil {
 		return fmt.Errorf("invalid external port: %w", err)
 	}
-	rvInfo[0] = append(rvInfo[0], fdo.RvInstruction{Variable: fdo.RVDevPort, Value: mustMarshal(portNum)})
+	port := uint16(portNum)
+	rvInfo[0] = append(rvInfo[0], fdo.RvInstruction{Variable: fdo.RVDevPort, Value: mustMarshal(port)})
 	if rvBypass {
 		rvInfo[0] = append(rvInfo[0], fdo.RvInstruction{Variable: fdo.RVBypass})
 	}
 
 	// Invoke TO0 client if a GUID is specified
 	if to0Guid != "" {
-		return registerRvBlob(host, uint16(portNum), state)
+		return registerRvBlob(host, port, state)
 	}
 
 	return serveHTTP(rvInfo, state)
@@ -197,7 +198,7 @@ func newServer(rvInfo [][]fdo.RvInstruction, state *sqlite.DB) (*fdo.Server, err
 			return nil, fmt.Errorf("error parsing TO1 URL to use for TO2 addr: %w", err)
 		}
 		to1Host := to1URL.Hostname()
-		to1Port, err := strconv.Atoi(to1URL.Port())
+		to1Port, err := strconv.ParseUint(to1URL.Port(), 10, 16)
 		if err != nil {
 			return nil, fmt.Errorf("error parsing TO1 port to use for TO2: %w", err)
 		}

@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"math"
 	"strings"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
@@ -287,7 +288,7 @@ type ovhProof struct {
 // HelloDevice(60) -> ProveOVHdr(61)
 //
 // TODO: Handle MaxDeviceMessageSize
-func (s *Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1Tag[ovhProof, []byte], error) {
+func (s *Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1Tag[ovhProof, []byte], error) { //nolint:gocyclo
 	// Parse request
 	var rawHello cbor.RawBytes
 	if err := cbor.NewDecoder(msg).Decode(&rawHello); err != nil {
@@ -307,6 +308,10 @@ func (s *Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1Tag[
 	if err != nil {
 		captureErr(ctx, resourceNotFound, "")
 		return nil, fmt.Errorf("error retrieving voucher for device %x: %w", hello.GUID, err)
+	}
+	numEntries := len(ov.Entries)
+	if numEntries > math.MaxUint8 {
+		return nil, fmt.Errorf("voucher for device %x has too many entries", hello.GUID)
 	}
 
 	// Generate nonce for ProveDevice
@@ -356,7 +361,7 @@ func (s *Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1Tag[
 		},
 		Payload: cbor.NewByteWrap(ovhProof{
 			OVH:             ov.Header,
-			NumOVEntries:    uint8(len(ov.Entries)),
+			NumOVEntries:    uint8(numEntries),
 			OVHHmac:         ov.Hmac,
 			NonceTO2ProveOV: hello.NonceTO2ProveOV,
 			SigInfoB:        hello.SigInfoA,

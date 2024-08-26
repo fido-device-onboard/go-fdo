@@ -11,6 +11,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"math/big"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
@@ -139,13 +140,25 @@ type ecdhParam struct {
 
 func (p ecdhParam) MarshalBinary() ([]byte, error) {
 	xb, yb := p.X.Bytes(), p.Y.Bytes()
+	xbLen := len(xb)
+	if xbLen > math.MaxUint16 {
+		return nil, fmt.Errorf("x contains too many bytes")
+	}
+	ybLen := len(yb)
+	if ybLen > math.MaxUint16 {
+		return nil, fmt.Errorf("y contains too many bytes")
+	}
+	randLen := len(p.Rand)
+	if randLen > math.MaxUint16 {
+		return nil, fmt.Errorf("rand contains too many bytes")
+	}
 
 	var b []byte
-	b = binary.BigEndian.AppendUint16(b, uint16(len(xb)))
+	b = binary.BigEndian.AppendUint16(b, uint16(xbLen))
 	b = append(b, xb...)
-	b = binary.BigEndian.AppendUint16(b, uint16(len(yb)))
+	b = binary.BigEndian.AppendUint16(b, uint16(ybLen))
 	b = append(b, yb...)
-	b = binary.BigEndian.AppendUint16(b, uint16(len(p.Rand)))
+	b = binary.BigEndian.AppendUint16(b, uint16(randLen))
 	b = append(b, p.Rand...)
 	return b, nil
 }

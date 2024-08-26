@@ -137,7 +137,7 @@ func encodeValue(b *bytes.Buffer, v any) error { //nolint:gocyclo
 		_, _ = b.WriteString("}")
 
 	case cbor.Tag[cbor.RawBytes]:
-		_, _ = b.WriteString(strconv.Itoa(int(v.Num)))
+		_, _ = b.WriteString(strconv.FormatUint(v.Num, 10))
 		_, _ = b.WriteString("(")
 
 		var val any

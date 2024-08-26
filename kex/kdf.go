@@ -6,6 +6,7 @@ package kex
 import (
 	"crypto"
 	"crypto/hmac"
+	"crypto/sha512"
 	"encoding/binary"
 	"fmt"
 	"math"
@@ -41,8 +42,15 @@ func kdf(hash crypto.Hash, shSe, contextRand []byte, bits uint16) ([]byte, error
 	//     • PRF = HMAC-SHA256 or HMAC-SHA384, depending on CipherSuite
 
 	// Parameters
-	h := uint16(hash.Size() * 8)
-	r := uint16(8)
+	var h uint16
+	switch hash.Size() {
+	case sha512.Size256:
+		h = sha512.Size256
+	case sha512.Size384:
+		h = sha512.Size384
+	default:
+		return nil, fmt.Errorf("unsupported hash size")
+	}
 
 	// Input
 	kIn := shSe
@@ -52,16 +60,25 @@ func kdf(hash crypto.Hash, shSe, contextRand []byte, bits uint16) ([]byte, error
 
 	// Process
 	// 1.
-	n := uint8(L / h)
+	n := L / h
 	if L%h != 0 {
 		n++
 	}
+
 	// 2.
-	if float64(n) > math.Pow(2, float64(r))-1 {
+	if n > math.MaxUint8 {
 		return nil, fmt.Errorf("n too large")
 	}
+	// Equivalent to
+	//
+	// r := uint16(8)
+	// if float64(n) > math.Pow(2, float64(r))-1 {
+	// 	return nil, fmt.Errorf("n too large")
+	// }
+
 	// 3.
 	var result []byte
+
 	// 4.
 	input := []byte{0x00} // iteration-dependent
 	input = append(input, label...)
@@ -69,7 +86,7 @@ func kdf(hash crypto.Hash, shSe, contextRand []byte, bits uint16) ([]byte, error
 	input = append(input, context...)
 	input = binary.BigEndian.AppendUint16(input, L)
 	digest := hmac.New(hash.New, kIn)
-	for i := uint8(0); i < n; i++ {
+	for i := uint8(0); i < uint8(n); i++ {
 		// a.
 		digest.Reset()
 		input[0] = i + 1
@@ -80,6 +97,7 @@ func kdf(hash crypto.Hash, shSe, contextRand []byte, bits uint16) ([]byte, error
 		// b.
 		result = append(result, digest.Sum(nil)...)
 	}
+
 	// 5.
 	kOut := result[:L/8]
 

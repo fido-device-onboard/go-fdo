@@ -139,25 +139,25 @@ func (r *ChunkReader) ReadChunk(size uint16) (*KV, error) {
 	//
 	// The size of the value that will be read is unknown, but its max is, so a
 	// max overhead can be calculated.
-	maxOverhead := uint16(1 + len(r.rkey) + 1)
-	if size-maxOverhead >= 24 {
+	maxOverhead := 1 + len(r.rkey) + 1
+	if int(size)-maxOverhead >= 24 {
 		maxOverhead++
 	}
-	if size-maxOverhead >= 256 {
+	if int(size)-maxOverhead >= 256 {
 		maxOverhead++
 	}
-	if size-maxOverhead <= 0 {
+	if int(size)-maxOverhead <= 0 {
 		return nil, ErrSizeTooSmall
 	}
 
 	// Grow buffer if not large enough
-	if len(r.buffer) < int(size-maxOverhead) {
-		r.buffer = make([]byte, size-maxOverhead)
+	if len(r.buffer) < int(size)-maxOverhead {
+		r.buffer = make([]byte, int(size)-maxOverhead)
 	}
 
 	// Read data, ensuring ServiceInfo will not be larger than size once
 	// marshaled to CBOR
-	n, err := io.ReadFull(r.r, r.buffer[:size-maxOverhead])
+	n, err := io.ReadFull(r.r, r.buffer[:int(size)-maxOverhead])
 	if err == io.EOF || err == io.ErrUnexpectedEOF {
 		r.r = nil
 		if n == 0 {

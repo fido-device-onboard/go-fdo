@@ -260,7 +260,7 @@ func (d *Devmod) writeModuleMessages(modules []string, mtu uint16, w *serviceinf
 		}
 
 		// Continue if MTU is not exceeded
-		if uint16(size) <= mtu {
+		if int(size) <= int(mtu) {
 			modules = modules[1:]
 			continue
 		}
