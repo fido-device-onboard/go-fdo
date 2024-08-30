@@ -7,22 +7,19 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"os"
 	"path"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
-	"github.com/fido-device-onboard/go-fdo/cbor/cdn"
 	"github.com/fido-device-onboard/go-fdo/kex"
 )
 
@@ -47,9 +44,6 @@ type Transport struct {
 	// MaxContentLength defaults to 65535. Negative values disable content
 	// length checking.
 	MaxContentLength int64
-
-	// Debug will dump the request and response to stderr.
-	Debug bool
 }
 
 var _ fdo.Transport = (*Transport)(nil)
@@ -68,13 +62,9 @@ func (t *Transport) Send(ctx context.Context, base string, msgType uint8, msg an
 
 	// Encrypt if a key exchange session is provided
 	if sess != nil {
-		if t.Debug {
+		if debugEnabled() {
 			body, _ := cbor.Marshal(msg)
-			debug, err := cdn.FromCBOR(body)
-			if err != nil {
-				debug = hex.EncodeToString(body)
-			}
-			fmt.Fprintf(os.Stderr, "Unencrypted request body [msg %d]:\n%s\n", msgType, debug)
+			slog.Debug("unencrypted request", "msg", msgType, "body", tryDebugNotation(body))
 		}
 		var err error
 		msg, err = sess.Encrypt(rand.Reader, msg)
@@ -113,34 +103,23 @@ func (t *Transport) Send(ctx context.Context, base string, msgType uint8, msg an
 	}
 
 	// Perform HTTP request
-	if t.Debug {
-		if debugReq, err := httputil.DumpRequestOut(req, false); err == nil {
-			fmt.Fprintf(os.Stderr, "[%s] Request:\n%s", time.Now(), string(debugReq))
-		}
-		debug, err := cdn.FromCBOR(body.Bytes())
-		if err != nil {
-			debug = hex.EncodeToString(body.Bytes())
-		}
-		fmt.Fprintln(os.Stderr, debug)
+	if debugEnabled() {
+		debugReq, _ := httputil.DumpRequestOut(req, false)
+		slog.Debug("request", "dump", string(bytes.TrimSpace(debugReq)),
+			"body", tryDebugNotation(body.Bytes()))
 	}
 	resp, err := t.Client.Do(req)
 	if err != nil {
 		return 0, nil, fmt.Errorf("error making HTTP request for message %d: %w", msgType, err)
 	}
-	if t.Debug {
-		if debugResp, err := httputil.DumpResponse(resp, false); err == nil {
-			fmt.Fprintf(os.Stderr, "[%s] Response:\n%s", time.Now(), string(debugResp))
-		}
+	if debugEnabled() {
+		debugResp, _ := httputil.DumpResponse(resp, false)
 		var saveBody bytes.Buffer
 		if _, err := saveBody.ReadFrom(resp.Body); err == nil {
-			debug, err := cdn.FromCBOR(saveBody.Bytes())
-			if err != nil {
-				debug = hex.EncodeToString(saveBody.Bytes())
-			}
-			fmt.Fprintln(os.Stderr, debug)
-
 			resp.Body = io.NopCloser(&saveBody)
 		}
+		slog.Debug("response", "dump", string(bytes.TrimSpace(debugResp)),
+			"body", tryDebugNotation(saveBody.Bytes()))
 	}
 
 	return t.handleResponse(resp, sess)
@@ -209,8 +188,8 @@ func (t *Transport) handleResponse(resp *http.Response, sess kex.Session) (msgTy
 			return 0, nil, fmt.Errorf("error decrypting message %d: %w", msgType, err)
 		}
 
-		if t.Debug {
-			fmt.Fprintf(os.Stderr, "[%s] Decrypted response body [msg %d]:\n%x\n", time.Now(), msgType, decrypted)
+		if debugEnabled() {
+			slog.Debug("decrypted response", "msg", msgType, "body", tryDebugNotation(decrypted))
 		}
 
 		content = io.NopCloser(bytes.NewBuffer(decrypted))

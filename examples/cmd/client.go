@@ -13,6 +13,7 @@ import (
 	"flag"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"math"
 	"math/big"
 	"net"
@@ -119,7 +120,7 @@ func (files fsVar) Open(path string) (fs.File, error) {
 
 func init() {
 	clientFlags.StringVar(&blobPath, "blob", "cred.bin", "File path of device credential blob")
-	clientFlags.BoolVar(&debug, "debug", false, "Print HTTP contents")
+	clientFlags.BoolVar(&debug, "debug", debug, "Print HTTP contents")
 	clientFlags.StringVar(&dlDir, "download", "", "A `dir` to download files into (FSIM disabled if empty)")
 	clientFlags.StringVar(&diURL, "di", "", "HTTP base `URL` for DI server")
 	clientFlags.BoolVar(&printDevice, "print", false, "Print device credential blob and stop")
@@ -129,8 +130,12 @@ func init() {
 }
 
 func client() error {
+	if debug {
+		level.Set(slog.LevelDebug)
+	}
+
 	cli := &fdo.Client{
-		Transport: &http.Transport{Debug: debug},
+		Transport: &http.Transport{},
 		Cred:      fdo.DeviceCredential{Version: 101},
 		Devmod: fdo.Devmod{
 			Os:      runtime.GOOS,

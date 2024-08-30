@@ -17,15 +17,21 @@ var (
 	debug bool
 )
 
+func init() {
+	flags.BoolVar(&debug, "debug", false, "Run subcommand with debug enabled")
+}
+
 func usage() {
 	fmt.Fprintf(os.Stderr, `
 Usage:
-  fdo [client|server] [--] [options]
+  fdo [global_options] [client|server] [--] [options]
 
+Global options:
+%s
 Client options:
 %s
 Server options:
-%s`, options(clientFlags), options(serverFlags))
+%s`, options(flags), options(clientFlags), options(serverFlags))
 }
 
 func options(flags *flag.FlagSet) string {

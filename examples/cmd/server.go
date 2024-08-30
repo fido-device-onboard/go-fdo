@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"iter"
 	"log"
+	"log/slog"
 	"math/big"
 	"net"
 	"net/http"
@@ -67,7 +68,7 @@ func (list *stringList) String() string {
 func init() {
 	serverFlags.StringVar(&dbPath, "db", "", "SQLite database file path")
 	serverFlags.StringVar(&dbPass, "db-pass", "", "SQLite database encryption-at-rest passphrase")
-	serverFlags.BoolVar(&debug, "debug", false, "Print HTTP contents")
+	serverFlags.BoolVar(&debug, "debug", debug, "Print HTTP contents")
 	serverFlags.StringVar(&to0Addr, "to0", "", "Rendezvous server `addr`ess to register RV blobs (disables self-registration)")
 	serverFlags.StringVar(&to0Guid, "to0-guid", "", "Device `guid` to immediately register an RV blob (requires to0 flag)")
 	serverFlags.StringVar(&extAddr, "ext-http", "", "External `addr`ess devices should connect to (default \"127.0.0.1:${LISTEN_PORT}\")")
@@ -79,6 +80,10 @@ func init() {
 }
 
 func server() error {
+	if debug {
+		level.Set(slog.LevelDebug)
+	}
+
 	if dbPath == "" {
 		return errors.New("db flag is required")
 	}
@@ -133,10 +138,7 @@ func serveHTTP(rvInfo [][]fdo.RvInstruction, state *sqlite.DB) error {
 
 	// Listen and serve
 	handler := http.NewServeMux()
-	handler.Handle("POST /fdo/101/msg/{msg}", &transport.Handler{
-		Debug:     debug,
-		Responder: srv,
-	})
+	handler.Handle("POST /fdo/101/msg/{msg}", &transport.Handler{Responder: srv})
 	return (&http.Server{
 		Addr:              addr,
 		Handler:           handler,
@@ -161,7 +163,7 @@ func registerRvBlob(host string, port uint16, state *sqlite.DB) error {
 	copy(guid[:], guidBytes)
 
 	refresh, err := (&fdo.TO0Client{
-		Transport: &transport.Transport{Debug: debug},
+		Transport: &transport.Transport{},
 		Addrs: []fdo.RvTO2Addr{
 			{
 				DNSAddress:        &host,

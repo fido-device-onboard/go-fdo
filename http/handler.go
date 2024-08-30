@@ -10,10 +10,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -32,36 +32,31 @@ type Handler struct {
 	// MaxContentLength defaults to 65535. Negative values disable content
 	// length checking.
 	MaxContentLength int64
-
-	// Debug will dump the request and response to stderr.
-	Debug bool
 }
 
 var _ http.Handler = (*Handler)(nil)
 
 func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if !h.Debug {
+	if !debugEnabled() {
 		h.handleRequest(w, r)
 		return
 	}
 
 	// Dump request
-	if debugReq, err := httputil.DumpRequest(r, false); err == nil {
-		fmt.Fprint(os.Stderr, "Request: ", string(debugReq))
-	}
+	debugReq, _ := httputil.DumpRequest(r, false)
 	var saveBody bytes.Buffer
 	if _, err := saveBody.ReadFrom(r.Body); err == nil {
-		fmt.Fprintf(os.Stderr, "%x\n", saveBody.Bytes())
 		r.Body = io.NopCloser(&saveBody)
 	}
+	slog.Debug("request", "dump", string(bytes.TrimSpace(debugReq)),
+		"body", tryDebugNotation(saveBody.Bytes()))
 
 	// Dump response
 	rr := httptest.NewRecorder()
 	h.handleRequest(rr, r)
-	if debugResp, err := httputil.DumpResponse(rr.Result(), false); err == nil {
-		fmt.Fprint(os.Stderr, "Response: ", string(debugResp))
-	}
-	fmt.Fprintf(os.Stderr, "%x\n", rr.Body.Bytes())
+	debugResp, _ := httputil.DumpResponse(rr.Result(), false)
+	slog.Debug("response", "dump", string(bytes.TrimSpace(debugResp)),
+		"body", tryDebugNotation(rr.Body.Bytes()))
 
 	// Copy recorded response into response writer
 	for key, values := range rr.Header() {
@@ -133,8 +128,8 @@ func (h Handler) handleRequest(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if h.Debug {
-			fmt.Fprintf(os.Stderr, "Decrypted request body [msg %d]:\n%x\n", msgType, decrypted)
+		if debugEnabled() {
+			slog.Debug("decrypted request", "msg", msgType, "body", tryDebugNotation(decrypted))
 		}
 
 		msg = io.NopCloser(bytes.NewBuffer(decrypted))
@@ -149,7 +144,7 @@ func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, token
 	if msgType == fdo.ErrorMsgType && token != "" {
 		ctx := h.Responder.Tokens.TokenContext(ctx, token)
 		if err := h.Responder.Tokens.InvalidateToken(ctx); err != nil {
-			fmt.Fprintf(os.Stderr, "[WARNING] error invalidating token: %v\n", err)
+			slog.Warn("invalidating token", "error", err)
 		}
 		w.WriteHeader(http.StatusOK)
 		return
@@ -166,9 +161,9 @@ func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, token
 			return
 		}
 
-		if h.Debug {
+		if debugEnabled() {
 			body, _ := cbor.Marshal(resp)
-			fmt.Fprintf(os.Stderr, "Unencrypted response body [msg %d]:\n%x\n", respType, body)
+			slog.Debug("unencrypted response", "msg", respType, "body", tryDebugNotation(body))
 		}
 
 		resp, err = sess.Encrypt(rand.Reader, resp)
@@ -184,7 +179,7 @@ func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, token
 		if newToken != "" {
 			ctx := h.Responder.Tokens.TokenContext(ctx, newToken)
 			if err := h.Responder.Tokens.InvalidateToken(ctx); err != nil {
-				fmt.Fprintf(os.Stderr, "[WARNING] error invalidating token: %v\n", err)
+				slog.Warn("invalidating token", "error", err)
 			}
 		}
 	}
