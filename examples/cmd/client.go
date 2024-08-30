@@ -8,6 +8,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"flag"
@@ -17,11 +18,13 @@ import (
 	"math"
 	"math/big"
 	"net"
+	net_http "net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/blob"
@@ -36,6 +39,7 @@ import (
 var clientFlags = flag.NewFlagSet("client", flag.ContinueOnError)
 
 var (
+	insecureTLS bool
 	blobPath    string
 	diURL       string
 	printDevice bool
@@ -121,6 +125,7 @@ func (files fsVar) Open(path string) (fs.File, error) {
 func init() {
 	clientFlags.StringVar(&blobPath, "blob", "cred.bin", "File path of device credential blob")
 	clientFlags.BoolVar(&debug, "debug", debug, "Print HTTP contents")
+	clientFlags.BoolVar(&insecureTLS, "insecure-tls", false, "Skip TLS certificate verification")
 	clientFlags.StringVar(&dlDir, "download", "", "A `dir` to download files into (FSIM disabled if empty)")
 	clientFlags.StringVar(&diURL, "di", "", "HTTP base `URL` for DI server")
 	clientFlags.BoolVar(&printDevice, "print", false, "Print device credential blob and stop")
@@ -135,8 +140,24 @@ func client() error {
 	}
 
 	cli := &fdo.Client{
-		Transport: &http.Transport{},
-		Cred:      fdo.DeviceCredential{Version: 101},
+		Transport: &http.Transport{
+			Client: &net_http.Client{Transport: &net_http.Transport{
+				Proxy: net_http.ProxyFromEnvironment,
+				DialContext: (&net.Dialer{
+					Timeout:   30 * time.Second,
+					KeepAlive: 30 * time.Second,
+				}).DialContext,
+				ForceAttemptHTTP2: true,
+				MaxIdleConns:      100,
+				IdleConnTimeout:   90 * time.Second,
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: insecureTLS, //nolint:gosec
+				},
+				TLSHandshakeTimeout:   10 * time.Second,
+				ExpectContinueTimeout: 1 * time.Second,
+			}},
+		},
+		Cred: fdo.DeviceCredential{Version: 101},
 		Devmod: fdo.Devmod{
 			Os:      runtime.GOOS,
 			Arch:    runtime.GOARCH,

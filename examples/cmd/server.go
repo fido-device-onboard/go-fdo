@@ -11,8 +11,10 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"flag"
@@ -42,6 +44,7 @@ import (
 var serverFlags = flag.NewFlagSet("server", flag.ContinueOnError)
 
 var (
+	useTLS     bool
 	addr       string
 	dbPath     string
 	dbPass     string
@@ -73,6 +76,7 @@ func init() {
 	serverFlags.StringVar(&to0Guid, "to0-guid", "", "Device `guid` to immediately register an RV blob (requires to0 flag)")
 	serverFlags.StringVar(&extAddr, "ext-http", "", "External `addr`ess devices should connect to (default \"127.0.0.1:${LISTEN_PORT}\")")
 	serverFlags.StringVar(&addr, "http", "localhost:8080", "The `addr`ess to listen on")
+	serverFlags.BoolVar(&useTLS, "insecure-tls", false, "Listen with a self-signed TLS certificate")
 	serverFlags.BoolVar(&rvBypass, "rv-bypass", false, "Skip TO1")
 	serverFlags.Var(&downloads, "download", "Use fdo.download FSIM for each `file` (flag may be used multiple times)")
 	serverFlags.StringVar(&uploadDir, "upload-dir", "uploads", "The directory `path` to put file uploads")
@@ -95,7 +99,11 @@ func server() error {
 	state.PreserveReplacedVouchers = true
 
 	// RV Info
-	rvInfo := [][]fdo.RvInstruction{{{Variable: fdo.RVProtocol, Value: mustMarshal(fdo.RVProtHTTP)}}}
+	prot := fdo.RVProtHTTP
+	if useTLS {
+		prot = fdo.RVProtHTTPS
+	}
+	rvInfo := [][]fdo.RvInstruction{{{Variable: fdo.RVProtocol, Value: mustMarshal(prot)}}}
 	if extAddr == "" {
 		extAddr = addr
 	}
@@ -130,20 +138,34 @@ func server() error {
 
 func serveHTTP(rvInfo [][]fdo.RvInstruction, state *sqlite.DB) error {
 	// Create FDO responder
-	srv, err := newServer(rvInfo, state)
+	svc, err := newService(rvInfo, state)
 	if err != nil {
 		return err
 	}
-	srv.OwnerModules = ownerModules
+	svc.OwnerModules = ownerModules
 
-	// Listen and serve
+	// Handle messages
 	handler := http.NewServeMux()
-	handler.Handle("POST /fdo/101/msg/{msg}", &transport.Handler{Responder: srv})
-	return (&http.Server{
+	handler.Handle("POST /fdo/101/msg/{msg}", &transport.Handler{Responder: svc})
+	srv := &http.Server{
 		Addr:              addr,
 		Handler:           handler,
 		ReadHeaderTimeout: 3 * time.Second,
-	}).ListenAndServe()
+	}
+
+	// Listen and serve
+	if useTLS {
+		cert, err := tlsCert(state.DB())
+		if err != nil {
+			return err
+		}
+		srv.TLSConfig = &tls.Config{
+			MinVersion:   tls.VersionTLS12,
+			Certificates: []tls.Certificate{*cert},
+		}
+		return srv.ListenAndServeTLS("", "")
+	}
+	return srv.ListenAndServe()
 }
 
 func registerRvBlob(host string, port uint16, state *sqlite.DB) error {
@@ -162,13 +184,18 @@ func registerRvBlob(host string, port uint16, state *sqlite.DB) error {
 	var guid fdo.GUID
 	copy(guid[:], guidBytes)
 
+	proto := fdo.HTTPTransport
+	if useTLS {
+		proto = fdo.HTTPSTransport
+	}
+
 	refresh, err := (&fdo.TO0Client{
 		Transport: &transport.Transport{},
 		Addrs: []fdo.RvTO2Addr{
 			{
 				DNSAddress:        &host,
 				Port:              port,
-				TransportProtocol: fdo.HTTPTransport,
+				TransportProtocol: proto,
 			},
 		},
 		Vouchers:  state,
@@ -191,7 +218,7 @@ func mustMarshal(v any) []byte {
 }
 
 //nolint:gocyclo
-func newServer(rvInfo [][]fdo.RvInstruction, state *sqlite.DB) (*fdo.Server, error) {
+func newService(rvInfo [][]fdo.RvInstruction, state *sqlite.DB) (*fdo.Server, error) {
 	// Auto-register RV blob so that TO1 can be tested
 	if to0Addr == "" && !rvBypass {
 		to1URLs, _ := fdo.BaseHTTP(rvInfo)
@@ -204,6 +231,10 @@ func newServer(rvInfo [][]fdo.RvInstruction, state *sqlite.DB) (*fdo.Server, err
 		if err != nil {
 			return nil, fmt.Errorf("error parsing TO1 port to use for TO2: %w", err)
 		}
+		proto := fdo.HTTPTransport
+		if useTLS {
+			proto = fdo.HTTPSTransport
+		}
 
 		fakeHash := sha256.Sum256([]byte("fake blob"))
 		state.AutoRegisterRV = &fdo.To1d{
@@ -211,7 +242,7 @@ func newServer(rvInfo [][]fdo.RvInstruction, state *sqlite.DB) (*fdo.Server, err
 				{
 					DNSAddress:        &to1Host,
 					Port:              uint16(to1Port),
-					TransportProtocol: fdo.HTTPTransport,
+					TransportProtocol: proto,
 				},
 			},
 			To0dHash: fdo.Hash{
@@ -348,4 +379,68 @@ func ownerModules(ctx context.Context, guid fdo.GUID, info string, chain []*x509
 			}
 		}
 	}
+}
+
+func tlsCert(db *sql.DB) (*tls.Certificate, error) {
+	// Ensure that the https table exists
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS https
+		( cert BLOB NOT NULL
+		, key BLOB NOT NULL
+		)`); err != nil {
+		return nil, err
+	}
+
+	// Load a TLS cert and key from the database
+	row := db.QueryRow("SELECT cert, key FROM https LIMIT 1")
+	var certDer, keyDer []byte
+	if err := row.Scan(&certDer, &keyDer); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	if len(keyDer) > 0 {
+		key, err := x509.ParsePKCS8PrivateKey(keyDer)
+		if err != nil {
+			return nil, fmt.Errorf("bad HTTPS key stored: %w", err)
+		}
+		return &tls.Certificate{
+			Certificate: [][]byte{certDer},
+			PrivateKey:  key,
+		}, nil
+	}
+
+	// Generate a new self-signed TLS CA
+	tlsKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Test CA"},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(30 * 365 * 24 * time.Hour),
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, tlsKey.Public(), tlsKey)
+	if err != nil {
+		return nil, err
+	}
+	tlsCA, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		return nil, err
+	}
+
+	// Store TLS cert and key to the database
+	keyDER, err := x509.MarshalPKCS8PrivateKey(tlsKey)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := db.Exec("INSERT INTO https (cert, key) VALUES (?, ?)", caDER, keyDER); err != nil {
+		return nil, err
+	}
+
+	// Use CA to serve TLS
+	return &tls.Certificate{
+		Certificate: [][]byte{tlsCA.Raw},
+		PrivateKey:  tlsKey,
+	}, nil
 }

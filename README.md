@@ -19,7 +19,11 @@ $ go build -o fdo ./examples/cmd
 $ ./fdo
 
 Usage:
-  fdo [client|server] [--] [options]
+  fdo [global_options] [client|server] [--] [options]
+
+Global options:
+  -debug
+        Run subcommand with debug enabled
 
 Client options:
   -blob string
@@ -30,6 +34,8 @@ Client options:
         HTTP base URL for DI server
   -download dir
         A dir to download files into (FSIM disabled if empty)
+  -insecure-tls
+        Skip TLS certificate verification
   -print
         Print device credential blob and stop
   -rv-only
@@ -50,6 +56,8 @@ Server options:
         External address devices should connect to (default "127.0.0.1:${LISTEN_PORT}")
   -http addr
         The address to listen on (default "localhost:8080")
+  -insecure-tls
+        Listen with a self-signed TLS certificate
   -rv-bypass
         Skip TO1
   -to0 addr
