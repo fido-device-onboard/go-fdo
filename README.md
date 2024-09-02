@@ -90,7 +90,6 @@ blobcred[
 ]
 $ ./fdo client -rv-only
 TO1 failed for "http://127.0.0.1:9999": error received from TO1.HelloRV request: 2024-08-23 09:59:20 -0400 EDT [code=6,prevMsgType=30,id=0] not found
-$ ./fdo server -print
 ```
 
 Then register an RV blob with the server.

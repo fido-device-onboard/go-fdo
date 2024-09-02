@@ -76,7 +76,7 @@ func init() {
 	serverFlags.StringVar(&to0Guid, "to0-guid", "", "Device `guid` to immediately register an RV blob (requires to0 flag)")
 	serverFlags.StringVar(&extAddr, "ext-http", "", "External `addr`ess devices should connect to (default \"127.0.0.1:${LISTEN_PORT}\")")
 	serverFlags.StringVar(&addr, "http", "localhost:8080", "The `addr`ess to listen on")
-	serverFlags.BoolVar(&useTLS, "insecure-tls", false, "Listen with a self-signed TLS certificate")
+	serverFlags.BoolVar(&insecureTLS, "insecure-tls", false, "Listen with a self-signed TLS certificate")
 	serverFlags.BoolVar(&rvBypass, "rv-bypass", false, "Skip TO1")
 	serverFlags.Var(&downloads, "download", "Use fdo.download FSIM for each `file` (flag may be used multiple times)")
 	serverFlags.StringVar(&uploadDir, "upload-dir", "uploads", "The directory `path` to put file uploads")
@@ -97,6 +97,8 @@ func server() error {
 	}
 	state.AutoExtend = true
 	state.PreserveReplacedVouchers = true
+
+	useTLS = insecureTLS
 
 	// RV Info
 	prot := fdo.RVProtHTTP
@@ -190,7 +192,7 @@ func registerRvBlob(host string, port uint16, state *sqlite.DB) error {
 	}
 
 	refresh, err := (&fdo.TO0Client{
-		Transport: &transport.Transport{},
+		Transport: tlsTransport(nil),
 		Addrs: []fdo.RvTO2Addr{
 			{
 				DNSAddress:        &host,
