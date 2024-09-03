@@ -150,12 +150,18 @@ func serveHTTP(rvInfo [][]fdo.RvInstruction, state *sqlite.DB) error {
 	handler := http.NewServeMux()
 	handler.Handle("POST /fdo/101/msg/{msg}", &transport.Handler{Responder: svc})
 	srv := &http.Server{
-		Addr:              addr,
 		Handler:           handler,
 		ReadHeaderTimeout: 3 * time.Second,
 	}
 
 	// Listen and serve
+	lis, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lis.Close() }()
+	slog.Info("Listening", "local", lis.Addr().String(), "external", extAddr)
+
 	if useTLS {
 		cert, err := tlsCert(state.DB())
 		if err != nil {
@@ -165,9 +171,9 @@ func serveHTTP(rvInfo [][]fdo.RvInstruction, state *sqlite.DB) error {
 			MinVersion:   tls.VersionTLS12,
 			Certificates: []tls.Certificate{*cert},
 		}
-		return srv.ListenAndServeTLS("", "")
+		return srv.ServeTLS(lis, "", "")
 	}
-	return srv.ListenAndServe()
+	return srv.Serve(lis)
 }
 
 func registerRvBlob(host string, port uint16, state *sqlite.DB) error {
@@ -206,7 +212,7 @@ func registerRvBlob(host string, port uint16, state *sqlite.DB) error {
 	if err != nil {
 		return fmt.Errorf("error performing to0: %w", err)
 	}
-	log.Printf("to0 refresh in %s\n", time.Duration(refresh)*time.Second)
+	slog.Info("RV blob registered", "ttl", time.Duration(refresh)*time.Second)
 
 	return nil
 }

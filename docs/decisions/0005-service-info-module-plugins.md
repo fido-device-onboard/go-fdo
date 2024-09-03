@@ -13,7 +13,7 @@ Currently, the library only allows implementing service info modules (FSIMs) as 
 - FSIM implementers want to develop in a language other than Go
 - Application packagers want to provide a generic FDO client or server
 - The FDO client or server is running in lower privileges while a subset of FSIMs need elevated privileges
-    - Example: Client runs in a container, FSIM runs on host to read SMBIOS tables
+  - Example: Client runs in a container, FSIM runs on host to read SMBIOS tables
 - Application users want to upgrade an FSIM without redeploying
 
 ## Considered Options

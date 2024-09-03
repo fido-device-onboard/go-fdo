@@ -271,7 +271,7 @@ func transferOwnership(cli *fdo.Client, rvInfo [][]fdo.RvInstruction) *fdo.Devic
 		var err error
 		to1d, err = cli.TransferOwnership1(context.TODO(), baseURL)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "TO1 failed for %q: %v\n", baseURL, err)
+			slog.Error("TO1 failed", "base URL", baseURL, "error", err)
 			continue
 		}
 		break
@@ -343,7 +343,7 @@ func transferOwnership2(cli *fdo.Client, baseURL string, to1d *cose.Sign1[fdo.To
 
 	cred, err := cli.TransferOwnership2(context.TODO(), baseURL, to1d, fsims)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "TO2 failed for %q: %v\n", baseURL, err)
+		slog.Error("TO2 failed", "base URL", baseURL, "error", err)
 		return nil
 	}
 	return cred

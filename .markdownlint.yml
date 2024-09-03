@@ -1,0 +1,19 @@
+default: true
+MD004:
+  style: dash
+MD010:
+  # Code blocks may have hard tabs.
+  code_blocks: false
+MD013: false # Disable line length checking.  We use softwraps.
+MD024: false # Allow duplicate headers.
+MD025:
+  # Ignore the front matter title.  Pages still need a top level header (#).
+  front_matter_title: ""
+MD026:
+  punctuation: ".,;:!。，；：！"
+MD029:
+  style: ordered
+MD033:
+  allowed_elements:
+    - ref # allow hugo relative reference links
+    - br # allow mermaid <br> to create new line

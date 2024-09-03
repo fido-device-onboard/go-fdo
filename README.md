@@ -76,6 +76,9 @@ First, start a server in a separate console.
 
 ```console
 $ ./fdo server -http 127.0.0.1:9999 -to0 http://127.0.0.1:9999 -db ./test.db
+[2024-09-01 00:00:00] INFO: Listening
+  local: 127.0.0.1:9999
+  external: 127.0.0.1:9999
 ```
 
 Next, initialize the device and check that TO1 fails.
@@ -89,14 +92,17 @@ blobcred[
   ...
 ]
 $ ./fdo client -rv-only
-TO1 failed for "http://127.0.0.1:9999": error received from TO1.HelloRV request: 2024-08-23 09:59:20 -0400 EDT [code=6,prevMsgType=30,id=0] not found
+[2024-09-01 00:00:00] ERROR: TO1 failed
+  base URL: http://127.0.0.1:9999
+  error: error received from TO1.HelloRV request: 2024-09-01 00:00:00 +0000 UTC [code=6,prevMsgType=30,id=0] not found
 ```
 
 Then register an RV blob with the server.
 
 ```console
 $ ./fdo server -http 127.0.0.1:9999 -to0 http://127.0.0.1:9999 -to0-guid d21d841a3f54f4e89a60ed9b9779e9e8 -db ./test.db
-2024/08/23 10:03:06 to0 refresh in 1193046h28m15s
+[2024-09-01 00:00:00] INFO: RV blob registered
+  ttl: 1193046h28m15s
 ```
 
 Finally, check that TO1 now succeeds.

@@ -35,3 +35,14 @@ jobs:
         uses: actions/checkout@v4
       - name: Run ShellCheck
         run: find . \( -name "*.sh" -o -name "*.bash" \) -exec shellcheck '{}' +
+
+  markdownlint:
+    runs-on: ["innersource.prod.amr.dind"]
+    name: Lint Documentation Markdown
+    container:
+      image: node:20-alpine
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v4
+      - name: Lint all markdown
+        run: npx markdownlint-cli2 --config .markdownlint.yml '**/*.md'
