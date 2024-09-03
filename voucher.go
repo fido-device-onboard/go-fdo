@@ -381,7 +381,7 @@ func validateNextEntry(prevOwnerKey crypto.PublicKey, prevHash hash.Hash, header
 	default:
 		return fmt.Errorf("unsupported hash algorithm for hashing voucher entry payload: %s", alg)
 	}
-	if err := cbor.NewEncoder(payloadHash).Encode(&entry.Payload.Val); err != nil {
+	if err := cbor.NewEncoder(payloadHash).Encode(entry.Tag()); err != nil {
 		return fmt.Errorf("error computing hash of voucher entry payload: %w", err)
 	}
 
@@ -494,7 +494,7 @@ func ExtendVoucher[T PublicKeyOrChain](v *Voucher, owner crypto.Signer, nextOwne
 			return nil, fmt.Errorf("error computing initial entry hash, writing encoded header hmac: %w", err)
 		}
 	} else {
-		if err := cbor.NewEncoder(digest).Encode(&v.Entries[len(v.Entries)-1].Payload.Val); err != nil {
+		if err := cbor.NewEncoder(digest).Encode(v.Entries[len(v.Entries)-1].Tag()); err != nil {
 			return nil, fmt.Errorf("error computing hash of voucher entry payload: %w", err)
 		}
 	}
