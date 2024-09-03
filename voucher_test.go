@@ -194,3 +194,14 @@ func TestExtendAndVerify(t *testing.T) {
 		t.Errorf("error verifying voucher entries: %v", err)
 	}
 }
+
+func TestVerifyExtendedVoucher(t *testing.T) {
+	var ov fdo.Voucher
+	if err := cbor.Unmarshal(voucherBytes(t, "ov_extended.pem"), &ov); err != nil {
+		t.Fatalf("error parsing voucher test data: %v", err)
+	}
+
+	if err := ov.VerifyEntries(); err != nil {
+		t.Errorf("error verifying voucher entries: %v", err)
+	}
+}
