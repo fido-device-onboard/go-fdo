@@ -723,7 +723,7 @@ func (d *Decoder) decodeByteSlice(rv reflect.Value, additional []byte) error {
 	// Support fixed-size array
 	if rv.Kind() == reflect.Array && rv.Type().Elem().Kind() == reflect.Uint8 {
 		// Ensure array is large enough
-		if uint64(rv.Len()) < length {
+		if rv.Len() < int(length) {
 			return fmt.Errorf("fixed-size array is too small: must be at least length %d", length)
 		}
 
@@ -1213,10 +1213,13 @@ func (e *Encoder) encodeNumber(rv reflect.Value) error {
 	switch {
 	case rv.CanUint(): // positive uint
 		u64, majorType = rv.Uint(), unsignedIntMajorType
-	case rv.CanInt() && rv.Int() >= 0: // positive int
-		u64, majorType = uint64(rv.Int()), unsignedIntMajorType
-	case rv.CanInt() && rv.Int() < 0: // negative int
-		u64, majorType = uint64(-rv.Int()-1), negativeIntMajorType
+	case rv.CanInt():
+		if v := rv.Int(); v >= 0 {
+			u64, majorType = uint64(v), unsignedIntMajorType
+		} else {
+			abs := uint64(-v)
+			u64, majorType = abs-1, negativeIntMajorType
+		}
 	default:
 		return ErrUnsupportedType{typeName: rv.Type().String()}
 	}
@@ -1262,6 +1265,10 @@ func (e *Encoder) encodeTextOrBinary(rv reflect.Value) error {
 }
 
 func (e *Encoder) encodeArray(size int, get func(int) reflect.Value) error {
+	if size < 0 {
+		panic("negative array lengths are invalid")
+	}
+
 	// Write the length as additional info
 	info := u64Bytes(uint64(size))
 	if err := e.write(additionalInfo(arrayMajorType, info)); err != nil {
@@ -1328,6 +1335,10 @@ func (e *Encoder) encodeStruct(size int, get func([]int) reflect.Value, field fu
 }
 
 func (e *Encoder) encodeMap(length int, keys []reflect.Value, get func(k reflect.Value) reflect.Value) error {
+	if length < 0 {
+		panic("negative map lengths are invalid")
+	}
+
 	// Write the length as additional info
 	info := u64Bytes(uint64(length))
 	if err := e.write(additionalInfo(mapMajorType, info)); err != nil {
