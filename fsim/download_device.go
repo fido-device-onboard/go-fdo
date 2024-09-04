@@ -7,9 +7,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha512"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
+	"log/slog"
 	"os"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
@@ -73,44 +75,58 @@ func (d *Download) receive(moduleName, messageName string, messageBody io.Reader
 		return cbor.NewDecoder(messageBody).Decode(&d.name)
 
 	case "data":
-		if d.temp == nil {
-			var err error
-			if d.CreateTemp != nil {
-				d.temp, err = d.CreateTemp()
-			} else {
-				d.temp, err = os.CreateTemp("", "fdo.download_*")
-			}
-			if err != nil {
-				return fmt.Errorf("error creating temp file for download: %w", err)
-			}
+		if err := d.createTemp(); err != nil {
+			return err
 		}
 
-		var chunk []byte
-		if err := cbor.NewDecoder(messageBody).Decode(&chunk); err != nil {
-			d.reset()
-			if d.ErrorLog != nil {
-				_, _ = fmt.Fprintf(d.ErrorLog, "[file=%s] error decoding data chunk: %v\n", d.name, err)
+		for {
+			var chunk []byte
+			if err := cbor.NewDecoder(messageBody).Decode(&chunk); errors.Is(err, io.EOF) {
+				if d.written >= d.length {
+					return d.finalize(respond)
+				}
+				return nil
+			} else if err != nil {
+				d.reset()
+				if d.ErrorLog != nil {
+					_, _ = fmt.Fprintf(d.ErrorLog, "[file=%s] error decoding data chunk: %v\n", d.name, err)
+				}
+				return cbor.NewEncoder(respond("done")).Encode(-1)
 			}
-			return cbor.NewEncoder(respond("done")).Encode(-1)
-		}
-		n, err := io.MultiWriter(d.temp, d.hash).Write(chunk)
-		if err != nil {
-			d.reset()
-			if d.ErrorLog != nil {
-				_, _ = fmt.Fprintf(d.ErrorLog, "[file=%s] error writing data chunk: %v\n", d.name, err)
+			n, err := io.MultiWriter(d.temp, d.hash).Write(chunk)
+			if err != nil {
+				d.reset()
+				if d.ErrorLog != nil {
+					_, _ = fmt.Fprintf(d.ErrorLog, "[file=%s] error writing data chunk: %v\n", d.name, err)
+				}
+				return cbor.NewEncoder(respond("done")).Encode(-1)
 			}
-			return cbor.NewEncoder(respond("done")).Encode(-1)
+			d.written += n
+			if debugEnabled() {
+				slog.Default().WithGroup("fdo.download").Debug("progress", "written", d.written, "length", d.length)
+			}
 		}
-		d.written += n
-		fmt.Printf("written: %d, length: %d\n", d.written, d.length)
-		if d.written < d.length {
-			return nil
-		}
-		return d.finalize(respond)
 
 	default:
 		return fmt.Errorf("unknown message %s:%s", moduleName, messageName)
 	}
+}
+
+func (d *Download) createTemp() error {
+	if d.temp != nil {
+		return nil
+	}
+
+	var err error
+	if d.CreateTemp != nil {
+		d.temp, err = d.CreateTemp()
+	} else {
+		d.temp, err = os.CreateTemp("", "fdo.download_*")
+	}
+	if err != nil {
+		return fmt.Errorf("error creating temp file for download: %w", err)
+	}
+	return nil
 }
 
 func (d *Download) finalize(respond func(string) io.Writer) error {

@@ -58,6 +58,48 @@ func TestClientWithMockModule(t *testing.T) {
 	}
 }
 
+func TestClientWithMockModuleAndAutoUnchunking(t *testing.T) {
+	deviceModule := &fdotest.MockDeviceModule{
+		ReceiveFunc: func(ctx context.Context, moduleName, messageName string, messageBody io.Reader, respond func(message string) io.Writer, yield func()) error {
+			var v any
+			return cbor.NewDecoder(messageBody).Decode(&v)
+		},
+	}
+	ownerModule := &fdotest.MockOwnerModule{
+		ProduceInfoFunc: func(ctx context.Context, producer *serviceinfo.Producer) (blockPeer, moduleDone bool, _ error) {
+			if err := producer.WriteChunk(mockModuleName, "active", []byte{0xf5}); err != nil {
+				return false, false, err
+			}
+			if err := producer.WriteChunk(mockModuleName, "message", []byte{0xf4}); err != nil {
+				return false, false, err
+			}
+			if err := producer.WriteChunk(mockModuleName, "message", []byte{0xf4}); err != nil {
+				return false, false, err
+			}
+			return false, true, nil
+		},
+	}
+
+	fdotest.RunClientTestSuite(t, nil, map[string]serviceinfo.DeviceModule{
+		mockModuleName: deviceModule,
+	}, func(ctx context.Context, replacementGUID fdo.GUID, info string, chain []*x509.Certificate, devmod fdo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
+		return func(yield func(string, serviceinfo.OwnerModule) bool) {
+			yield(mockModuleName, ownerModule)
+		}
+	}, func(t *testing.T, err error) {
+		if err == nil {
+			t.Error("expected err to occur when not handling all message chunks")
+		}
+		if !strings.Contains(err.Error(), "device module did not read full body") {
+			t.Error("expected err to refer to device module not reading full message body")
+		}
+	})
+
+	if !deviceModule.ActiveState {
+		t.Error("device module should be active")
+	}
+}
+
 func TestClientWithCustomDevmod(t *testing.T) {
 	t.Run("Incomplete devmod", func(t *testing.T) {
 		customDevmod := &fdotest.MockDeviceModule{
