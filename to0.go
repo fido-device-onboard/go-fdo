@@ -259,7 +259,7 @@ func (s *Server) acceptOwner(ctx context.Context, msg io.Reader) (*to0AcceptOwne
 
 	// Store rendezvous blob
 	expiration := time.Now().Add(time.Duration(negotiatedTTL) * time.Second)
-	if err := s.RVBlobs.SetRVBlob(ctx, ov.Header.Val.GUID, sig.To1d.Untag(), expiration); err != nil {
+	if err := s.RVBlobs.SetRVBlob(ctx, &ov, sig.To1d.Untag(), expiration); err != nil {
 		return nil, fmt.Errorf("error storing rendezvous blob: %w", err)
 	}
 

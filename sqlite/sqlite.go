@@ -89,6 +89,7 @@ func New(filename, password string) (*DB, error) {
 		`CREATE TABLE IF NOT EXISTS rv_blobs
 			( guid BLOB PRIMARY KEY
 			, rv BLOB NOT NULL
+			, voucher BLOB NOT NULL
 			, exp INTEGER NOT NULL
 			)`,
 		`CREATE TABLE IF NOT EXISTS sessions
@@ -833,7 +834,7 @@ func (db *DB) autoRegisterRV(ctx context.Context, ov *fdo.Voucher) error {
 		return fmt.Errorf("error signing to1d: %w", err)
 	}
 	exp := time.Now().AddDate(30, 0, 0) // Expire in 30 years
-	if err := db.SetRVBlob(ctx, ov.Header.Val.GUID, &sign1, exp); err != nil {
+	if err := db.SetRVBlob(ctx, ov, &sign1, exp); err != nil {
 		return fmt.Errorf("error storing to1d: %w", err)
 	}
 
@@ -1216,41 +1217,54 @@ func (db *DB) MTU(ctx context.Context) (uint16, error) {
 }
 
 // SetRVBlob sets the owner rendezvous blob for a device.
-func (db *DB) SetRVBlob(ctx context.Context, guid fdo.GUID, to1d *cose.Sign1[fdo.To1d, []byte], exp time.Time) error {
+func (db *DB) SetRVBlob(ctx context.Context, ov *fdo.Voucher, to1d *cose.Sign1[fdo.To1d, []byte], exp time.Time) error {
 	blob, err := cbor.Marshal(to1d)
 	if err != nil {
 		return fmt.Errorf("error marshaling rendezvous blob: %w", err)
 	}
+
+	voucher, err := cbor.Marshal(ov)
+	if err != nil {
+		return fmt.Errorf("error marshaling ownership voucher: %w", err)
+	}
+
+	guid := ov.Header.Val.GUID[:]
 	return db.insert(db.debugCtx(ctx), "rv_blobs",
 		map[string]any{
-			"guid": guid[:],
-			"rv":   blob,
-			"exp":  exp.Unix(),
+			"guid":    guid,
+			"rv":      blob,
+			"voucher": voucher,
+			"exp":     exp.Unix(),
 		},
 		map[string]any{
-			"guid": guid[:],
+			"guid": guid,
 		})
 }
 
 // RVBlob returns the owner rendezvous blob for a device.
-func (db *DB) RVBlob(ctx context.Context, guid fdo.GUID) (*cose.Sign1[fdo.To1d, []byte], error) {
-	var blob []byte
+func (db *DB) RVBlob(ctx context.Context, guid fdo.GUID) (*cose.Sign1[fdo.To1d, []byte], *fdo.Voucher, error) {
+	var blob, voucher []byte
 	var exp sql.NullInt64
-	if err := db.query(db.debugCtx(ctx), "rv_blobs", []string{"rv", "exp"}, map[string]any{
+	if err := db.query(db.debugCtx(ctx), "rv_blobs", []string{"rv", "voucher", "exp"}, map[string]any{
 		"guid": guid[:],
-	}, &blob, &exp); err != nil {
-		return nil, err
+	}, &blob, &voucher, &exp); err != nil {
+		return nil, nil, err
 	}
 	if blob == nil || !exp.Valid {
-		return nil, fdo.ErrNotFound
+		return nil, nil, fdo.ErrNotFound
 	}
 	if time.Now().After(time.Unix(exp.Int64, 0)) {
-		return nil, fdo.ErrNotFound
+		return nil, nil, fdo.ErrNotFound
 	}
 
 	var to1d cose.Sign1[fdo.To1d, []byte]
 	if err := cbor.Unmarshal(blob, &to1d); err != nil {
-		return nil, fmt.Errorf("error unmarshaling rendezvous blob: %w", err)
+		return nil, nil, fmt.Errorf("error unmarshaling rendezvous blob: %w", err)
 	}
-	return &to1d, nil
+	var ov fdo.Voucher
+	if err := cbor.Unmarshal(voucher, &ov); err != nil {
+		return nil, nil, fmt.Errorf("error unmarshaling ownership voucher: %w", err)
+	}
+
+	return &to1d, &ov, nil
 }

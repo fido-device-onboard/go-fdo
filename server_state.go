@@ -155,10 +155,10 @@ type TO2SessionState interface {
 // TO0 and TO1.
 type RendezvousBlobPersistentState interface {
 	// SetRVBlob sets the owner rendezvous blob for a device.
-	SetRVBlob(context.Context, GUID, *cose.Sign1[To1d, []byte], time.Time) error
+	SetRVBlob(context.Context, *Voucher, *cose.Sign1[To1d, []byte], time.Time) error
 
 	// RVBlob returns the owner rendezvous blob for a device.
-	RVBlob(context.Context, GUID) (*cose.Sign1[To1d, []byte], error)
+	RVBlob(context.Context, GUID) (*cose.Sign1[To1d, []byte], *Voucher, error)
 }
 
 // OwnerKeyPersistentState maintains the owner service keys.

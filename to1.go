@@ -110,7 +110,7 @@ func (s *Server) helloRVAck(ctx context.Context, msg io.Reader) (*rvAck, error) 
 	}
 
 	// Check if device has been registered
-	if _, err := s.RVBlobs.RVBlob(ctx, hello.GUID); errors.Is(err, ErrNotFound) {
+	if _, _, err := s.RVBlobs.RVBlob(ctx, hello.GUID); errors.Is(err, ErrNotFound) {
 		captureErr(ctx, resourceNotFound, "")
 		return nil, ErrNotFound
 	} else if err != nil {
@@ -237,9 +237,9 @@ func (s *Server) rvRedirect(ctx context.Context, msg io.Reader) (*cose.Sign1Tag[
 	_ = copy(guid[:], ueid[1:])
 
 	// Get device public key from ownership voucher
-	ov, err := s.Vouchers.Voucher(ctx, guid)
+	blob, ov, err := s.RVBlobs.RVBlob(ctx, guid)
 	if err != nil {
-		return nil, fmt.Errorf("error looking up ownership voucher: %w", err)
+		return nil, fmt.Errorf("error looking up rendezvous blob: %w", err)
 	}
 	pub, err := ov.DevicePublicKey()
 	if err != nil {
@@ -256,9 +256,5 @@ func (s *Server) rvRedirect(ctx context.Context, msg io.Reader) (*cose.Sign1Tag[
 	}
 
 	// Return RV blob
-	blob, err := s.RVBlobs.RVBlob(ctx, guid)
-	if err != nil {
-		return nil, fmt.Errorf("error looking up rendezvous blob: %w", err)
-	}
 	return blob.Tag(), nil
 }

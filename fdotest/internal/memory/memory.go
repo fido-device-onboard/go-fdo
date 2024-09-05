@@ -144,17 +144,22 @@ func (s *State) Signer(keyType fdo.KeyType) (crypto.Signer, bool) {
 }
 
 // SetRVBlob sets the owner rendezvous blob for a device.
-func (s *State) SetRVBlob(ctx context.Context, guid fdo.GUID, to1d *cose.Sign1[fdo.To1d, []byte], exp time.Time) error {
+func (s *State) SetRVBlob(ctx context.Context, ov *fdo.Voucher, to1d *cose.Sign1[fdo.To1d, []byte], exp time.Time) error {
 	// TODO: Handle expiration
-	s.RVBlobs[guid] = to1d
+	s.RVBlobs[ov.Header.Val.GUID] = to1d
+	s.Vouchers[ov.Header.Val.GUID] = ov
 	return nil
 }
 
 // RVBlob returns the owner rendezvous blob for a device.
-func (s *State) RVBlob(ctx context.Context, guid fdo.GUID) (*cose.Sign1[fdo.To1d, []byte], error) {
+func (s *State) RVBlob(ctx context.Context, guid fdo.GUID) (*cose.Sign1[fdo.To1d, []byte], *fdo.Voucher, error) {
 	to1d, ok := s.RVBlobs[guid]
 	if !ok {
-		return nil, fdo.ErrNotFound
+		return nil, nil, fdo.ErrNotFound
 	}
-	return to1d, nil
+	ov, ok := s.Vouchers[guid]
+	if !ok {
+		return nil, nil, fdo.ErrNotFound
+	}
+	return to1d, ov, nil
 }

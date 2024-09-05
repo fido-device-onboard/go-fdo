@@ -470,6 +470,7 @@ func RunServerStateSuite(t *testing.T, state AllServerState) {
 		if _, err := rand.Read(guid[:]); err != nil {
 			t.Fatal(err)
 		}
+		ov := &fdo.Voucher{Header: *cbor.NewBstr(fdo.VoucherHeader{GUID: guid})}
 		dnsAddr := "owner.fidoalliance.org"
 		fakeHash := sha256.Sum256([]byte("fake blob"))
 		expect := cose.Sign1[fdo.To1d, []byte]{
@@ -499,14 +500,14 @@ func RunServerStateSuite(t *testing.T, state AllServerState) {
 		var state fdo.RendezvousBlobPersistentState = state
 
 		// Store and retrieve rendezvous blob
-		if _, err := state.RVBlob(context.TODO(), guid); !errors.Is(err, fdo.ErrNotFound) {
+		if _, _, err := state.RVBlob(context.TODO(), guid); !errors.Is(err, fdo.ErrNotFound) {
 			t.Fatalf("expected ErrNotFound, got %v", err)
 		}
 		exp := time.Now().Add(time.Hour)
-		if err := state.SetRVBlob(context.TODO(), guid, &expect, exp); err != nil {
+		if err := state.SetRVBlob(context.TODO(), ov, &expect, exp); err != nil {
 			t.Fatal(err)
 		}
-		got, err := state.RVBlob(context.TODO(), guid)
+		got, _, err := state.RVBlob(context.TODO(), guid)
 		if err != nil {
 			t.Fatal(err)
 		}
