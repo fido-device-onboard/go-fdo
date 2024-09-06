@@ -26,6 +26,8 @@ import (
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
 
+const timeout = 10 * time.Second
+
 // OwnerModulesFunc creates an iterator of service info modules for a given
 // device.
 type OwnerModulesFunc func(ctx context.Context, replacementGUID fdo.GUID, info string, chain []*x509.Certificate, devmod fdo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule]
@@ -61,34 +63,45 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 		}{stateless, inMemory}
 	}
 
-	server := &fdo.Server{
-		Tokens:    state,
-		DI:        state,
-		TO0:       state,
-		TO1:       state,
-		TO2:       state,
-		RVBlobs:   state,
-		Vouchers:  state,
-		OwnerKeys: state,
-		OwnerModules: func(ctx context.Context, replacementGUID fdo.GUID, info string, chain []*x509.Certificate, devmod fdo.Devmod, supportedMods []string) iter.Seq[serviceinfo.OwnerModule] {
-			if ownerModules == nil {
-				return func(yield func(serviceinfo.OwnerModule) bool) {}
-			}
+	transport := &Transport{
+		Tokens: state,
+		DIResponder: &fdo.DIServer{
+			Session:  state,
+			Vouchers: state,
+			RvInfo:   nil, // TODO:
+		},
+		TO0Responder: &fdo.TO0Server{
+			Session: state,
+			RVBlobs: state,
+		},
+		TO1Responder: &fdo.TO1Server{
+			Session: state,
+			RVBlobs: state,
+		},
+		TO2Responder: &fdo.TO2Server{
+			Session:   state,
+			Vouchers:  state,
+			OwnerKeys: state,
+			RvInfo:    nil, // TODO:
+			OwnerModules: func(ctx context.Context, replacementGUID fdo.GUID, info string, chain []*x509.Certificate, devmod fdo.Devmod, supportedMods []string) iter.Seq[serviceinfo.OwnerModule] {
+				if ownerModules == nil {
+					return func(yield func(serviceinfo.OwnerModule) bool) {}
+				}
 
-			mods := ownerModules(ctx, replacementGUID, info, chain, devmod, supportedMods)
-			return func(yield func(serviceinfo.OwnerModule) bool) {
-				for modName, mod := range mods {
-					if slices.Contains(supportedMods, modName) {
-						if !yield(mod) {
-							return
+				mods := ownerModules(ctx, replacementGUID, info, chain, devmod, supportedMods)
+				return func(yield func(serviceinfo.OwnerModule) bool) {
+					for modName, mod := range mods {
+						if slices.Contains(supportedMods, modName) {
+							if !yield(mod) {
+								return
+							}
 						}
 					}
 				}
-			}
+			},
 		},
+		T: t,
 	}
-
-	transport := &Transport{Responder: server, T: t}
 	dnsAddr := "owner.fidoalliance.org"
 
 	to0 := &fdo.TO0Client{
@@ -166,7 +179,7 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 	})
 
 	t.Run("Transfer Ownership 0", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 		if _, err := cli.TransferOwnership1(ctx, ""); !strings.HasSuffix(err.Error(), fdo.ErrNotFound.Error()) {
 			t.Fatalf("expected TO1 to fail with no resource found, got %v", err)
@@ -179,7 +192,7 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 	})
 
 	t.Run("Transfer Ownership 1 and Transfer Ownership 2", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 		to1d, err := cli.TransferOwnership1(ctx, "")
 		if err != nil {
@@ -200,7 +213,7 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 	})
 
 	t.Run("Transfer Ownership 2 Only", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 		newCred, err := cli.TransferOwnership2(ctx, "", nil, nil)
 		if err != nil {
@@ -215,7 +228,7 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 	})
 
 	t.Run("Transfer Ownership 2 w/ Modules", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 		newCred, err := cli.TransferOwnership2(ctx, "", nil, deviceModules)
 		if customExpect != nil {

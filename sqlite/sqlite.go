@@ -130,7 +130,11 @@ func New(filename, password string) (*DB, error) {
 			, mtu INTEGER
 			, FOREIGN KEY(session) REFERENCES sessions(id) ON DELETE CASCADE
 			)`,
-		`CREATE TABLE IF NOT EXISTS vouchers
+		`CREATE TABLE IF NOT EXISTS mfg_vouchers
+			( guid BLOB PRIMARY KEY
+			, cbor BLOB NOT NULL
+			)`,
+		`CREATE TABLE IF NOT EXISTS owner_vouchers
 			( guid BLOB PRIMARY KEY
 			, cbor BLOB NOT NULL
 			)`,
@@ -193,7 +197,8 @@ var _ interface {
 	fdo.TO1SessionState
 	fdo.TO2SessionState
 	fdo.RendezvousBlobPersistentState
-	fdo.VoucherPersistentState
+	fdo.ManufacturerVoucherPersistentState
+	fdo.OwnerVoucherPersistentState
 	fdo.OwnerKeyPersistentState
 } = (*DB)(nil)
 
@@ -740,7 +745,10 @@ func (db *DB) GUID(ctx context.Context) (fdo.GUID, error) {
 
 // NewVoucher creates and stores a new voucher.
 func (db *DB) NewVoucher(ctx context.Context, ov *fdo.Voucher) error {
+	table := "mfg_vouchers"
 	if db.AutoExtend {
+		table = "owner_vouchers"
+
 		if err := db.autoExtend(ov); err != nil {
 			return fmt.Errorf("auto extend: %w", err)
 		}
@@ -756,7 +764,7 @@ func (db *DB) NewVoucher(ctx context.Context, ov *fdo.Voucher) error {
 	if err != nil {
 		return fmt.Errorf("error marshaling ownership voucher: %w", err)
 	}
-	return db.insert(db.debugCtx(ctx), "vouchers", map[string]any{
+	return db.insert(db.debugCtx(ctx), table, map[string]any{
 		"guid": ov.Header.Val.GUID[:],
 		"cbor": data,
 	}, nil)
@@ -841,6 +849,18 @@ func (db *DB) autoRegisterRV(ctx context.Context, ov *fdo.Voucher) error {
 	return nil
 }
 
+// AddVoucher stores the voucher of a device owned by the service.
+func (db *DB) AddVoucher(ctx context.Context, ov *fdo.Voucher) error {
+	data, err := cbor.Marshal(ov)
+	if err != nil {
+		return fmt.Errorf("error marshaling ownership voucher: %w", err)
+	}
+	return db.insert(db.debugCtx(ctx), "owner_vouchers", map[string]any{
+		"guid": ov.Header.Val.GUID[:],
+		"cbor": data,
+	}, nil)
+}
+
 // ReplaceVoucher stores a new voucher, possibly deleting or marking the
 // previous voucher as replaced.
 func (db *DB) ReplaceVoucher(ctx context.Context, guid fdo.GUID, ov *fdo.Voucher) error {
@@ -849,13 +869,13 @@ func (db *DB) ReplaceVoucher(ctx context.Context, guid fdo.GUID, ov *fdo.Voucher
 		return fmt.Errorf("error marshaling ownership voucher: %w", err)
 	}
 	if db.PreserveReplacedVouchers {
-		return db.insert(db.debugCtx(ctx), "vouchers",
+		return db.insert(db.debugCtx(ctx), "owner_vouchers",
 			map[string]any{
 				"guid": ov.Header.Val.GUID[:],
 				"cbor": data,
 			}, nil)
 	}
-	return db.update(db.debugCtx(ctx), "vouchers",
+	return db.update(db.debugCtx(ctx), "owner_vouchers",
 		map[string]any{
 			"guid": ov.Header.Val.GUID[:],
 			"cbor": data,
@@ -869,7 +889,7 @@ func (db *DB) ReplaceVoucher(ctx context.Context, guid fdo.GUID, ov *fdo.Voucher
 // Voucher retrieves a voucher by GUID.
 func (db *DB) Voucher(ctx context.Context, guid fdo.GUID) (*fdo.Voucher, error) {
 	var data []byte
-	if err := db.query(db.debugCtx(ctx), "vouchers", []string{"cbor"},
+	if err := db.query(db.debugCtx(ctx), "owner_vouchers", []string{"cbor"},
 		map[string]any{"guid": guid[:]},
 		&data,
 	); err != nil {
@@ -979,9 +999,9 @@ func (db *DB) ReplacementHmac(ctx context.Context) (fdo.Hmac, error) {
 	}, nil
 }
 
-// SetSession updates the current key exchange/encryption session based on
+// SetXSession updates the current key exchange/encryption session based on
 // an opaque "authorization" token.
-func (db *DB) SetSession(ctx context.Context, suite kex.Suite, sess kex.Session) error {
+func (db *DB) SetXSession(ctx context.Context, suite kex.Suite, sess kex.Session) error {
 	sessID, ok := db.sessionID(ctx)
 	if !ok {
 		return fdo.ErrInvalidSession
@@ -1008,10 +1028,10 @@ func (db *DB) SetSession(ctx context.Context, suite kex.Suite, sess kex.Session)
 	)
 }
 
-// Session returns the current key exchange/encryption session based on an
+// XSession returns the current key exchange/encryption session based on an
 // opaque "authorization" token.
-func (db *DB) Session(ctx context.Context, token string) (kex.Suite, kex.Session, error) {
-	sessID, ok := db.sessionID(db.TokenContext(ctx, token))
+func (db *DB) XSession(ctx context.Context) (kex.Suite, kex.Session, error) {
+	sessID, ok := db.sessionID(ctx)
 	if !ok {
 		return "", nil, fdo.ErrInvalidSession
 	}

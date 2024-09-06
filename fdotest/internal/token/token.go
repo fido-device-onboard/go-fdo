@@ -409,26 +409,27 @@ func (s Service) ReplacementHmac(ctx context.Context) (fdo.Hmac, error) {
 	})
 }
 
-// SetSession updates the current key exchange/encryption session based on an
+// SetXSession updates the current key exchange/encryption session based on an
 // opaque "authorization" token.
-func (s Service) SetSession(ctx context.Context, suite kex.Suite, sess kex.Session) error {
+func (s Service) SetXSession(ctx context.Context, suite kex.Suite, sess kex.Session) error {
 	return update(ctx, s, func(state *to2State) error {
 		state.KeyExchange.Suite, state.KeyExchange.Sess = suite, sess
 		return nil
 	})
 }
 
-// Session returns the current key exchange/encryption session based on an
+// XSession returns the current key exchange/encryption session based on an
 // opaque "authorization" token.
-func (s Service) Session(ctx context.Context, token string) (kex.Suite, kex.Session, error) {
-	state, err := fromToken[to2State](token, s.HmacSecret)
-	if err != nil {
-		return "", nil, err
-	}
-	if state.KeyExchange.Sess == nil {
-		return "", nil, fdo.ErrNotFound
-	}
-	return state.KeyExchange.Suite, state.KeyExchange.Sess, nil
+func (s Service) XSession(ctx context.Context) (xSuite kex.Suite, xSession kex.Session, _ error) {
+	_, err := fetch(ctx, s, func(state to2State) (struct{}, error) {
+		if state.KeyExchange.Sess == nil {
+			return struct{}{}, fdo.ErrNotFound
+		}
+		xSuite = state.KeyExchange.Suite
+		xSession = state.KeyExchange.Sess
+		return struct{}{}, nil
+	})
+	return xSuite, xSession, err
 }
 
 // SetProveDeviceNonce stores the Nonce used in TO2.ProveDevice for use in

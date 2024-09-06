@@ -253,7 +253,7 @@ func (c *Client) errorMsg(ctx context.Context, baseURL string, err error) {
 	// Send error, but ignore the response, only making sure to close the
 	// reader if one is returned
 	_, rc, err := c.Transport.Send(ctx, baseURL, ErrorMsgType, errMsg, nil)
-	if err == nil {
+	if err == nil && rc != nil {
 		_ = rc.Close()
 	}
 }

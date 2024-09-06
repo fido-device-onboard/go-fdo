@@ -103,7 +103,7 @@ type rvAck struct {
 }
 
 // HelloRV(30) -> HelloRVAck(31)
-func (s *Server) helloRVAck(ctx context.Context, msg io.Reader) (*rvAck, error) {
+func (s *TO1Server) helloRVAck(ctx context.Context, msg io.Reader) (*rvAck, error) {
 	var hello helloRV
 	if err := cbor.NewDecoder(msg).Decode(&hello); err != nil {
 		return nil, fmt.Errorf("error decoding TO1.HelloRV request: %w", err)
@@ -122,7 +122,7 @@ func (s *Server) helloRVAck(ctx context.Context, msg io.Reader) (*rvAck, error) 
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return nil, fmt.Errorf("error generating nonce for TO1 proof: %w", err)
 	}
-	if err := s.TO1.SetTO1ProofNonce(ctx, nonce); err != nil {
+	if err := s.Session.SetTO1ProofNonce(ctx, nonce); err != nil {
 		return nil, fmt.Errorf("error storing nonce for TO1.ProveToRV: %w", err)
 	}
 
@@ -198,14 +198,14 @@ func (c *Client) proveToRv(ctx context.Context, baseURL string, nonce Nonce) (*c
 }
 
 // ProveToRV(32) -> RVRedirect(33)
-func (s *Server) rvRedirect(ctx context.Context, msg io.Reader) (*cose.Sign1Tag[To1d, []byte], error) {
+func (s *TO1Server) rvRedirect(ctx context.Context, msg io.Reader) (*cose.Sign1Tag[To1d, []byte], error) {
 	var token cose.Sign1Tag[eatoken, []byte]
 	if err := cbor.NewDecoder(msg).Decode(&token); err != nil {
 		return nil, fmt.Errorf("error decoding TO1.ProveToRV request: %w", err)
 	}
 
 	// Check EAT nonce
-	proofNonce, err := s.TO1.TO1ProofNonce(ctx)
+	proofNonce, err := s.Session.TO1ProofNonce(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error getting TO1 proof nonce: %w", err)
 	}

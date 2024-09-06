@@ -27,7 +27,12 @@ const bearerPrefix = "Bearer "
 // Handler implements http.Handler and responds to all DI, TO1, and TO2 message
 // types.
 type Handler struct {
-	Responder *fdo.Server
+	Tokens fdo.TokenService
+
+	DIResponder  *fdo.DIServer
+	TO0Responder *fdo.TO0Server
+	TO1Responder *fdo.TO1Server
+	TO2Responder *fdo.TO2Server
 
 	// MaxContentLength defaults to 65535. Negative values disable content
 	// length checking.
@@ -36,12 +41,85 @@ type Handler struct {
 
 var _ http.Handler = (*Handler)(nil)
 
+type responder interface {
+	Respond(ctx context.Context, msgType uint8, msg io.Reader) (respType uint8, resp any)
+}
+
 func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if !debugEnabled() {
-		h.handleRequest(w, r)
+	// Parse message type from request URL
+	typ, err := strconv.ParseUint(r.PathValue("msg"), 10, 8)
+	if err != nil {
+		writeErr(w, 0, fmt.Errorf("invalid message type"))
+		return
+	}
+	msgType := uint8(typ)
+	protocol := fdo.ProtocolOf(msgType)
+
+	// Parse request headers
+	token := r.Header.Get("Authorization")
+	if token != "" && !strings.HasPrefix(token, bearerPrefix) {
+		writeErr(w, msgType, fmt.Errorf("invalid bearer token"))
+		return
+	}
+	token = strings.TrimPrefix(token, bearerPrefix)
+	ctx := h.Tokens.TokenContext(r.Context(), token)
+
+	// Get responder for message
+	var resp responder
+	var isProtocolStart bool
+	switch protocol {
+	case fdo.DIProtocol:
+		resp = h.DIResponder
+		isProtocolStart = msgType == 10
+	case fdo.TO0Protocol:
+		resp = h.TO0Responder
+		isProtocolStart = msgType == 20
+	case fdo.TO1Protocol:
+		resp = h.TO1Responder
+		isProtocolStart = msgType == 30
+	case fdo.TO2Protocol:
+		resp = h.TO2Responder
+		isProtocolStart = msgType == 60
+	case fdo.AnyProtocol:
+		// Immediately respond to an error
+		if token == "" {
+			return
+		}
+		if err := h.Tokens.InvalidateToken(ctx); err != nil {
+			slog.Warn("invalidating token", "error", err)
+		}
+		return
+	}
+	if resp == nil {
+		writeErr(w, msgType, fmt.Errorf("unsupported message type"))
 		return
 	}
 
+	// Inject token state into context to keep method signatures clean while
+	// allowing some implementations to mutate tokens on every message.
+	if isProtocolStart {
+		initToken, err := h.Tokens.NewToken(ctx, protocol)
+		if err != nil {
+			writeErr(w, msgType, fdo.ErrorMessage{
+				Code:          500,
+				PrevMsgType:   msgType,
+				ErrString:     err.Error(),
+				Timestamp:     time.Now().Unix(),
+				CorrelationID: nil,
+			})
+			return
+		}
+		ctx = h.Tokens.TokenContext(ctx, initToken)
+	}
+
+	if debugEnabled() {
+		h.debugRequest(ctx, w, r, msgType, resp)
+		return
+	}
+	h.handleRequest(ctx, w, r, msgType, resp)
+}
+
+func (h Handler) debugRequest(ctx context.Context, w http.ResponseWriter, r *http.Request, msgType uint8, resp responder) {
 	// Dump request
 	debugReq, _ := httputil.DumpRequest(r, false)
 	var saveBody bytes.Buffer
@@ -53,7 +131,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Dump response
 	rr := httptest.NewRecorder()
-	h.handleRequest(rr, r)
+	h.handleRequest(ctx, rr, r, msgType, resp)
 	debugResp, _ := httputil.DumpResponse(rr.Result(), false)
 	slog.Debug("response", "dump", string(bytes.TrimSpace(debugResp)),
 		"body", tryDebugNotation(rr.Body.Bytes()))
@@ -68,23 +146,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(rr.Body.Bytes())
 }
 
-func (h Handler) handleRequest(w http.ResponseWriter, r *http.Request) {
-	// Parse message type from request URL
-	typ, err := strconv.ParseUint(r.PathValue("msg"), 10, 8)
-	if err != nil {
-		h.error(w, 0, fmt.Errorf("invalid message type"))
-		return
-	}
-	msgType := uint8(typ)
-
-	// Parse request headers
-	token := r.Header.Get("Authorization")
-	if token != "" && !strings.HasPrefix(token, bearerPrefix) {
-		h.error(w, msgType, fmt.Errorf("invalid bearer token"))
-		return
-	}
-	token = strings.TrimPrefix(token, bearerPrefix)
-
+func (h Handler) handleRequest(ctx context.Context, w http.ResponseWriter, r *http.Request, msgType uint8, resp responder) {
 	// Validate content length
 	maxSize := h.MaxContentLength
 	if maxSize == 0 {
@@ -92,12 +154,12 @@ func (h Handler) handleRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	if maxSize > 0 && r.ContentLength > maxSize {
 		_ = r.Body.Close()
-		h.error(w, msgType, fmt.Errorf("content too large (%d bytes)", r.ContentLength))
+		writeErr(w, msgType, fmt.Errorf("content too large (%d bytes)", r.ContentLength))
 		return
 	}
 	if maxSize > 0 && r.ContentLength < 0 {
 		_ = r.Body.Close()
-		h.error(w, msgType, errors.New("content length must be specified in request headers"))
+		writeErr(w, msgType, errors.New("content length must be specified in request headers"))
 		return
 	}
 
@@ -115,16 +177,16 @@ func (h Handler) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 	// Decrypt TO2 messages after 64
 	if 64 < msgType && msgType < fdo.ErrorMsgType {
-		_, sess, err := h.Responder.TO2.Session(r.Context(), token)
+		_, sess, err := resp.(*fdo.TO2Server).Session.XSession(ctx)
 		if err != nil {
-			h.error(w, msgType, err)
+			writeErr(w, msgType, err)
 			return
 		}
 		defer func() { _ = r.Body.Close() }()
 
 		decrypted, err := sess.Decrypt(rand.Reader, msg)
 		if err != nil {
-			h.error(w, msgType, fmt.Errorf("error decrypting message %d: %w", msgType, err))
+			writeErr(w, msgType, fmt.Errorf("error decrypting message %d: %w", msgType, err))
 			return
 		}
 
@@ -136,49 +198,45 @@ func (h Handler) handleRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Handle request message
-	h.writeResponse(r.Context(), w, token, msgType, msg)
+	h.writeResponse(ctx, w, msgType, msg, resp)
 }
 
-func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, token string, msgType uint8, msg io.Reader) {
-	// Immediately respond to an error
-	if msgType == fdo.ErrorMsgType && token != "" {
-		ctx := h.Responder.Tokens.TokenContext(ctx, token)
-		if err := h.Responder.Tokens.InvalidateToken(ctx); err != nil {
-			slog.Warn("invalidating token", "error", err)
-		}
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-
+func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, msgType uint8, msg io.Reader, resp responder) {
 	// Perform business logic of message handling
-	newToken, respType, resp := h.Responder.Respond(ctx, token, msgType, msg)
+	respType, respData := resp.Respond(ctx, msgType, msg)
+	if respType == fdo.ErrorMsgType {
+		if err := h.Tokens.InvalidateToken(ctx); err != nil {
+			slog.Warn("error invalidating token", "error", err)
+		}
+	}
 
 	// Encrypt TO2 messages beginning with 64
 	if 64 < respType && respType < fdo.ErrorMsgType {
-		_, sess, err := h.Responder.TO2.Session(ctx, newToken)
+		_, sess, err := resp.(*fdo.TO2Server).Session.XSession(ctx)
 		if err != nil {
-			h.error(w, msgType, err)
+			writeErr(w, msgType, err)
 			return
 		}
 
 		if debugEnabled() {
-			body, _ := cbor.Marshal(resp)
+			body, _ := cbor.Marshal(respData)
 			slog.Debug("unencrypted response", "msg", respType, "body", tryDebugNotation(body))
 		}
 
-		resp, err = sess.Encrypt(rand.Reader, resp)
+		respData, err = sess.Encrypt(rand.Reader, respData)
 		if err != nil {
-			h.error(w, msgType, fmt.Errorf("error encrypting message %d: %w", respType, err))
+			writeErr(w, msgType, fmt.Errorf("error encrypting message %d: %w", respType, err))
 			return
 		}
 	}
 
 	// Invalidate token when finishing a protocol or erroring
+	newToken, _ := h.Tokens.TokenFromContext(ctx)
 	switch respType {
 	case 13, 32, 71, fdo.ErrorMsgType:
 		if newToken != "" {
-			ctx := h.Responder.Tokens.TokenContext(ctx, newToken)
-			if err := h.Responder.Tokens.InvalidateToken(ctx); err != nil {
+			ctx := h.Tokens.TokenContext(ctx, newToken)
+			if err := h.Tokens.InvalidateToken(ctx); err != nil {
 				slog.Warn("invalidating token", "error", err)
 			}
 		}
@@ -186,8 +244,8 @@ func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, token
 
 	// Marshal response to get size
 	var body bytes.Buffer
-	if err := cbor.NewEncoder(&body).Encode(resp); err != nil {
-		h.error(w, msgType, fmt.Errorf("error marshaling response message %d: %w", respType, err))
+	if err := cbor.NewEncoder(&body).Encode(respData); err != nil {
+		writeErr(w, msgType, fmt.Errorf("error marshaling response message %d: %w", respType, err))
 		return
 	}
 
@@ -199,12 +257,12 @@ func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, token
 	w.WriteHeader(http.StatusOK)
 
 	if _, err := w.Write(body.Bytes()); err != nil {
-		h.error(w, msgType, fmt.Errorf("error writing response message %d: %w", respType, err))
+		writeErr(w, msgType, fmt.Errorf("error writing response message %d: %w", respType, err))
 		return
 	}
 }
 
-func (h Handler) error(w http.ResponseWriter, prevMsgType uint8, err error) {
+func writeErr(w http.ResponseWriter, prevMsgType uint8, err error) {
 	var msg fdo.ErrorMessage
 	if !errors.As(err, &msg) {
 		msg.Code = 500

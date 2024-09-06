@@ -35,7 +35,8 @@ type State struct {
 }
 
 var _ fdo.RendezvousBlobPersistentState = (*State)(nil)
-var _ fdo.VoucherPersistentState = (*State)(nil)
+var _ fdo.ManufacturerVoucherPersistentState = (*State)(nil)
+var _ fdo.OwnerVoucherPersistentState = (*State)(nil)
 var _ fdo.OwnerKeyPersistentState = (*State)(nil)
 
 // NewState initializes the in-memory state.
@@ -65,7 +66,7 @@ func NewState() (*State, error) {
 	}, nil
 }
 
-// NewVoucher creates and stores a new voucher.
+// NewVoucher creates and stores a voucher for a newly initialized device.
 func (s *State) NewVoucher(_ context.Context, ov *fdo.Voucher) error {
 	if s.AutoExtend != nil {
 		keyType := ov.Header.Val.ManufacturerKey.Type
@@ -114,6 +115,12 @@ func (s *State) NewVoucher(_ context.Context, ov *fdo.Voucher) error {
 			s.RVBlobs[ov.Header.Val.GUID] = &sign1
 		}
 	}
+	s.Vouchers[ov.Header.Val.GUID] = ov
+	return nil
+}
+
+// AddVoucher stores the voucher of a device owned by the service.
+func (s *State) AddVoucher(_ context.Context, ov *fdo.Voucher) error {
 	s.Vouchers[ov.Header.Val.GUID] = ov
 	return nil
 }

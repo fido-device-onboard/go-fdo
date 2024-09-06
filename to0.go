@@ -41,7 +41,7 @@ type TO0Client struct {
 
 	// Vouchers is used to lookup the ownership voucher for registering a
 	// rendezvous blob for a given device.
-	Vouchers VoucherPersistentState
+	Vouchers OwnerVoucherPersistentState
 
 	// OwnerKeys are used for signing the rendezvous blob.
 	OwnerKeys OwnerKeyPersistentState
@@ -113,7 +113,7 @@ type to0Ack struct {
 }
 
 // Hello(20) -> HelloAck(21)
-func (s *Server) helloAck(ctx context.Context, msg io.Reader) (*to0Ack, error) {
+func (s *TO0Server) helloAck(ctx context.Context, msg io.Reader) (*to0Ack, error) {
 	var hello struct{}
 	if err := cbor.NewDecoder(msg).Decode(&hello); err != nil {
 		return nil, fmt.Errorf("error decoding TO0.Hello request: %w", err)
@@ -124,7 +124,7 @@ func (s *Server) helloAck(ctx context.Context, msg io.Reader) (*to0Ack, error) {
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return nil, fmt.Errorf("error generating nonce for TO0 sign: %w", err)
 	}
-	if err := s.TO0.SetTO0SignNonce(ctx, nonce); err != nil {
+	if err := s.Session.SetTO0SignNonce(ctx, nonce); err != nil {
 		return nil, fmt.Errorf("error storing nonce for TO0.OwnerSign: %w", err)
 	}
 
@@ -224,7 +224,7 @@ type to0AcceptOwner struct {
 }
 
 // OwnerSign(22) -> AcceptOwner(23)
-func (s *Server) acceptOwner(ctx context.Context, msg io.Reader) (*to0AcceptOwner, error) {
+func (s *TO0Server) acceptOwner(ctx context.Context, msg io.Reader) (*to0AcceptOwner, error) {
 	var sig ownerSign
 	if err := cbor.NewDecoder(msg).Decode(&sig); err != nil {
 		captureErr(ctx, invalidMessageErrCode, "")

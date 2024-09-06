@@ -37,7 +37,8 @@ type AllServerState interface {
 	fdo.TO1SessionState
 	fdo.TO2SessionState
 	fdo.RendezvousBlobPersistentState
-	fdo.VoucherPersistentState
+	fdo.ManufacturerVoucherPersistentState
+	fdo.OwnerVoucherPersistentState
 	fdo.OwnerKeyPersistentState
 }
 
@@ -358,24 +359,20 @@ func RunServerStateSuite(t *testing.T, state AllServerState) {
 			}
 			ctx := state.TokenContext(context.TODO(), token)
 			defer func() { _ = state.InvalidateToken(ctx) }()
-			getToken := func() string {
-				newToken, _ := state.TokenFromContext(ctx)
-				return newToken
-			}
 
 			// Shadow state to limit testable functions
 			var state fdo.TO2SessionState = state
 
 			// Store and retrieve
-			if _, _, err := state.Session(ctx, getToken()); !errors.Is(err, fdo.ErrNotFound) {
+			if _, _, err := state.XSession(ctx); !errors.Is(err, fdo.ErrNotFound) {
 				t.Fatalf("expected ErrNotFound, got %v", err)
 			}
 			suite := kex.ECDH256Suite
 			sess := suite.New([]byte{}, kex.A128GcmCipher)
-			if err := state.SetSession(ctx, suite, sess); err != nil {
+			if err := state.SetXSession(ctx, suite, sess); err != nil {
 				t.Fatal(err)
 			}
-			gotSuite, gotSess, err := state.Session(ctx, getToken())
+			gotSuite, gotSess, err := state.XSession(ctx)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -516,7 +513,7 @@ func RunServerStateSuite(t *testing.T, state AllServerState) {
 		}
 	})
 
-	t.Run("VoucherPersistentState", func(t *testing.T) {
+	t.Run("OwnerVoucherPersistentState", func(t *testing.T) {
 		// Parse ownership voucher from testdata
 		b, err := testdata.Files.ReadFile("ov.pem")
 		if err != nil {
@@ -532,13 +529,13 @@ func RunServerStateSuite(t *testing.T, state AllServerState) {
 		}
 
 		// Shadow state to limit testable functions
-		var state fdo.VoucherPersistentState = state
+		var state fdo.OwnerVoucherPersistentState = state
 
 		// Create and retrieve voucher
 		if _, err := state.Voucher(context.TODO(), ov.Header.Val.GUID); !errors.Is(err, fdo.ErrNotFound) {
 			t.Fatalf("expected ErrNotFound, got %v", err)
 		}
-		if err := state.NewVoucher(context.TODO(), ov); err != nil {
+		if err := state.AddVoucher(context.TODO(), ov); err != nil {
 			t.Fatal(err)
 		}
 		got, err := state.Voucher(context.TODO(), ov.Header.Val.GUID)

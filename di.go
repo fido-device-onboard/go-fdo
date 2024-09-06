@@ -99,7 +99,7 @@ type setCredentialsMsg struct {
 }
 
 // AppStart(10) -> SetCredentials(11)
-func (s *Server) setCredentials(ctx context.Context, msg io.Reader) (*setCredentialsMsg, error) {
+func (s *DIServer) setCredentials(ctx context.Context, msg io.Reader) (*setCredentialsMsg, error) {
 	var appStart struct {
 		DeviceMfgInfo *cbor.Bstr[DeviceMfgInfo]
 	}
@@ -107,7 +107,7 @@ func (s *Server) setCredentials(ctx context.Context, msg io.Reader) (*setCredent
 		return nil, fmt.Errorf("error decoding device manufacturing info: %w", err)
 	}
 	info := appStart.DeviceMfgInfo.Val
-	chain, err := s.DI.NewDeviceCertChain(ctx, info)
+	chain, err := s.Session.NewDeviceCertChain(ctx, info)
 	if err != nil {
 		return nil, fmt.Errorf("error creating device certificate chain: %w", err)
 	}
@@ -134,7 +134,7 @@ func (s *Server) setCredentials(ctx context.Context, msg io.Reader) (*setCredent
 			Value:     certChainHash.Sum(nil),
 		},
 	}
-	if err := s.DI.SetIncompleteVoucherHeader(ctx, ovh); err != nil {
+	if err := s.Session.SetIncompleteVoucherHeader(ctx, ovh); err != nil {
 		return nil, fmt.Errorf("error storing incomplete voucher header: %w", err)
 	}
 	return &setCredentialsMsg{
@@ -184,18 +184,18 @@ func (c *Client) setHmac(ctx context.Context, baseURL string, ovh *VoucherHeader
 }
 
 // SetHMAC(12) -> Done(13)
-func (s *Server) diDone(ctx context.Context, msg io.Reader) (struct{}, error) {
+func (s *DIServer) diDone(ctx context.Context, msg io.Reader) (struct{}, error) {
 	var req struct {
 		Hmac Hmac
 	}
 	if err := cbor.NewDecoder(msg).Decode(&req); err != nil {
 		return struct{}{}, fmt.Errorf("error parsing DI.SetHMAC request: %w", err)
 	}
-	ovh, err := s.DI.IncompleteVoucherHeader(ctx)
+	ovh, err := s.Session.IncompleteVoucherHeader(ctx)
 	if err != nil {
 		return struct{}{}, fmt.Errorf("voucher header not found for session: %w", err)
 	}
-	deviceCertChain, err := s.DI.DeviceCertChain(ctx)
+	deviceCertChain, err := s.Session.DeviceCertChain(ctx)
 	if err != nil {
 		return struct{}{}, fmt.Errorf("device certificate chain not found for session: %w", err)
 	}

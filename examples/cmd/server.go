@@ -140,17 +140,16 @@ func server() error {
 
 func serveHTTP(rvInfo [][]fdo.RvInstruction, state *sqlite.DB) error {
 	// Create FDO responder
-	svc, err := newService(rvInfo, state)
+	handler, err := newHandler(rvInfo, state)
 	if err != nil {
 		return err
 	}
-	svc.OwnerModules = ownerModules
 
 	// Handle messages
-	handler := http.NewServeMux()
-	handler.Handle("POST /fdo/101/msg/{msg}", &transport.Handler{Responder: svc})
+	mux := http.NewServeMux()
+	mux.Handle("POST /fdo/101/msg/{msg}", handler)
 	srv := &http.Server{
-		Handler:           handler,
+		Handler:           mux,
 		ReadHeaderTimeout: 3 * time.Second,
 	}
 
@@ -226,7 +225,7 @@ func mustMarshal(v any) []byte {
 }
 
 //nolint:gocyclo
-func newService(rvInfo [][]fdo.RvInstruction, state *sqlite.DB) (*fdo.Server, error) {
+func newHandler(rvInfo [][]fdo.RvInstruction, state *sqlite.DB) (*transport.Handler, error) {
 	// Auto-register RV blob so that TO1 can be tested
 	if to0Addr == "" && !rvBypass {
 		to1URLs, _ := fdo.BaseHTTP(rvInfo)
@@ -343,16 +342,28 @@ func newService(rvInfo [][]fdo.RvInstruction, state *sqlite.DB) (*fdo.Server, er
 		return nil, err
 	}
 
-	return &fdo.Server{
-		Tokens:    state,
-		DI:        state,
-		TO0:       state,
-		TO1:       state,
-		TO2:       state,
-		RVBlobs:   state,
-		Vouchers:  state,
-		OwnerKeys: state,
-		RvInfo:    rvInfo,
+	return &transport.Handler{
+		Tokens: state,
+		DIResponder: &fdo.DIServer{
+			Session:  state,
+			Vouchers: state,
+			RvInfo:   rvInfo,
+		},
+		TO0Responder: &fdo.TO0Server{
+			Session: state,
+			RVBlobs: state,
+		},
+		TO1Responder: &fdo.TO1Server{
+			Session: state,
+			RVBlobs: state,
+		},
+		TO2Responder: &fdo.TO2Server{
+			Session:      state,
+			Vouchers:     state,
+			OwnerKeys:    state,
+			RvInfo:       rvInfo,
+			OwnerModules: ownerModules,
+		},
 	}, nil
 }
 

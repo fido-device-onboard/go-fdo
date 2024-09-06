@@ -121,13 +121,13 @@ type TO2SessionState interface {
 	// ReplacementHmac retrieves the voucher HMAC to persist at the end of TO2.
 	ReplacementHmac(context.Context) (Hmac, error)
 
-	// SetSession updates the current key exchange/encryption session based on
+	// SetXSession updates the current key exchange/encryption session based on
 	// an opaque "authorization" token.
-	SetSession(context.Context, kex.Suite, kex.Session) error
+	SetXSession(context.Context, kex.Suite, kex.Session) error
 
-	// Session returns the current key exchange/encryption session based on an
+	// XSession returns the current key exchange/encryption session based on an
 	// opaque "authorization" token.
-	Session(context.Context, string) (kex.Suite, kex.Session, error)
+	XSession(context.Context) (kex.Suite, kex.Session, error)
 
 	// SetProveDeviceNonce stores the Nonce used in TO2.ProveDevice for use in
 	// TO2.Done.
@@ -167,11 +167,17 @@ type OwnerKeyPersistentState interface {
 	Signer(KeyType) (crypto.Signer, bool)
 }
 
-// VoucherPersistentState maintains complete voucher state. This state is used
-// in the DI, TO0, TO1, and TO2 protocols.
-type VoucherPersistentState interface {
-	// NewVoucher creates and stores a new voucher.
+// ManufacturerVoucherPersistentState maintains vouchers created during DI
+// which have not yet been extended.
+type ManufacturerVoucherPersistentState interface {
+	// NewVoucher creates and stores a voucher for a newly initialized device.
 	NewVoucher(context.Context, *Voucher) error
+}
+
+// OwnerVoucherPersistentState maintains vouchers owned by the service.
+type OwnerVoucherPersistentState interface {
+	// AddVoucher stores the voucher of a device owned by the service.
+	AddVoucher(context.Context, *Voucher) error
 
 	// ReplaceVoucher stores a new voucher, possibly deleting or marking the
 	// previous voucher as replaced.
