@@ -18,6 +18,7 @@ import (
 // DeviceModule adapts an executable plugin to the internal module interface.
 type DeviceModule struct {
 	Module
+	Name string
 
 	once  sync.Once
 	proto *protocol
@@ -45,12 +46,12 @@ func (m *DeviceModule) Transition(active bool) error {
 }
 
 // Receive implements serviceinfo.DeviceModule.
-func (m *DeviceModule) Receive(ctx context.Context, moduleName, messageName string, messageBody io.Reader, respond func(message string) io.Writer, yield func()) error {
+func (m *DeviceModule) Receive(ctx context.Context, messageName string, messageBody io.Reader, respond func(message string) io.Writer, yield func()) error {
 	if m.proto == nil {
 		return errors.New("plugin module not activated")
 	}
 
-	name := moduleName + ":" + messageName
+	name := m.Name + ":" + messageName
 
 	// Decode CBOR and encode to plugin protocol
 	var val interface{}

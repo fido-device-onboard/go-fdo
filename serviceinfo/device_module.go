@@ -65,7 +65,7 @@ type DeviceModule interface {
 	// For manual chunking using yield, it may be desirable to know the MTU.
 	// The full negotiated MTU (not the current space left from the MTU) can be
 	// acquired from `ctx.Value(serviceinfo.MTUKey{}).(uint16)`.
-	Receive(ctx context.Context, moduleName, messageName string, messageBody io.Reader, respond func(message string) io.Writer, yield func()) error
+	Receive(ctx context.Context, messageName string, messageBody io.Reader, respond func(message string) io.Writer, yield func()) error
 
 	// Yield indicates that all service info key value pairs have been received
 	// from the owner module, possibly across multiple messages with
@@ -89,7 +89,7 @@ var _ DeviceModule = (*UnknownModule)(nil)
 func (m UnknownModule) Transition(bool) error { return nil }
 
 // Receive implements DeviceModule.
-func (m UnknownModule) Receive(_ context.Context, _, _ string, messageBody io.Reader, _ func(string) io.Writer, _ func()) error {
+func (m UnknownModule) Receive(_ context.Context, _ string, messageBody io.Reader, _ func(string) io.Writer, _ func()) error {
 	// Ignore message and drain the body
 	_, _ = io.Copy(io.Discard, messageBody)
 	return nil

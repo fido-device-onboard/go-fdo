@@ -160,7 +160,7 @@ func handleOwnerModuleMessage(ctx context.Context, mod serviceinfo.DeviceModule,
 	}
 
 	// Handle message
-	if err := mod.Receive(ctx, moduleName, messageName, messageBody, respond, yield); err != nil {
+	if err := mod.Receive(ctx, messageName, messageBody, respond, yield); err != nil {
 		return err
 	}
 

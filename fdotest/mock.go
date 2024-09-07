@@ -17,7 +17,7 @@ import (
 // MockDeviceModule implements a trivial serviceinfo.DeviceModule.
 type MockDeviceModule struct {
 	ActiveState bool
-	ReceiveFunc func(ctx context.Context, moduleName, messageName string, messageBody io.Reader, respond func(message string) io.Writer, yield func()) error
+	ReceiveFunc func(ctx context.Context, messageName string, messageBody io.Reader, respond func(message string) io.Writer, yield func()) error
 	YieldFunc   func(ctx context.Context, respond func(message string) io.Writer, yield func()) error
 }
 
@@ -30,9 +30,9 @@ func (m *MockDeviceModule) Transition(active bool) error {
 }
 
 // Receive implements serviceinfo.DeviceModule.
-func (m *MockDeviceModule) Receive(ctx context.Context, moduleName, messageName string, messageBody io.Reader, respond func(message string) io.Writer, yield func()) error {
+func (m *MockDeviceModule) Receive(ctx context.Context, messageName string, messageBody io.Reader, respond func(message string) io.Writer, yield func()) error {
 	if m.ReceiveFunc != nil {
-		return m.ReceiveFunc(ctx, moduleName, messageName, messageBody, respond, yield)
+		return m.ReceiveFunc(ctx, messageName, messageBody, respond, yield)
 	}
 	return nil
 }

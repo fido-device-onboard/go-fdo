@@ -79,7 +79,10 @@ func TestDownloadDevicePlugin(t *testing.T) {
 
 	downloadDeviceCmd := exec.Command("./download_device.bash", "testdata/downloads")
 	downloadDeviceCmd.Stderr = fdotest.TestingLog(t)
-	downloadDevicePlugin := &plugin.DeviceModule{Module: plugin.NewCommandPluginModule(downloadDeviceCmd)}
+	downloadDevicePlugin := &plugin.DeviceModule{
+		Module: plugin.NewCommandPluginModule(downloadDeviceCmd),
+		Name:   "fdo.download",
+	}
 
 	fdotest.RunClientTestSuite(t, nil, map[string]serviceinfo.DeviceModule{
 		"fdo.download": downloadDevicePlugin,
@@ -138,7 +141,10 @@ func TestDevmodPlugin(t *testing.T) {
 		expected.MudURL,
 	)
 	devmodCmd.Stderr = fdotest.TestingLog(t)
-	devmodPlugin := &plugin.DeviceModule{Module: plugin.NewCommandPluginModule(devmodCmd)}
+	devmodPlugin := &plugin.DeviceModule{
+		Module: plugin.NewCommandPluginModule(devmodCmd),
+		Name:   "devmod",
+	}
 
 	var got fdo.Devmod
 

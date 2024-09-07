@@ -29,15 +29,15 @@ var _ serviceinfo.DeviceModule = (*Upload)(nil)
 func (u *Upload) Transition(active bool) error { u.reset(); return nil }
 
 // Receive implements serviceinfo.DeviceModule.
-func (u *Upload) Receive(ctx context.Context, moduleName, messageName string, messageBody io.Reader, respond func(string) io.Writer, yield func()) error {
-	if err := u.receive(moduleName, messageName, messageBody, respond, yield); err != nil {
+func (u *Upload) Receive(ctx context.Context, messageName string, messageBody io.Reader, respond func(string) io.Writer, yield func()) error {
+	if err := u.receive(messageName, messageBody, respond, yield); err != nil {
 		u.reset()
 		return err
 	}
 	return nil
 }
 
-func (u *Upload) receive(moduleName, messageName string, messageBody io.Reader, respond func(string) io.Writer, yield func()) error {
+func (u *Upload) receive(messageName string, messageBody io.Reader, respond func(string) io.Writer, yield func()) error {
 	switch messageName {
 	case "name":
 		var name string
@@ -54,7 +54,7 @@ func (u *Upload) receive(moduleName, messageName string, messageBody io.Reader, 
 
 	default:
 		u.reset()
-		return fmt.Errorf("unknown message %s:%s", moduleName, messageName)
+		return fmt.Errorf("unknown message %s", messageName)
 	}
 }
 

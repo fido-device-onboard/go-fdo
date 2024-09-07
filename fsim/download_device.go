@@ -55,15 +55,15 @@ func (d *Download) Transition(active bool) error {
 }
 
 // Receive implements serviceinfo.DeviceModule.
-func (d *Download) Receive(ctx context.Context, moduleName, messageName string, messageBody io.Reader, respond func(string) io.Writer, yield func()) error {
-	if err := d.receive(moduleName, messageName, messageBody, respond); err != nil {
+func (d *Download) Receive(ctx context.Context, messageName string, messageBody io.Reader, respond func(string) io.Writer, yield func()) error {
+	if err := d.receive(messageName, messageBody, respond); err != nil {
 		d.reset()
 		return err
 	}
 	return nil
 }
 
-func (d *Download) receive(moduleName, messageName string, messageBody io.Reader, respond func(string) io.Writer) error {
+func (d *Download) receive(messageName string, messageBody io.Reader, respond func(string) io.Writer) error {
 	switch messageName {
 	case "length":
 		return cbor.NewDecoder(messageBody).Decode(&d.length)
@@ -108,7 +108,7 @@ func (d *Download) receive(moduleName, messageName string, messageBody io.Reader
 		}
 
 	default:
-		return fmt.Errorf("unknown message %s:%s", moduleName, messageName)
+		return fmt.Errorf("unknown message %s", messageName)
 	}
 }
 

@@ -28,7 +28,7 @@ func TestClient(t *testing.T) {
 
 func TestClientWithMockModule(t *testing.T) {
 	deviceModule := &fdotest.MockDeviceModule{
-		ReceiveFunc: func(ctx context.Context, moduleName, messageName string, messageBody io.Reader, respond func(message string) io.Writer, yield func()) error {
+		ReceiveFunc: func(ctx context.Context, messageName string, messageBody io.Reader, respond func(message string) io.Writer, yield func()) error {
 			_, _ = io.Copy(io.Discard, messageBody)
 			return nil
 		},
@@ -60,7 +60,7 @@ func TestClientWithMockModule(t *testing.T) {
 
 func TestClientWithMockModuleAndAutoUnchunking(t *testing.T) {
 	deviceModule := &fdotest.MockDeviceModule{
-		ReceiveFunc: func(ctx context.Context, moduleName, messageName string, messageBody io.Reader, respond func(message string) io.Writer, yield func()) error {
+		ReceiveFunc: func(ctx context.Context, messageName string, messageBody io.Reader, respond func(message string) io.Writer, yield func()) error {
 			var v any
 			return cbor.NewDecoder(messageBody).Decode(&v)
 		},
@@ -103,7 +103,7 @@ func TestClientWithMockModuleAndAutoUnchunking(t *testing.T) {
 func TestClientWithCustomDevmod(t *testing.T) {
 	t.Run("Incomplete devmod", func(t *testing.T) {
 		customDevmod := &fdotest.MockDeviceModule{
-			ReceiveFunc: func(ctx context.Context, moduleName, messageName string, messageBody io.Reader, respond func(message string) io.Writer, yield func()) error {
+			ReceiveFunc: func(ctx context.Context, messageName string, messageBody io.Reader, respond func(message string) io.Writer, yield func()) error {
 				_, _ = io.Copy(io.Discard, messageBody)
 				return nil
 			},
@@ -143,7 +143,7 @@ func TestClientWithCustomDevmod(t *testing.T) {
 
 	t.Run("Valid devmod", func(t *testing.T) {
 		customDevmod := &fdotest.MockDeviceModule{
-			ReceiveFunc: func(ctx context.Context, moduleName, messageName string, messageBody io.Reader, respond func(message string) io.Writer, yield func()) error {
+			ReceiveFunc: func(ctx context.Context, messageName string, messageBody io.Reader, respond func(message string) io.Writer, yield func()) error {
 				_, _ = io.Copy(io.Discard, messageBody)
 				return nil
 			},
