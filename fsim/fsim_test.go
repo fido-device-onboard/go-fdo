@@ -6,16 +6,21 @@ package fsim_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha512"
 	"crypto/x509"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"iter"
 	"log"
+	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
@@ -34,6 +39,23 @@ func TestClient(t *testing.T) {
 	}
 
 	data := bytes.Repeat([]byte("Hello World!\n"), 1024)
+	sum := sha512.Sum384(data)
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lis.Close() }()
+
+	srv := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.ServeContent(w, r, "wget.test", time.Now(), bytes.NewReader(data))
+		}),
+		ReadHeaderTimeout: 3 * time.Second,
+	}
+
+	errc := make(chan error)
+	go func() { errc <- srv.Serve(lis) }()
 
 	fdotest.RunClientTestSuite(t, nil, map[string]serviceinfo.DeviceModule{
 		"fdo.download": &fsim.Download{
@@ -51,6 +73,15 @@ func TestClient(t *testing.T) {
 				Mode: 0777,
 			},
 		}},
+		"fdo.wget": &fsim.Wget{
+			CreateTemp: func() (*os.File, error) {
+				return os.CreateTemp("testdata", "fdo.wget_*")
+			},
+			NameToPath: func(name string) string {
+				return filepath.Join("testdata", "downloads", name)
+			},
+			Timeout: 10 * time.Second,
+		},
 	}, func(ctx context.Context, replacementGUID fdo.GUID, info string, chain []*x509.Certificate, devmod fdo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 		return func(yield func(string, serviceinfo.OwnerModule) bool) {
 			if !yield("fdo.download", &fsim.DownloadContents[*bytes.Reader]{
@@ -67,6 +98,19 @@ func TestClient(t *testing.T) {
 				CreateTemp: func() (*os.File, error) {
 					return os.CreateTemp("testdata", "fdo.upload_*")
 				},
+			}) {
+				return
+			}
+
+			if !yield("fdo.wget", &fsim.WgetCommand{
+				Name: "wget.test",
+				URL: &url.URL{
+					Scheme: "http",
+					Host:   lis.Addr().String(),
+					Path:   "/file",
+				},
+				Length:   int64(len(data)),
+				Checksum: sum[:],
 			}) {
 				return
 			}
@@ -87,6 +131,21 @@ func TestClient(t *testing.T) {
 	}
 	if !bytes.Equal(uploadContents, data) {
 		t.Fatal("upload contents did not match expected")
+	}
+	wgetContents, err := os.ReadFile("testdata/downloads/wget.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(wgetContents, data) {
+		t.Fatal("upload contents did not match expected")
+	}
+
+	// Shutdown file server and wait
+	if err := srv.Shutdown(context.TODO()); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-errc; err != http.ErrServerClosed {
+		t.Fatal(err)
 	}
 }
 
