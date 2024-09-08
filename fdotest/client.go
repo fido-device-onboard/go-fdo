@@ -83,16 +83,16 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 			Vouchers:  state,
 			OwnerKeys: state,
 			RvInfo:    nil, // TODO:
-			OwnerModules: func(ctx context.Context, replacementGUID fdo.GUID, info string, chain []*x509.Certificate, devmod fdo.Devmod, supportedMods []string) iter.Seq[serviceinfo.OwnerModule] {
+			OwnerModules: func(ctx context.Context, replacementGUID fdo.GUID, info string, chain []*x509.Certificate, devmod fdo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 				if ownerModules == nil {
-					return func(yield func(serviceinfo.OwnerModule) bool) {}
+					return func(yield func(string, serviceinfo.OwnerModule) bool) {}
 				}
 
 				mods := ownerModules(ctx, replacementGUID, info, chain, devmod, supportedMods)
-				return func(yield func(serviceinfo.OwnerModule) bool) {
+				return func(yield func(string, serviceinfo.OwnerModule) bool) {
 					for modName, mod := range mods {
 						if slices.Contains(supportedMods, modName) {
-							if !yield(mod) {
+							if !yield(modName, mod) {
 								return
 							}
 						}

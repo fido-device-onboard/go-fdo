@@ -293,11 +293,7 @@ type devmodOwnerModule struct {
 	done       bool
 }
 
-func (d *devmodOwnerModule) HandleInfo(ctx context.Context, moduleName, messageName string, messageBody io.Reader) error {
-	if moduleName != devmodModuleName {
-		return fmt.Errorf("device must only send devmod as the first module: got %s:%s", moduleName, messageName)
-	}
-
+func (d *devmodOwnerModule) HandleInfo(ctx context.Context, messageName string, messageBody io.Reader) error {
 	switch messageName {
 	case "active":
 		var ignore bool

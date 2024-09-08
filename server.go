@@ -154,10 +154,10 @@ type TO2Server struct {
 	RvInfo [][]RvInstruction
 
 	// Create an iterator of service info modules for a given device
-	OwnerModules func(ctx context.Context, replacementGUID GUID, info string, chain []*x509.Certificate, devmod Devmod, modules []string) iter.Seq[serviceinfo.OwnerModule]
+	OwnerModules func(ctx context.Context, replacementGUID GUID, info string, chain []*x509.Certificate, devmod Devmod, modules []string) iter.Seq2[string, serviceinfo.OwnerModule]
 
 	// Server affinity state
-	nextModule func() (serviceinfo.OwnerModule, bool)
+	nextModule func() (string, serviceinfo.OwnerModule, bool)
 	stop       func()
 	plugins    []plugin.Module
 

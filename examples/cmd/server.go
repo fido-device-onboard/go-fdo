@@ -367,8 +367,8 @@ func newHandler(rvInfo [][]fdo.RvInstruction, state *sqlite.DB) (*transport.Hand
 	}, nil
 }
 
-func ownerModules(ctx context.Context, guid fdo.GUID, info string, chain []*x509.Certificate, devmod fdo.Devmod, modules []string) iter.Seq[serviceinfo.OwnerModule] {
-	return func(yield func(serviceinfo.OwnerModule) bool) {
+func ownerModules(ctx context.Context, guid fdo.GUID, info string, chain []*x509.Certificate, devmod fdo.Devmod, modules []string) iter.Seq2[string, serviceinfo.OwnerModule] {
+	return func(yield func(string, serviceinfo.OwnerModule) bool) {
 		if slices.Contains(modules, "fdo.download") {
 			for _, name := range downloads {
 				f, err := os.Open(filepath.Clean(name))
@@ -377,7 +377,7 @@ func ownerModules(ctx context.Context, guid fdo.GUID, info string, chain []*x509
 				}
 				defer func() { _ = f.Close() }()
 
-				if !yield(&fsim.DownloadContents[*os.File]{
+				if !yield("fdo.download", &fsim.DownloadContents[*os.File]{
 					Name:         name,
 					Contents:     f,
 					MustDownload: true,
@@ -389,7 +389,7 @@ func ownerModules(ctx context.Context, guid fdo.GUID, info string, chain []*x509
 
 		if slices.Contains(modules, "fdo.upload") {
 			for _, name := range uploadReqs {
-				if !yield(&fsim.UploadRequest{
+				if !yield("fdo.upload", &fsim.UploadRequest{
 					Dir:  uploadDir,
 					Name: name,
 				}) {

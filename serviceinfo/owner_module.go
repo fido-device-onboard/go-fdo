@@ -12,7 +12,7 @@ import (
 type OwnerModule interface {
 	// HandleInfo is called once for each service info KV received from the
 	// device.
-	HandleInfo(ctx context.Context, moduleName, messageName string, messageBody io.Reader) error
+	HandleInfo(ctx context.Context, messageName string, messageBody io.Reader) error
 
 	// ProduceInfo is called once for each TO2.DeviceServiceInfo, after
 	// HandleInfo is called for each service info KV, unless the device
@@ -29,13 +29,15 @@ type OwnerModule interface {
 // Producer allows an owner service info module to produce service info either
 // with auto-chunking (not yet implemented) or manually.
 type Producer struct {
-	mtu  uint16
-	info []*KV
+	moduleName string
+	mtu        uint16
+	info       []*KV
 }
 
 // NewProducer creates a new producer instance for the given MTU.
-func NewProducer(mtu uint16) *Producer {
+func NewProducer(moduleName string, mtu uint16) *Producer {
 	return &Producer{
+		moduleName: moduleName,
 		// 3 bytes are used by the CBOR message:
 		//
 		//   - 1 byte for "array of 3"
@@ -49,16 +51,16 @@ func NewProducer(mtu uint16) *Producer {
 // If the next service info will not fit in the remaining bytes, then the
 // module should return and on the next ProduceInfo the full MTU will be
 // available.
-func (p *Producer) Available(moduleName, messageName string) int {
-	return int(p.mtu) - int(ArraySizeCBOR(append(p.info, &KV{Key: moduleName + ":" + messageName}))) +
+func (p *Producer) Available(messageName string) int {
+	return int(p.mtu) - int(ArraySizeCBOR(append(p.info, &KV{Key: p.moduleName + ":" + messageName}))) +
 		1 // 1 represents overcounting the size of the last KV, because the Val will be 1 byte
 }
 
 // WriteChunk queues a single service info. If messageBody is larger than the
 // bytes available, WriteChunk will fail and no service info will be queued.
-func (p *Producer) WriteChunk(moduleName, messageName string, messageBody []byte) error {
+func (p *Producer) WriteChunk(messageName string, messageBody []byte) error {
 	p.info = append(p.info, &KV{
-		Key: moduleName + ":" + messageName,
+		Key: p.moduleName + ":" + messageName,
 		Val: messageBody,
 	})
 	return nil
@@ -67,7 +69,7 @@ func (p *Producer) WriteChunk(moduleName, messageName string, messageBody []byte
 // AutoChunk writes one or more service info. When the MTU is exceeded...
 // TODO: How to queue unsent service info chunks? What about non-affinity?
 //
-// func (p *Producer) AutoChunk(moduleName, messageName string) io.Writer
+// func (p *Producer) AutoChunk(messageName string) io.Writer
 
 // ServiceInfo returns all ServiceInfo, guaranteed to fit within the MTU.
 func (p *Producer) ServiceInfo() []*KV { return p.info }

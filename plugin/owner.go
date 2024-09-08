@@ -30,8 +30,8 @@ var _ serviceinfo.OwnerModule = (*OwnerModule)(nil)
 // HandleInfo implements serviceinfo.OwnerModule.
 //
 // TODO: Allow plugin to declare maximum chunk size?
-func (m *OwnerModule) HandleInfo(ctx context.Context, moduleName, messageName string, messageBody io.Reader) error {
-	name := moduleName + ":" + messageName
+func (m *OwnerModule) HandleInfo(ctx context.Context, messageName string, messageBody io.Reader) error {
+	name := m.name + ":" + messageName
 
 	// Decode CBOR and encode to plugin protocol
 	var val interface{}
@@ -90,8 +90,8 @@ func (m *OwnerModule) ProduceInfo(ctx context.Context, producer *serviceinfo.Pro
 			return false, false, fmt.Errorf("plugin error: %s", param)
 
 		case dKey:
-			moduleName, messageName := m.name, param.(string)
-			if err := m.decodeAndProduce(moduleName, messageName, producer); err != nil {
+			messageName := param.(string)
+			if err := m.decodeAndProduce(messageName, producer); err != nil {
 				return false, false, err
 			}
 
@@ -101,7 +101,7 @@ func (m *OwnerModule) ProduceInfo(ctx context.Context, producer *serviceinfo.Pro
 	}
 }
 
-func (m *OwnerModule) decodeAndProduce(moduleName, messageName string, producer *serviceinfo.Producer) error {
+func (m *OwnerModule) decodeAndProduce(messageName string, producer *serviceinfo.Producer) error {
 	val, err := m.proto.DecodeValue()
 	if err != nil {
 		return err
@@ -112,11 +112,11 @@ func (m *OwnerModule) decodeAndProduce(moduleName, messageName string, producer 
 		return err
 	}
 
-	if len(messageBody) > producer.Available(moduleName, messageName) {
+	if len(messageBody) > producer.Available(messageName) {
 		return errors.New("plugin produced a message too large to send")
 	}
 
-	if err := producer.WriteChunk(moduleName, messageName, messageBody); err != nil {
+	if err := producer.WriteChunk(messageName, messageBody); err != nil {
 		return err
 	}
 

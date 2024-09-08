@@ -764,24 +764,24 @@ func (s *TO2Server) ownerServiceInfoReady(ctx context.Context, msg io.Reader) (*
 
 	// Initialize service info modules
 	s.plugins = nil
-	s.nextModule, s.stop = iter.Pull(func() iter.Seq[serviceinfo.OwnerModule] {
+	s.nextModule, s.stop = iter.Pull2(func() iter.Seq2[string, serviceinfo.OwnerModule] {
 		var devmod devmodOwnerModule
-		var ownerModules iter.Seq[serviceinfo.OwnerModule]
+		var ownerModules iter.Seq2[string, serviceinfo.OwnerModule]
 
-		return func(yield func(serviceinfo.OwnerModule) bool) {
+		return func(yield func(string, serviceinfo.OwnerModule) bool) {
 			if ownerModules == nil {
-				if !yield(&devmod) {
+				if !yield(devmodModuleName, &devmod) {
 					return
 				}
 				ownerModules = s.OwnerModules(ctx, replacementGUID, info, deviceCertChain, devmod.Devmod, devmod.Modules)
 			}
 
-			ownerModules(func(mod serviceinfo.OwnerModule) bool {
+			ownerModules(func(moduleName string, mod serviceinfo.OwnerModule) bool {
 				if p, ok := mod.(plugin.Module); ok {
 					// Collect plugins before yielding the module
 					s.plugins = append(s.plugins, p)
 				}
-				return yield(mod)
+				return yield(moduleName, mod)
 			})
 		}
 	}())
@@ -1053,7 +1053,7 @@ func (s *TO2Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*owner
 	}
 
 	// Get next owner service info module
-	mod, ok := s.nextModule()
+	moduleName, mod, ok := s.nextModule()
 	if !ok {
 		return &ownerServiceInfo{
 			IsMoreServiceInfo: false,
@@ -1078,7 +1078,7 @@ func (s *TO2Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*owner
 			break
 		}
 		moduleName, messageName, _ := strings.Cut(key, ":")
-		if err := mod.HandleInfo(ctx, moduleName, messageName, messageBody); err != nil {
+		if err := mod.HandleInfo(ctx, messageName, messageBody); err != nil {
 			return nil, fmt.Errorf("error handling device service info %q: %w", key, err)
 		}
 		if n, err := io.Copy(io.Discard, messageBody); err != nil {
@@ -1094,7 +1094,7 @@ func (s *TO2Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*owner
 	}
 
 	if deviceInfo.IsMoreServiceInfo {
-		s.continueWithModule(mod)
+		s.continueWithModule(moduleName, mod)
 
 		return &ownerServiceInfo{
 			IsMoreServiceInfo: false,
@@ -1103,26 +1103,26 @@ func (s *TO2Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*owner
 		}, nil
 	}
 
-	return s.produceOwnerServiceInfo(ctx, mod)
+	return s.produceOwnerServiceInfo(ctx, moduleName, mod)
 }
 
 // Override nextModule so that the same module is used in the next round
-func (s *TO2Server) continueWithModule(mod serviceinfo.OwnerModule) {
+func (s *TO2Server) continueWithModule(moduleName string, mod serviceinfo.OwnerModule) {
 	nextModule := s.nextModule
-	s.nextModule = func() (serviceinfo.OwnerModule, bool) {
+	s.nextModule = func() (string, serviceinfo.OwnerModule, bool) {
 		s.nextModule = nextModule
-		return mod, true
+		return moduleName, mod, true
 	}
 }
 
 // Allow owner module to produce data
-func (s *TO2Server) produceOwnerServiceInfo(ctx context.Context, mod serviceinfo.OwnerModule) (*ownerServiceInfo, error) {
+func (s *TO2Server) produceOwnerServiceInfo(ctx context.Context, moduleName string, mod serviceinfo.OwnerModule) (*ownerServiceInfo, error) {
 	mtu, err := s.Session.MTU(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error getting max device service info size: %w", err)
 	}
 
-	producer := serviceinfo.NewProducer(mtu)
+	producer := serviceinfo.NewProducer(moduleName, mtu)
 	explicitBlock, isComplete, err := mod.ProduceInfo(ctx, producer)
 	if err != nil {
 		return nil, fmt.Errorf("error producing owner service info from module: %w", err)
@@ -1134,7 +1134,7 @@ func (s *TO2Server) produceOwnerServiceInfo(ctx context.Context, mod serviceinfo
 
 	// If module is not yet complete, override nextModule to return it again
 	if !isComplete {
-		s.continueWithModule(mod)
+		s.continueWithModule(moduleName, mod)
 	}
 
 	// Return chunked data

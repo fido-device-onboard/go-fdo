@@ -53,22 +53,19 @@ type UploadRequest struct {
 var _ serviceinfo.OwnerModule = (*UploadRequest)(nil)
 
 // HandleInfo implements serviceinfo.OwnerModule.
-func (u *UploadRequest) HandleInfo(ctx context.Context, moduleName, messageName string, messageBody io.Reader) error {
-	if moduleName != fdoUploadModule {
-		return fmt.Errorf("invalid module name %q, expected %q", moduleName, fdoUploadModule)
-	}
+func (u *UploadRequest) HandleInfo(ctx context.Context, messageName string, messageBody io.Reader) error {
 	switch messageName {
 	case "active":
 		// TODO: Check that active is true
 		var ignore bool
 		if err := cbor.NewDecoder(messageBody).Decode(&ignore); err != nil {
-			return fmt.Errorf("error decoding message %s:%s: %w", moduleName, messageName, err)
+			return fmt.Errorf("error decoding message %s:%s: %w", fdoUploadModule, messageName, err)
 		}
 		return nil
 
 	case "length":
 		if err := cbor.NewDecoder(messageBody).Decode(&u.length); err != nil {
-			return fmt.Errorf("error decoding message %s:%s: %w", moduleName, messageName, err)
+			return fmt.Errorf("error decoding message %s:%s: %w", fdoUploadModule, messageName, err)
 		}
 		return nil
 
@@ -92,7 +89,7 @@ func (u *UploadRequest) HandleInfo(ctx context.Context, moduleName, messageName 
 			if err := cbor.NewDecoder(messageBody).Decode(&chunk); errors.Is(err, io.EOF) {
 				break
 			} else if err != nil {
-				return fmt.Errorf("error decoding message %s:%s: %w", moduleName, messageName, err)
+				return fmt.Errorf("error decoding message %s:%s: %w", fdoUploadModule, messageName, err)
 			}
 			n, err := io.MultiWriter(u.temp, u.hash).Write(chunk)
 			if err != nil {
@@ -104,7 +101,7 @@ func (u *UploadRequest) HandleInfo(ctx context.Context, moduleName, messageName 
 
 	case "sha-384":
 		if err := cbor.NewDecoder(messageBody).Decode(&u.sha384); err != nil {
-			return fmt.Errorf("error decoding message %s:%s: %w", moduleName, messageName, err)
+			return fmt.Errorf("error decoding message %s:%s: %w", fdoUploadModule, messageName, err)
 		}
 		return nil
 
@@ -125,8 +122,6 @@ func (u *UploadRequest) ProduceInfo(ctx context.Context, producer *serviceinfo.P
 }
 
 func (u *UploadRequest) request(producer *serviceinfo.Producer) (blockPeer, moduleDone bool, _ error) {
-	const moduleName = "fdo.upload"
-
 	// Marshal message bodies
 	trueBody, err := cbor.Marshal(true)
 	if err != nil {
@@ -138,13 +133,13 @@ func (u *UploadRequest) request(producer *serviceinfo.Producer) (blockPeer, modu
 	}
 
 	// Send upload messages
-	if err := producer.WriteChunk(moduleName, "active", trueBody); err != nil {
+	if err := producer.WriteChunk("active", trueBody); err != nil {
 		return false, false, err
 	}
-	if err := producer.WriteChunk(moduleName, "need-sha", trueBody); err != nil {
+	if err := producer.WriteChunk("need-sha", trueBody); err != nil {
 		return false, false, err
 	}
-	if err := producer.WriteChunk(moduleName, "name", nameBody); err != nil {
+	if err := producer.WriteChunk("name", nameBody); err != nil {
 		return false, false, err
 	}
 

@@ -47,16 +47,16 @@ func (m *MockDeviceModule) Yield(ctx context.Context, respond func(message strin
 
 // MockOwnerModule implements a trivial serviceinfo.OwnerModule.
 type MockOwnerModule struct {
-	HandleInfoFunc  func(ctx context.Context, moduleName, messageName string, messageBody io.Reader) error
+	HandleInfoFunc  func(ctx context.Context, messageName string, messageBody io.Reader) error
 	ProduceInfoFunc func(ctx context.Context, producer *serviceinfo.Producer) (blockPeer, moduleDone bool, _ error)
 }
 
 var _ serviceinfo.OwnerModule = (*MockOwnerModule)(nil)
 
 // HandleInfo implements serviceinfo.OwnerModule.
-func (m *MockOwnerModule) HandleInfo(ctx context.Context, moduleName, messageName string, messageBody io.Reader) error {
+func (m *MockOwnerModule) HandleInfo(ctx context.Context, messageName string, messageBody io.Reader) error {
 	if m.HandleInfoFunc != nil {
-		return m.HandleInfoFunc(ctx, moduleName, messageName, messageBody)
+		return m.HandleInfoFunc(ctx, messageName, messageBody)
 	}
 	return nil
 }
