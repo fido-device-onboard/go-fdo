@@ -811,8 +811,6 @@ func (c *Client) exchangeServiceInfo(ctx context.Context,
 	deviceModules map[string]serviceinfo.DeviceModule,
 	session kex.Session,
 ) error {
-	defer func() { _ = initInfo.Close() }()
-
 	// Shadow context to ensure that any goroutines still running after this
 	// function exits will shutdown
 	ctx, cancel := context.WithCancel(ctx)
@@ -831,51 +829,65 @@ func (c *Client) exchangeServiceInfo(ctx context.Context,
 
 	// Send initial device info (devmod)
 	totalRounds, done, err := c.exchangeServiceInfoRound(ctx, baseURL, mtu, initInfo, ownerInfoIn, session)
+	_ = initInfo.Close()
 	if err != nil {
 		return fmt.Errorf("error sending devmod: %w", err)
 	}
-
-	// Limit to 1e6 (1 million) rounds and fail TO2 if exceeded
+	if err := ownerInfoIn.Close(); err != nil {
+		return fmt.Errorf("error closing owner service info -> device module pipe: %w", err)
+	}
 	if totalRounds >= 1_000_000 {
 		return fmt.Errorf("exceeded 1e6 rounds of service info exchange")
+	}
+	if done {
+		return c.done(ctx, baseURL, proveDvNonce, setupDvNonce, session)
 	}
 
 	// Track active modules
 	modules := deviceModuleMap{modules: deviceModules, active: make(map[string]bool)}
 
-	// NOTE: done never changes, this is just to skip if devmod took 1e6 rounds
-	for !done {
+	var prevModuleName string
+	for {
 		// Handle received owner service info and produce zero or more service
 		// info to send. Each service info grouping is automatically chunked
 		// and if it exceeds the MTU will have IsMoreServiceInfo=true.
-		deviceInfoChan := make(chan *serviceinfo.ChunkReader)
+		//
+		// 1000 service info buffered in and out means up to ~1MB of data for
+		// the default MTU. If both queues fill, the device will deadlock. This
+		// should only happen for a poorly behaved owner module.
+		deviceInfo, deviceInfoIn := serviceinfo.NewChunkOutPipe(1000)
 		ctxWithMTU := context.WithValue(ctx, serviceinfo.MTUKey{}, mtu)
-		go handleOwnerModuleMessages(ctxWithMTU, modules, ownerInfo, deviceInfoChan)
+		// Track the owner module in use so that if the next round has no data
+		// exchanged, we can still yield to the appropriate device module.
+		moduleName := make(chan string)
+		go func() {
+			select {
+			case <-ctx.Done():
+			case moduleName <- handleOwnerModuleMessages(ctxWithMTU, prevModuleName, modules, ownerInfo, deviceInfoIn):
+			}
+		}()
 
 		// Send all device service info and receive all owner service info into
 		// a buffered pipe. Note that if >1000 service info are received from
 		// the owner service without it allowing the device to respond, the
 		// device will deadlock.
-		ownerInfo, ownerInfoIn = serviceinfo.NewChunkInPipe(1000)
-		deviceInfo, ok := <-deviceInfoChan
-		if !ok {
-			noInfo, noInfoIn := serviceinfo.NewChunkOutPipe(0)
-			_ = noInfoIn.Close()
-			deviceInfo = noInfo
-		}
+		nextOwnerInfo, ownerInfoIn := serviceinfo.NewChunkInPipe(1000)
 		rounds, done, err := c.exchangeServiceInfoRound(ctx, baseURL, mtu, deviceInfo, ownerInfoIn, session)
 		if err != nil {
+			_ = ownerInfoIn.CloseWithError(err)
 			return err
 		}
-		totalRounds += rounds
-
-		if done {
-			break
+		if err := ownerInfoIn.Close(); err != nil {
+			return fmt.Errorf("error closing owner service info -> device module pipe: %w", err)
 		}
 
 		// Limit to 1e6 (1 million) rounds and fail TO2 if exceeded
+		totalRounds += rounds
 		if totalRounds >= 1_000_000 {
 			return fmt.Errorf("exceeded 1e6 rounds of service info exchange")
+		}
+		if done {
+			break
 		}
 
 		// If there is no ServiceInfo to send and the last owner response did
@@ -885,6 +897,13 @@ func (c *Client) exchangeServiceInfo(ctx context.Context,
 		//
 		// TODO: Wait a few seconds if no service info was sent or received in
 		// the last round.
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case prevModuleName = <-moduleName:
+			ownerInfo = nextOwnerInfo
+		}
 	}
 
 	return c.done(ctx, baseURL, proveDvNonce, setupDvNonce, session)
@@ -1001,11 +1020,6 @@ func (c *Client) exchangeServiceInfoRound(ctx context.Context, baseURL string, m
 	if msg.IsMoreServiceInfo || ownerServiceInfo.IsMoreServiceInfo {
 		rounds, done, err := c.exchangeServiceInfoRound(ctx, baseURL, mtu, r, w, session)
 		return rounds + 1, done, err
-	}
-
-	// If no more owner service info, close the pipe
-	if err := w.Close(); err != nil {
-		return 0, false, fmt.Errorf("error closing owner service info -> device module pipe: %w", err)
 	}
 
 	return 1, ownerServiceInfo.IsDone, nil
