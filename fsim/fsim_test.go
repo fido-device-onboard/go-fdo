@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -30,7 +31,7 @@ import (
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
 
-func TestClient(t *testing.T) {
+func TestClientWithDataModules(t *testing.T) {
 	if err := os.MkdirAll("testdata/downloads", 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -234,6 +235,56 @@ func TestClientWithMockDownloadOwner(t *testing.T) {
 			yield("fdo.download", ownerModule)
 		}
 	}, nil)
+}
+
+func TestClientWithCommandModule(t *testing.T) {
+	var outbuf, errbuf bytes.Buffer
+	exitChan := make(chan int, 1)
+
+	fdotest.RunClientTestSuite(t, nil, map[string]serviceinfo.DeviceModule{
+		"fdo.command": &fsim.Command{
+			Timeout: 10 * time.Second,
+		},
+	}, func(ctx context.Context, replacementGUID fdo.GUID, info string, chain []*x509.Certificate, devmod fdo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
+		return func(yield func(string, serviceinfo.OwnerModule) bool) {
+			if !yield("fdo.command", &fsim.RunCommand{
+				Command: "date",
+				Args:    []string{"--utc"},
+				Stdout: struct {
+					io.Writer
+					io.Closer
+				}{
+					Writer: &outbuf,
+					Closer: io.NopCloser(nil),
+				},
+				Stderr: struct {
+					io.Writer
+					io.Closer
+				}{
+					Writer: &errbuf,
+					Closer: io.NopCloser(nil),
+				},
+				ExitChan: exitChan,
+			}) {
+				return
+			}
+		}
+	}, nil)
+
+	select {
+	case code := <-exitChan:
+		if code != 0 {
+			t.Errorf("expected command success, got error code %d", code)
+		}
+	default:
+		t.Error("expected exit code on channel")
+	}
+	if !strings.Contains(" UTC ", outbuf.String()) {
+		t.Errorf("expected stdout to include UTC, got\n%s", outbuf.String())
+	}
+	if errbuf.Len() > 0 {
+		t.Errorf("expected empty stderr, got\n%s", errbuf.String())
+	}
 }
 
 func tryDebugNotation(b []byte) string {

@@ -11,6 +11,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"iter"
+	"log/slog"
 	"runtime"
 	"slices"
 	"strings"
@@ -44,6 +45,8 @@ type OwnerModulesFunc func(ctx context.Context, replacementGUID fdo.GUID, info s
 //
 //nolint:gocyclo
 func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[string]serviceinfo.DeviceModule, ownerModules OwnerModulesFunc, customExpect func(*testing.T, error)) {
+	slog.SetDefault(slog.New(slog.NewTextHandler(TestingLog(t), &slog.HandlerOptions{Level: slog.LevelDebug})))
+
 	if state == nil {
 		stateless, err := token.NewService()
 		if err != nil {
