@@ -74,7 +74,9 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 		DIResponder: &fdo.DIServer{
 			Session:  state,
 			Vouchers: state,
-			RvInfo:   nil, // TODO:
+			RvInfo: func(context.Context, *fdo.Voucher) ([][]fdo.RvInstruction, error) {
+				return [][]fdo.RvInstruction{}, nil
+			},
 		},
 		TO0Responder: &fdo.TO0Server{
 			Session: state,
@@ -88,7 +90,9 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 			Session:   state,
 			Vouchers:  state,
 			OwnerKeys: state,
-			RvInfo:    nil, // TODO:
+			RvInfo: func(context.Context, *fdo.Voucher) ([][]fdo.RvInstruction, error) {
+				return [][]fdo.RvInstruction{}, nil
+			},
 			OwnerModules: func(ctx context.Context, replacementGUID fdo.GUID, info string, chain []*x509.Certificate, devmod fdo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 				if ownerModules == nil {
 					return func(yield func(string, serviceinfo.OwnerModule) bool) {}

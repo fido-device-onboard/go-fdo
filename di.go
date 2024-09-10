@@ -99,6 +99,7 @@ type setCredentialsMsg struct {
 
 // AppStart(10) -> SetCredentials(11)
 func (s *DIServer) setCredentials(ctx context.Context, msg io.Reader) (*setCredentialsMsg, error) {
+	// Decode proprietary device mfg info from app start
 	var appStart struct {
 		DeviceMfgInfo *cbor.Bstr[DeviceMfgInfo]
 	}
@@ -107,13 +108,14 @@ func (s *DIServer) setCredentials(ctx context.Context, msg io.Reader) (*setCrede
 	}
 	info := appStart.DeviceMfgInfo.Val
 
-	// Sign device certificate chain
+	// Create a new device certificate chain by signing CSR
 	chain, err := s.Session.NewDeviceCertChain(ctx, info)
 	if err != nil {
 		return nil, fmt.Errorf("error creating device certificate chain: %w", err)
 	}
 
-	// Get the manufacturer pubkey in the right encoding
+	// Use issuer chain of device certificate to identify manufacturer pubkey
+	// and encode as the device requested
 	var mfgPubKey *PublicKey
 	switch enc := info.KeyEncoding; enc {
 	case X509KeyEnc:
@@ -134,12 +136,14 @@ func (s *DIServer) setCredentials(ctx context.Context, msg io.Reader) (*setCrede
 	if err != nil {
 		return nil, fmt.Errorf("error determining appropriate device cert chain hash algorithm: %w", err)
 	}
+	certChain := make([]*cbor.X509Certificate, len(chain))
 	certChainHash := alg.HashFunc().New()
-	for _, cert := range chain {
+	for i, cert := range chain {
+		certChain[i] = (*cbor.X509Certificate)(cert)
 		_, _ = certChainHash.Write(cert.Raw)
 	}
 
-	// Store and return a voucher header for the device
+	// Generate voucher header
 	var guid GUID
 	if _, err := rand.Read(guid[:]); err != nil {
 		return nil, fmt.Errorf("error generating device GUID: %w", err)
@@ -147,7 +151,6 @@ func (s *DIServer) setCredentials(ctx context.Context, msg io.Reader) (*setCrede
 	ovh := &VoucherHeader{
 		Version:         101,
 		GUID:            guid,
-		RvInfo:          s.RvInfo,
 		DeviceInfo:      info.DeviceInfo,
 		ManufacturerKey: *mfgPubKey,
 		CertChainHash: &Hash{
@@ -155,13 +158,23 @@ func (s *DIServer) setCredentials(ctx context.Context, msg io.Reader) (*setCrede
 			Value:     certChainHash.Sum(nil),
 		},
 	}
+	rvInfo, err := s.RvInfo(ctx, &Voucher{
+		Version:   101,
+		Header:    *cbor.NewBstr(*ovh),
+		CertChain: &certChain,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("error determining rendezvous info for device: %w", err)
+	}
+	ovh.RvInfo = rvInfo
+
+	// Store and return voucher header
 	if err := s.Session.SetIncompleteVoucherHeader(ctx, ovh); err != nil {
 		return nil, fmt.Errorf("error storing incomplete voucher header: %w", err)
 	}
 	return &setCredentialsMsg{
 		OVHeader: *cbor.NewBstr(*ovh),
 	}, nil
-
 }
 
 // SetHMAC(12) -> Done(13)

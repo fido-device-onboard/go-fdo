@@ -16,6 +16,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
+	"net"
 	"reflect"
 	"testing"
 	"time"
@@ -296,6 +297,42 @@ func RunServerStateSuite(t *testing.T, state AllServerState) {
 			}
 			if !bytes.Equal(guid[:], got[:]) {
 				t.Fatal("guid state did not match expected")
+			}
+		})
+
+		t.Run("RvInfo", func(t *testing.T) {
+			token, err := state.NewToken(context.TODO(), fdo.TO2Protocol)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx := state.TokenContext(context.TODO(), token)
+			defer func() { _ = state.InvalidateToken(ctx) }()
+
+			// Shadow state to limit testable functions
+			var state fdo.TO2SessionState = state
+
+			// Check for not found
+			if rvInfo, err := state.RvInfo(ctx); !errors.Is(err, fdo.ErrNotFound) {
+				t.Fatalf("expected ErrNotFound, got %v: %v", err, rvInfo)
+			}
+
+			// Store and retrieve RV info
+			rvInfo := [][]fdo.RvInstruction{
+				{
+					{Variable: fdo.RVProtocol, Value: mustMarshal(t, fdo.HTTPTransport)},
+					{Variable: fdo.RVIPAddress, Value: mustMarshal(t, net.IP{127, 0, 0, 1})},
+					{Variable: fdo.RVDevPort, Value: mustMarshal(t, 8080)},
+				},
+			}
+			if err := state.SetRvInfo(ctx, rvInfo); err != nil {
+				t.Fatal(err)
+			}
+			got, err := state.RvInfo(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(rvInfo, got) {
+				t.Fatal("RV info state did not match expected")
 			}
 		})
 
@@ -586,4 +623,12 @@ func RunServerStateSuite(t *testing.T, state AllServerState) {
 			t.Fatalf("EC owner key is an incorrect type: %T", rsaKey)
 		}
 	})
+}
+
+func mustMarshal(t *testing.T, v any) []byte {
+	data, err := cbor.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }

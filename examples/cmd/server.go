@@ -347,7 +347,7 @@ func newHandler(rvInfo [][]fdo.RvInstruction, state *sqlite.DB) (*transport.Hand
 		DIResponder: &fdo.DIServer{
 			Session:  state,
 			Vouchers: state,
-			RvInfo:   rvInfo,
+			RvInfo:   func(context.Context, *fdo.Voucher) ([][]fdo.RvInstruction, error) { return rvInfo, nil },
 		},
 		TO0Responder: &fdo.TO0Server{
 			Session: state,
@@ -361,7 +361,7 @@ func newHandler(rvInfo [][]fdo.RvInstruction, state *sqlite.DB) (*transport.Hand
 			Session:      state,
 			Vouchers:     state,
 			OwnerKeys:    state,
-			RvInfo:       rvInfo,
+			RvInfo:       func(context.Context, *fdo.Voucher) ([][]fdo.RvInstruction, error) { return rvInfo, nil },
 			OwnerModules: ownerModules,
 		},
 	}, nil

@@ -125,6 +125,7 @@ func New(filename, password string) (*DB, error) {
 		`CREATE TABLE IF NOT EXISTS to2_sessions
 			( session BLOB UNIQUE NOT NULL
 			, guid BLOB
+			, rv_info BLOB
 			, prove_device BLOB
 			, setup_device BLOB
 			, mtu INTEGER
@@ -741,6 +742,50 @@ func (db *DB) GUID(ctx context.Context) (fdo.GUID, error) {
 	var guid fdo.GUID
 	_ = copy(guid[:], result)
 	return guid, nil
+}
+
+// SetRvInfo stores the rendezvous instructions to store at the end of TO2.
+func (db *DB) SetRvInfo(ctx context.Context, rvInfo [][]fdo.RvInstruction) error {
+	sessID, ok := db.sessionID(ctx)
+	if !ok {
+		return fdo.ErrInvalidSession
+	}
+	blob, err := cbor.Marshal(rvInfo)
+	if err != nil {
+		return fmt.Errorf("error marshaling RV info: %w", err)
+	}
+	return db.insert(db.debugCtx(ctx), "to2_sessions",
+		map[string]any{
+			"session": sessID,
+			"rv_info": blob,
+		},
+		map[string]any{
+			"session": sessID,
+		})
+}
+
+// RvInfo retrieves the rendezvous instructions to store at the end of TO2.
+func (db *DB) RvInfo(ctx context.Context) ([][]fdo.RvInstruction, error) {
+	sessID, ok := db.sessionID(ctx)
+	if !ok {
+		return nil, fdo.ErrInvalidSession
+	}
+
+	var result []byte
+	if err := db.query(db.debugCtx(ctx), "to2_sessions", []string{"rv_info"}, map[string]any{
+		"session": sessID,
+	}, &result); err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, fdo.ErrNotFound
+	}
+
+	var rvInfo [][]fdo.RvInstruction
+	if err := cbor.Unmarshal(result, &rvInfo); err != nil {
+		return nil, fmt.Errorf("error unmarshaling RV info: %w", err)
+	}
+	return rvInfo, nil
 }
 
 // NewVoucher creates and stores a new voucher.

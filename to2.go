@@ -627,6 +627,15 @@ func (s *TO2Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1
 		return nil, fmt.Errorf("error updating associated key exchange session: %w", err)
 	}
 
+	// Get configured RV info
+	rvInfo, err := s.RvInfo(ctx, ov)
+	if err != nil {
+		return nil, fmt.Errorf("error determining rendezvous info for device: %w", err)
+	}
+	if err := s.Session.SetRvInfo(ctx, rvInfo); err != nil {
+		return nil, fmt.Errorf("error storing rendezvous info for device: %w", err)
+	}
+
 	// Generate a replacement GUID
 	var replacementGUID GUID
 	if _, err := rand.Read(replacementGUID[:]); err != nil {
@@ -648,7 +657,7 @@ func (s *TO2Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1
 	}
 	s1 := cose.Sign1[deviceSetup, []byte]{
 		Payload: cbor.NewByteWrap(deviceSetup{
-			RendezvousInfo:  s.RvInfo,
+			RendezvousInfo:  rvInfo,
 			GUID:            replacementGUID,
 			NonceTO2SetupDv: setupDeviceNonce,
 			Owner2Key:       *ownerPublicKey,
@@ -1205,6 +1214,11 @@ func (s *TO2Server) to2Done2(ctx context.Context, msg io.Reader) (*done2Msg, err
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving voucher for device %x: %w", currentGUID, err)
 	}
+
+	rvInfo, err := s.Session.RvInfo(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error retrieving rendezvous info for device: %w", err)
+	}
 	replacementGUID, err := s.Session.ReplacementGUID(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving replacement GUID for device: %w", err)
@@ -1229,7 +1243,7 @@ func (s *TO2Server) to2Done2(ctx context.Context, msg io.Reader) (*done2Msg, err
 		Header: *cbor.NewBstr(VoucherHeader{
 			Version:         currentOV.Header.Val.Version,
 			GUID:            replacementGUID,
-			RvInfo:          s.RvInfo,
+			RvInfo:          rvInfo,
 			DeviceInfo:      currentOV.Header.Val.DeviceInfo,
 			ManufacturerKey: *ownerPublicKey,
 			CertChainHash:   currentOV.Header.Val.CertChainHash,

@@ -109,6 +109,12 @@ type TO2SessionState interface {
 	// GUID retrieves the GUID of the voucher associated with the session.
 	GUID(context.Context) (GUID, error)
 
+	// SetRvInfo stores the rendezvous instructions to store at the end of TO2.
+	SetRvInfo(context.Context, [][]RvInstruction) error
+
+	// RvInfo retrieves the rendezvous instructions to store at the end of TO2.
+	RvInfo(context.Context) ([][]RvInstruction, error)
+
 	// SetReplacementGUID stores the device GUID to persist at the end of TO2.
 	SetReplacementGUID(context.Context, GUID) error
 

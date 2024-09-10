@@ -45,6 +45,7 @@ type to1State struct {
 type to2State struct {
 	Unique
 	GUID        fdo.GUID
+	RvInfo      *[][]fdo.RvInstruction
 	Replacement struct {
 		GUID fdo.GUID
 		Hmac fdo.Hmac
@@ -370,6 +371,24 @@ func (s Service) GUID(ctx context.Context) (fdo.GUID, error) {
 			return fdo.GUID{}, fdo.ErrNotFound
 		}
 		return state.GUID, nil
+	})
+}
+
+// SetRvInfo stores the rendezvous instructions to store at the end of TO2.
+func (s Service) SetRvInfo(ctx context.Context, rvInfo [][]fdo.RvInstruction) error {
+	return update(ctx, s, func(state *to2State) error {
+		state.RvInfo = &rvInfo
+		return nil
+	})
+}
+
+// RvInfo retrieves the rendezvous instructions to store at the end of TO2.
+func (s Service) RvInfo(ctx context.Context) ([][]fdo.RvInstruction, error) {
+	return fetch(ctx, s, func(state to2State) ([][]fdo.RvInstruction, error) {
+		if state.RvInfo == nil {
+			return nil, fdo.ErrNotFound
+		}
+		return *state.RvInfo, nil
 	})
 }
 

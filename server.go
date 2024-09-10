@@ -21,7 +21,7 @@ type DIServer struct {
 	Vouchers ManufacturerVoucherPersistentState
 
 	// Rendezvous directives
-	RvInfo [][]RvInstruction
+	RvInfo func(context.Context, *Voucher) ([][]RvInstruction, error)
 }
 
 // Respond validates a request and returns the appropriate response message.
@@ -151,7 +151,7 @@ type TO2Server struct {
 	OwnerKeys OwnerKeyPersistentState
 
 	// Rendezvous directives
-	RvInfo [][]RvInstruction
+	RvInfo func(context.Context, *Voucher) ([][]RvInstruction, error)
 
 	// Create an iterator of service info modules for a given device
 	OwnerModules func(ctx context.Context, replacementGUID GUID, info string, chain []*x509.Certificate, devmod Devmod, modules []string) iter.Seq2[string, serviceinfo.OwnerModule]
