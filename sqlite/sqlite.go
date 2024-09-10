@@ -137,8 +137,10 @@ func New(filename, password string) (*DB, error) {
 			)`,
 		`CREATE TABLE IF NOT EXISTS owner_vouchers
 			( guid BLOB PRIMARY KEY
+			-- , serial_number TEXT NOT NULL
 			, cbor BLOB NOT NULL
 			)`,
+		// `CREATE INDEX idx_owner_voucher_serial_number ON owner_vouchers(serial_number)`,
 		`CREATE TABLE IF NOT EXISTS replacement_vouchers
 			( session BLOB UNIQUE NOT NULL
 			, guid BLOB
@@ -342,15 +344,15 @@ func (db *DB) insert(ctx context.Context, table string, kvs, upsertWhere map[str
 }
 
 func (db *DB) insertOrIgnore(ctx context.Context, table string, kvs map[string]any) error {
-	return insert(ctx, db.db, table, kvs, map[string]any{})
+	return insert(db.debugCtx(ctx), db.db, table, kvs, map[string]any{})
 }
 
 func (db *DB) update(ctx context.Context, table string, kvs, where map[string]any) error {
-	return update(ctx, db.db, table, kvs, where)
+	return update(db.debugCtx(ctx), db.db, table, kvs, where)
 }
 
 func (db *DB) query(ctx context.Context, table string, columns []string, where map[string]any, into ...any) error {
-	return query(ctx, db.db, table, columns, where, into...)
+	return query(db.debugCtx(ctx), db.db, table, columns, where, into...)
 }
 
 type execer interface {
@@ -464,7 +466,7 @@ func (db *DB) AddManufacturerKey(keyType fdo.KeyType, key crypto.PrivateKey, cha
 	if err != nil {
 		return err
 	}
-	return db.insertOrIgnore(db.debugCtx(context.Background()), "mfg_keys", map[string]any{
+	return db.insertOrIgnore(context.Background(), "mfg_keys", map[string]any{
 		"type":       int(keyType),
 		"pkcs8":      der,
 		"x509_chain": derEncode(chain),
@@ -473,7 +475,7 @@ func (db *DB) AddManufacturerKey(keyType fdo.KeyType, key crypto.PrivateKey, cha
 
 func (db *DB) manufacturerKey(keyType fdo.KeyType) (crypto.PrivateKey, []*x509.Certificate, error) {
 	var pkcs8, der []byte
-	if err := db.query(db.debugCtx(context.Background()), "mfg_keys", []string{"pkcs8", "x509_chain"}, map[string]any{
+	if err := db.query(context.Background(), "mfg_keys", []string{"pkcs8", "x509_chain"}, map[string]any{
 		"type": int(keyType),
 	}, &pkcs8, &der); err != nil {
 		return nil, nil, err
@@ -540,7 +542,7 @@ func (db *DB) NewDeviceCertChain(ctx context.Context, info fdo.DeviceMfgInfo) ([
 	if !ok {
 		return nil, fdo.ErrInvalidSession
 	}
-	if err := db.insert(db.debugCtx(ctx), "device_info", map[string]any{
+	if err := db.insert(ctx, "device_info", map[string]any{
 		"key_type":      int(info.KeyType),
 		"key_encoding":  int(info.KeyEncoding),
 		"serial_number": info.SerialNumber,
@@ -571,7 +573,7 @@ func (db *DB) DeviceCertChain(ctx context.Context) ([]*x509.Certificate, error) 
 	}
 
 	var der []byte
-	if err := db.query(db.debugCtx(ctx), "device_info", []string{"x509_chain"}, map[string]any{
+	if err := db.query(ctx, "device_info", []string{"x509_chain"}, map[string]any{
 		"session": sessID,
 	}, &der); err != nil {
 		return nil, err
@@ -595,7 +597,7 @@ func (db *DB) SetIncompleteVoucherHeader(ctx context.Context, ovh *fdo.VoucherHe
 		return fmt.Errorf("error marshaling ownership voucher header: %w", err)
 	}
 
-	return db.insert(db.debugCtx(ctx), "incomplete_vouchers", map[string]any{
+	return db.insert(ctx, "incomplete_vouchers", map[string]any{
 		"session": sessID,
 		"header":  ovhCBOR,
 	}, nil)
@@ -610,7 +612,7 @@ func (db *DB) IncompleteVoucherHeader(ctx context.Context) (*fdo.VoucherHeader, 
 	}
 
 	var ovhCBOR []byte
-	if err := db.query(db.debugCtx(ctx), "incomplete_vouchers", []string{"header"}, map[string]any{
+	if err := db.query(ctx, "incomplete_vouchers", []string{"header"}, map[string]any{
 		"session": sessID,
 	}, &ovhCBOR); err != nil {
 		return nil, err
@@ -632,7 +634,7 @@ func (db *DB) SetTO0SignNonce(ctx context.Context, nonce fdo.Nonce) error {
 	if !ok {
 		return fdo.ErrInvalidSession
 	}
-	return db.insert(db.debugCtx(ctx), "to0_sessions",
+	return db.insert(ctx, "to0_sessions",
 		map[string]any{
 			"session": sessID,
 			"nonce":   nonce[:],
@@ -650,7 +652,7 @@ func (db *DB) TO0SignNonce(ctx context.Context) (fdo.Nonce, error) {
 	}
 
 	var into []byte
-	if err := db.query(db.debugCtx(ctx), "to0_sessions", []string{"nonce"}, map[string]any{
+	if err := db.query(ctx, "to0_sessions", []string{"nonce"}, map[string]any{
 		"session": sessID,
 	}, &into); err != nil {
 		return fdo.Nonce{}, err
@@ -670,7 +672,7 @@ func (db *DB) SetTO1ProofNonce(ctx context.Context, nonce fdo.Nonce) error {
 	if !ok {
 		return fdo.ErrInvalidSession
 	}
-	return db.insert(db.debugCtx(ctx), "to1_sessions",
+	return db.insert(ctx, "to1_sessions",
 		map[string]any{
 			"session": sessID,
 			"nonce":   nonce[:],
@@ -688,7 +690,7 @@ func (db *DB) TO1ProofNonce(ctx context.Context) (fdo.Nonce, error) {
 	}
 
 	var into []byte
-	if err := db.query(db.debugCtx(ctx), "to1_sessions", []string{"nonce"}, map[string]any{
+	if err := db.query(ctx, "to1_sessions", []string{"nonce"}, map[string]any{
 		"session": sessID,
 	}, &into); err != nil {
 		return fdo.Nonce{}, err
@@ -708,7 +710,7 @@ func (db *DB) SetGUID(ctx context.Context, guid fdo.GUID) error {
 	if !ok {
 		return fdo.ErrInvalidSession
 	}
-	return db.insert(db.debugCtx(ctx), "to2_sessions",
+	return db.insert(ctx, "to2_sessions",
 		map[string]any{
 			"session": sessID,
 			"guid":    guid[:],
@@ -726,7 +728,7 @@ func (db *DB) GUID(ctx context.Context) (fdo.GUID, error) {
 	}
 
 	var result []byte
-	if err := db.query(db.debugCtx(ctx), "to2_sessions", []string{"guid"}, map[string]any{
+	if err := db.query(ctx, "to2_sessions", []string{"guid"}, map[string]any{
 		"session": sessID,
 	}, &result); err != nil {
 		return fdo.GUID{}, err
@@ -754,7 +756,7 @@ func (db *DB) SetRvInfo(ctx context.Context, rvInfo [][]fdo.RvInstruction) error
 	if err != nil {
 		return fmt.Errorf("error marshaling RV info: %w", err)
 	}
-	return db.insert(db.debugCtx(ctx), "to2_sessions",
+	return db.insert(ctx, "to2_sessions",
 		map[string]any{
 			"session": sessID,
 			"rv_info": blob,
@@ -772,7 +774,7 @@ func (db *DB) RvInfo(ctx context.Context) ([][]fdo.RvInstruction, error) {
 	}
 
 	var result []byte
-	if err := db.query(db.debugCtx(ctx), "to2_sessions", []string{"rv_info"}, map[string]any{
+	if err := db.query(ctx, "to2_sessions", []string{"rv_info"}, map[string]any{
 		"session": sessID,
 	}, &result); err != nil {
 		return nil, err
@@ -809,7 +811,7 @@ func (db *DB) NewVoucher(ctx context.Context, ov *fdo.Voucher) error {
 	if err != nil {
 		return fmt.Errorf("error marshaling ownership voucher: %w", err)
 	}
-	return db.insert(db.debugCtx(ctx), table, map[string]any{
+	return db.insert(ctx, table, map[string]any{
 		"guid": ov.Header.Val.GUID[:],
 		"cbor": data,
 	}, nil)
@@ -900,7 +902,7 @@ func (db *DB) AddVoucher(ctx context.Context, ov *fdo.Voucher) error {
 	if err != nil {
 		return fmt.Errorf("error marshaling ownership voucher: %w", err)
 	}
-	return db.insert(db.debugCtx(ctx), "owner_vouchers", map[string]any{
+	return db.insert(ctx, "owner_vouchers", map[string]any{
 		"guid": ov.Header.Val.GUID[:],
 		"cbor": data,
 	}, nil)
@@ -914,13 +916,13 @@ func (db *DB) ReplaceVoucher(ctx context.Context, guid fdo.GUID, ov *fdo.Voucher
 		return fmt.Errorf("error marshaling ownership voucher: %w", err)
 	}
 	if db.PreserveReplacedVouchers {
-		return db.insert(db.debugCtx(ctx), "owner_vouchers",
+		return db.insert(ctx, "owner_vouchers",
 			map[string]any{
 				"guid": ov.Header.Val.GUID[:],
 				"cbor": data,
 			}, nil)
 	}
-	return db.update(db.debugCtx(ctx), "owner_vouchers",
+	return db.update(ctx, "owner_vouchers",
 		map[string]any{
 			"guid": ov.Header.Val.GUID[:],
 			"cbor": data,
@@ -934,7 +936,7 @@ func (db *DB) ReplaceVoucher(ctx context.Context, guid fdo.GUID, ov *fdo.Voucher
 // Voucher retrieves a voucher by GUID.
 func (db *DB) Voucher(ctx context.Context, guid fdo.GUID) (*fdo.Voucher, error) {
 	var data []byte
-	if err := db.query(db.debugCtx(ctx), "owner_vouchers", []string{"cbor"},
+	if err := db.query(ctx, "owner_vouchers", []string{"cbor"},
 		map[string]any{"guid": guid[:]},
 		&data,
 	); err != nil {
@@ -957,7 +959,7 @@ func (db *DB) SetReplacementGUID(ctx context.Context, guid fdo.GUID) error {
 	if !ok {
 		return fdo.ErrInvalidSession
 	}
-	return db.insert(db.debugCtx(ctx), "replacement_vouchers",
+	return db.insert(ctx, "replacement_vouchers",
 		map[string]any{
 			"session": sessID,
 			"guid":    guid[:],
@@ -976,7 +978,7 @@ func (db *DB) ReplacementGUID(ctx context.Context) (fdo.GUID, error) {
 	}
 
 	var into []byte
-	if err := db.query(db.debugCtx(ctx), "replacement_vouchers", []string{"guid"},
+	if err := db.query(ctx, "replacement_vouchers", []string{"guid"},
 		map[string]any{"session": sessID}, &into,
 	); err != nil {
 		return fdo.GUID{}, err
@@ -1000,7 +1002,7 @@ func (db *DB) SetReplacementHmac(ctx context.Context, hmac fdo.Hmac) error {
 	if !ok {
 		return fdo.ErrInvalidSession
 	}
-	return db.insert(db.debugCtx(ctx), "replacement_vouchers",
+	return db.insert(ctx, "replacement_vouchers",
 		map[string]any{
 			"session": sessID,
 			"hmac":    hmac.Value,
@@ -1019,7 +1021,7 @@ func (db *DB) ReplacementHmac(ctx context.Context) (fdo.Hmac, error) {
 	}
 
 	var hmac []byte
-	if err := db.query(db.debugCtx(ctx), "replacement_vouchers", []string{"hmac"},
+	if err := db.query(ctx, "replacement_vouchers", []string{"hmac"},
 		map[string]any{"session": sessID}, &hmac,
 	); err != nil {
 		return fdo.Hmac{}, err
@@ -1061,7 +1063,7 @@ func (db *DB) SetXSession(ctx context.Context, suite kex.Suite, sess kex.Session
 		return fmt.Errorf("error marshaling key exchange key exchange state: %w", err)
 	}
 
-	return db.insert(db.debugCtx(ctx), "key_exchanges",
+	return db.insert(ctx, "key_exchanges",
 		map[string]any{
 			"session": sessID,
 			"suite":   string(suite),
@@ -1083,7 +1085,7 @@ func (db *DB) XSession(ctx context.Context) (kex.Suite, kex.Session, error) {
 
 	var suite string
 	var sessData []byte
-	if err := db.query(db.debugCtx(ctx), "key_exchanges", []string{"suite", "cbor"}, map[string]any{
+	if err := db.query(ctx, "key_exchanges", []string{"suite", "cbor"}, map[string]any{
 		"session": sessID,
 	}, &suite, &sessData); err != nil {
 		return "", nil, fmt.Errorf("error querying key exchange session: %w", err)
@@ -1111,7 +1113,7 @@ func (db *DB) SetProveDeviceNonce(ctx context.Context, nonce fdo.Nonce) error {
 	if !ok {
 		return fdo.ErrInvalidSession
 	}
-	return db.insert(db.debugCtx(ctx), "to2_sessions",
+	return db.insert(ctx, "to2_sessions",
 		map[string]any{
 			"session":      sessID,
 			"prove_device": nonce[:],
@@ -1130,7 +1132,7 @@ func (db *DB) ProveDeviceNonce(ctx context.Context) (fdo.Nonce, error) {
 	}
 
 	var into []byte
-	if err := db.query(db.debugCtx(ctx), "to2_sessions", []string{"prove_device"}, map[string]any{
+	if err := db.query(ctx, "to2_sessions", []string{"prove_device"}, map[string]any{
 		"session": sessID,
 	}, &into); err != nil {
 		return fdo.Nonce{}, err
@@ -1154,7 +1156,7 @@ func (db *DB) SetSetupDeviceNonce(ctx context.Context, nonce fdo.Nonce) error {
 	if !ok {
 		return fdo.ErrInvalidSession
 	}
-	return db.insert(db.debugCtx(ctx), "to2_sessions",
+	return db.insert(ctx, "to2_sessions",
 		map[string]any{
 			"session":      sessID,
 			"setup_device": nonce[:],
@@ -1174,7 +1176,7 @@ func (db *DB) SetupDeviceNonce(ctx context.Context) (fdo.Nonce, error) {
 	}
 
 	var into []byte
-	if err := db.query(db.debugCtx(ctx), "to2_sessions", []string{"setup_device"}, map[string]any{
+	if err := db.query(ctx, "to2_sessions", []string{"setup_device"}, map[string]any{
 		"session": sessID,
 	}, &into); err != nil {
 		return fdo.Nonce{}, err
@@ -1199,12 +1201,12 @@ func (db *DB) AddOwnerKey(keyType fdo.KeyType, key crypto.PrivateKey, chain []*x
 		return err
 	}
 	if chain == nil {
-		return db.insertOrIgnore(db.debugCtx(context.Background()), "owner_keys", map[string]any{
+		return db.insertOrIgnore(context.Background(), "owner_keys", map[string]any{
 			"type":  int(keyType),
 			"pkcs8": der,
 		})
 	}
-	return db.insertOrIgnore(db.debugCtx(context.Background()), "owner_keys", map[string]any{
+	return db.insertOrIgnore(context.Background(), "owner_keys", map[string]any{
 		"type":       int(keyType),
 		"pkcs8":      der,
 		"x509_chain": derEncode(chain),
@@ -1214,7 +1216,7 @@ func (db *DB) AddOwnerKey(keyType fdo.KeyType, key crypto.PrivateKey, chain []*x
 // TODO: Randomize result when there are multiple rows?
 func (db *DB) ownerKey(keyType fdo.KeyType) (crypto.Signer, []*x509.Certificate, error) {
 	var keyDer, certChainDer []byte
-	if err := db.query(db.debugCtx(context.Background()), "owner_keys", []string{"pkcs8", "x509_chain"}, map[string]any{
+	if err := db.query(context.Background(), "owner_keys", []string{"pkcs8", "x509_chain"}, map[string]any{
 		"type": int(keyType),
 	}, &keyDer, &certChainDer); err != nil {
 		return nil, nil, fmt.Errorf("error querying owner key [type=%s]: %w", keyType, err)
@@ -1251,7 +1253,7 @@ func (db *DB) SetMTU(ctx context.Context, mtu uint16) error {
 	if !ok {
 		return fdo.ErrInvalidSession
 	}
-	return db.insert(db.debugCtx(ctx), "to2_sessions",
+	return db.insert(ctx, "to2_sessions",
 		map[string]any{
 			"session": sessID,
 			"mtu":     int(mtu),
@@ -1269,7 +1271,7 @@ func (db *DB) MTU(ctx context.Context) (uint16, error) {
 	}
 
 	var mtu sql.Null[uint16]
-	if err := db.query(db.debugCtx(ctx), "to2_sessions", []string{"mtu"}, map[string]any{
+	if err := db.query(ctx, "to2_sessions", []string{"mtu"}, map[string]any{
 		"session": sessID,
 	}, &mtu); err != nil {
 		return 0, err
@@ -1294,7 +1296,7 @@ func (db *DB) SetRVBlob(ctx context.Context, ov *fdo.Voucher, to1d *cose.Sign1[f
 	}
 
 	guid := ov.Header.Val.GUID[:]
-	return db.insert(db.debugCtx(ctx), "rv_blobs",
+	return db.insert(ctx, "rv_blobs",
 		map[string]any{
 			"guid":    guid,
 			"rv":      blob,
@@ -1310,7 +1312,7 @@ func (db *DB) SetRVBlob(ctx context.Context, ov *fdo.Voucher, to1d *cose.Sign1[f
 func (db *DB) RVBlob(ctx context.Context, guid fdo.GUID) (*cose.Sign1[fdo.To1d, []byte], *fdo.Voucher, error) {
 	var blob, voucher []byte
 	var exp sql.NullInt64
-	if err := db.query(db.debugCtx(ctx), "rv_blobs", []string{"rv", "voucher", "exp"}, map[string]any{
+	if err := db.query(ctx, "rv_blobs", []string{"rv", "voucher", "exp"}, map[string]any{
 		"guid": guid[:],
 	}, &blob, &voucher, &exp); err != nil {
 		return nil, nil, err
