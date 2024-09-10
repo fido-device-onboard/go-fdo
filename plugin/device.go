@@ -6,7 +6,6 @@ package plugin
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -18,40 +17,26 @@ import (
 // DeviceModule adapts an executable plugin to the internal module interface.
 type DeviceModule struct {
 	Module
-	Name string
 
 	once  sync.Once
 	proto *protocol
+	name  string
 	err   error
 }
 
 var _ serviceinfo.DeviceModule = (*DeviceModule)(nil)
 
 // Transition implements serviceinfo.DeviceModule.
-func (m *DeviceModule) Transition(active bool) error {
-	if !active {
-		return nil
-	}
-
-	m.once.Do(func() {
-		w, r, err := m.Start()
-		if err != nil {
-			m.err = err
-			return
-		}
-		m.proto = &protocol{in: w, out: bufio.NewScanner(r)}
-	})
-
-	return m.err
-}
+func (m *DeviceModule) Transition(active bool) error { return nil }
 
 // Receive implements serviceinfo.DeviceModule.
 func (m *DeviceModule) Receive(ctx context.Context, messageName string, messageBody io.Reader, respond func(message string) io.Writer, yield func()) error {
-	if m.proto == nil {
-		return errors.New("plugin module not activated")
+	m.once.Do(m.start)
+	if m.err != nil {
+		return m.err
 	}
 
-	name := m.Name + ":" + messageName
+	name := m.name + ":" + messageName
 
 	// Decode CBOR and encode to plugin protocol
 	var val interface{}
@@ -70,8 +55,9 @@ func (m *DeviceModule) Receive(ctx context.Context, messageName string, messageB
 
 // Yield implements serviceinfo.DeviceModule.
 func (m *DeviceModule) Yield(ctx context.Context, respond func(message string) io.Writer, yield func()) error {
-	if m.proto == nil {
-		return errors.New("plugin module not activated")
+	m.once.Do(m.start)
+	if m.err != nil {
+		return m.err
 	}
 
 	// Send yield to plugin
@@ -109,4 +95,28 @@ func (m *DeviceModule) Yield(ctx context.Context, respond func(message string) i
 			return fmt.Errorf("invalid data: got unexpected command %q while parsing", c)
 		}
 	}
+}
+
+func (m *DeviceModule) start() {
+	w, r, err := m.Start()
+	if err != nil {
+		m.err = err
+		return
+	}
+
+	proto := &protocol{in: w, out: bufio.NewScanner(r)}
+	name, err := proto.ModuleName()
+	if err != nil {
+		m.err = err
+		return
+	}
+
+	m.proto, m.name = proto, name
+}
+
+// Stop calls the Stop method of the underlying plugin.Module. It also makes
+// sure that the next Yield/Receive will start the plugin again.
+func (m *DeviceModule) Stop() error {
+	defer func() { m.once = sync.Once{} }()
+	return m.Module.Stop()
 }

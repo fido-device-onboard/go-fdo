@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -238,8 +239,12 @@ func TestClientWithMockDownloadOwner(t *testing.T) {
 }
 
 func TestClientWithCommandModule(t *testing.T) {
-	var outbuf, errbuf bytes.Buffer
-	exitChan := make(chan int, 1)
+	type runData struct {
+		outbuf   bytes.Buffer
+		errbuf   bytes.Buffer
+		exitChan chan int
+	}
+	runs := make(chan runData, 1000)
 
 	fdotest.RunClientTestSuite(t, nil, map[string]serviceinfo.DeviceModule{
 		"fdo.command": &fsim.Command{
@@ -247,6 +252,8 @@ func TestClientWithCommandModule(t *testing.T) {
 		},
 	}, func(ctx context.Context, replacementGUID fdo.GUID, info string, chain []*x509.Certificate, devmod fdo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 		return func(yield func(string, serviceinfo.OwnerModule) bool) {
+			run := runData{exitChan: make(chan int, 1)}
+
 			if !yield("fdo.command", &fsim.RunCommand{
 				Command: "date",
 				Args:    []string{"--utc"},
@@ -254,36 +261,42 @@ func TestClientWithCommandModule(t *testing.T) {
 					io.Writer
 					io.Closer
 				}{
-					Writer: &outbuf,
+					Writer: &run.outbuf,
 					Closer: io.NopCloser(nil),
 				},
 				Stderr: struct {
 					io.Writer
 					io.Closer
 				}{
-					Writer: &errbuf,
+					Writer: &run.errbuf,
 					Closer: io.NopCloser(nil),
 				},
-				ExitChan: exitChan,
+				ExitChan: run.exitChan,
 			}) {
 				return
 			}
+			if slices.Contains(supportedMods, "fdo.command") {
+				runs <- run
+			}
 		}
 	}, nil)
+	close(runs)
 
-	select {
-	case code := <-exitChan:
-		if code != 0 {
-			t.Errorf("expected command success, got error code %d", code)
+	for run := range runs {
+		select {
+		case code := <-run.exitChan:
+			if code != 0 {
+				t.Errorf("expected command success, got error code %d", code)
+			}
+		default:
+			t.Error("expected exit code on channel")
 		}
-	default:
-		t.Error("expected exit code on channel")
-	}
-	if !strings.Contains(" UTC ", outbuf.String()) {
-		t.Errorf("expected stdout to include UTC, got\n%s", outbuf.String())
-	}
-	if errbuf.Len() > 0 {
-		t.Errorf("expected empty stderr, got\n%s", errbuf.String())
+		if !strings.Contains(" UTC ", run.outbuf.String()) {
+			t.Errorf("expected stdout to include UTC, got\n%s", run.outbuf.String())
+		}
+		if run.errbuf.Len() > 0 {
+			t.Errorf("expected empty stderr, got\n%s", run.errbuf.String())
+		}
 	}
 }
 

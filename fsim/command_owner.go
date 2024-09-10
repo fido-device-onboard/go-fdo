@@ -37,7 +37,8 @@ type RunCommand struct {
 	// writer
 	Stderr io.WriteCloser
 
-	// If set, the exit code will be sent on this channel
+	// If set, the exit code will be sent on this channel. It should be
+	// buffered with a size of 1.
 	ExitChan chan<- int
 
 	// Signals to send to command

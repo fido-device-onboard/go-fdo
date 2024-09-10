@@ -45,9 +45,14 @@ func ModuleName(p Module) (string, error) {
 // NewCommandPluginModule constructs a plugin.Module from an OS executable.
 //
 // For graceful stop behavior, a custom plugin.Module implementation should be used.
-func NewCommandPluginModule(cmd *exec.Cmd) Module {
+func NewCommandPluginModule(pluginCmd *exec.Cmd) Module {
+	var cmd *exec.Cmd
 	return plugin{
 		StartFunc: func() (io.Writer, io.Reader, error) {
+			// Duplicate command so that plugin can be started multiple times
+			dupcmd := *pluginCmd
+			cmd = &dupcmd
+
 			in, err := cmd.StdinPipe()
 			if err != nil {
 				return nil, nil, fmt.Errorf("error opening stdin pipe to plugin executable: %w", err)
@@ -67,6 +72,8 @@ func NewCommandPluginModule(cmd *exec.Cmd) Module {
 			if cmd == nil || cmd.Process == nil {
 				return nil
 			}
+			defer func() { cmd = nil }()
+
 			if err := cmd.Process.Kill(); err != nil {
 				return err
 			}

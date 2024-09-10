@@ -270,20 +270,20 @@ func (c *Client) stopPlugins(deviceModules map[string]serviceinfo.DeviceModule) 
 			pluginGracefulStopCtx, done := context.WithCancel(pluginStopCtx)
 
 			// Allow Graceful stop up to the original shared timeout
-			go func() {
+			go func(p plugin.Module) {
 				defer done()
-				if err := p.GracefulStop(pluginStopCtx); err != nil && !errors.Is(err, context.Canceled) { //nolint:revive,staticcheck
+				if err := p.GracefulStop(pluginGracefulStopCtx); err != nil && !errors.Is(err, context.Canceled) { //nolint:revive,staticcheck
 					// TODO: Write to error log
 				}
-			}()
+			}(p)
 
 			// Force stop after the shared timeout expires or graceful stop
 			// completes
-			go func() {
+			go func(p plugin.Module) {
 				<-pluginGracefulStopCtx.Done()
 				_ = p.Stop()
 				pluginStopWg.Done()
-			}()
+			}(p)
 		}
 	}
 	pluginStopWg.Wait()

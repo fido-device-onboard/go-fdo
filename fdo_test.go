@@ -9,7 +9,9 @@ import (
 	"io"
 	"iter"
 	"runtime"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -177,36 +179,62 @@ func TestClientWithCustomDevmod(t *testing.T) {
 }
 
 func TestClientWithPluginModule(t *testing.T) {
-	devicePlugin, ownerPlugin := fdotest.NewMockPlugin(), fdotest.NewMockPlugin()
+	devicePlugin := new(fdotest.MockPlugin)
+	devicePlugin.Routines = fdotest.ModuleNameOnlyRoutines(mockModuleName)
+	ownerPlugins := make(chan *fdotest.MockPlugin, 1000)
 
 	fdotest.RunClientTestSuite(t, nil, map[string]serviceinfo.DeviceModule{
 		mockModuleName: struct {
 			plugin.Module
 			serviceinfo.DeviceModule
 		}{
-			Module:       devicePlugin,
-			DeviceModule: &fdotest.MockDeviceModule{},
+			Module: devicePlugin,
+			DeviceModule: &fdotest.MockDeviceModule{
+				TransitionFunc: func(active bool) error {
+					if active {
+						_, _, err := devicePlugin.Start()
+						return err
+					}
+					return nil
+				},
+			},
 		},
 	}, func(ctx context.Context, replacementGUID fdo.GUID, info string, chain []*x509.Certificate, devmod fdo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 		return func(yield func(string, serviceinfo.OwnerModule) bool) {
-			yield(mockModuleName, struct {
+			var once sync.Once
+			ownerPlugin := new(fdotest.MockPlugin)
+			ownerPlugin.Routines = fdotest.ModuleNameOnlyRoutines(mockModuleName)
+			if !yield(mockModuleName, struct {
 				plugin.Module
 				serviceinfo.OwnerModule
 			}{
-				Module:      ownerPlugin,
-				OwnerModule: &fdotest.MockOwnerModule{},
-			})
+				Module: ownerPlugin,
+				OwnerModule: &fdotest.MockOwnerModule{
+					ProduceInfoFunc: func(ctx context.Context, producer *serviceinfo.Producer) (blockPeer, moduleDone bool, err error) {
+						once.Do(func() { _, _, err = ownerPlugin.Start() })
+						if err != nil {
+							return false, false, err
+						}
+						return false, true, producer.WriteChunk("active", []byte{0xf5})
+					},
+				},
+			}) {
+				return
+			}
+			if slices.Contains(supportedMods, mockModuleName) {
+				ownerPlugins <- ownerPlugin
+			}
 		}
 	}, nil)
+	close(ownerPlugins)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
 	select {
 	case <-ctx.Done():
 		t.Fatal("expected device plugin to be gracefully stopped")
 	case <-devicePlugin.GracefulStopped:
-
 	}
 	select {
 	case <-ctx.Done():
@@ -214,16 +242,18 @@ func TestClientWithPluginModule(t *testing.T) {
 	case <-devicePlugin.Stopped:
 	}
 
-	select {
-	case <-ctx.Done():
-		t.Fatal("expected owner plugin to be gracefully stopped")
-	case <-ownerPlugin.GracefulStopped:
+	for ownerPlugin := range ownerPlugins {
+		select {
+		case <-ctx.Done():
+			t.Fatal("expected owner plugin to be gracefully stopped")
+		case <-ownerPlugin.GracefulStopped:
 
-	}
-	select {
-	case <-ctx.Done():
-		t.Error("expected owner plugin to be forcefully stopped")
-	case <-ownerPlugin.Stopped:
+		}
+		select {
+		case <-ctx.Done():
+			t.Error("expected owner plugin to be forcefully stopped")
+		case <-ownerPlugin.Stopped:
+		}
 	}
 }
 

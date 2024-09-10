@@ -81,7 +81,6 @@ func TestDownloadDevicePlugin(t *testing.T) {
 	downloadDeviceCmd.Stderr = fdotest.TestingLog(t)
 	downloadDevicePlugin := &plugin.DeviceModule{
 		Module: plugin.NewCommandPluginModule(downloadDeviceCmd),
-		Name:   "fdo.download",
 	}
 
 	fdotest.RunClientTestSuite(t, nil, map[string]serviceinfo.DeviceModule{
@@ -143,7 +142,6 @@ func TestDevmodPlugin(t *testing.T) {
 	devmodCmd.Stderr = fdotest.TestingLog(t)
 	devmodPlugin := &plugin.DeviceModule{
 		Module: plugin.NewCommandPluginModule(devmodCmd),
-		Name:   "devmod",
 	}
 
 	var got fdo.Devmod

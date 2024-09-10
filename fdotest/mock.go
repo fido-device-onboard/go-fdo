@@ -5,8 +5,11 @@
 package fdotest
 
 import (
+	"bufio"
 	"context"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 
@@ -16,9 +19,10 @@ import (
 
 // MockDeviceModule implements a trivial serviceinfo.DeviceModule.
 type MockDeviceModule struct {
-	ActiveState bool
-	ReceiveFunc func(ctx context.Context, messageName string, messageBody io.Reader, respond func(message string) io.Writer, yield func()) error
-	YieldFunc   func(ctx context.Context, respond func(message string) io.Writer, yield func()) error
+	ActiveState    bool
+	TransitionFunc func(active bool) error
+	ReceiveFunc    func(ctx context.Context, messageName string, messageBody io.Reader, respond func(message string) io.Writer, yield func()) error
+	YieldFunc      func(ctx context.Context, respond func(message string) io.Writer, yield func()) error
 }
 
 var _ serviceinfo.DeviceModule = (*MockDeviceModule)(nil)
@@ -26,6 +30,9 @@ var _ serviceinfo.DeviceModule = (*MockDeviceModule)(nil)
 // Transition implements serviceinfo.DeviceModule.
 func (m *MockDeviceModule) Transition(active bool) error {
 	m.ActiveState = active
+	if m.TransitionFunc != nil {
+		return m.TransitionFunc(active)
+	}
 	return nil
 }
 
@@ -72,8 +79,8 @@ func (m *MockOwnerModule) ProduceInfo(ctx context.Context, producer *serviceinfo
 // MockPlugin implements a trivial plugin.Module.
 type MockPlugin struct {
 	Routines         func() (func(context.Context, io.Writer) error, func(context.Context, io.Reader) error)
-	Stopped          chan (struct{})
-	GracefulStopped  chan (struct{})
+	Stopped          chan struct{}
+	GracefulStopped  chan struct{}
 	GracefulStopFunc func(context.Context) error
 
 	cancel context.CancelFunc
@@ -81,15 +88,6 @@ type MockPlugin struct {
 }
 
 var _ plugin.Module = (*MockPlugin)(nil)
-
-// NewMockPlugin initializes channels for checking whether the plugin is
-// stopped.
-func NewMockPlugin() *MockPlugin {
-	return &MockPlugin{
-		Stopped:         make(chan (struct{})),
-		GracefulStopped: make(chan (struct{})),
-	}
-}
 
 // Start implements plugin.Module.
 func (m *MockPlugin) Start() (io.Writer, io.Reader, error) {
@@ -138,27 +136,75 @@ func (m *MockPlugin) Start() (io.Writer, io.Reader, error) {
 
 	m.cancel = cancel
 	m.errc = errc
+	m.Stopped = make(chan struct{})
+	m.GracefulStopped = make(chan struct{})
 	return wIn, rOut, nil
 }
 
 // Stop implements plugin.Module.
 func (m *MockPlugin) Stop() error {
-	defer close(m.Stopped)
-	if m.errc != nil {
-		return <-m.errc
+	if m.cancel == nil {
+		panic("stop called before start")
 	}
-	return nil
+	defer close(m.Stopped)
+
+	m.cancel()
+
+	return <-m.errc
 }
 
 // GracefulStop implements plugin.Module.
 func (m *MockPlugin) GracefulStop(ctx context.Context) error {
-	if m.cancel != nil {
-		m.cancel()
+	if m.cancel == nil {
+		panic("stop called before start")
 	}
-
 	defer close(m.GracefulStopped)
+
+	m.cancel()
+
 	if m.GracefulStopFunc != nil {
 		return m.GracefulStopFunc(ctx)
 	}
 	return nil
+}
+
+// ModuleNameOnlyRoutines creates routines that only respond to module name
+// commands.
+func ModuleNameOnlyRoutines(moduleName string) func() (func(context.Context, io.Writer) error, func(context.Context, io.Reader) error) {
+	return func() (func(context.Context, io.Writer) error, func(context.Context, io.Reader) error) {
+		gotModuleNameCommand := make(chan struct{})
+
+		return func(ctx context.Context, w io.Writer) error {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-gotModuleNameCommand:
+				}
+
+				name := base64.StdEncoding.EncodeToString([]byte(moduleName))
+				if _, err := w.Write(append([]byte{'M'}, name...)); err != nil {
+					return err
+				}
+				if _, err := w.Write([]byte{'\n'}); err != nil {
+					return err
+				}
+
+				return nil
+			}, func(ctx context.Context, r io.Reader) error {
+				scanner := bufio.NewScanner(r)
+				if !scanner.Scan() {
+					if err := scanner.Err(); err != nil {
+						return err
+					}
+					return io.ErrUnexpectedEOF
+				}
+
+				if scanner.Text() != "M" {
+					return fmt.Errorf("expected module name command")
+				}
+
+				close(gotModuleNameCommand)
+				return nil
+			}
+	}
 }

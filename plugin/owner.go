@@ -122,3 +122,10 @@ func (m *OwnerModule) decodeAndProduce(messageName string, producer *serviceinfo
 
 	return nil
 }
+
+// Stop calls the Stop method of the underlying plugin.Module. It also makes
+// sure that the next HandleInfo/ProduceInfo will start the plugin again.
+func (m *OwnerModule) Stop() error {
+	defer func() { m.once = sync.Once{} }()
+	return m.Module.Stop()
+}

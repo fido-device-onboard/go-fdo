@@ -210,19 +210,20 @@ func (s *TO2Server) Respond(ctx context.Context, msgType uint8, msg io.Reader) (
 			pluginGracefulStopCtx, done := context.WithCancel(pluginStopCtx)
 
 			// Allow Graceful stop up to the original shared timeout
-			go func() {
+			go func(p plugin.Module) {
 				defer done()
-				if err := p.GracefulStop(pluginStopCtx); err != nil && !errors.Is(err, context.Canceled) { //nolint:revive,staticcheck
+				if err := p.GracefulStop(pluginGracefulStopCtx); err != nil && !errors.Is(err, context.Canceled) { //nolint:revive,staticcheck
 					// TODO: Write to error log
 				}
-			}()
+			}(p)
 
 			// Force stop after the shared timeout expires or graceful stop
 			// completes
-			go func() {
+			go func(p plugin.Module) {
 				<-pluginGracefulStopCtx.Done()
 				_ = p.Stop()
-			}()
+				// TODO: Track state for whether plugins are still stopping
+			}(p)
 		}
 	}
 

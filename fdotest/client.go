@@ -5,11 +5,13 @@ package fdotest
 
 import (
 	"context"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"iter"
 	"log/slog"
 	"runtime"
@@ -135,118 +137,161 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 		CipherSuite: kex.A128GcmCipher,
 	}
 
-	t.Run("Device Initialization", func(t *testing.T) {
-		secret := make([]byte, 32)
-		if _, err := rand.Read(secret); err != nil {
-			t.Fatalf("error generating device secret: %v", err)
-		}
-		cli.Hmac = blob.Hmac(secret)
+	for _, table := range []struct {
+		keyType     fdo.KeyType
+		keyEncoding fdo.KeyEncoding
+	}{
+		// {
+		// 	keyType:     fdo.Secp256r1KeyType,
+		// 	keyEncoding: fdo.X509KeyEnc,
+		// },
+		// {
+		// 	keyType:     fdo.Secp384r1KeyType,
+		// 	keyEncoding: fdo.X509KeyEnc,
+		// },
+		{
+			keyType:     fdo.Secp256r1KeyType,
+			keyEncoding: fdo.X5ChainKeyEnc,
+		},
+		{
+			keyType:     fdo.Secp384r1KeyType,
+			keyEncoding: fdo.X5ChainKeyEnc,
+		},
+	} {
+		t.Run("Key "+table.keyType.String()+" "+table.keyEncoding.String(), func(t *testing.T) {
+			t.Run("Device Initialization", func(t *testing.T) {
+				secret := make([]byte, 32)
+				if _, err := rand.Read(secret); err != nil {
+					t.Fatalf("error generating device secret: %v", err)
+				}
+				cli.Hmac = blob.Hmac(secret)
 
-		key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
-		if err != nil {
-			t.Fatalf("error generating device key: %v", err)
-		}
-		cli.Key = key
+				var key crypto.Signer
+				switch table.keyType {
+				case fdo.Secp256r1KeyType:
+					var err error
+					key, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+					if err != nil {
+						t.Fatalf("error generating device key: %v", err)
+					}
 
-		// Generate Java implementation-compatible mfg string
-		csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
-			Subject: pkix.Name{CommonName: "device.go-fdo"},
-		}, key)
-		if err != nil {
-			t.Fatalf("error creating CSR for device certificate chain: %v", err)
-		}
-		csr, err := x509.ParseCertificateRequest(csrDER)
-		if err != nil {
-			t.Fatalf("error parsing CSR for device certificate chain: %v", err)
-		}
+				case fdo.Secp384r1KeyType:
+					var err error
+					key, err = ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+					if err != nil {
+						t.Fatalf("error generating device key: %v", err)
+					}
 
-		// Call the DI server
-		cred, err := cli.DeviceInitialize(context.TODO(), "", fdo.DeviceMfgInfo{
-			KeyType:      fdo.Secp384r1KeyType, // Must match the key used to generate the CSR
-			KeyEncoding:  fdo.X5ChainKeyEnc,
-			SerialNumber: "123456",
-			DeviceInfo:   "gotest",
-			CertInfo:     cbor.X509CertificateRequest(*csr),
+				default:
+					t.Fatal("unsupported key type " + table.keyType.String())
+				}
+				cli.Key = key
+
+				// Generate Java implementation-compatible mfg string
+				csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
+					Subject: pkix.Name{CommonName: "device.go-fdo"},
+				}, key)
+				if err != nil {
+					t.Fatalf("error creating CSR for device certificate chain: %v", err)
+				}
+				csr, err := x509.ParseCertificateRequest(csrDER)
+				if err != nil {
+					t.Fatalf("error parsing CSR for device certificate chain: %v", err)
+				}
+
+				// Call the DI server
+				serial := make([]byte, 10)
+				if _, err := rand.Read(serial); err != nil {
+					t.Fatalf("error generating serial: %v", err)
+				}
+				cred, err := cli.DeviceInitialize(context.TODO(), "", fdo.DeviceMfgInfo{
+					KeyType:      table.keyType,
+					KeyEncoding:  table.keyEncoding,
+					SerialNumber: hex.EncodeToString(serial),
+					DeviceInfo:   "gotest",
+					CertInfo:     cbor.X509CertificateRequest(*csr),
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				cli.Cred = *cred
+
+				t.Logf("Credential: %s", blob.DeviceCredential{
+					Active:           true,
+					DeviceCredential: *cred,
+					HmacSecret:       []byte(cli.Hmac.(blob.Hmac)),
+					PrivateKey:       blob.Pkcs8Key{PrivateKey: cli.Key},
+				})
+			})
+
+			t.Run("Transfer Ownership 0", func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), timeout)
+				defer cancel()
+				if _, err := cli.TransferOwnership1(ctx, ""); !strings.HasSuffix(err.Error(), fdo.ErrNotFound.Error()) {
+					t.Fatalf("expected TO1 to fail with no resource found, got %v", err)
+				}
+				ttl, err := to0.RegisterBlob(ctx, "", cli.Cred.GUID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Logf("RV Blob TTL: %d seconds", ttl)
+			})
+
+			t.Run("Transfer Ownership 1 and Transfer Ownership 2", func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), timeout)
+				defer cancel()
+				to1d, err := cli.TransferOwnership1(ctx, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Logf("RV Blob: %+v", to1d)
+
+				newCred, err := cli.TransferOwnership2(ctx, "", to1d, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Logf("New credential: %s", blob.DeviceCredential{
+					Active:           true,
+					DeviceCredential: *newCred,
+					HmacSecret:       []byte(cli.Hmac.(blob.Hmac)),
+					PrivateKey:       blob.Pkcs8Key{PrivateKey: cli.Key},
+				})
+			})
+
+			t.Run("Transfer Ownership 2 Only", func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), timeout)
+				defer cancel()
+				newCred, err := cli.TransferOwnership2(ctx, "", nil, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Logf("New credential: %s", blob.DeviceCredential{
+					Active:           true,
+					DeviceCredential: *newCred,
+					HmacSecret:       []byte(cli.Hmac.(blob.Hmac)),
+					PrivateKey:       blob.Pkcs8Key{PrivateKey: cli.Key},
+				})
+			})
+
+			t.Run("Transfer Ownership 2 w/ Modules", func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), timeout)
+				defer cancel()
+				newCred, err := cli.TransferOwnership2(ctx, "", nil, deviceModules)
+				if customExpect != nil {
+					customExpect(t, err)
+					if err != nil {
+						return
+					}
+				} else if err != nil {
+					t.Fatal(err)
+				}
+				t.Logf("New credential: %s", blob.DeviceCredential{
+					Active:           true,
+					DeviceCredential: *newCred,
+					HmacSecret:       []byte(cli.Hmac.(blob.Hmac)),
+					PrivateKey:       blob.Pkcs8Key{PrivateKey: cli.Key},
+				})
+			})
 		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		cli.Cred = *cred
-
-		t.Logf("Credential: %s", blob.DeviceCredential{
-			Active:           true,
-			DeviceCredential: *cred,
-			HmacSecret:       []byte(cli.Hmac.(blob.Hmac)),
-			PrivateKey:       blob.Pkcs8Key{PrivateKey: cli.Key},
-		})
-	})
-
-	t.Run("Transfer Ownership 0", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		defer cancel()
-		if _, err := cli.TransferOwnership1(ctx, ""); !strings.HasSuffix(err.Error(), fdo.ErrNotFound.Error()) {
-			t.Fatalf("expected TO1 to fail with no resource found, got %v", err)
-		}
-		ttl, err := to0.RegisterBlob(ctx, "", cli.Cred.GUID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Logf("RV Blob TTL: %d seconds", ttl)
-	})
-
-	t.Run("Transfer Ownership 1 and Transfer Ownership 2", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		defer cancel()
-		to1d, err := cli.TransferOwnership1(ctx, "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Logf("RV Blob: %+v", to1d)
-
-		newCred, err := cli.TransferOwnership2(ctx, "", to1d, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Logf("New credential: %s", blob.DeviceCredential{
-			Active:           true,
-			DeviceCredential: *newCred,
-			HmacSecret:       []byte(cli.Hmac.(blob.Hmac)),
-			PrivateKey:       blob.Pkcs8Key{PrivateKey: cli.Key},
-		})
-	})
-
-	t.Run("Transfer Ownership 2 Only", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		defer cancel()
-		newCred, err := cli.TransferOwnership2(ctx, "", nil, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Logf("New credential: %s", blob.DeviceCredential{
-			Active:           true,
-			DeviceCredential: *newCred,
-			HmacSecret:       []byte(cli.Hmac.(blob.Hmac)),
-			PrivateKey:       blob.Pkcs8Key{PrivateKey: cli.Key},
-		})
-	})
-
-	t.Run("Transfer Ownership 2 w/ Modules", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		defer cancel()
-		newCred, err := cli.TransferOwnership2(ctx, "", nil, deviceModules)
-		if customExpect != nil {
-			customExpect(t, err)
-			if err != nil {
-				return
-			}
-		} else if err != nil {
-			t.Fatal(err)
-		}
-		t.Logf("New credential: %s", blob.DeviceCredential{
-			Active:           true,
-			DeviceCredential: *newCred,
-			HmacSecret:       []byte(cli.Hmac.(blob.Hmac)),
-			PrivateKey:       blob.Pkcs8Key{PrivateKey: cli.Key},
-		})
-	})
+	}
 }
