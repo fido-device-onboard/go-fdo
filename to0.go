@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"fmt"
 	"io"
 	"time"
@@ -151,12 +150,16 @@ func (c *TO0Client) ownerSign(ctx context.Context, baseURL string, nonce Nonce, 
 	if err != nil {
 		return 0, fmt.Errorf("error looking up ownership voucher: %w", err)
 	}
+	if len(ov.Entries) == 0 {
+		return 0, fmt.Errorf("ownership voucher has zero extensions")
+	}
 	to0d := to0d{
 		Voucher:      *ov,
 		WaitSeconds:  ttl,
 		NonceTO0Sign: nonce,
 	}
-	to0dHash := sha256.New()
+	alg := ov.Entries[0].Payload.Val.PreviousHash.Algorithm
+	to0dHash := alg.HashFunc().New()
 	if err := cbor.NewEncoder(to0dHash).Encode(to0d); err != nil {
 		return 0, fmt.Errorf("error hashing to0d structure: %w", err)
 	}
@@ -174,7 +177,7 @@ func (c *TO0Client) ownerSign(ctx context.Context, baseURL string, nonce Nonce, 
 	to1d := cose.Sign1[To1d, []byte]{Payload: cbor.NewByteWrap(To1d{
 		RV: c.Addrs,
 		To0dHash: Hash{
-			Algorithm: Sha256Hash,
+			Algorithm: alg,
 			Value:     to0dHash.Sum(nil),
 		},
 	})}

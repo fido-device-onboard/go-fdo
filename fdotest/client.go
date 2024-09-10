@@ -9,6 +9,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
@@ -141,14 +142,22 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 		keyType     fdo.KeyType
 		keyEncoding fdo.KeyEncoding
 	}{
-		// {
-		// 	keyType:     fdo.Secp256r1KeyType,
-		// 	keyEncoding: fdo.X509KeyEnc,
-		// },
-		// {
-		// 	keyType:     fdo.Secp384r1KeyType,
-		// 	keyEncoding: fdo.X509KeyEnc,
-		// },
+		{
+			keyType:     fdo.Secp256r1KeyType,
+			keyEncoding: fdo.X509KeyEnc,
+		},
+		{
+			keyType:     fdo.Secp384r1KeyType,
+			keyEncoding: fdo.X509KeyEnc,
+		},
+		{
+			keyType:     fdo.RsaPkcsKeyType,
+			keyEncoding: fdo.X509KeyEnc,
+		},
+		{
+			keyType:     fdo.RsaPssKeyType,
+			keyEncoding: fdo.X509KeyEnc,
+		},
 		{
 			keyType:     fdo.Secp256r1KeyType,
 			keyEncoding: fdo.X5ChainKeyEnc,
@@ -182,8 +191,23 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 						t.Fatalf("error generating device key: %v", err)
 					}
 
+				case fdo.RsaPkcsKeyType:
+					var err error
+					key, err = rsa.GenerateKey(rand.Reader, 2048)
+					if err != nil {
+						t.Fatalf("error generating device key: %v", err)
+					}
+
+				case fdo.RsaPssKeyType:
+					var err error
+					key, err = rsa.GenerateKey(rand.Reader, 3072)
+					if err != nil {
+						t.Fatalf("error generating device key: %v", err)
+					}
+					cli.PSS = true
+
 				default:
-					t.Fatal("unsupported key type " + table.keyType.String())
+					panic("unsupported key type " + table.keyType.String())
 				}
 				cli.Key = key
 

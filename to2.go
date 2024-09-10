@@ -8,7 +8,6 @@ import (
 	"context"
 	"crypto"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/x509"
 	"errors"
 	"fmt"
@@ -158,7 +157,7 @@ func (c *Client) helloDevice(ctx context.Context, baseURL string) (Nonce, *ovhVa
 	// Select SigInfo using SHA384 when available
 	aSigInfo, err := sigInfoFor(c.Key, c.PSS)
 	if err != nil {
-		return Nonce{}, nil, nil, fmt.Errorf("error select aSigInfo for TO2.HelloDevice request: %w", err)
+		return Nonce{}, nil, nil, fmt.Errorf("error selecting aSigInfo for TO2.HelloDevice request: %w", err)
 	}
 
 	// Create a request structure
@@ -294,7 +293,6 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 	if err := cbor.NewDecoder(msg).Decode(&rawHello); err != nil {
 		return nil, fmt.Errorf("error decoding TO2.HelloDevice request: %w", err)
 	}
-	helloSum256 := sha256.Sum256(rawHello)
 	var hello helloDeviceMsg
 	if err := cbor.Unmarshal(rawHello, &hello); err != nil {
 		return nil, fmt.Errorf("error decoding TO2.HelloDevice request: %w", err)
@@ -313,6 +311,12 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 	if numEntries > math.MaxUint8 {
 		return nil, fmt.Errorf("voucher for device %x has too many entries", hello.GUID)
 	}
+
+	// Hash request
+	helloDeviceHash := Hash{Algorithm: ov.Header.Val.CertChainHash.Algorithm}
+	helloDeviceHasher := helloDeviceHash.Algorithm.HashFunc().New()
+	_, _ = helloDeviceHasher.Write(rawHello)
+	helloDeviceHash.Value = helloDeviceHasher.Sum(nil)
 
 	// Generate nonce for ProveDevice
 	var proveDeviceNonce Nonce
@@ -360,16 +364,13 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 			},
 		},
 		Payload: cbor.NewByteWrap(ovhProof{
-			OVH:             ov.Header,
-			NumOVEntries:    uint8(numEntries),
-			OVHHmac:         ov.Hmac,
-			NonceTO2ProveOV: hello.NonceTO2ProveOV,
-			SigInfoB:        hello.SigInfoA,
-			KeyExchangeA:    xA,
-			HelloDeviceHash: Hash{
-				Algorithm: Sha256Hash,
-				Value:     helloSum256[:],
-			},
+			OVH:                 ov.Header,
+			NumOVEntries:        uint8(numEntries),
+			OVHHmac:             ov.Hmac,
+			NonceTO2ProveOV:     hello.NonceTO2ProveOV,
+			SigInfoB:            hello.SigInfoA,
+			KeyExchangeA:        xA,
+			HelloDeviceHash:     helloDeviceHash,
 			MaxOwnerMessageSize: 65535, // TODO: Make this configurable and match handler config
 		}),
 	}
@@ -664,9 +665,17 @@ type deviceServiceInfoReady struct {
 }
 
 // DeviceServiceInfoReady(66) -> OwnerServiceInfoReady(67)
-func (c *Client) readyServiceInfo(ctx context.Context, baseURL string, replacementOVH *VoucherHeader, session kex.Session) (maxDeviceServiceInfoSiz uint16, err error) {
+func (c *Client) readyServiceInfo(ctx context.Context, baseURL string, alg HashAlg, replacementOVH *VoucherHeader, session kex.Session) (maxDeviceServiceInfoSiz uint16, err error) {
 	// Calculate the new OVH HMac similar to DI.SetHMAC
-	replacementHmac, err := hmacHash(c.Hmac, HmacSha384Hash, replacementOVH)
+	switch alg {
+	case Sha256Hash, HmacSha256Hash:
+		alg = HmacSha256Hash
+	case Sha384Hash, HmacSha384Hash:
+		alg = HmacSha384Hash
+	default:
+		panic("only SHA256 and SHA384 are supported in FDO")
+	}
+	replacementHmac, err := hmacHash(c.Hmac, alg, replacementOVH)
 	if err != nil {
 		return 0, fmt.Errorf("error computing HMAC of ownership voucher header: %w", err)
 	}

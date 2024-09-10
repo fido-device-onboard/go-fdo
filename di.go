@@ -6,7 +6,6 @@ package fdo
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha512"
 	"fmt"
 	"io"
 
@@ -107,18 +106,38 @@ func (s *DIServer) setCredentials(ctx context.Context, msg io.Reader) (*setCrede
 		return nil, fmt.Errorf("error decoding device manufacturing info: %w", err)
 	}
 	info := appStart.DeviceMfgInfo.Val
+
+	// Sign device certificate chain
 	chain, err := s.Session.NewDeviceCertChain(ctx, info)
 	if err != nil {
 		return nil, fmt.Errorf("error creating device certificate chain: %w", err)
 	}
-	mfgPubKey, err := newPublicKey(info.KeyType, chain[1:])
+
+	// Get the manufacturer pubkey in the right encoding
+	var mfgPubKey *PublicKey
+	switch enc := info.KeyEncoding; enc {
+	case X509KeyEnc:
+		mfgPubKey, err = newPublicKey(info.KeyType, chain[1].PublicKey)
+	case X5ChainKeyEnc:
+		mfgPubKey, err = newPublicKey(info.KeyType, chain[1:])
+	default:
+		return nil, fmt.Errorf("unsupported key encoding: %s", enc)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("error constructing manufacturer public key from CA chain: %w", err)
 	}
-	certChainHash := sha512.New384()
+
+	// Compute the appropriate cert chain hash
+	alg, err := hashAlgFor(chain[0].PublicKey, chain[1].PublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("error determining appropriate device cert chain hash algorithm: %w", err)
+	}
+	certChainHash := alg.HashFunc().New()
 	for _, cert := range chain {
 		_, _ = certChainHash.Write(cert.Raw)
 	}
+
+	// Store and return a voucher header for the device
 	var guid GUID
 	if _, err := rand.Read(guid[:]); err != nil {
 		return nil, fmt.Errorf("error generating device GUID: %w", err)
@@ -130,7 +149,7 @@ func (s *DIServer) setCredentials(ctx context.Context, msg io.Reader) (*setCrede
 		DeviceInfo:      info.DeviceInfo,
 		ManufacturerKey: *mfgPubKey,
 		CertChainHash: &Hash{
-			Algorithm: Sha384Hash,
+			Algorithm: alg,
 			Value:     certChainHash.Sum(nil),
 		},
 	}
@@ -145,7 +164,21 @@ func (s *DIServer) setCredentials(ctx context.Context, msg io.Reader) (*setCrede
 
 // SetHMAC(12) -> Done(13)
 func (c *Client) setHmac(ctx context.Context, baseURL string, ovh *VoucherHeader) (err error) {
-	ovhHash, err := hmacHash(c.Hmac, HmacSha384Hash, ovh)
+	// Compute HMAC
+	ownerPubKey, _ := ovh.ManufacturerKey.Public()
+	alg, err := hashAlgFor(c.Key.Public(), ownerPubKey)
+	if err != nil {
+		return fmt.Errorf("error selecting the appropriate hash algorithm: %w", err)
+	}
+	switch alg {
+	case Sha256Hash:
+		alg = HmacSha256Hash
+	case Sha384Hash:
+		alg = HmacSha384Hash
+	default:
+		panic("only SHA256 and SHA384 are supported in FDO")
+	}
+	ovhHash, err := hmacHash(c.Hmac, alg, ovh)
 	if err != nil {
 		return fmt.Errorf("error computing HMAC of ownership voucher header: %w", err)
 	}

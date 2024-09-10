@@ -6,7 +6,6 @@ package fdo
 import (
 	"context"
 	"crypto"
-	"crypto/sha512"
 	"errors"
 	"fmt"
 	"sync"
@@ -91,13 +90,14 @@ func (c *Client) DeviceInitialize(ctx context.Context, baseURL string, info any)
 	}
 
 	// Hash initial owner public key
-	ownerKeyDigest := sha512.New384()
+	alg := Sha384Hash
+	ownerKeyDigest := alg.HashFunc().New()
 	if err := cbor.NewEncoder(ownerKeyDigest).Encode(ovh.ManufacturerKey); err != nil {
 		err = fmt.Errorf("error computing hash of initial owner (manufacturer) key: %w", err)
 		c.errorMsg(ctx, baseURL, err)
 		return nil, err
 	}
-	ownerKeyHash := Hash{Algorithm: Sha384Hash, Value: ownerKeyDigest.Sum(nil)[:]}
+	ownerKeyHash := Hash{Algorithm: alg, Value: ownerKeyDigest.Sum(nil)[:]}
 
 	if err := c.setHmac(ctx, baseURL, ovh); err != nil {
 		c.errorMsg(ctx, baseURL, err)
@@ -182,8 +182,15 @@ func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, to1d *c
 		CertChainHash:   originalOVH.CertChainHash,
 	}
 
+	// Select the appropriate hash algorithm
+	ownerPubKey, _ := partialOVH.ManufacturerKey.Public()
+	alg, err := hashAlgFor(c.Key.Public(), ownerPubKey)
+	if err != nil {
+		return nil, fmt.Errorf("error selecting the appropriate hash algorithm: %w", err)
+	}
+
 	// Prepare to send and receive service info, determining the transmit MTU
-	sendMTU, err := c.readyServiceInfo(ctx, baseURL, replacementOVH, session)
+	sendMTU, err := c.readyServiceInfo(ctx, baseURL, alg, replacementOVH, session)
 	if err != nil {
 		c.errorMsg(ctx, baseURL, err)
 		return nil, err
@@ -207,13 +214,13 @@ func (c *Client) TransferOwnership2(ctx context.Context, baseURL string, to1d *c
 
 	// Hash new initial owner public key and return replacement device
 	// credential
-	replacementKeyDigest := sha512.New384()
+	replacementKeyDigest := alg.HashFunc().New()
 	if err := cbor.NewEncoder(replacementKeyDigest).Encode(replacementOVH.ManufacturerKey); err != nil {
 		err = fmt.Errorf("error computing hash of replacement owner key: %w", err)
 		c.errorMsg(ctx, baseURL, err)
 		return nil, err
 	}
-	replacementPublicKeyHash := Hash{Algorithm: Sha384Hash, Value: replacementKeyDigest.Sum(nil)[:]}
+	replacementPublicKeyHash := Hash{Algorithm: alg, Value: replacementKeyDigest.Sum(nil)[:]}
 
 	return &DeviceCredential{
 		Version:       replacementOVH.Version,
