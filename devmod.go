@@ -5,6 +5,7 @@ package fdo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
@@ -301,19 +302,7 @@ func (d *devmodOwnerModule) HandleInfo(ctx context.Context, messageName string, 
 	case "nummodules":
 		return cbor.NewDecoder(messageBody).Decode(&d.numModules)
 	case "modules":
-		if d.Modules == nil {
-			d.Modules = make([]string, d.numModules)
-		}
-		var chunk devmodModulesChunk
-		if err := cbor.NewDecoder(messageBody).Decode(&chunk); err != nil {
-			return err
-		}
-		if chunk.Start < 0 || chunk.Len < 0 || chunk.Start+chunk.Len > d.numModules || len(chunk.Modules) != chunk.Len {
-			return fmt.Errorf("invalid devmod module chunk")
-		}
-		copy(d.Modules[chunk.Start:chunk.Start+chunk.Len], chunk.Modules)
-		d.done = chunk.Start+chunk.Len == d.numModules
-		return nil
+		return d.parseModules(messageBody)
 	}
 
 	dm := reflect.ValueOf(&d.Devmod).Elem()
@@ -327,6 +316,35 @@ func (d *devmodOwnerModule) HandleInfo(ctx context.Context, messageName string, 
 	}
 
 	return fmt.Errorf("unknown devmod message name: %s", messageName)
+}
+
+func (d *devmodOwnerModule) parseModules(messageBody io.Reader) error {
+	if d.Modules == nil {
+		d.Modules = make([]string, d.numModules)
+	}
+	var nextIndex *int
+	for {
+		var chunk devmodModulesChunk
+		if err := cbor.NewDecoder(messageBody).Decode(&chunk); errors.Is(err, io.EOF) {
+			return nil
+		} else if err != nil {
+			return err
+		}
+		if chunk.Start < 0 || chunk.Len < 0 || chunk.Start+chunk.Len > d.numModules || len(chunk.Modules) != chunk.Len {
+			return fmt.Errorf("invalid devmod module chunk")
+		}
+
+		// Handle implementations that don't use the first array item to
+		// indicate the start index of the full module array to populate.
+		if nextIndex != nil && chunk.Start == 0 {
+			chunk.Start = *nextIndex
+		}
+		end := chunk.Start + chunk.Len
+		nextIndex = &end
+
+		copy(d.Modules[chunk.Start:chunk.Start+chunk.Len], chunk.Modules)
+		d.done = chunk.Start+chunk.Len == d.numModules
+	}
 }
 
 func (d *devmodOwnerModule) ProduceInfo(_ context.Context, _ *serviceinfo.Producer) (bool, bool, error) {
