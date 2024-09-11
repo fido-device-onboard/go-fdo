@@ -32,6 +32,10 @@ Client options:
         Print HTTP contents
   -di URL
         HTTP base URL for DI server
+  -di-ec256
+        Use Secp256r1 EC key for device credential
+  -di-x5chain
+        Use X5Chain for manufacturer public key encoding
   -download dir
         A dir to download files into (FSIM disabled if empty)
   -insecure-tls

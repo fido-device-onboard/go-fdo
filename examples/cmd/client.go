@@ -37,6 +37,8 @@ var clientFlags = flag.NewFlagSet("client", flag.ContinueOnError)
 var (
 	blobPath    string
 	diURL       string
+	diEC256     bool
+	diX5Chain   bool
 	printDevice bool
 	rvOnly      bool
 	dlDir       string
@@ -123,6 +125,8 @@ func init() {
 	clientFlags.BoolVar(&insecureTLS, "insecure-tls", false, "Skip TLS certificate verification")
 	clientFlags.StringVar(&dlDir, "download", "", "A `dir` to download files into (FSIM disabled if empty)")
 	clientFlags.StringVar(&diURL, "di", "", "HTTP base `URL` for DI server")
+	clientFlags.BoolVar(&diEC256, "di-ec256", false, "Use Secp256r1 EC key for device credential")
+	clientFlags.BoolVar(&diX5Chain, "di-x5chain", false, "Use X5Chain for manufacturer public key encoding")
 	clientFlags.BoolVar(&printDevice, "print", false, "Print device credential blob and stop")
 	clientFlags.BoolVar(&rvOnly, "rv-only", false, "Perform TO1 then stop")
 	clientFlags.Var(&uploads, "upload", "List of dirs and `files` to upload files from, "+
@@ -243,9 +247,16 @@ func di(cli *fdo.Client) error {
 	if err != nil {
 		return fmt.Errorf("error generating random serial number: %w", err)
 	}
+	keyType, keyEncoding := fdo.Secp384r1KeyType, fdo.X509KeyEnc
+	if diEC256 {
+		keyType = fdo.Secp256r1KeyType
+	}
+	if diX5Chain {
+		keyEncoding = fdo.X5ChainKeyEnc
+	}
 	cred, err := cli.DeviceInitialize(context.TODO(), diURL, fdo.DeviceMfgInfo{
-		KeyType:      fdo.Secp384r1KeyType, // Must match the key used to generate the CSR
-		KeyEncoding:  fdo.X5ChainKeyEnc,
+		KeyType:      keyType,
+		KeyEncoding:  keyEncoding,
 		SerialNumber: strconv.FormatInt(sn.Int64(), 10),
 		DeviceInfo:   "gotest",
 		CertInfo:     cbor.X509CertificateRequest(*csr),
