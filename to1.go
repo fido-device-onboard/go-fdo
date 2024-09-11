@@ -199,8 +199,15 @@ func (c *Client) proveToRv(ctx context.Context, baseURL string, nonce Nonce) (*c
 
 // ProveToRV(32) -> RVRedirect(33)
 func (s *TO1Server) rvRedirect(ctx context.Context, msg io.Reader) (*cose.Sign1Tag[To1d, []byte], error) {
-	var token cose.Sign1Tag[eatoken, []byte]
+	// Decode a fully-parsed and raw COSE Sign1. The latter is used for
+	// verifying in a more lenient way, as it doesn't require deterministic
+	// encoding of CBOR (even though FDO requires this).
+	var token cose.Sign1Tag[cbor.RawBytes, []byte]
 	if err := cbor.NewDecoder(msg).Decode(&token); err != nil {
+		return nil, fmt.Errorf("error decoding TO1.ProveToRV request: %w", err)
+	}
+	var eat eatoken
+	if err := cbor.Unmarshal([]byte(token.Payload.Val), &eat); err != nil {
 		return nil, fmt.Errorf("error decoding TO1.ProveToRV request: %w", err)
 	}
 
@@ -209,7 +216,7 @@ func (s *TO1Server) rvRedirect(ctx context.Context, msg io.Reader) (*cose.Sign1T
 	if err != nil {
 		return nil, fmt.Errorf("error getting TO1 proof nonce: %w", err)
 	}
-	nonce, ok := token.Payload.Val[eatNonceClaim].([]byte)
+	nonce, ok := eat[eatNonceClaim].([]byte)
 	if !ok {
 		captureErr(ctx, invalidMessageErrCode, "")
 		return nil, fmt.Errorf("EAT missing nonce claim")
@@ -220,7 +227,7 @@ func (s *TO1Server) rvRedirect(ctx context.Context, msg io.Reader) (*cose.Sign1T
 	}
 
 	// Get GUID from EAT
-	ueid, ok := token.Payload.Val[eatUeidClaim].([]byte)
+	ueid, ok := eat[eatUeidClaim].([]byte)
 	if !ok {
 		captureErr(ctx, invalidMessageErrCode, "")
 		return nil, fmt.Errorf("EAT missing UEID claim")

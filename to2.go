@@ -543,9 +543,15 @@ type deviceSetup struct {
 //
 //nolint:gocyclo // This is very complex validation that is better understood linearly
 func (s *TO2Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1Tag[deviceSetup, []byte], error) {
-	// Parse request
-	var proof cose.Sign1Tag[eatoken, []byte]
+	// Decode a fully-parsed and raw COSE Sign1. The latter is used for
+	// verifying in a more lenient way, as it doesn't require deterministic
+	// encoding of CBOR (even though FDO requires this).
+	var proof cose.Sign1Tag[cbor.RawBytes, []byte]
 	if err := cbor.NewDecoder(msg).Decode(&proof); err != nil {
+		return nil, fmt.Errorf("error decoding TO2.ProveDevice request: %w", err)
+	}
+	var eat eatoken
+	if err := cbor.Unmarshal([]byte(proof.Payload.Val), &eat); err != nil {
 		return nil, fmt.Errorf("error decoding TO2.ProveDevice request: %w", err)
 	}
 
@@ -586,7 +592,6 @@ func (s *TO2Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving ProveDevice nonce for session: %w", err)
 	}
-	eat := proof.Payload.Val
 	nonceClaim, ok := eat[eatNonceClaim].([]byte)
 	if !ok {
 		return nil, fmt.Errorf("missing nonce claim from EAT")
