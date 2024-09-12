@@ -12,7 +12,7 @@ jobs:
     runs-on: ["innersource.prod.amr.dind"]
     name: Lint Go Source
     container:
-      image: golangci/golangci-lint:v1.60.1-alpine
+      image: golangci/golangci-lint:latest-alpine
     steps:
       - name: Check out repository code
         uses: actions/checkout@v4
