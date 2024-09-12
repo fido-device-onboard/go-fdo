@@ -224,7 +224,11 @@ func di(cli *fdo.Client) error {
 	}
 	cli.Hmac = blob.Hmac(secret)
 
-	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	curve := elliptic.P384()
+	if diEC256 {
+		curve = elliptic.P256()
+	}
+	key, err := ecdsa.GenerateKey(curve, rand.Reader)
 	if err != nil {
 		return fmt.Errorf("error generating device key: %w", err)
 	}

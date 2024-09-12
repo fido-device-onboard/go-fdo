@@ -89,8 +89,14 @@ func (c *Client) DeviceInitialize(ctx context.Context, baseURL string, info any)
 		return nil, err
 	}
 
+	// Select the appropriate hash algorithm
+	ownerPubKey, _ := ovh.ManufacturerKey.Public()
+	alg, err := hashAlgFor(c.Key.Public(), ownerPubKey)
+	if err != nil {
+		return nil, fmt.Errorf("error selecting the appropriate hash algorithm: %w", err)
+	}
+
 	// Hash initial owner public key
-	alg := Sha384Hash
 	ownerKeyDigest := alg.HashFunc().New()
 	if err := cbor.NewEncoder(ownerKeyDigest).Encode(ovh.ManufacturerKey); err != nil {
 		err = fmt.Errorf("error computing hash of initial owner (manufacturer) key: %w", err)
