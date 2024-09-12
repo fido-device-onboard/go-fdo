@@ -336,7 +336,10 @@ func (d *devmodOwnerModule) parseModules(messageBody io.Reader) error {
 
 		// Handle implementations that don't use the first array item to
 		// indicate the start index of the full module array to populate.
-		if idx := slices.Index(d.Modules, ""); idx > 0 && chunk.Start == 0 {
+		//
+		// TODO: Remove this in FDO 1.2 when the spec is made more clear on how
+		// to use the index.
+		if idx := slices.Index(d.Modules, ""); idx != -1 && chunk.Start != idx {
 			chunk.Start = idx
 		}
 
@@ -348,7 +351,17 @@ func (d *devmodOwnerModule) parseModules(messageBody io.Reader) error {
 func (d *devmodOwnerModule) ProduceInfo(_ context.Context, _ *serviceinfo.Producer) (bool, bool, error) {
 	// Validate required fields were sent before sending IsDone
 	if d.done {
-		return false, true, d.Devmod.Validate()
+		if err := d.Devmod.Validate(); err != nil {
+			return false, false, err
+		}
+		if slices.Contains(d.Modules, "") {
+			return false, false, fmt.Errorf("modules list did not match nummodules or included an empty module name")
+		}
+		// TODO: Enable this check when FDO 1.2 clarifies the requirement
+		// if !slices.Contains(d.Modules, "devmod") {
+		// 	return false, false, fmt.Errorf("modules list did not include devmod")
+		// }
+		return false, true, nil
 	}
 	return false, false, nil
 }
