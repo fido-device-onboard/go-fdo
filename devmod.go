@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
@@ -322,7 +323,6 @@ func (d *devmodOwnerModule) parseModules(messageBody io.Reader) error {
 	if d.Modules == nil {
 		d.Modules = make([]string, d.numModules)
 	}
-	var nextIndex *int
 	for {
 		var chunk devmodModulesChunk
 		if err := cbor.NewDecoder(messageBody).Decode(&chunk); errors.Is(err, io.EOF) {
@@ -336,11 +336,9 @@ func (d *devmodOwnerModule) parseModules(messageBody io.Reader) error {
 
 		// Handle implementations that don't use the first array item to
 		// indicate the start index of the full module array to populate.
-		if nextIndex != nil && chunk.Start == 0 {
-			chunk.Start = *nextIndex
+		if idx := slices.Index(d.Modules, ""); idx > 0 && chunk.Start == 0 {
+			chunk.Start = idx
 		}
-		end := chunk.Start + chunk.Len
-		nextIndex = &end
 
 		copy(d.Modules[chunk.Start:chunk.Start+chunk.Len], chunk.Modules)
 		d.done = chunk.Start+chunk.Len == d.numModules
