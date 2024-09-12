@@ -22,7 +22,7 @@ func init() {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, `
+	_, _ = fmt.Fprintf(os.Stderr, `
 Usage:
   fdo [global_options] [client|server] [--] [options]
 
@@ -47,7 +47,7 @@ func options(flags *flag.FlagSet) string {
 
 func main() {
 	if err := flags.Parse(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		_, _ = fmt.Fprintln(os.Stderr, err)
 		usage()
 		os.Exit(1)
 	}
@@ -64,27 +64,27 @@ func main() {
 	switch sub {
 	case "client", "c", "cli":
 		if err := clientFlags.Parse(args); err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			_, _ = fmt.Fprintln(os.Stderr, err)
 			usage()
 			os.Exit(1)
 		}
 		if err := client(); err != nil {
-			fmt.Fprintf(os.Stderr, "client error: %v\n", err)
+			_, _ = fmt.Fprintf(os.Stderr, "client error: %v\n", err)
 			os.Exit(2)
 		}
 	case "server", "s", "srv":
 		if err := serverFlags.Parse(args); err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			_, _ = fmt.Fprintln(os.Stderr, err)
 			usage()
 			os.Exit(1)
 		}
 		if err := server(); err != nil {
-			fmt.Fprintf(os.Stderr, "server error: %v\n", err)
+			_, _ = fmt.Fprintf(os.Stderr, "server error: %v\n", err)
 			os.Exit(2)
 		}
 	default:
 		if sub != "" {
-			fmt.Fprintf(os.Stderr, "unknown subcommand %q\n", sub)
+			_, _ = fmt.Fprintf(os.Stderr, "unknown subcommand %q\n", sub)
 		}
 		usage()
 		os.Exit(1)
