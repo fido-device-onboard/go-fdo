@@ -38,7 +38,7 @@ var (
 	blobPath    string
 	diURL       string
 	diEC256     bool
-	diX5Chain   bool
+	diKeyEnc    string
 	printDevice bool
 	rvOnly      bool
 	dlDir       string
@@ -126,7 +126,7 @@ func init() {
 	clientFlags.StringVar(&dlDir, "download", "", "A `dir` to download files into (FSIM disabled if empty)")
 	clientFlags.StringVar(&diURL, "di", "", "HTTP base `URL` for DI server")
 	clientFlags.BoolVar(&diEC256, "di-ec256", false, "Use Secp256r1 EC key for device credential")
-	clientFlags.BoolVar(&diX5Chain, "di-x5chain", false, "Use X5Chain for manufacturer public key encoding")
+	clientFlags.StringVar(&diKeyEnc, "di-key-enc", "x509", "Public key encoding to use for manufacturer key [x509,x5chain,cose]")
 	clientFlags.BoolVar(&printDevice, "print", false, "Print device credential blob and stop")
 	clientFlags.BoolVar(&rvOnly, "rv-only", false, "Perform TO1 then stop")
 	clientFlags.Var(&uploads, "upload", "List of dirs and `files` to upload files from, "+
@@ -251,12 +251,20 @@ func di(cli *fdo.Client) error {
 	if err != nil {
 		return fmt.Errorf("error generating random serial number: %w", err)
 	}
-	keyType, keyEncoding := fdo.Secp384r1KeyType, fdo.X509KeyEnc
+	keyType := fdo.Secp384r1KeyType
 	if diEC256 {
 		keyType = fdo.Secp256r1KeyType
 	}
-	if diX5Chain {
+	var keyEncoding fdo.KeyEncoding
+	switch {
+	case strings.EqualFold(diKeyEnc, "x509"):
+		keyEncoding = fdo.X509KeyEnc
+	case strings.EqualFold(diKeyEnc, "x5chain"):
 		keyEncoding = fdo.X5ChainKeyEnc
+	case strings.EqualFold(diKeyEnc, "cose"):
+		keyEncoding = fdo.CoseKeyEnc
+	default:
+		return fmt.Errorf("unsupported key encoding: %s", diKeyEnc)
 	}
 	cred, err := cli.DeviceInitialize(context.TODO(), diURL, fdo.DeviceMfgInfo{
 		KeyType:      keyType,

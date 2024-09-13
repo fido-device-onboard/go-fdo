@@ -34,8 +34,8 @@ Client options:
         HTTP base URL for DI server
   -di-ec256
         Use Secp256r1 EC key for device credential
-  -di-x5chain
-        Use X5Chain for manufacturer public key encoding
+  -di-key-enc string
+        Public key encoding to use for manufacturer key [x509,x5chain,cose] (default "x509")
   -download dir
         A dir to download files into (FSIM disabled if empty)
   -insecure-tls

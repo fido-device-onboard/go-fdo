@@ -13,6 +13,7 @@ import (
 	"fmt"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/cose"
 )
 
 // KeyType is an FDO pkType enum.
@@ -126,7 +127,7 @@ func (pub PublicKey) String() string {
 	return s
 }
 
-func newPublicKey(typ KeyType, pub any) (*PublicKey, error) {
+func newPublicKey(typ KeyType, pub any, asCOSE bool) (*PublicKey, error) {
 	switch pub := pub.(type) {
 	case []*x509.Certificate:
 		chain := make([]*cbor.X509Certificate, len(pub))
@@ -144,6 +145,22 @@ func newPublicKey(typ KeyType, pub any) (*PublicKey, error) {
 		}, nil
 
 	case *ecdsa.PublicKey, *rsa.PublicKey:
+		if asCOSE {
+			coseKey, err := cose.NewKey(pub)
+			if err != nil {
+				return nil, fmt.Errorf("COSE encoding: %w", err)
+			}
+			body, err := cbor.Marshal(coseKey)
+			if err != nil {
+				return nil, fmt.Errorf("COSE encoding: %w", err)
+			}
+			return &PublicKey{
+				Type:     typ,
+				Encoding: CoseKeyEnc,
+				Body:     body,
+			}, nil
+		}
+
 		der, err := x509.MarshalPKIXPublicKey(pub)
 		if err != nil {
 			return nil, fmt.Errorf("X509 encoding: %w", err)
@@ -187,6 +204,9 @@ func (pub *PublicKey) parse() error {
 
 	case X5ChainKeyEnc:
 		return pub.parseX5Chain()
+
+	case CoseKeyEnc:
+		return pub.parseCose()
 
 	default:
 		return fmt.Errorf("unsupported key encoding: %s", pub.Encoding)
@@ -255,6 +275,19 @@ func (pub *PublicKey) parseX5Chain() error {
 	default:
 		return fmt.Errorf("unsupported key type: %s", pub.Type)
 	}
+}
+
+func (pub *PublicKey) parseCose() error {
+	var key cose.Key
+	if err := cbor.Unmarshal([]byte(pub.Body), &key); err != nil {
+		return err
+	}
+	pubkey, err := key.Public()
+	if err != nil {
+		return err
+	}
+	pub.key = pubkey
+	return nil
 }
 
 // hashAlgFor determines the appropriate hash algorithm to use based on the

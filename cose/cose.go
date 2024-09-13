@@ -5,6 +5,13 @@
 // RFC8152.
 package cose
 
+import (
+	"fmt"
+	"strconv"
+
+	"github.com/fido-device-onboard/go-fdo/cbor"
+)
+
 /*
 COSE Tags
 
@@ -32,3 +39,46 @@ const (
 	MacTagNum      uint64 = 97
 	Mac0TagNum     uint64 = 17
 )
+
+// IntOrStr is either an int or a text string. Many values in COSE have this
+// polymorphic type. For simplicity, it is implemented once and each type is an
+// alias or embeds it.
+type IntOrStr struct {
+	Int64 int64
+	Str   string
+}
+
+func (v IntOrStr) String() string {
+	if v.Int64 != 0 {
+		return strconv.FormatInt(v.Int64, 10)
+	}
+	return v.Str
+}
+
+// MarshalCBOR implements cbor.Marshaler.
+func (v IntOrStr) MarshalCBOR() ([]byte, error) {
+	// 0 is a reserved label
+	if v.Int64 != 0 {
+		return cbor.Marshal(v.Int64)
+	}
+	return cbor.Marshal(v.String)
+}
+
+// UnmarshalCBOR implements cbor.Unmarshaler.
+func (v *IntOrStr) UnmarshalCBOR(b []byte) error {
+	var a any
+	if err := cbor.Unmarshal(b, &a); err != nil {
+		return err
+	}
+	switch a := a.(type) {
+	case int64:
+		v.Int64 = a
+		v.Str = ""
+	case string:
+		v.Int64 = 0
+		v.Str = a
+	default:
+		return fmt.Errorf("unexpected label type: %T", a)
+	}
+	return nil
+}

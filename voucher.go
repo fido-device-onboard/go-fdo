@@ -463,7 +463,7 @@ func ExtendVoucher[T PublicKeyOrChain](v *Voucher, owner crypto.Signer, nextOwne
 	}
 
 	// Create the next owner PublicKey structure
-	nextOwnerPublicKey, err := newPublicKey(v.Header.Val.ManufacturerKey.Type, nextOwner)
+	nextOwnerPublicKey, err := newPublicKey(v.Header.Val.ManufacturerKey.Type, nextOwner, false)
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling next owner public key: %w", err)
 	}

@@ -117,9 +117,11 @@ func (s *DIServer) setCredentials(ctx context.Context, msg io.Reader) (*setCrede
 	var mfgPubKey *PublicKey
 	switch enc := info.KeyEncoding; enc {
 	case X509KeyEnc:
-		mfgPubKey, err = newPublicKey(info.KeyType, chain[1].PublicKey)
+		mfgPubKey, err = newPublicKey(info.KeyType, chain[1].PublicKey, false)
 	case X5ChainKeyEnc:
-		mfgPubKey, err = newPublicKey(info.KeyType, chain[1:])
+		mfgPubKey, err = newPublicKey(info.KeyType, chain[1:], false)
+	case CoseKeyEnc:
+		mfgPubKey, err = newPublicKey(info.KeyType, chain[1:], true)
 	default:
 		return nil, fmt.Errorf("unsupported key encoding: %s", enc)
 	}

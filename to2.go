@@ -352,7 +352,7 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 	if !ok {
 		return nil, fmt.Errorf("key type %s not supported", keyType)
 	}
-	ownerPublicKey, err := newPublicKey(keyType, key.Public())
+	ownerPublicKey, err := newPublicKey(keyType, key.Public(), false)
 	if err != nil {
 		return nil, fmt.Errorf("error with owner public key: %w", err)
 	}
@@ -642,7 +642,7 @@ func (s *TO2Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1
 	if !ok {
 		return nil, fmt.Errorf("key type %s not supported", keyType)
 	}
-	ownerPublicKey, err := newPublicKey(keyType, key.Public())
+	ownerPublicKey, err := newPublicKey(keyType, key.Public(), false)
 	if err != nil {
 		return nil, fmt.Errorf("error with owner public key: %w", err)
 	}
@@ -1220,7 +1220,7 @@ func (s *TO2Server) to2Done2(ctx context.Context, msg io.Reader) (*done2Msg, err
 	if !ok {
 		return nil, fmt.Errorf("key type %s not supported", keyType)
 	}
-	ownerPublicKey, err := newPublicKey(keyType, key.Public())
+	ownerPublicKey, err := newPublicKey(keyType, key.Public(), false)
 	if err != nil {
 		return nil, fmt.Errorf("error with owner public key: %w", err)
 	}
