@@ -349,7 +349,9 @@ func transferOwnership(cli *fdo.Client, rvInfo [][]fdo.RvInstruction) *fdo.Devic
 }
 
 func transferOwnership2(cli *fdo.Client, baseURL string, to1d *cose.Sign1[fdo.To1d, []byte]) *fdo.DeviceCredential {
-	fsims := make(map[string]serviceinfo.DeviceModule)
+	fsims := map[string]serviceinfo.DeviceModule{
+		"fido_alliance": &fsim.Interop{},
+	}
 	if dlDir != "" {
 		fsims["fdo.download"] = &fsim.Download{
 			NameToPath: func(name string) string {
