@@ -7,10 +7,8 @@ package sqlite
 import (
 	"context"
 	"crypto"
-	"crypto/ecdsa"
 	"crypto/hmac"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/sha512"
 	"crypto/x509"
@@ -21,7 +19,6 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"math/big"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -39,13 +36,6 @@ import (
 
 // DB implements FDO server state persistence.
 type DB struct {
-	// When set, NewVoucher will extend the voucher. An owner key of the
-	// appropriate type must already be added.
-	AutoExtend bool
-
-	// When set, NewVoucher will cause an RV blob to be created.
-	AutoRegisterRV *fdo.To1d
-
 	// When set, ReplaceVoucher will not delete the original voucher.
 	PreserveReplacedVouchers bool
 
@@ -473,7 +463,8 @@ func (db *DB) AddManufacturerKey(keyType fdo.KeyType, key crypto.PrivateKey, cha
 	})
 }
 
-func (db *DB) manufacturerKey(keyType fdo.KeyType) (crypto.PrivateKey, []*x509.Certificate, error) {
+// ManufacturerKey returns the signer of a given key type.
+func (db *DB) ManufacturerKey(keyType fdo.KeyType) (crypto.Signer, []*x509.Certificate, error) {
 	var pkcs8, der []byte
 	if err := db.query(context.Background(), "mfg_keys", []string{"pkcs8", "x509_chain"}, map[string]any{
 		"type": int(keyType),
@@ -492,69 +483,46 @@ func (db *DB) manufacturerKey(keyType fdo.KeyType) (crypto.PrivateKey, []*x509.C
 	if err != nil {
 		return nil, nil, fmt.Errorf("error parsing manufacturer certificate chain: %w", err)
 	}
-	return key, chain, nil
+	return key.(crypto.Signer), chain, nil
 }
 
-// NewDeviceCertChain creates a device certificate chain based on info
-// provided in the (non-normative) DI.AppStart message and also stores it
-// in session state.
-func (db *DB) NewDeviceCertChain(ctx context.Context, info fdo.DeviceMfgInfo) ([]*x509.Certificate, error) {
-	// Validate device info
-	csr := x509.CertificateRequest(info.CertInfo)
-	if err := csr.CheckSignature(); err != nil {
-		return nil, fmt.Errorf("invalid CSR: %w", err)
-	}
-
-	// Sign CSR
-	key, chain, err := db.manufacturerKey(info.KeyType)
-	if err != nil {
-		var unsupportedErr fdo.ErrUnsupportedKeyType
-		if errors.As(err, &unsupportedErr) {
-			return nil, unsupportedErr
-		}
-		return nil, fmt.Errorf("error retrieving manufacturer key [type=%s]: %w", info.KeyType, err)
-	}
-	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
-	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
-	if err != nil {
-		return nil, fmt.Errorf("error generating certificate serial number: %w", err)
-	}
-	template := &x509.Certificate{
-		SerialNumber: serialNumber,
-		Issuer:       chain[0].Subject,
-		Subject:      csr.Subject,
-		NotBefore:    time.Now(),
-		NotAfter:     time.Now().Add(30 * 360 * 24 * time.Hour), // Matches Java impl
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	der, err := x509.CreateCertificate(rand.Reader, template, chain[0], csr.PublicKey, key)
-	if err != nil {
-		return nil, fmt.Errorf("error signing CSR: %w", err)
-	}
-	cert, err := x509.ParseCertificate(der)
-	if err != nil {
-		return nil, fmt.Errorf("error parsing signed device cert: %w", err)
-	}
-	chain = append([]*x509.Certificate{cert}, chain...)
-
-	// Store device info and associate it with session
+// SetDeviceCertChain sets the device certificate chain generated from
+// DI.AppStart info.
+func (db *DB) SetDeviceCertChain(ctx context.Context, chain []*x509.Certificate) error {
 	sessID, ok := db.sessionID(ctx)
 	if !ok {
-		return nil, fdo.ErrInvalidSession
+		return fdo.ErrInvalidSession
 	}
 	if err := db.insert(ctx, "device_info", map[string]any{
+		"x509_chain": derEncode(chain),
+		"session":    sessID,
+	}, nil); err != nil {
+		return fmt.Errorf("error persisting device certificate chain: %w", err)
+	}
+
+	return nil
+}
+
+// SetDeviceSelfInfo implements an optional interface to store info from
+// DI.AppStart.
+func (db *DB) SetDeviceSelfInfo(ctx context.Context, info *fdo.DeviceMfgInfo) error {
+	sessID, ok := db.sessionID(ctx)
+	if !ok {
+		return fdo.ErrInvalidSession
+	}
+	if err := db.update(ctx, "device_info", map[string]any{
 		"key_type":      int(info.KeyType),
 		"key_encoding":  int(info.KeyEncoding),
 		"serial_number": info.SerialNumber,
 		"info_string":   info.DeviceInfo,
 		"csr":           info.CertInfo.Raw,
-		"x509_chain":    derEncode(chain),
-		"session":       sessID,
-	}, nil); err != nil {
-		return nil, fmt.Errorf("error persisting device certificate chain: %w", err)
+	}, map[string]any{
+		"session": sessID,
+	}); err != nil {
+		return fmt.Errorf("error persisting device certificate chain: %w", err)
 	}
 
-	return chain, nil
+	return nil
 }
 
 func derEncode(certs []*x509.Certificate) (der []byte) {
@@ -790,110 +758,22 @@ func (db *DB) RvInfo(ctx context.Context) ([][]fdo.RvInstruction, error) {
 	return rvInfo, nil
 }
 
-// NewVoucher creates and stores a new voucher.
+// NewVoucher creates and stores a voucher for a newly initialized device.
+// Note that the voucher may have entries if the server was configured for
+// auto voucher extension.
 func (db *DB) NewVoucher(ctx context.Context, ov *fdo.Voucher) error {
-	table := "mfg_vouchers"
-	if db.AutoExtend {
-		table = "owner_vouchers"
-
-		if err := db.autoExtend(ov); err != nil {
-			return fmt.Errorf("auto extend: %w", err)
-		}
-
-		if db.AutoRegisterRV != nil {
-			if err := db.autoRegisterRV(ctx, ov); err != nil {
-				return fmt.Errorf("auto register RV blob: %w", err)
-			}
-		}
-	}
-
 	data, err := cbor.Marshal(ov)
 	if err != nil {
 		return fmt.Errorf("error marshaling ownership voucher: %w", err)
+	}
+	table := "mfg_vouchers"
+	if len(ov.Entries) > 0 {
+		table = "owner_vouchers"
 	}
 	return db.insert(ctx, table, map[string]any{
 		"guid": ov.Header.Val.GUID[:],
 		"cbor": data,
 	}, nil)
-}
-
-func (db *DB) autoExtend(ov *fdo.Voucher) error {
-	keyType := ov.Header.Val.ManufacturerKey.Type
-	owner, _, err := db.manufacturerKey(keyType)
-	if err != nil {
-		return fmt.Errorf("error getting %s manufacturer key: %w", keyType, err)
-	}
-	nextOwner, _, err := db.ownerKey(keyType)
-	if err != nil {
-		return fmt.Errorf("error getting %s owner key: %w", keyType, err)
-	}
-	switch owner := owner.(type) {
-	case *ecdsa.PrivateKey:
-		nextOwner, ok := nextOwner.(*ecdsa.PrivateKey)
-		if !ok {
-			return fmt.Errorf("owner key must be %s", keyType)
-		}
-		extended, err := fdo.ExtendVoucher(ov, owner, &nextOwner.PublicKey, nil)
-		if err != nil {
-			return err
-		}
-		*ov = *extended
-	case *rsa.PrivateKey:
-		nextOwner, ok := nextOwner.(*rsa.PrivateKey)
-		if !ok {
-			return fmt.Errorf("owner key must be %s", keyType)
-		}
-		extended, err := fdo.ExtendVoucher(ov, owner, &nextOwner.PublicKey, nil)
-		if err != nil {
-			return err
-		}
-		*ov = *extended
-	default:
-		return fmt.Errorf("invalid key type %T", owner)
-	}
-
-	return nil
-}
-
-func (db *DB) autoRegisterRV(ctx context.Context, ov *fdo.Voucher) error {
-	keyType := ov.Header.Val.ManufacturerKey.Type
-	nextOwner, _, err := db.ownerKey(keyType)
-	if err != nil {
-		return fmt.Errorf("error getting %s owner key: %w", keyType, err)
-	}
-
-	var opts crypto.SignerOpts
-	switch keyType {
-	case fdo.Rsa2048RestrKeyType, fdo.RsaPkcsKeyType, fdo.RsaPssKeyType:
-		switch rsaPub := nextOwner.Public().(*rsa.PublicKey); rsaPub.Size() {
-		case 2048 / 8:
-			opts = crypto.SHA256
-		case 3072 / 8:
-			opts = crypto.SHA384
-		default:
-			return fmt.Errorf("unsupported RSA key size: %d bits", rsaPub.Size()*8)
-		}
-
-		if keyType == fdo.RsaPssKeyType {
-			opts = &rsa.PSSOptions{
-				SaltLength: rsa.PSSSaltLengthEqualsHash,
-				Hash:       opts.(crypto.Hash),
-			}
-		}
-	}
-
-	sign1 := cose.Sign1[fdo.To1d, []byte]{
-		Payload: cbor.NewByteWrap(*db.AutoRegisterRV),
-	}
-	if err := sign1.Sign(nextOwner, nil, nil, opts); err != nil {
-		return fmt.Errorf("error signing to1d: %w", err)
-	}
-	exp := time.Now().AddDate(30, 0, 0) // Expire in 30 years
-	if err := db.SetRVBlob(ctx, ov, &sign1, exp); err != nil {
-		return fmt.Errorf("error storing to1d: %w", err)
-	}
-
-	return nil
 }
 
 // AddVoucher stores the voucher of a device owned by the service.
@@ -1213,8 +1093,9 @@ func (db *DB) AddOwnerKey(keyType fdo.KeyType, key crypto.PrivateKey, chain []*x
 	})
 }
 
-// TODO: Randomize result when there are multiple rows?
-func (db *DB) ownerKey(keyType fdo.KeyType) (crypto.Signer, []*x509.Certificate, error) {
+// OwnerKey returns the private key matching a given key type and optionally
+// its certificate chain.
+func (db *DB) OwnerKey(keyType fdo.KeyType) (crypto.Signer, []*x509.Certificate, error) {
 	var keyDer, certChainDer []byte
 	if err := db.query(context.Background(), "owner_keys", []string{"pkcs8", "x509_chain"}, map[string]any{
 		"type": int(keyType),
@@ -1236,15 +1117,6 @@ func (db *DB) ownerKey(keyType fdo.KeyType) (crypto.Signer, []*x509.Certificate,
 	}
 
 	return key.(crypto.Signer), chain, nil
-}
-
-// Signer returns the private key matching a given key type.
-func (db *DB) Signer(keyType fdo.KeyType) (crypto.Signer, bool) {
-	key, _, err := db.ownerKey(keyType)
-	if err != nil {
-		return nil, false
-	}
-	return key, true
 }
 
 // SetMTU sets the max service info size the device may receive.

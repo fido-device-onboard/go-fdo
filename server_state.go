@@ -65,10 +65,9 @@ type TokenService interface {
 
 // DISessionState stores DI protocol state for a particular session.
 type DISessionState interface {
-	// NewDeviceCertChain creates a device certificate chain based on info
-	// provided in the (non-normative) DI.AppStart message and also stores it
-	// in session state.
-	NewDeviceCertChain(context.Context, DeviceMfgInfo) ([]*x509.Certificate, error)
+	// SetDeviceCertChain sets the device certificate chain generated from
+	// DI.AppStart info.
+	SetDeviceCertChain(context.Context, []*x509.Certificate) error
 
 	// DeviceCertChain gets a device certificate chain from the current
 	// session.
@@ -169,14 +168,17 @@ type RendezvousBlobPersistentState interface {
 
 // OwnerKeyPersistentState maintains the owner service keys.
 type OwnerKeyPersistentState interface {
-	// Signer returns the private key matching a given key type.
-	Signer(KeyType) (crypto.Signer, bool)
+	// OwnerKey returns the private key matching a given key type and optionally
+	// its certificate chain.
+	OwnerKey(KeyType) (crypto.Signer, []*x509.Certificate, error)
 }
 
 // ManufacturerVoucherPersistentState maintains vouchers created during DI
 // which have not yet been extended.
 type ManufacturerVoucherPersistentState interface {
 	// NewVoucher creates and stores a voucher for a newly initialized device.
+	// Note that the voucher may have entries if the server was configured for
+	// auto voucher extension.
 	NewVoucher(context.Context, *Voucher) error
 }
 

@@ -5,27 +5,50 @@ package fdo
 
 import (
 	"context"
+	"crypto"
 	"crypto/x509"
 	"errors"
 	"io"
 	"iter"
 	"time"
 
+	"github.com/fido-device-onboard/go-fdo/cose"
 	"github.com/fido-device-onboard/go-fdo/plugin"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
 
 // DIServer implements the DI protocol.
-type DIServer struct {
+type DIServer[T any] struct {
 	Session  DISessionState
 	Vouchers ManufacturerVoucherPersistentState
+
+	// SignDeviceCertChain creates a device certificate chain based on info
+	// provided in the DI.AppStart message.
+	SignDeviceCertificate func(*T) ([]*x509.Certificate, error)
+
+	// DeviceInfo returns the device info string to use for a given device,
+	// based on its self-reported info and certificate chain.
+	DeviceInfo func(context.Context, *T, []*x509.Certificate) (string, KeyType, KeyEncoding, error)
+
+	// When set, new vouchers will be extended using the appropriate owner key.
+	AutoExtend interface {
+		ManufacturerKey(keyType KeyType) (crypto.Signer, []*x509.Certificate, error)
+		OwnerKey(keyType KeyType) (crypto.Signer, []*x509.Certificate, error)
+	}
+
+	// When set, new vouchers will be registered for rendezvous.
+	AutoTO0 interface {
+		OwnerKey(keyType KeyType) (crypto.Signer, []*x509.Certificate, error)
+		SetRVBlob(context.Context, *Voucher, *cose.Sign1[To1d, []byte], time.Time) error
+	}
+	AutoTO0Addrs []RvTO2Addr
 
 	// Rendezvous directives
 	RvInfo func(context.Context, *Voucher) ([][]RvInstruction, error)
 }
 
 // Respond validates a request and returns the appropriate response message.
-func (s *DIServer) Respond(ctx context.Context, msgType uint8, msg io.Reader) (respType uint8, resp any) {
+func (s *DIServer[T]) Respond(ctx context.Context, msgType uint8, msg io.Reader) (respType uint8, resp any) {
 	// Inject a mutable error into the context for error info capturing without
 	// complex error wrapping or overburdened method signatures.
 	ctx = contextWithErrMsg(ctx)

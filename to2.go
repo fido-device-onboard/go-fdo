@@ -348,11 +348,13 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 	if mfgKeyType := ov.Header.Val.ManufacturerKey.Type; keyType != mfgKeyType {
 		return nil, fmt.Errorf("device sig info has key type %q, must be %q to match manufacturer key", keyType, mfgKeyType)
 	}
-	key, ok := s.OwnerKeys.Signer(keyType)
-	if !ok {
+	ownerKey, _, err := s.OwnerKeys.OwnerKey(keyType)
+	if errors.Is(err, ErrNotFound) {
 		return nil, fmt.Errorf("key type %s not supported", keyType)
+	} else if err != nil {
+		return nil, fmt.Errorf("error getting owner key [type=%s]: %w", keyType, err)
 	}
-	ownerPublicKey, err := newPublicKey(keyType, key.Public(), false)
+	ownerPublicKey, err := newPublicKey(keyType, ownerKey.Public(), false)
 	if err != nil {
 		return nil, fmt.Errorf("error with owner public key: %w", err)
 	}
@@ -374,7 +376,7 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 			MaxOwnerMessageSize: 65535, // TODO: Make this configurable and match handler config
 		}),
 	}
-	if err := s1.Sign(key, nil, nil, opts); err != nil {
+	if err := s1.Sign(ownerKey, nil, nil, opts); err != nil {
 		return nil, fmt.Errorf("error signing TO2.ProveOVHdr payload: %w", err)
 	}
 
@@ -647,11 +649,13 @@ func (s *TO2Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1
 
 	// Respond with device setup
 	keyType := ov.Header.Val.ManufacturerKey.Type
-	key, ok := s.OwnerKeys.Signer(keyType)
-	if !ok {
+	ownerKey, _, err := s.OwnerKeys.OwnerKey(keyType)
+	if errors.Is(err, ErrNotFound) {
 		return nil, fmt.Errorf("key type %s not supported", keyType)
+	} else if err != nil {
+		return nil, fmt.Errorf("error getting owner key [type=%s]: %w", keyType, err)
 	}
-	ownerPublicKey, err := newPublicKey(keyType, key.Public(), false)
+	ownerPublicKey, err := newPublicKey(keyType, ownerKey.Public(), false)
 	if err != nil {
 		return nil, fmt.Errorf("error with owner public key: %w", err)
 	}
@@ -663,11 +667,11 @@ func (s *TO2Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1
 			Owner2Key:       *ownerPublicKey,
 		}),
 	}
-	opts, err := signOptsFor(key, keyType == RsaPssKeyType)
+	opts, err := signOptsFor(ownerKey, keyType == RsaPssKeyType)
 	if err != nil {
 		return nil, fmt.Errorf("error determining signing options for TO2.SetupDevice message: %w", err)
 	}
-	if err := s1.Sign(key, nil, nil, opts); err != nil {
+	if err := s1.Sign(ownerKey, nil, nil, opts); err != nil {
 		return nil, fmt.Errorf("error signing TO2.SetupDevice payload: %w", err)
 	}
 	return s1.Tag(), nil
@@ -1230,11 +1234,13 @@ func (s *TO2Server) to2Done2(ctx context.Context, msg io.Reader) (*done2Msg, err
 
 	// Create and store a new voucher
 	keyType := currentOV.Header.Val.ManufacturerKey.Type
-	key, ok := s.OwnerKeys.Signer(keyType)
-	if !ok {
+	ownerKey, _, err := s.OwnerKeys.OwnerKey(keyType)
+	if errors.Is(err, ErrNotFound) {
 		return nil, fmt.Errorf("key type %s not supported", keyType)
+	} else if err != nil {
+		return nil, fmt.Errorf("error getting owner key [type=%s]: %w", keyType, err)
 	}
-	ownerPublicKey, err := newPublicKey(keyType, key.Public(), false)
+	ownerPublicKey, err := newPublicKey(keyType, ownerKey.Public(), false)
 	if err != nil {
 		return nil, fmt.Errorf("error with owner public key: %w", err)
 	}

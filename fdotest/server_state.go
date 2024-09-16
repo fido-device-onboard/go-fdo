@@ -6,6 +6,7 @@ package fdotest
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/hmac"
@@ -16,6 +17,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
+	"math/big"
 	"net"
 	"reflect"
 	"testing"
@@ -41,6 +43,7 @@ type AllServerState interface {
 	fdo.ManufacturerVoucherPersistentState
 	fdo.OwnerVoucherPersistentState
 	fdo.OwnerKeyPersistentState
+	ManufacturerKey(keyType fdo.KeyType) (crypto.Signer, []*x509.Certificate, error)
 }
 
 // RunServerStateSuite is used to test different implementations of all server
@@ -102,31 +105,17 @@ func RunServerStateSuite(t *testing.T, state AllServerState) {
 			t.Fatalf("expected ErrNotFound, got %v", err)
 		}
 
-		// Create a CSR
-		priv, err := rsa.GenerateKey(rand.Reader, 2048)
+		// Create a new certificate chain
+		mfgCert, mfgKey, err := newCert(nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		asn1Data, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
-			Subject: pkix.Name{CommonName: "Test Device"},
-		}, priv)
+		devCert, _, err := newCert(mfgCert, mfgKey)
 		if err != nil {
 			t.Fatal(err)
 		}
-		csr, err := x509.ParseCertificateRequest(asn1Data)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		// Sign a new chain
-		chain, err := state.NewDeviceCertChain(ctx, fdo.DeviceMfgInfo{
-			KeyType:      fdo.RsaPkcsKeyType,
-			KeyEncoding:  fdo.X509KeyEnc,
-			SerialNumber: "testserial",
-			DeviceInfo:   "something",
-			CertInfo:     cbor.X509CertificateRequest(*csr),
-		})
-		if err != nil {
+		chain := []*x509.Certificate{devCert, mfgCert}
+		if err := state.SetDeviceCertChain(ctx, chain); err != nil {
 			t.Fatal(err)
 		}
 
@@ -606,18 +595,18 @@ func RunServerStateSuite(t *testing.T, state AllServerState) {
 		var state fdo.OwnerKeyPersistentState = state
 
 		// RSA
-		rsaKey, ok := state.Signer(fdo.RsaPkcsKeyType)
-		if !ok {
-			t.Fatal("RSA owner key not set")
+		rsaKey, _, err := state.OwnerKey(fdo.RsaPkcsKeyType)
+		if err != nil {
+			t.Fatal("RSA owner key", err)
 		}
 		if _, ok := rsaKey.(*rsa.PrivateKey); !ok {
 			t.Fatalf("RSA owner key is an incorrect type: %T", rsaKey)
 		}
 
 		// EC
-		ecKey, ok := state.Signer(fdo.Secp256r1KeyType)
-		if !ok {
-			t.Fatal("EC owner key not set")
+		ecKey, _, err := state.OwnerKey(fdo.Secp256r1KeyType)
+		if err != nil {
+			t.Fatal("EC owner key", err)
 		}
 		if _, ok := ecKey.(*ecdsa.PrivateKey); !ok {
 			t.Fatalf("EC owner key is an incorrect type: %T", rsaKey)
@@ -631,4 +620,40 @@ func mustMarshal(t *testing.T, v any) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+func newCert(issuer *x509.Certificate, issuerKey crypto.Signer) (*x509.Certificate, crypto.Signer, error) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, nil, err
+	}
+	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
+	if err != nil {
+		return nil, nil, err
+	}
+	template := &x509.Certificate{
+		SerialNumber: serialNumber,
+		Issuer:       pkix.Name{CommonName: "CA"},
+		Subject:      pkix.Name{CommonName: "CA"},
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(30 * 360 * 24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	if issuer != nil {
+		template.Issuer = issuer.Subject
+		template.Subject = pkix.Name{CommonName: "Test Device"}
+	} else {
+		issuer = template
+		issuerKey = key
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, issuer, key.Public(), issuerKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		return nil, nil, err
+	}
+	return cert, key, nil
 }

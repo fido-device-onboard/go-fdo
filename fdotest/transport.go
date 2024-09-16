@@ -23,7 +23,7 @@ type Transport struct {
 
 	Tokens fdo.TokenService
 
-	DIResponder  *fdo.DIServer
+	DIResponder  *fdo.DIServer[fdo.DeviceMfgInfo]
 	TO0Responder *fdo.TO0Server
 	TO1Responder *fdo.TO1Server
 	TO2Responder *fdo.TO2Server

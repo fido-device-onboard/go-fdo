@@ -13,8 +13,11 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"iter"
 	"log/slog"
+	"math/big"
 	"runtime"
 	"slices"
 	"strings"
@@ -39,8 +42,7 @@ type OwnerModulesFunc func(ctx context.Context, replacementGUID fdo.GUID, info s
 // RunClientTestSuite is used to test different implementations of server state
 // methods at an almost end-to-end level (transport is mocked).
 //
-// The server state implementation must auto-extend vouchers so that TO2 can
-// occur immediately after DI. It also must NOT remove vouchers after TO2 so
+// The server state implementation must must NOT remove vouchers after TO2 so
 // that TO2 may occur with the same device many times in succession.
 //
 // If state is nil, then an in-memory implementation will be used. This is
@@ -60,7 +62,6 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 		if err != nil {
 			t.Fatal(err)
 		}
-		inMemory.AutoExtend = stateless
 		inMemory.PreserveReplacedVouchers = true
 
 		state = struct {
@@ -71,9 +72,50 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 
 	transport := &Transport{
 		Tokens: state,
-		DIResponder: &fdo.DIServer{
+		DIResponder: &fdo.DIServer[fdo.DeviceMfgInfo]{
 			Session:  state,
 			Vouchers: state,
+			SignDeviceCertificate: func(info *fdo.DeviceMfgInfo) ([]*x509.Certificate, error) {
+				// Validate device info
+				csr := x509.CertificateRequest(info.CertInfo)
+				if err := csr.CheckSignature(); err != nil {
+					return nil, fmt.Errorf("invalid CSR: %w", err)
+				}
+
+				// Sign CSR
+				key, chain, err := state.ManufacturerKey(info.KeyType)
+				if err != nil {
+					var unsupportedErr fdo.ErrUnsupportedKeyType
+					if errors.As(err, &unsupportedErr) {
+						return nil, unsupportedErr
+					}
+					return nil, fmt.Errorf("error retrieving manufacturer key [type=%s]: %w", info.KeyType, err)
+				}
+				serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+				serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
+				if err != nil {
+					return nil, fmt.Errorf("error generating certificate serial number: %w", err)
+				}
+				template := &x509.Certificate{
+					SerialNumber: serialNumber,
+					Issuer:       chain[0].Subject,
+					Subject:      csr.Subject,
+					NotBefore:    time.Now(),
+					NotAfter:     time.Now().Add(30 * 360 * 24 * time.Hour), // Matches Java impl
+					KeyUsage:     x509.KeyUsageDigitalSignature,
+				}
+				der, err := x509.CreateCertificate(rand.Reader, template, chain[0], csr.PublicKey, key)
+				if err != nil {
+					return nil, fmt.Errorf("error signing CSR: %w", err)
+				}
+				cert, err := x509.ParseCertificate(der)
+				if err != nil {
+					return nil, fmt.Errorf("error parsing signed device cert: %w", err)
+				}
+				chain = append([]*x509.Certificate{cert}, chain...)
+				return chain, nil
+			},
+			AutoExtend: state,
 			RvInfo: func(context.Context, *fdo.Voucher) ([][]fdo.RvInstruction, error) {
 				return [][]fdo.RvInstruction{}, nil
 			},
@@ -171,6 +213,9 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 			keyEncoding: fdo.X5ChainKeyEnc,
 		},
 	} {
+		transport.DIResponder.DeviceInfo = func(context.Context, *fdo.DeviceMfgInfo, []*x509.Certificate) (string, fdo.KeyType, fdo.KeyEncoding, error) {
+			return "test_device", table.keyType, table.keyEncoding, nil
+		}
 		t.Run("Key "+table.keyType.String()+" "+table.keyEncoding.String(), func(t *testing.T) {
 			t.Run("Device Initialization", func(t *testing.T) {
 				secret := make([]byte, 32)

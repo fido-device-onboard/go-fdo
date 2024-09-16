@@ -10,7 +10,6 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -95,7 +94,6 @@ func server() error {
 	if err != nil {
 		return err
 	}
-	state.AutoExtend = true
 	state.PreserveReplacedVouchers = true
 
 	useTLS = insecureTLS
@@ -225,40 +223,7 @@ func mustMarshal(v any) []byte {
 }
 
 //nolint:gocyclo
-func newHandler(rvInfo [][]fdo.RvInstruction, state *sqlite.DB) (*transport.Handler, error) {
-	// Auto-register RV blob so that TO1 can be tested
-	if to0Addr == "" && !rvBypass {
-		to1URLs, _ := fdo.BaseHTTP(rvInfo)
-		to1URL, err := url.Parse(to1URLs[0])
-		if err != nil {
-			return nil, fmt.Errorf("error parsing TO1 URL to use for TO2 addr: %w", err)
-		}
-		to1Host := to1URL.Hostname()
-		to1Port, err := strconv.ParseUint(to1URL.Port(), 10, 16)
-		if err != nil {
-			return nil, fmt.Errorf("error parsing TO1 port to use for TO2: %w", err)
-		}
-		proto := fdo.HTTPTransport
-		if useTLS {
-			proto = fdo.HTTPSTransport
-		}
-
-		fakeHash := sha256.Sum256([]byte("fake blob"))
-		state.AutoRegisterRV = &fdo.To1d{
-			RV: []fdo.RvTO2Addr{
-				{
-					DNSAddress:        &to1Host,
-					Port:              uint16(to1Port),
-					TransportProtocol: proto,
-				},
-			},
-			To0dHash: fdo.Hash{
-				Algorithm: fdo.Sha256Hash,
-				Value:     fakeHash[:],
-			},
-		}
-	}
-
+func newHandler(rvInfo [][]fdo.RvInstruction, state *sqlite.DB) (*transport.Handler[fdo.DeviceMfgInfo], error) {
 	// Generate manufacturing component keys
 	rsaMfgKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -342,12 +307,92 @@ func newHandler(rvInfo [][]fdo.RvInstruction, state *sqlite.DB) (*transport.Hand
 		return nil, err
 	}
 
-	return &transport.Handler{
+	// Sign device certificate
+	signDeviceCertificate := func(info *fdo.DeviceMfgInfo) ([]*x509.Certificate, error) {
+		// Validate device info
+		csr := x509.CertificateRequest(info.CertInfo)
+		if err := csr.CheckSignature(); err != nil {
+			return nil, fmt.Errorf("invalid CSR: %w", err)
+		}
+
+		// Sign CSR
+		key, chain, err := state.ManufacturerKey(info.KeyType)
+		if err != nil {
+			var unsupportedErr fdo.ErrUnsupportedKeyType
+			if errors.As(err, &unsupportedErr) {
+				return nil, unsupportedErr
+			}
+			return nil, fmt.Errorf("error retrieving manufacturer key [type=%s]: %w", info.KeyType, err)
+		}
+		serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+		serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
+		if err != nil {
+			return nil, fmt.Errorf("error generating certificate serial number: %w", err)
+		}
+		template := &x509.Certificate{
+			SerialNumber: serialNumber,
+			Issuer:       chain[0].Subject,
+			Subject:      csr.Subject,
+			NotBefore:    time.Now(),
+			NotAfter:     time.Now().Add(30 * 360 * 24 * time.Hour), // Matches Java impl
+			KeyUsage:     x509.KeyUsageDigitalSignature,
+		}
+		der, err := x509.CreateCertificate(rand.Reader, template, chain[0], csr.PublicKey, key)
+		if err != nil {
+			return nil, fmt.Errorf("error signing CSR: %w", err)
+		}
+		cert, err := x509.ParseCertificate(der)
+		if err != nil {
+			return nil, fmt.Errorf("error parsing signed device cert: %w", err)
+		}
+		chain = append([]*x509.Certificate{cert}, chain...)
+		return chain, nil
+	}
+
+	// Auto-register RV blob so that TO1 can be tested unless a TO0 address is
+	// given or RV bypass is set
+	var autoTO0 *sqlite.DB
+	var autoTO0Addrs []fdo.RvTO2Addr
+	if to0Addr == "" && !rvBypass {
+		autoTO0 = state
+
+		to1URLs, _ := fdo.BaseHTTP(rvInfo)
+		to1URL, err := url.Parse(to1URLs[0])
+		if err != nil {
+			return nil, fmt.Errorf("error parsing TO1 URL to use for TO2 addr: %w", err)
+		}
+		to1Host := to1URL.Hostname()
+		to1Port, err := strconv.ParseUint(to1URL.Port(), 10, 16)
+		if err != nil {
+			return nil, fmt.Errorf("error parsing TO1 port to use for TO2: %w", err)
+		}
+		proto := fdo.HTTPTransport
+		if useTLS {
+			proto = fdo.HTTPSTransport
+		}
+
+		autoTO0Addrs = []fdo.RvTO2Addr{
+			{
+				DNSAddress:        &to1Host,
+				Port:              uint16(to1Port),
+				TransportProtocol: proto,
+			},
+		}
+	}
+
+	return &transport.Handler[fdo.DeviceMfgInfo]{
 		Tokens: state,
-		DIResponder: &fdo.DIServer{
-			Session:  state,
-			Vouchers: state,
-			RvInfo:   func(context.Context, *fdo.Voucher) ([][]fdo.RvInstruction, error) { return rvInfo, nil },
+		DIResponder: &fdo.DIServer[fdo.DeviceMfgInfo]{
+			Session:               state,
+			Vouchers:              state,
+			SignDeviceCertificate: signDeviceCertificate,
+			DeviceInfo: func(_ context.Context, info *fdo.DeviceMfgInfo, _ []*x509.Certificate) (string, fdo.KeyType, fdo.KeyEncoding, error) {
+				return info.DeviceInfo, info.KeyType, info.KeyEncoding, nil
+			},
+			AutoExtend:   state,
+			AutoTO0:      autoTO0,
+			AutoTO0Addrs: autoTO0Addrs,
+			RvInfo:       func(context.Context, *fdo.Voucher) ([][]fdo.RvInstruction, error) { return rvInfo, nil },
 		},
 		TO0Responder: &fdo.TO0Server{
 			Session: state,

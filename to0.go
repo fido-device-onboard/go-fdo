@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -166,11 +167,13 @@ func (c *TO0Client) ownerSign(ctx context.Context, baseURL string, nonce Nonce, 
 
 	// Sign to1d rendezvous blob
 	keyType := ov.Header.Val.ManufacturerKey.Type
-	key, ok := c.OwnerKeys.Signer(keyType)
-	if !ok {
+	ownerKey, _, err := c.OwnerKeys.OwnerKey(keyType)
+	if errors.Is(err, ErrNotFound) {
 		return 0, fmt.Errorf("no available owner key for TO0.OwnerSign [type=%s]", keyType)
+	} else if err != nil {
+		return 0, fmt.Errorf("error getting owner key [type=%s]: %w", keyType, err)
 	}
-	opts, err := signOptsFor(key, keyType == RsaPssKeyType)
+	opts, err := signOptsFor(ownerKey, keyType == RsaPssKeyType)
 	if err != nil {
 		return 0, fmt.Errorf("error determining signing options for TO0.OwnerSign: %w", err)
 	}
@@ -181,7 +184,7 @@ func (c *TO0Client) ownerSign(ctx context.Context, baseURL string, nonce Nonce, 
 			Value:     to0dHash.Sum(nil),
 		},
 	})}
-	if err := to1d.Sign(key, nil, nil, opts); err != nil {
+	if err := to1d.Sign(ownerKey, nil, nil, opts); err != nil {
 		return 0, fmt.Errorf("error signing To1d payload for TO0.OwnerSign: %w", err)
 	}
 

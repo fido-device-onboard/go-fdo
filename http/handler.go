@@ -26,10 +26,10 @@ const bearerPrefix = "Bearer "
 
 // Handler implements http.Handler and responds to all DI, TO1, and TO2 message
 // types.
-type Handler struct {
+type Handler[T any] struct {
 	Tokens fdo.TokenService
 
-	DIResponder  *fdo.DIServer
+	DIResponder  *fdo.DIServer[T]
 	TO0Responder *fdo.TO0Server
 	TO1Responder *fdo.TO1Server
 	TO2Responder *fdo.TO2Server
@@ -39,13 +39,13 @@ type Handler struct {
 	MaxContentLength int64
 }
 
-var _ http.Handler = (*Handler)(nil)
+var _ http.Handler = (*Handler[fdo.DeviceMfgInfo])(nil)
 
 type responder interface {
 	Respond(ctx context.Context, msgType uint8, msg io.Reader) (respType uint8, resp any)
 }
 
-func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (h Handler[T]) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Parse message type from request URL
 	typ, err := strconv.ParseUint(r.PathValue("msg"), 10, 8)
 	if err != nil {
@@ -119,7 +119,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.handleRequest(ctx, w, r, msgType, resp)
 }
 
-func (h Handler) debugRequest(ctx context.Context, w http.ResponseWriter, r *http.Request, msgType uint8, resp responder) {
+func (h Handler[T]) debugRequest(ctx context.Context, w http.ResponseWriter, r *http.Request, msgType uint8, resp responder) {
 	// Dump request
 	debugReq, _ := httputil.DumpRequest(r, false)
 	var saveBody bytes.Buffer
@@ -146,7 +146,7 @@ func (h Handler) debugRequest(ctx context.Context, w http.ResponseWriter, r *htt
 	_, _ = w.Write(rr.Body.Bytes())
 }
 
-func (h Handler) handleRequest(ctx context.Context, w http.ResponseWriter, r *http.Request, msgType uint8, resp responder) {
+func (h Handler[T]) handleRequest(ctx context.Context, w http.ResponseWriter, r *http.Request, msgType uint8, resp responder) {
 	// Validate content length
 	maxSize := h.MaxContentLength
 	if maxSize == 0 {
@@ -201,7 +201,7 @@ func (h Handler) handleRequest(ctx context.Context, w http.ResponseWriter, r *ht
 	h.writeResponse(ctx, w, msgType, msg, resp)
 }
 
-func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, msgType uint8, msg io.Reader, resp responder) {
+func (h Handler[T]) writeResponse(ctx context.Context, w http.ResponseWriter, msgType uint8, msg io.Reader, resp responder) {
 	// Perform business logic of message handling
 	respType, respData := resp.Respond(ctx, msgType, msg)
 	if respType == fdo.ErrorMsgType {

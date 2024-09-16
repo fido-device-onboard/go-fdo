@@ -24,8 +24,6 @@ import (
 func TestClient(t *testing.T) {
 	state, cleanup := newDB(t)
 	defer func() { _ = cleanup() }()
-
-	state.AutoExtend = true
 	state.PreserveReplacedVouchers = true
 
 	fdotest.RunClientTestSuite(t, state, nil, nil, nil)
@@ -90,17 +88,19 @@ func newDB(t *testing.T) (_ *sqlite.DB, cleanup func() error) {
 		t.Fatal(err)
 	}
 
-	if err := state.AddOwnerKey(fdo.RsaPkcsKeyType, rsaOwnerKey, nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := state.AddOwnerKey(fdo.RsaPssKeyType, rsaOwnerKey, nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := state.AddOwnerKey(fdo.Secp256r1KeyType, ec256OwnerKey, nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := state.AddOwnerKey(fdo.Secp384r1KeyType, ec384OwnerKey, nil); err != nil {
-		t.Fatal(err)
+	for keyType, key := range map[fdo.KeyType]crypto.Signer{
+		fdo.RsaPkcsKeyType:   rsaOwnerKey,
+		fdo.RsaPssKeyType:    rsaOwnerKey,
+		fdo.Secp256r1KeyType: ec256OwnerKey,
+		fdo.Secp384r1KeyType: ec384OwnerKey,
+	} {
+		chain, err := generateCA(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := state.AddOwnerKey(keyType, key, chain); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	return state, cleanup

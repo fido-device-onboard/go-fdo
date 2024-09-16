@@ -13,24 +13,21 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
-	"fmt"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"math/big"
 	"time"
 
 	"github.com/fido-device-onboard/go-fdo"
-	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
 )
 
 // State implements interfaces for state which must be persisted between
 // protocol sessions, but not between server processes.
 type State struct {
-	RVBlobs    map[fdo.GUID]*cose.Sign1[fdo.To1d, []byte]
-	Vouchers   map[fdo.GUID]*fdo.Voucher
-	OwnerKeys  map[fdo.KeyType]crypto.Signer
-	AutoExtend interface {
-		ExtendVoucher(*fdo.Voucher, crypto.PublicKey) (*fdo.Voucher, error)
-	}
-	AutoRegisterRV           *fdo.To1d
+	RVBlobs                  map[fdo.GUID]*cose.Sign1[fdo.To1d, []byte]
+	Vouchers                 map[fdo.GUID]*fdo.Voucher
+	OwnerKeys                map[fdo.KeyType]crypto.Signer
 	PreserveReplacedVouchers bool
 }
 
@@ -67,54 +64,9 @@ func NewState() (*State, error) {
 }
 
 // NewVoucher creates and stores a voucher for a newly initialized device.
+// Note that the voucher may have entries if the server was configured for
+// auto voucher extension.
 func (s *State) NewVoucher(_ context.Context, ov *fdo.Voucher) error {
-	if s.AutoExtend != nil {
-		keyType := ov.Header.Val.ManufacturerKey.Type
-		key, ok := s.OwnerKeys[keyType]
-		if !ok {
-			return fmt.Errorf("auto extend: no owner key of type %s", keyType)
-		}
-		ex, err := s.AutoExtend.ExtendVoucher(ov, key.Public())
-		if err != nil {
-			return err
-		}
-		ov = ex
-
-		if s.AutoRegisterRV != nil {
-			keyType := ov.Header.Val.ManufacturerKey.Type
-			key, ok := s.OwnerKeys[keyType]
-			if !ok {
-				return fmt.Errorf("auto register RV blob: no owner key of type %s", keyType)
-			}
-			var opts crypto.SignerOpts
-			switch keyType {
-			case fdo.Rsa2048RestrKeyType, fdo.RsaPkcsKeyType, fdo.RsaPssKeyType:
-				switch rsaPub := key.Public().(*rsa.PublicKey); rsaPub.Size() {
-				case 2048 / 8:
-					opts = crypto.SHA256
-				case 3072 / 8:
-					opts = crypto.SHA384
-				default:
-					return fmt.Errorf("unsupported RSA key size: %d bits", rsaPub.Size()*8)
-				}
-
-				if keyType == fdo.RsaPssKeyType {
-					opts = &rsa.PSSOptions{
-						SaltLength: rsa.PSSSaltLengthEqualsHash,
-						Hash:       opts.(crypto.Hash),
-					}
-				}
-			}
-
-			sign1 := cose.Sign1[fdo.To1d, []byte]{
-				Payload: cbor.NewByteWrap(*s.AutoRegisterRV),
-			}
-			if err := sign1.Sign(key, nil, nil, opts); err != nil {
-				return fmt.Errorf("auto register RV blob: %w", err)
-			}
-			s.RVBlobs[ov.Header.Val.GUID] = &sign1
-		}
-	}
 	s.Vouchers[ov.Header.Val.GUID] = ov
 	return nil
 }
@@ -144,10 +96,48 @@ func (s *State) Voucher(_ context.Context, guid fdo.GUID) (*fdo.Voucher, error) 
 	return ov, nil
 }
 
-// Signer returns the private key matching a given key type.
-func (s *State) Signer(keyType fdo.KeyType) (crypto.Signer, bool) {
+// OwnerKey returns the private key matching a given key type and optionally
+// its certificate chain.
+func (s *State) OwnerKey(keyType fdo.KeyType) (crypto.Signer, []*x509.Certificate, error) {
 	key, ok := s.OwnerKeys[keyType]
-	return key, ok
+	if !ok {
+		return nil, nil, fdo.ErrNotFound
+	}
+	cert, err := newCA(key)
+	if err != nil {
+		return nil, nil, err
+	}
+	return key, []*x509.Certificate{cert}, nil
+}
+
+func newCA(priv crypto.Signer) (*x509.Certificate, error) {
+	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
+	if err != nil {
+		return nil, err
+	}
+	template := &x509.Certificate{
+		SerialNumber: serialNumber,
+		Issuer:       pkix.Name{CommonName: "CA"},
+		Subject:      pkix.Name{CommonName: "CA"},
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(30 * 360 * 24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, priv.Public(), priv)
+	if err != nil {
+		return nil, err
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		return nil, err
+	}
+	return cert, nil
+}
+
+// ManufacturerKey returns the signer of a given key type.
+func (s *State) ManufacturerKey(keyType fdo.KeyType) (crypto.Signer, []*x509.Certificate, error) {
+	return s.OwnerKey(keyType)
 }
 
 // SetRVBlob sets the owner rendezvous blob for a device.

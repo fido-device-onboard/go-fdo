@@ -235,54 +235,16 @@ func (s Service) InvalidateToken(ctx context.Context) error {
 	return nil
 }
 
-// NewDeviceCertChain creates a device certificate chain based on info
-// provided in the (non-normative) DI.AppStart message and also stores it
-// in session state.
-func (s Service) NewDeviceCertChain(ctx context.Context, info fdo.DeviceMfgInfo) ([]*x509.Certificate, error) {
-	// Sign CSR
-	csr := x509.CertificateRequest(info.CertInfo)
-	if err := csr.CheckSignature(); err != nil {
-		return nil, fmt.Errorf("invalid CSR: %w", err)
-	}
-	ca, ok := s.CAs[info.KeyType]
-	if !ok {
-		return nil, fmt.Errorf("unsupported key type %s", info.KeyType)
-	}
-	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
-	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
-	if err != nil {
-		return nil, fmt.Errorf("error generating certificate serial number: %w", err)
-	}
-	template := &x509.Certificate{
-		SerialNumber: serialNumber,
-		Issuer:       ca.Chain[0].Subject,
-		Subject:      csr.Subject,
-		NotBefore:    time.Now(),
-		NotAfter:     time.Now().Add(30 * 360 * 24 * time.Hour), // Matches Java impl
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	der, err := x509.CreateCertificate(rand.Reader, template, ca.Chain[0], csr.PublicKey, ca.Key)
-	if err != nil {
-		return nil, fmt.Errorf("error signing CSR: %w", err)
-	}
-	cert, err := x509.ParseCertificate(der)
-	if err != nil {
-		return nil, fmt.Errorf("error parsing signed device cert: %w", err)
-	}
-	chain := append([]*x509.Certificate{cert}, ca.Chain...)
-
-	// Update state with cert chain
-	if err := update(ctx, s, func(state *diState) error {
+// SetDeviceCertChain sets the device certificate chain generated from
+// DI.AppStart info.
+func (s Service) SetDeviceCertChain(ctx context.Context, chain []*x509.Certificate) error {
+	return update(ctx, s, func(state *diState) error {
 		state.Chain = make([]*cbor.X509Certificate, len(chain))
 		for i, cert := range chain {
 			state.Chain[i] = (*cbor.X509Certificate)(cert)
 		}
 		return nil
-	}); err != nil {
-		return nil, err
-	}
-
-	return chain, nil
+	})
 }
 
 // DeviceCertChain gets a device certificate chain from the current
