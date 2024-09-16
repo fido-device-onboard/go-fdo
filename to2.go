@@ -348,15 +348,9 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 	if mfgKeyType := ov.Header.Val.ManufacturerKey.Type; keyType != mfgKeyType {
 		return nil, fmt.Errorf("device sig info has key type %q, must be %q to match manufacturer key", keyType, mfgKeyType)
 	}
-	ownerKey, _, err := s.OwnerKeys.OwnerKey(keyType)
-	if errors.Is(err, ErrNotFound) {
-		return nil, fmt.Errorf("key type %s not supported", keyType)
-	} else if err != nil {
-		return nil, fmt.Errorf("error getting owner key [type=%s]: %w", keyType, err)
-	}
-	ownerPublicKey, err := newPublicKey(keyType, ownerKey.Public(), false)
+	ownerKey, ownerPublicKey, err := s.ownerKey(keyType, ov)
 	if err != nil {
-		return nil, fmt.Errorf("error with owner public key: %w", err)
+		return nil, err
 	}
 	s1 := cose.Sign1[ovhProof, []byte]{
 		Header: cose.Header{
@@ -381,6 +375,35 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 	}
 
 	return s1.Tag(), nil
+}
+
+func (s *TO2Server) ownerKey(keyType KeyType, ov *Voucher) (crypto.Signer, *PublicKey, error) {
+	key, chain, err := s.OwnerKeys.OwnerKey(keyType)
+	if errors.Is(err, ErrNotFound) {
+		return nil, nil, fmt.Errorf("owner key type %s not supported", keyType)
+	} else if err != nil {
+		return nil, nil, fmt.Errorf("error getting owner key [type=%s]: %w", keyType, err)
+	}
+
+	var pub any
+	var asCOSE bool
+	switch ov.Header.Val.ManufacturerKey.Encoding {
+	default:
+		pub = key.Public()
+	case X5ChainKeyEnc:
+		pub = chain
+		if len(chain) == 0 {
+			pub = key.Public()
+		}
+	case CoseKeyEnc:
+		pub = key.Public()
+		asCOSE = true
+	}
+	pubkey, err := newPublicKey(keyType, pub, asCOSE)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error with owner public key: %w", err)
+	}
+	return key, pubkey, nil
 }
 
 // GetOVNextEntry(62) -> OVNextEntry(63)
@@ -649,15 +672,9 @@ func (s *TO2Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1
 
 	// Respond with device setup
 	keyType := ov.Header.Val.ManufacturerKey.Type
-	ownerKey, _, err := s.OwnerKeys.OwnerKey(keyType)
-	if errors.Is(err, ErrNotFound) {
-		return nil, fmt.Errorf("key type %s not supported", keyType)
-	} else if err != nil {
-		return nil, fmt.Errorf("error getting owner key [type=%s]: %w", keyType, err)
-	}
-	ownerPublicKey, err := newPublicKey(keyType, ownerKey.Public(), false)
+	ownerKey, ownerPublicKey, err := s.ownerKey(keyType, ov)
 	if err != nil {
-		return nil, fmt.Errorf("error with owner public key: %w", err)
+		return nil, err
 	}
 	s1 := cose.Sign1[deviceSetup, []byte]{
 		Payload: cbor.NewByteWrap(deviceSetup{
@@ -1234,15 +1251,9 @@ func (s *TO2Server) to2Done2(ctx context.Context, msg io.Reader) (*done2Msg, err
 
 	// Create and store a new voucher
 	keyType := currentOV.Header.Val.ManufacturerKey.Type
-	ownerKey, _, err := s.OwnerKeys.OwnerKey(keyType)
-	if errors.Is(err, ErrNotFound) {
-		return nil, fmt.Errorf("key type %s not supported", keyType)
-	} else if err != nil {
-		return nil, fmt.Errorf("error getting owner key [type=%s]: %w", keyType, err)
-	}
-	ownerPublicKey, err := newPublicKey(keyType, ownerKey.Public(), false)
+	_, ownerPublicKey, err := s.ownerKey(keyType, currentOV)
 	if err != nil {
-		return nil, fmt.Errorf("error with owner public key: %w", err)
+		return nil, err
 	}
 	ov := &Voucher{
 		Version: currentOV.Version,
