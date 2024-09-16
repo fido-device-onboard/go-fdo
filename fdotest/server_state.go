@@ -32,7 +32,8 @@ import (
 	"github.com/fido-device-onboard/go-fdo/testdata"
 )
 
-// AllServerState includes all server state interfaces.
+// AllServerState includes all server state interfaces and additional functions
+// needed for testing.
 type AllServerState interface {
 	fdo.TokenService
 	fdo.DISessionState
@@ -48,9 +49,7 @@ type AllServerState interface {
 
 // RunServerStateSuite is used to test different implementations of all server
 // state methods.
-//
-//nolint:gocyclo
-func RunServerStateSuite(t *testing.T, state AllServerState) {
+func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 	if state == nil {
 		stateless, err := token.NewService()
 		if err != nil {

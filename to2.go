@@ -61,9 +61,6 @@ func (c *Client) verifyOwner(ctx context.Context, baseURL string, to1d *cose.Sig
 	if err != nil {
 		return Nonce{}, nil, nil, err
 	}
-	if info.NumVoucherEntries == 0 {
-		return Nonce{}, nil, nil, fmt.Errorf("ownership voucher cannot have zero entries")
-	}
 	var entries []cose.Sign1Tag[VoucherEntryPayload, []byte]
 	for i := 0; i < info.NumVoucherEntries; i++ {
 		entry, err := c.nextOVEntry(ctx, baseURL, i)
@@ -89,7 +86,7 @@ func (c *Client) verifyOwner(ctx context.Context, baseURL string, to1d *cose.Sig
 	// and/or manufacturer key corresponding to the stored device credentials.
 	if err := ov.VerifyManufacturerKey(c.Cred.PublicKeyHash); err != nil {
 		captureErr(ctx, invalidMessageErrCode, "")
-		return Nonce{}, nil, nil, fmt.Errorf("bad ownership voucher header from TO2.ProveOVHdr: %w", err)
+		return Nonce{}, nil, nil, fmt.Errorf("bad ownership voucher header from TO2.ProveOVHdr: manufacturer key: %w", err)
 	}
 
 	// Verify each entry in the voucher's list by performing iterative
@@ -106,7 +103,11 @@ func (c *Client) verifyOwner(ctx context.Context, baseURL string, to1d *cose.Sig
 	// validate its COSE signature. If the public key were not to match the
 	// last entry of the voucher, then it would not be known that ProveOVHdr
 	// was signed by the intended owner service.
-	expectedOwnerPub, err := ov.Entries[len(ov.Entries)-1].Payload.Val.PublicKey.Public()
+	ownerPub := ov.Header.Val.ManufacturerKey
+	if len(ov.Entries) > 0 {
+		ownerPub = ov.Entries[len(ov.Entries)-1].Payload.Val.PublicKey
+	}
+	expectedOwnerPub, err := ownerPub.Public()
 	if err != nil {
 		return Nonce{}, nil, nil, fmt.Errorf("error parsing last public key of ownership voucher: %w", err)
 	}
@@ -348,7 +349,7 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 	if mfgKeyType := ov.Header.Val.ManufacturerKey.Type; keyType != mfgKeyType {
 		return nil, fmt.Errorf("device sig info has key type %q, must be %q to match manufacturer key", keyType, mfgKeyType)
 	}
-	ownerKey, ownerPublicKey, err := s.ownerKey(keyType, ov)
+	ownerKey, ownerPublicKey, err := s.ownerKey(keyType, ov.Header.Val.ManufacturerKey.Encoding)
 	if err != nil {
 		return nil, err
 	}
@@ -377,7 +378,7 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 	return s1.Tag(), nil
 }
 
-func (s *TO2Server) ownerKey(keyType KeyType, ov *Voucher) (crypto.Signer, *PublicKey, error) {
+func (s *TO2Server) ownerKey(keyType KeyType, keyEncoding KeyEncoding) (crypto.Signer, *PublicKey, error) {
 	key, chain, err := s.OwnerKeys.OwnerKey(keyType)
 	if errors.Is(err, ErrNotFound) {
 		return nil, nil, fmt.Errorf("owner key type %s not supported", keyType)
@@ -385,21 +386,11 @@ func (s *TO2Server) ownerKey(keyType KeyType, ov *Voucher) (crypto.Signer, *Publ
 		return nil, nil, fmt.Errorf("error getting owner key [type=%s]: %w", keyType, err)
 	}
 
-	var pub any
-	var asCOSE bool
-	switch ov.Header.Val.ManufacturerKey.Encoding {
-	default:
-		pub = key.Public()
-	case X5ChainKeyEnc:
+	pub := key.Public()
+	if keyEncoding == X5ChainKeyEnc && len(chain) > 0 {
 		pub = chain
-		if len(chain) == 0 {
-			pub = key.Public()
-		}
-	case CoseKeyEnc:
-		pub = key.Public()
-		asCOSE = true
 	}
-	pubkey, err := newPublicKey(keyType, pub, asCOSE)
+	pubkey, err := newPublicKey(keyType, pub, keyEncoding == CoseKeyEnc)
 	if err != nil {
 		return nil, nil, fmt.Errorf("error with owner public key: %w", err)
 	}
@@ -672,7 +663,7 @@ func (s *TO2Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1
 
 	// Respond with device setup
 	keyType := ov.Header.Val.ManufacturerKey.Type
-	ownerKey, ownerPublicKey, err := s.ownerKey(keyType, ov)
+	ownerKey, ownerPublicKey, err := s.ownerKey(keyType, ov.Header.Val.ManufacturerKey.Encoding)
 	if err != nil {
 		return nil, err
 	}
@@ -1251,7 +1242,8 @@ func (s *TO2Server) to2Done2(ctx context.Context, msg io.Reader) (*done2Msg, err
 
 	// Create and store a new voucher
 	keyType := currentOV.Header.Val.ManufacturerKey.Type
-	_, ownerPublicKey, err := s.ownerKey(keyType, currentOV)
+	keyEncoding := currentOV.Header.Val.ManufacturerKey.Encoding
+	_, ownerPublicKey, err := s.ownerKey(keyType, keyEncoding)
 	if err != nil {
 		return nil, err
 	}

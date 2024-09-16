@@ -25,10 +25,12 @@ import (
 // State implements interfaces for state which must be persisted between
 // protocol sessions, but not between server processes.
 type State struct {
-	RVBlobs                  map[fdo.GUID]*cose.Sign1[fdo.To1d, []byte]
-	Vouchers                 map[fdo.GUID]*fdo.Voucher
-	OwnerKeys                map[fdo.KeyType]crypto.Signer
-	PreserveReplacedVouchers bool
+	RVBlobs   map[fdo.GUID]*cose.Sign1[fdo.To1d, []byte]
+	Vouchers  map[fdo.GUID]*fdo.Voucher
+	OwnerKeys map[fdo.KeyType]struct {
+		Key   crypto.Signer
+		Chain []*x509.Certificate
+	}
 }
 
 var _ fdo.RendezvousBlobPersistentState = (*State)(nil)
@@ -42,7 +44,15 @@ func NewState() (*State, error) {
 	if err != nil {
 		return nil, err
 	}
+	rsaCert, err := newCA(rsaKey)
+	if err != nil {
+		return nil, err
+	}
 	ec256Key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	ec256Cert, err := newCA(ec256Key)
 	if err != nil {
 		return nil, err
 	}
@@ -50,15 +60,22 @@ func NewState() (*State, error) {
 	if err != nil {
 		return nil, err
 	}
+	ec384Cert, err := newCA(ec384Key)
+	if err != nil {
+		return nil, err
+	}
 	return &State{
 		RVBlobs:  make(map[fdo.GUID]*cose.Sign1[fdo.To1d, []byte]),
 		Vouchers: make(map[fdo.GUID]*fdo.Voucher),
-		OwnerKeys: map[fdo.KeyType]crypto.Signer{
-			fdo.Rsa2048RestrKeyType: rsaKey,
-			fdo.RsaPkcsKeyType:      rsaKey,
-			fdo.RsaPssKeyType:       rsaKey,
-			fdo.Secp256r1KeyType:    ec256Key,
-			fdo.Secp384r1KeyType:    ec384Key,
+		OwnerKeys: map[fdo.KeyType]struct {
+			Key   crypto.Signer
+			Chain []*x509.Certificate
+		}{
+			fdo.Rsa2048RestrKeyType: {Key: rsaKey, Chain: []*x509.Certificate{rsaCert}},
+			fdo.RsaPkcsKeyType:      {Key: rsaKey, Chain: []*x509.Certificate{rsaCert}},
+			fdo.RsaPssKeyType:       {Key: rsaKey, Chain: []*x509.Certificate{rsaCert}},
+			fdo.Secp256r1KeyType:    {Key: ec256Key, Chain: []*x509.Certificate{ec256Cert}},
+			fdo.Secp384r1KeyType:    {Key: ec384Key, Chain: []*x509.Certificate{ec384Cert}},
 		},
 	}, nil
 }
@@ -80,9 +97,7 @@ func (s *State) AddVoucher(_ context.Context, ov *fdo.Voucher) error {
 // ReplaceVoucher stores a new voucher, possibly deleting or marking the
 // previous voucher as replaced.
 func (s *State) ReplaceVoucher(_ context.Context, oldGUID fdo.GUID, ov *fdo.Voucher) error {
-	if !s.PreserveReplacedVouchers {
-		delete(s.Vouchers, oldGUID)
-	}
+	delete(s.Vouchers, oldGUID)
 	s.Vouchers[ov.Header.Val.GUID] = ov
 	return nil
 }
@@ -103,11 +118,7 @@ func (s *State) OwnerKey(keyType fdo.KeyType) (crypto.Signer, []*x509.Certificat
 	if !ok {
 		return nil, nil, fdo.ErrNotFound
 	}
-	cert, err := newCA(key)
-	if err != nil {
-		return nil, nil, err
-	}
-	return key, []*x509.Certificate{cert}, nil
+	return key.Key, key.Chain, nil
 }
 
 func newCA(priv crypto.Signer) (*x509.Certificate, error) {

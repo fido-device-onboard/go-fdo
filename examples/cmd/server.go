@@ -94,7 +94,6 @@ func server() error {
 	if err != nil {
 		return err
 	}
-	state.PreserveReplacedVouchers = true
 
 	useTLS = insecureTLS
 

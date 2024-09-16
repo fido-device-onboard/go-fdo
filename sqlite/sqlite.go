@@ -36,9 +36,6 @@ import (
 
 // DB implements FDO server state persistence.
 type DB struct {
-	// When set, ReplaceVoucher will not delete the original voucher.
-	PreserveReplacedVouchers bool
-
 	// Log all SQL queries to this optional writer.
 	DebugLog io.Writer
 
@@ -794,13 +791,6 @@ func (db *DB) ReplaceVoucher(ctx context.Context, guid fdo.GUID, ov *fdo.Voucher
 	data, err := cbor.Marshal(ov)
 	if err != nil {
 		return fmt.Errorf("error marshaling ownership voucher: %w", err)
-	}
-	if db.PreserveReplacedVouchers {
-		return db.insert(ctx, "owner_vouchers",
-			map[string]any{
-				"guid": ov.Header.Val.GUID[:],
-				"cbor": data,
-			}, nil)
 	}
 	return db.update(ctx, "owner_vouchers",
 		map[string]any{

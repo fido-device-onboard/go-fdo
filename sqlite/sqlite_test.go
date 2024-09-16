@@ -24,7 +24,6 @@ import (
 func TestClient(t *testing.T) {
 	state, cleanup := newDB(t)
 	defer func() { _ = cleanup() }()
-	state.PreserveReplacedVouchers = true
 
 	fdotest.RunClientTestSuite(t, state, nil, nil, nil)
 }

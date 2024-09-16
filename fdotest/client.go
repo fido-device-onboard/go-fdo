@@ -42,9 +42,6 @@ type OwnerModulesFunc func(ctx context.Context, replacementGUID fdo.GUID, info s
 // RunClientTestSuite is used to test different implementations of server state
 // methods at an almost end-to-end level (transport is mocked).
 //
-// The server state implementation must must NOT remove vouchers after TO2 so
-// that TO2 may occur with the same device many times in succession.
-//
 // If state is nil, then an in-memory implementation will be used. This is
 // useful for only testing service info modules.
 //
@@ -62,7 +59,6 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 		if err != nil {
 			t.Fatal(err)
 		}
-		inMemory.PreserveReplacedVouchers = true
 
 		state = struct {
 			*token.Service
@@ -329,6 +325,7 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 					HmacSecret:       []byte(cli.Hmac.(blob.Hmac)),
 					PrivateKey:       blob.Pkcs8Key{PrivateKey: cli.Key},
 				})
+				cli.Cred = *newCred
 			})
 
 			t.Run("Transfer Ownership 2 Only", func(t *testing.T) {
@@ -344,6 +341,7 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 					HmacSecret:       []byte(cli.Hmac.(blob.Hmac)),
 					PrivateKey:       blob.Pkcs8Key{PrivateKey: cli.Key},
 				})
+				cli.Cred = *newCred
 			})
 
 			t.Run("Transfer Ownership 2 w/ Modules", func(t *testing.T) {
@@ -364,6 +362,7 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 					HmacSecret:       []byte(cli.Hmac.(blob.Hmac)),
 					PrivateKey:       blob.Pkcs8Key{PrivateKey: cli.Key},
 				})
+				cli.Cred = *newCred
 			})
 		})
 	}
