@@ -6,8 +6,11 @@ package fdo
 import (
 	"context"
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/rsa"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"io"
 	"iter"
 	"time"
@@ -186,6 +189,47 @@ type TO2Server struct {
 
 	// Optional configuration
 	MaxDeviceServiceInfoSize uint16
+}
+
+// Resell implements the FDO Resale Protocol by removing a voucher from
+// ownership, extending it to a new owner, and then returning it for
+// out-of-band transport.
+func (s *TO2Server) Resell(ctx context.Context, guid GUID, nextOwner crypto.PublicKey, extra ExtraInfo) (*Voucher, error) {
+	// Remove voucher from ownership of this service
+	ov, err := s.Vouchers.RemoveVoucher(ctx, guid)
+	if err != nil {
+		return nil, fmt.Errorf("error untracking voucher for resale: %w", err)
+	}
+
+	// Get current owner key
+	ownerPubKey := ov.Header.Val.ManufacturerKey
+	if len(ov.Entries) > 0 {
+		ownerPubKey = ov.Entries[len(ov.Entries)-1].Payload.Val.PublicKey
+	}
+	ownerKey, _, err := s.OwnerKeys.OwnerKey(ownerPubKey.Type)
+	if err != nil {
+		_ = s.Vouchers.AddVoucher(ctx, ov)
+		return nil, fmt.Errorf("error getting key used to sign voucher: %w", err)
+	}
+
+	// Extend voucher
+	var extended *Voucher
+	switch nextOwner := nextOwner.(type) {
+	case *rsa.PublicKey:
+		extended, err = ExtendVoucher(ov, ownerKey, nextOwner, extra)
+	case *ecdsa.PublicKey:
+		extended, err = ExtendVoucher(ov, ownerKey, nextOwner, extra)
+	case []*x509.Certificate:
+		extended, err = ExtendVoucher(ov, ownerKey, nextOwner, extra)
+	default:
+		err = fmt.Errorf("unsupported key type: %T", nextOwner)
+	}
+	if err != nil {
+		_ = s.Vouchers.AddVoucher(ctx, ov)
+		return nil, fmt.Errorf("error extending voucher to new owner: %w", err)
+	}
+
+	return extended, nil
 }
 
 // Respond validates a request and returns the appropriate response message.

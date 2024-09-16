@@ -462,8 +462,23 @@ func ExtendVoucher[T PublicKeyOrChain](v *Voucher, owner crypto.Signer, nextOwne
 		return nil, fmt.Errorf("unsupported key type: %T", ownerPub)
 	}
 
+	// Owner key must match the last signature
+	expectedOwnerPubKey, err := v.OwnerPublicKey()
+	if err != nil {
+		return nil, fmt.Errorf("error getting owner public key of voucher to extend: %w", err)
+	}
+	if !ownerPubKey.(interface {
+		Equal(x crypto.PublicKey) bool
+	}).Equal(expectedOwnerPubKey) {
+		return nil, fmt.Errorf("owner key for signing does not match the last signature of the voucher to be extended")
+	}
+
 	// Create the next owner PublicKey structure
-	nextOwnerPublicKey, err := newPublicKey(v.Header.Val.ManufacturerKey.Type, nextOwner, false)
+	asCOSE := v.Header.Val.ManufacturerKey.Encoding == CoseKeyEnc
+	if _, ok := any(nextOwner).([]*x509.Certificate); ok {
+		asCOSE = false
+	}
+	nextOwnerPublicKey, err := newPublicKey(v.Header.Val.ManufacturerKey.Type, nextOwner, asCOSE)
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling next owner public key: %w", err)
 	}

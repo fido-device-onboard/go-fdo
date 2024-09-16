@@ -191,6 +191,10 @@ type OwnerVoucherPersistentState interface {
 	// previous voucher as replaced.
 	ReplaceVoucher(context.Context, GUID, *Voucher) error
 
+	// RemoveVoucher untracks a voucher, possibly by deleting it or marking it
+	// as removed, and returns it for extension.
+	RemoveVoucher(context.Context, GUID) (*Voucher, error)
+
 	// Voucher retrieves a voucher by GUID.
 	Voucher(context.Context, GUID) (*Voucher, error)
 }

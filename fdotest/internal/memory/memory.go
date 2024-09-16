@@ -102,6 +102,17 @@ func (s *State) ReplaceVoucher(_ context.Context, oldGUID fdo.GUID, ov *fdo.Vouc
 	return nil
 }
 
+// RemoveVoucher untracks a voucher, possibly by deleting it or marking it
+// as removed, and returns it for extension.
+func (s *State) RemoveVoucher(ctx context.Context, guid fdo.GUID) (*fdo.Voucher, error) {
+	ov, ok := s.Vouchers[guid]
+	if !ok {
+		return nil, fdo.ErrNotFound
+	}
+	delete(s.Vouchers, guid)
+	return ov, nil
+}
+
 // Voucher retrieves a voucher by GUID.
 func (s *State) Voucher(_ context.Context, guid fdo.GUID) (*fdo.Voucher, error) {
 	ov, ok := s.Vouchers[guid]

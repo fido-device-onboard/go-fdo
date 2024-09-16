@@ -446,6 +446,36 @@ func query(ctx context.Context, db querier, table string, columns []string, wher
 	return nil
 }
 
+func remove(ctx context.Context, db execer, table string, where map[string]any) error {
+	whereKeys := slices.Collect(maps.Keys(where))
+	clauses := make([]string, len(whereKeys))
+	for i, key := range whereKeys {
+		clauses[i] = "`" + key + "` = ?"
+	}
+	whereVals := make([]any, len(whereKeys))
+	for i, key := range whereKeys {
+		whereVals[i] = where[key]
+	}
+
+	query := fmt.Sprintf(
+		`DELETE FROM %s WHERE %s`,
+		table,
+		strings.Join(clauses, " AND "),
+	)
+	debug(ctx, "sqlite: %s\n%+v", query, where)
+
+	result, err := db.ExecContext(ctx, query, whereVals...)
+	if err != nil {
+		return err
+	}
+	if n, err := result.RowsAffected(); err != nil {
+		return err
+	} else if n < 1 {
+		return fdo.ErrNotFound
+	}
+	return nil
+}
+
 // AddManufacturerKey for signing device certificate chains. Unlike
 // [DB.AddOwnerKey], chain is always required.
 func (db *DB) AddManufacturerKey(keyType fdo.KeyType, key crypto.PrivateKey, chain []*x509.Certificate) error {
@@ -785,8 +815,7 @@ func (db *DB) AddVoucher(ctx context.Context, ov *fdo.Voucher) error {
 	}, nil)
 }
 
-// ReplaceVoucher stores a new voucher, possibly deleting or marking the
-// previous voucher as replaced.
+// ReplaceVoucher stores a new voucher, deleting the previous voucher.
 func (db *DB) ReplaceVoucher(ctx context.Context, guid fdo.GUID, ov *fdo.Voucher) error {
 	data, err := cbor.Marshal(ov)
 	if err != nil {
@@ -801,6 +830,43 @@ func (db *DB) ReplaceVoucher(ctx context.Context, guid fdo.GUID, ov *fdo.Voucher
 			"guid": guid[:],
 		},
 	)
+}
+
+// RemoveVoucher untracks a voucher, deleting it, and returns it for extension.
+func (db *DB) RemoveVoucher(ctx context.Context, guid fdo.GUID) (*fdo.Voucher, error) {
+	ctx = db.debugCtx(ctx)
+
+	tx, err := db.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("error starting transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var data []byte
+	if err := query(ctx, tx, "owner_vouchers", []string{"cbor"},
+		map[string]any{"guid": guid[:]},
+		&data,
+	); err != nil {
+		return nil, err
+	}
+	if data == nil {
+		return nil, fdo.ErrNotFound
+	}
+
+	var ov fdo.Voucher
+	if err := cbor.Unmarshal(data, &ov); err != nil {
+		return nil, fmt.Errorf("error unmarshaling ownership voucher: %w", err)
+	}
+
+	if err := remove(ctx, tx, "owner_vouchers", map[string]any{"guid": guid[:]}); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+
+	return &ov, nil
 }
 
 // Voucher retrieves a voucher by GUID.
