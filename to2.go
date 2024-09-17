@@ -308,9 +308,23 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 		captureErr(ctx, resourceNotFound, "")
 		return nil, fmt.Errorf("error retrieving voucher for device %x: %w", hello.GUID, err)
 	}
+	// It is legal for this tag to have a value of zero (0), but this is
+	// only useful in re-manufacturing situations, since the Rendezvous
+	// Server cannot verify (or accept) these Ownership Proxies.
 	numEntries := len(ov.Entries)
 	if numEntries > math.MaxUint8 {
 		return nil, fmt.Errorf("voucher for device %x has too many entries", hello.GUID)
+	}
+
+	// Verify voucher using custom configuration option.
+	if s.VerifyVoucher != nil {
+		if err := s.VerifyVoucher(ctx, *ov); err != nil {
+			captureErr(ctx, resourceNotFound, "")
+			return nil, fmt.Errorf("VerifyVoucher: %w", err)
+		}
+	} else if numEntries == 0 {
+		captureErr(ctx, resourceNotFound, "")
+		return nil, fmt.Errorf("error retrieving voucher for device %x: %w", hello.GUID, ErrNotFound)
 	}
 
 	// Hash request
@@ -644,7 +658,7 @@ func (s *TO2Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1
 	}
 
 	// Get configured RV info
-	rvInfo, err := s.RvInfo(ctx, ov)
+	rvInfo, err := s.RvInfo(ctx, *ov)
 	if err != nil {
 		return nil, fmt.Errorf("error determining rendezvous info for device: %w", err)
 	}

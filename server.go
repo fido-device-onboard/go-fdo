@@ -177,10 +177,18 @@ type TO2Server struct {
 	OwnerKeys OwnerKeyPersistentState
 
 	// Rendezvous directives
-	RvInfo func(context.Context, *Voucher) ([][]RvInstruction, error)
+	RvInfo func(context.Context, Voucher) ([][]RvInstruction, error)
 
 	// Create an iterator of service info modules for a given device
 	OwnerModules func(ctx context.Context, replacementGUID GUID, info string, chain []*x509.Certificate, devmod Devmod, modules []string) iter.Seq2[string, serviceinfo.OwnerModule]
+
+	// VerifyVoucher, if not nil, will be called before creating and responding
+	// with a TO2.ProveOVHdr message. Any error will cause TO2 to fail with a
+	// not found status code.
+	//
+	// If VerifyVoucher is nil, the default behavior is to reject all vouchers
+	// with zero extensions.
+	VerifyVoucher func(context.Context, Voucher) error
 
 	// Server affinity state
 	nextModule func() (string, serviceinfo.OwnerModule, bool)

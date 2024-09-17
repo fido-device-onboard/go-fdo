@@ -128,7 +128,7 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 			Session:   state,
 			Vouchers:  state,
 			OwnerKeys: state,
-			RvInfo: func(context.Context, *fdo.Voucher) ([][]fdo.RvInstruction, error) {
+			RvInfo: func(context.Context, fdo.Voucher) ([][]fdo.RvInstruction, error) {
 				return [][]fdo.RvInstruction{}, nil
 			},
 			OwnerModules: func(ctx context.Context, replacementGUID fdo.GUID, info string, chain []*x509.Certificate, devmod fdo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
@@ -147,6 +147,7 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 					}
 				}
 			},
+			VerifyVoucher: func(context.Context, fdo.Voucher) error { return nil },
 		},
 		T: t,
 	}
