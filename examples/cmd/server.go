@@ -35,7 +35,6 @@ import (
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
-	"github.com/fido-device-onboard/go-fdo/cose"
 	"github.com/fido-device-onboard/go-fdo/fsim"
 	transport "github.com/fido-device-onboard/go-fdo/http"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
@@ -408,10 +407,7 @@ func newHandler(rvInfo [][]fdo.RvInstruction, state *sqlite.DB) (*transport.Hand
 
 	// Auto-register RV blob so that TO1 can be tested unless a TO0 address is
 	// given or RV bypass is set
-	var autoTO0 interface {
-		OwnerKey(keyType fdo.KeyType) (crypto.Signer, []*x509.Certificate, error)
-		SetRVBlob(context.Context, *fdo.Voucher, *cose.Sign1[fdo.To1d, []byte], time.Time) error
-	}
+	var autoTO0 fdo.AutoTO0
 	var autoTO0Addrs []fdo.RvTO2Addr
 	if to0Addr == "" && !rvBypass {
 		autoTO0 = state

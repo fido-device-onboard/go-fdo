@@ -190,6 +190,8 @@ var _ interface {
 	fdo.ManufacturerVoucherPersistentState
 	fdo.OwnerVoucherPersistentState
 	fdo.OwnerKeyPersistentState
+	fdo.AutoExtend
+	fdo.AutoTO0
 } = (*DB)(nil)
 
 const sessionIDSize = 16
@@ -490,7 +492,8 @@ func (db *DB) AddManufacturerKey(keyType fdo.KeyType, key crypto.PrivateKey, cha
 	})
 }
 
-// ManufacturerKey returns the signer of a given key type.
+// ManufacturerKey returns the signer of a given key type and its certificate
+// chain (required).
 func (db *DB) ManufacturerKey(keyType fdo.KeyType) (crypto.Signer, []*x509.Certificate, error) {
 	var pkcs8, der []byte
 	if err := db.query(context.Background(), "mfg_keys", []string{"pkcs8", "x509_chain"}, map[string]any{

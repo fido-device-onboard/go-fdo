@@ -15,7 +15,6 @@ import (
 	"iter"
 	"time"
 
-	"github.com/fido-device-onboard/go-fdo/cose"
 	"github.com/fido-device-onboard/go-fdo/plugin"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
@@ -34,16 +33,10 @@ type DIServer[T any] struct {
 	DeviceInfo func(context.Context, *T, []*x509.Certificate) (string, KeyType, KeyEncoding, error)
 
 	// When set, new vouchers will be extended using the appropriate owner key.
-	AutoExtend interface {
-		ManufacturerKey(keyType KeyType) (crypto.Signer, []*x509.Certificate, error)
-		OwnerKey(keyType KeyType) (crypto.Signer, []*x509.Certificate, error)
-	}
+	AutoExtend AutoExtend
 
 	// When set, new vouchers will be registered for rendezvous.
-	AutoTO0 interface {
-		OwnerKey(keyType KeyType) (crypto.Signer, []*x509.Certificate, error)
-		SetRVBlob(context.Context, *Voucher, *cose.Sign1[To1d, []byte], time.Time) error
-	}
+	AutoTO0      AutoTO0
 	AutoTO0Addrs []RvTO2Addr
 
 	// Rendezvous directives

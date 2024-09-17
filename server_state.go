@@ -198,3 +198,28 @@ type OwnerVoucherPersistentState interface {
 	// Voucher retrieves a voucher by GUID.
 	Voucher(context.Context, GUID) (*Voucher, error)
 }
+
+// The following types are for optional server features.
+
+// AutoExtend provides the necessary methods for automatically extending a
+// device voucher upon the completion of DI.
+type AutoExtend interface {
+	// ManufacturerKey returns the signer of a given key type and its certificate
+	// chain (required).
+	ManufacturerKey(keyType KeyType) (crypto.Signer, []*x509.Certificate, error)
+
+	// OwnerKey returns the private key matching a given key type and optionally
+	// its certificate chain.
+	OwnerKey(keyType KeyType) (crypto.Signer, []*x509.Certificate, error)
+}
+
+// AutoTO0 provides the necessary methods for setting a rendezvous blob upon
+// device voucher auto-extension.
+type AutoTO0 interface {
+	// OwnerKey returns the private key matching a given key type and optionally
+	// its certificate chain.
+	OwnerKey(keyType KeyType) (crypto.Signer, []*x509.Certificate, error)
+
+	// SetRVBlob sets the owner rendezvous blob for a device.
+	SetRVBlob(context.Context, *Voucher, *cose.Sign1[To1d, []byte], time.Time) error
+}
