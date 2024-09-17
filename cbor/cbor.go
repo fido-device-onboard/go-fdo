@@ -202,6 +202,7 @@ package cbor
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -390,16 +391,12 @@ func (d *Decoder) Decode(v any) error {
 		if u, ok := rv.Interface().(Unmarshaler); ok {
 			b, err := d.decodeRaw()
 			if err != nil {
-				return err
-			}
-
-			// Handle null/undefined
-			/*
-				if len(b) == 1 && (b[0] == 0xf6 || b[0] == 0xf7) {
-					rv.SetZero()
+				_, isOmitEmpty := rv.Interface().(interface{ isOmitEmpty() })
+				if errors.Is(err, io.EOF) && isOmitEmpty {
 					return nil
 				}
-			*/
+				return err
+			}
 
 			return u.UnmarshalCBOR(b)
 		}
@@ -1523,6 +1520,35 @@ func collectFieldWeights(parents []int, i, upper int, field func(int) reflect.St
 		omittable: omittable,
 	}))
 }
+
+// OmitEmpty encodes a zero value (zero, empty array, empty byte string, empty
+// string, empty map) as zero bytes.
+type OmitEmpty[T any] struct{ Val T }
+
+// MarshalCBOR encodes a zero value (zero, empty array, empty byte string,
+// empty string, empty map) as zero bytes.
+func (o OmitEmpty[T]) MarshalCBOR() ([]byte, error) {
+	b, err := Marshal(o.Val)
+	if err != nil {
+		return nil, err
+	}
+	if len(b) != 1 {
+		return b, nil
+	}
+	switch b[0] {
+	case 0x00, 0x40, 0x60, 0x80, 0xa0:
+		return []byte{}, nil
+	default:
+		return b, nil
+	}
+}
+
+// UnmarshalCBOR decodes data into its generic typed Val field. Note that
+// OmitEmpty is treated specially by the cbor package such that reading zero
+// bytes (EOF) will not cause an error.
+func (o *OmitEmpty[T]) UnmarshalCBOR(p []byte) error { return Unmarshal(p, &o.Val) }
+
+func (o OmitEmpty[T]) isOmitEmpty() {}
 
 // BytewiseLexicalSort is a map key sorting function. It is the default for an
 // `Encoder`.

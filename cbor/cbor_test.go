@@ -2075,6 +2075,26 @@ func TestMarshalEmbeddedPointer(t *testing.T) {
 	})
 }
 
+func TestOmitEmptyType(t *testing.T) {
+	t.Run("Marshal", func(t *testing.T) {
+		v := cbor.OmitEmpty[int]{Val: 0}
+		data, err := cbor.Marshal(&v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(data) > 0 {
+			t.Fatal("expected zero bytes")
+		}
+	})
+
+	t.Run("Unmarshal", func(t *testing.T) {
+		var v cbor.OmitEmpty[*int]
+		if err := cbor.Unmarshal([]byte{}, &v); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
 // Trivial check-for-panic fuzz testing
 func FuzzUnmarshal(f *testing.F) {
 	f.Fuzz(func(t *testing.T, data []byte) {

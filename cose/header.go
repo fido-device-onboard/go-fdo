@@ -162,36 +162,15 @@ func newRawHeaderMap(unmarshaled map[Label]any) (rawHeaderMap, error) {
 
 // emptyOrSerializedMap encodes to/from a CBOR byte string which either
 // contains a serialized non-empty map or is empty itself.
-type emptyOrSerializedMap = cbor.Bstr[omitEmpty[rawHeaderMap]]
+type emptyOrSerializedMap = cbor.Bstr[cbor.OmitEmpty[rawHeaderMap]]
 
 // newEmptyOrSerializedMap marshals the values of a header map and wraps
 // it in a SerializedOrEmptyHeaders type.
 func newEmptyOrSerializedMap(unmarshaled map[Label]any) (emptyOrSerializedMap, error) {
 	hmap, err := newRawHeaderMap(unmarshaled)
 	return emptyOrSerializedMap{
-		Val: omitEmpty[rawHeaderMap]{
+		Val: cbor.OmitEmpty[rawHeaderMap]{
 			Val: hmap,
 		},
 	}, err
 }
-
-// omitEmpty encodes a zero value (zero, empty array, empty map) as zero bytes.
-type omitEmpty[T any] struct{ Val T }
-
-func (o omitEmpty[T]) MarshalCBOR() ([]byte, error) {
-	b, err := cbor.Marshal(o.Val)
-	if err != nil {
-		return nil, err
-	}
-	if len(b) != 1 {
-		return b, nil
-	}
-	switch b[0] {
-	case 0x00, 0x40, 0x60, 0x80, 0xa0:
-		return []byte{}, nil
-	default:
-		return b, nil
-	}
-}
-
-func (o *omitEmpty[T]) UnmarshalCBOR(b []byte) error { return cbor.Unmarshal(b, &o.Val) }
