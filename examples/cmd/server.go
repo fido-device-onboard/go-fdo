@@ -15,6 +15,7 @@ import (
 	"crypto/x509/pkix"
 	"database/sql"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
@@ -49,7 +50,9 @@ var (
 	dbPass     string
 	extAddr    string
 	to0Addr    string
-	to0Guid    string
+	to0GUID    string
+	resaleGUID string
+	resaleKey  string
 	rvBypass   bool
 	downloads  stringList
 	uploadDir  string
@@ -72,9 +75,11 @@ func init() {
 	serverFlags.StringVar(&dbPass, "db-pass", "", "SQLite database encryption-at-rest passphrase")
 	serverFlags.BoolVar(&debug, "debug", debug, "Print HTTP contents")
 	serverFlags.StringVar(&to0Addr, "to0", "", "Rendezvous server `addr`ess to register RV blobs (disables self-registration)")
-	serverFlags.StringVar(&to0Guid, "to0-guid", "", "Device `guid` to immediately register an RV blob (requires to0 flag)")
+	serverFlags.StringVar(&to0GUID, "to0-guid", "", "Device `guid` to immediately register an RV blob (requires to0 flag)")
 	serverFlags.StringVar(&extAddr, "ext-http", "", "External `addr`ess devices should connect to (default \"127.0.0.1:${LISTEN_PORT}\")")
 	serverFlags.StringVar(&addr, "http", "localhost:8080", "The `addr`ess to listen on")
+	serverFlags.StringVar(&resaleGUID, "resale-guid", "", "Voucher `guid` to extend for resale")
+	serverFlags.StringVar(&resaleKey, "resale-key", "", "The `path` to a PEM-encoded x.509 public key for the next owner")
 	serverFlags.BoolVar(&insecureTLS, "insecure-tls", false, "Listen with a self-signed TLS certificate")
 	serverFlags.BoolVar(&rvBypass, "rv-bypass", false, "Skip TO1")
 	serverFlags.Var(&downloads, "download", "Use fdo.download FSIM for each `file` (flag may be used multiple times)")
@@ -128,8 +133,13 @@ func server() error {
 	}
 
 	// Invoke TO0 client if a GUID is specified
-	if to0Guid != "" {
+	if to0GUID != "" {
 		return registerRvBlob(host, port, state)
+	}
+
+	// Invoke resale protocol if a GUID is specified
+	if resaleGUID != "" {
+		return resell(state)
 	}
 
 	return serveHTTP(rvInfo, state)
@@ -178,12 +188,12 @@ func registerRvBlob(host string, port uint16, state *sqlite.DB) error {
 	}
 
 	// Parse to0-guid flag
-	guidBytes, err := hex.DecodeString(to0Guid)
+	guidBytes, err := hex.DecodeString(strings.ReplaceAll(to0GUID, "-", ""))
 	if err != nil {
-		return fmt.Errorf("error parsing hex GUID of device to register RV blob: %w", err)
+		return fmt.Errorf("error parsing GUID of device to register RV blob: %w", err)
 	}
 	if len(guidBytes) != 16 {
-		return fmt.Errorf("error parsing hex GUID of device to register RV blob: must be 16 bytes")
+		return fmt.Errorf("error parsing GUID of device to register RV blob: must be 16 bytes")
 	}
 	var guid fdo.GUID
 	copy(guid[:], guidBytes)
@@ -211,6 +221,53 @@ func registerRvBlob(host string, port uint16, state *sqlite.DB) error {
 	slog.Info("RV blob registered", "ttl", time.Duration(refresh)*time.Second)
 
 	return nil
+}
+
+func resell(state *sqlite.DB) error {
+	// Parse resale-guid flag
+	guidBytes, err := hex.DecodeString(strings.ReplaceAll(resaleGUID, "-", ""))
+	if err != nil {
+		return fmt.Errorf("error parsing GUID of voucher to resell: %w", err)
+	}
+	if len(guidBytes) != 16 {
+		return fmt.Errorf("error parsing GUID of voucher to resell: must be 16 bytes")
+	}
+	var guid fdo.GUID
+	copy(guid[:], guidBytes)
+
+	// Parse next owner key
+	if resaleKey == "" {
+		return fmt.Errorf("resale-guid depends on resale-key flag being set")
+	}
+	keyBytes, err := os.ReadFile(filepath.Clean(resaleKey))
+	if err != nil {
+		return fmt.Errorf("error reading next owner key file: %w", err)
+	}
+	blk, _ := pem.Decode(keyBytes)
+	if blk == nil {
+		return fmt.Errorf("invalid PEM file: %s", resaleKey)
+	}
+	nextOwner, err := x509.ParsePKIXPublicKey(blk.Bytes)
+	if err != nil {
+		return fmt.Errorf("error parsing x.509 public key: %w", err)
+	}
+
+	// Perform resale protocol
+	extended, err := (&fdo.TO2Server{
+		Vouchers:  state,
+		OwnerKeys: state,
+	}).Resell(context.TODO(), guid, nextOwner, nil)
+	if err != nil {
+		return fmt.Errorf("resale protocol: %w", err)
+	}
+	ovBytes, err := cbor.Marshal(extended)
+	if err != nil {
+		return fmt.Errorf("resale protocol: error marshaling voucher: %w", err)
+	}
+	return pem.Encode(os.Stdout, &pem.Block{
+		Type:  "OWNERSHIP VOUCHER",
+		Bytes: ovBytes,
+	})
 }
 
 func mustMarshal(v any) []byte {
@@ -405,7 +462,7 @@ func newHandler(rvInfo [][]fdo.RvInstruction, state *sqlite.DB) (*transport.Hand
 			Session:      state,
 			Vouchers:     state,
 			OwnerKeys:    state,
-			RvInfo:       func(context.Context, *fdo.Voucher) ([][]fdo.RvInstruction, error) { return rvInfo, nil },
+			RvInfo:       func(context.Context, fdo.Voucher) ([][]fdo.RvInstruction, error) { return rvInfo, nil },
 			OwnerModules: ownerModules,
 		},
 	}, nil

@@ -19,6 +19,9 @@ var (
 
 func init() {
 	flags.BoolVar(&debug, "debug", false, "Run subcommand with debug enabled")
+	flags.Usage = usage
+	clientFlags.Usage = func() {}
+	serverFlags.Usage = func() {}
 }
 
 func usage() {
@@ -47,7 +50,6 @@ func options(flags *flag.FlagSet) string {
 
 func main() {
 	if err := flags.Parse(os.Args[1:]); err != nil {
-		_, _ = fmt.Fprintln(os.Stderr, err)
 		usage()
 		os.Exit(1)
 	}
@@ -64,7 +66,6 @@ func main() {
 	switch sub {
 	case "client", "c", "cli":
 		if err := clientFlags.Parse(args); err != nil {
-			_, _ = fmt.Fprintln(os.Stderr, err)
 			usage()
 			os.Exit(1)
 		}
@@ -74,7 +75,6 @@ func main() {
 		}
 	case "server", "s", "srv":
 		if err := serverFlags.Parse(args); err != nil {
-			_, _ = fmt.Fprintln(os.Stderr, err)
 			usage()
 			os.Exit(1)
 		}
