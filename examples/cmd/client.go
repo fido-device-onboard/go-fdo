@@ -39,6 +39,8 @@ var (
 	diURL       string
 	diEC256     bool
 	diKeyEnc    string
+	kexSuite    string
+	cipherSuite string
 	printDevice bool
 	rvOnly      bool
 	dlDir       string
@@ -127,6 +129,8 @@ func init() {
 	clientFlags.StringVar(&diURL, "di", "", "HTTP base `URL` for DI server")
 	clientFlags.BoolVar(&diEC256, "di-ec256", false, "Use Secp256r1 EC key for device credential")
 	clientFlags.StringVar(&diKeyEnc, "di-key-enc", "x509", "Public key encoding to use for manufacturer key [x509,x5chain,cose]")
+	clientFlags.StringVar(&kexSuite, "kex", "ECDH384", "Name of cipher `suite` to use for key exchange (see usage)")
+	clientFlags.StringVar(&cipherSuite, "cipher", "A128GCM", "Name of cipher `suite` to use for encryption (see usage)")
 	clientFlags.BoolVar(&printDevice, "print", false, "Print device credential blob and stop")
 	clientFlags.BoolVar(&rvOnly, "rv-only", false, "Perform TO1 then stop")
 	clientFlags.Var(&uploads, "upload", "List of dirs and `files` to upload files from, "+
@@ -136,6 +140,11 @@ func init() {
 func client() error {
 	if debug {
 		level.Set(slog.LevelDebug)
+	}
+
+	kexCipherSuiteID, ok := kex.CipherSuiteByName(cipherSuite)
+	if !ok {
+		return fmt.Errorf("invalid key exchange cipher suite: %s", cipherSuite)
 	}
 
 	cli := &fdo.Client{
@@ -149,8 +158,8 @@ func client() error {
 			FileSep: ";",
 			Bin:     runtime.GOARCH,
 		},
-		KeyExchange: kex.ECDH384Suite,
-		CipherSuite: kex.A128GcmCipher,
+		KeyExchange: kex.Suite(kexSuite),
+		CipherSuite: kexCipherSuiteID,
 	}
 
 	// Perform DI if given a URL

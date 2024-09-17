@@ -34,7 +34,26 @@ Global options:
 Client options:
 %s
 Server options:
-%s`, options(flags), options(clientFlags), options(serverFlags))
+%s
+Key exchange suites:
+  - A128GCM
+  - A192GCM
+  - A256GCM
+  - AES-CCM-64-128-128
+  - AES-CCM-64-128-256
+  - COSEAES128CBC
+  - COSEAES128CTR
+  - COSEAES256CBC
+  - COSEAES256CTR
+
+Encryption suites:
+  - DHKEXid14
+  - DHKEXid15
+  - ASYMKEX2048
+  - ASYMKEX3072
+  - ECDH256
+  - ECDH384
+`, options(flags), options(clientFlags), options(serverFlags))
 }
 
 func options(flags *flag.FlagSet) string {
