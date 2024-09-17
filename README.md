@@ -77,6 +77,47 @@ Server options:
         The directory path to put file uploads (default "uploads")
 ```
 
+### Testing Device Onboard
+
+First, start a server in a separate console.
+
+```console
+$ go run ./examples/cmd server -http 127.0.0.1:9999 -db ./test.db
+[2024-09-01 00:00:00] INFO: Listening
+  local: 127.0.0.1:9999
+  external: 127.0.0.1:9999
+```
+
+Then DI, followed by TO1 and TO2 may be run. Passing the `-debug` flag allows message payloads to be viewed.
+
+```console
+$ go run ./examples/cmd client -di http://127.0.0.1:9999
+Success
+$ go run ./examples/cmd client
+Success
+```
+
+Running TO1 and TO2 again will fail, because the new voucher has not been registered for rendezvous.
+
+```console
+$ go run ./examples/cmd client
+[2024-09-01 00:00:00] ERROR: TO1 failed
+  base URL: http://127.0.0.1:9999
+  error: error received from TO1.HelloRV request: 2024-09-01 00:00:00 UTC [code=6,prevMsgType=30,id=0] not found
+client error: transfer of ownership not successful
+exit status 2
+```
+
+If the server had been started with the `-rv-bypass` flag, then the second onboarding attempt would have failed with not found, because unextended vouchers are not automatically allowed for re-onboarding.
+
+```console
+[2024-09-01 00:00:00] ERROR: TO2 failed
+  base URL: http://127.0.0.1:9999
+  error: error received from TO2.HelloDevice request: 2024-09-01 00:00:00 UTC [code=6,prevMsgType=60,id=0] error retrieving voucher for device fa667c70e50b696086bbd8e05ba2773b: not found
+client error: transfer of ownership not successful
+exit status 2
+```
+
 ### Testing RV Blob Registration
 
 First, start a server in a separate console.
