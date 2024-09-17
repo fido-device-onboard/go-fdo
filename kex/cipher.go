@@ -230,22 +230,22 @@ func init() {
 		PRFHash:    crypto.SHA256,
 	})
 	RegisterCipherSuite(CoseAes128CtrCipher, CipherSuite{
-		EncryptAlg: -1, // FIXME: Implement
+		EncryptAlg: cose.A128CTR,
 		MacAlg:     cose.HMac256,
 		PRFHash:    crypto.SHA256,
 	})
 	RegisterCipherSuite(CoseAes128CbcCipher, CipherSuite{
-		EncryptAlg: -1, // FIXME: Implement
+		EncryptAlg: cose.A128CBC,
 		MacAlg:     cose.HMac256,
 		PRFHash:    crypto.SHA256,
 	})
 	RegisterCipherSuite(CoseAes256CtrCipher, CipherSuite{
-		EncryptAlg: -1, // FIXME: Implement
+		EncryptAlg: cose.A256CTR,
 		MacAlg:     cose.HMac384,
 		PRFHash:    crypto.SHA384,
 	})
 	RegisterCipherSuite(CoseAes256CbcCipher, CipherSuite{
-		EncryptAlg: -1, // FIXME: Implement
+		EncryptAlg: cose.A256CBC,
 		MacAlg:     cose.HMac384,
 		PRFHash:    crypto.SHA384,
 	})
