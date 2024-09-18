@@ -63,6 +63,8 @@ Server options:
         External address devices should connect to (default "127.0.0.1:${LISTEN_PORT}")
   -http addr
         The address to listen on (default "localhost:8080")
+  -import-voucher path
+        Import a PEM encoded voucher file at path
   -insecure-tls
         Listen with a self-signed TLS certificate
   -print-owner-public type

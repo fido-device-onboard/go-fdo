@@ -55,6 +55,7 @@ var (
 	resaleKey        string
 	rvBypass         bool
 	printOwnerPubKey string
+	importVoucher    string
 	downloads        stringList
 	uploadDir        string
 	uploadReqs       stringList
@@ -84,6 +85,7 @@ func init() {
 	serverFlags.BoolVar(&insecureTLS, "insecure-tls", false, "Listen with a self-signed TLS certificate")
 	serverFlags.BoolVar(&rvBypass, "rv-bypass", false, "Skip TO1")
 	serverFlags.StringVar(&printOwnerPubKey, "print-owner-public", "", "Print owner public key of `type` and exit")
+	serverFlags.StringVar(&importVoucher, "import-voucher", "", "Import a PEM encoded voucher file at `path`")
 	serverFlags.Var(&downloads, "download", "Use fdo.download FSIM for each `file` (flag may be used multiple times)")
 	serverFlags.StringVar(&uploadDir, "upload-dir", "uploads", "The directory `path` to put file uploads")
 	serverFlags.Var(&uploadReqs, "upload", "Use fdo.upload FSIM for each `file` (flag may be used multiple times)")
@@ -104,22 +106,12 @@ func server() error { //nolint:gocyclo
 
 	// If printing owner public key, do so and exit
 	if printOwnerPubKey != "" {
-		keyType, err := fdo.ParseKeyType(printOwnerPubKey)
-		if err != nil {
-			return fmt.Errorf("%w: see usage", err)
-		}
-		key, _, err := state.OwnerKey(keyType)
-		if err != nil {
-			return err
-		}
-		der, err := x509.MarshalPKIXPublicKey(key.Public())
-		if err != nil {
-			return err
-		}
-		return pem.Encode(os.Stdout, &pem.Block{
-			Type:  "PUBLIC KEY",
-			Bytes: der,
-		})
+		return doPrintOwnerPubKey(state)
+	}
+
+	// If importing a voucher, do so and exit
+	if importVoucher != "" {
+		return doImportVoucher(state)
 	}
 
 	useTLS = insecureTLS
@@ -202,6 +194,60 @@ func serveHTTP(rvInfo [][]fdo.RvInstruction, state *sqlite.DB) error {
 		return srv.ServeTLS(lis, "", "")
 	}
 	return srv.Serve(lis)
+}
+
+func doPrintOwnerPubKey(state *sqlite.DB) error {
+	keyType, err := fdo.ParseKeyType(printOwnerPubKey)
+	if err != nil {
+		return fmt.Errorf("%w: see usage", err)
+	}
+	key, _, err := state.OwnerKey(keyType)
+	if err != nil {
+		return err
+	}
+	der, err := x509.MarshalPKIXPublicKey(key.Public())
+	if err != nil {
+		return err
+	}
+	return pem.Encode(os.Stdout, &pem.Block{
+		Type:  "PUBLIC KEY",
+		Bytes: der,
+	})
+}
+
+func doImportVoucher(state *sqlite.DB) error {
+	// Parse voucher
+	pemVoucher, err := os.ReadFile(filepath.Clean(importVoucher))
+	if err != nil {
+		return err
+	}
+	blk, _ := pem.Decode(pemVoucher)
+	if blk == nil {
+		return fmt.Errorf("invalid PEM encoded file: %s", importVoucher)
+	}
+	if blk.Type != "OWNERSHIP VOUCHER" {
+		return fmt.Errorf("expected PEM block of ownership voucher type, found %s", blk.Type)
+	}
+	var ov fdo.Voucher
+	if err := cbor.Unmarshal(blk.Bytes, &ov); err != nil {
+		return fmt.Errorf("error parsing voucher: %w", err)
+	}
+
+	// Check that voucher owner key matches
+	expectedPubKey, err := ov.OwnerPublicKey()
+	if err != nil {
+		return fmt.Errorf("error parsing owner public key from voucher: %w", err)
+	}
+	ownerKey, _, err := state.OwnerKey(ov.Header.Val.ManufacturerKey.Type)
+	if err != nil {
+		return fmt.Errorf("error getting owner key: %w", err)
+	}
+	if !ownerKey.Public().(interface{ Equal(crypto.PublicKey) bool }).Equal(expectedPubKey) {
+		return fmt.Errorf("owner key in database does not match the owner of the voucher")
+	}
+
+	// Store voucher
+	return state.AddVoucher(context.Background(), &ov)
 }
 
 func registerRvBlob(host string, port uint16, state *sqlite.DB) error {
