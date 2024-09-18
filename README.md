@@ -28,7 +28,7 @@ Client options:
   -blob string
         File path of device credential blob (default "cred.bin")
   -cipher suite
-        Name of cipher suite to use for encryption (see usage) (default "ECDH384")
+        Name of cipher suite to use for encryption (see usage) (default "A128GCM")
   -debug
         Print HTTP contents
   -di URL
@@ -42,7 +42,7 @@ Client options:
   -insecure-tls
         Skip TLS certificate verification
   -kex suite
-        Name of cipher suite to use for key exchange (see usage) (default "A128GCM")
+        Name of cipher suite to use for key exchange (see usage) (default "ECDH384")
   -print
         Print device credential blob and stop
   -rv-only
@@ -65,6 +65,8 @@ Server options:
         The address to listen on (default "localhost:8080")
   -insecure-tls
         Listen with a self-signed TLS certificate
+  -print-owner-public type
+        Print owner public key of type and exit
   -resale-guid guid
         Voucher guid to extend for resale
   -resale-key path
@@ -79,6 +81,13 @@ Server options:
         Use fdo.upload FSIM for each file (flag may be used multiple times)
   -upload-dir path
         The directory path to put file uploads (default "uploads")
+
+Key types:
+  - RSA2048RESTR
+  - RSAPKCS
+  - RSAPSS
+  - SECP256R1
+  - SECP384R1
 
 Key exchange suites:
   - A128GCM
@@ -97,7 +106,7 @@ Encryption suites:
   - ASYMKEX2048
   - ASYMKEX3072
   - ECDH256
-  - ECDH38
+  - ECDH384
 ```
 
 ### Testing Device Onboard

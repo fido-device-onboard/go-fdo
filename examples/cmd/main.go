@@ -35,6 +35,13 @@ Client options:
 %s
 Server options:
 %s
+Key types:
+  - RSA2048RESTR
+  - RSAPKCS
+  - RSAPSS
+  - SECP256R1
+  - SECP384R1
+
 Key exchange suites:
   - A128GCM
   - A192GCM

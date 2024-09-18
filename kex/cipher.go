@@ -6,6 +6,7 @@ package kex
 import (
 	"crypto"
 	"strconv"
+	"strings"
 
 	"github.com/fido-device-onboard/go-fdo/cose"
 )
@@ -33,7 +34,7 @@ const (
 
 // CipherSuiteByName parses a name and returns its identifier.
 func CipherSuiteByName(name string) (CipherSuiteID, bool) {
-	switch name {
+	switch strings.ToUpper(name) {
 	case "A128GCM":
 		return A128GcmCipher, true
 	case "A192GCM":

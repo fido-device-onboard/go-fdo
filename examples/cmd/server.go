@@ -44,19 +44,20 @@ import (
 var serverFlags = flag.NewFlagSet("server", flag.ContinueOnError)
 
 var (
-	useTLS     bool
-	addr       string
-	dbPath     string
-	dbPass     string
-	extAddr    string
-	to0Addr    string
-	to0GUID    string
-	resaleGUID string
-	resaleKey  string
-	rvBypass   bool
-	downloads  stringList
-	uploadDir  string
-	uploadReqs stringList
+	useTLS           bool
+	addr             string
+	dbPath           string
+	dbPass           string
+	extAddr          string
+	to0Addr          string
+	to0GUID          string
+	resaleGUID       string
+	resaleKey        string
+	rvBypass         bool
+	printOwnerPubKey string
+	downloads        stringList
+	uploadDir        string
+	uploadReqs       stringList
 )
 
 type stringList []string
@@ -82,12 +83,13 @@ func init() {
 	serverFlags.StringVar(&resaleKey, "resale-key", "", "The `path` to a PEM-encoded x.509 public key for the next owner")
 	serverFlags.BoolVar(&insecureTLS, "insecure-tls", false, "Listen with a self-signed TLS certificate")
 	serverFlags.BoolVar(&rvBypass, "rv-bypass", false, "Skip TO1")
+	serverFlags.StringVar(&printOwnerPubKey, "print-owner-public", "", "Print owner public key of `type` and exit")
 	serverFlags.Var(&downloads, "download", "Use fdo.download FSIM for each `file` (flag may be used multiple times)")
 	serverFlags.StringVar(&uploadDir, "upload-dir", "uploads", "The directory `path` to put file uploads")
 	serverFlags.Var(&uploadReqs, "upload", "Use fdo.upload FSIM for each `file` (flag may be used multiple times)")
 }
 
-func server() error {
+func server() error { //nolint:gocyclo
 	if debug {
 		level.Set(slog.LevelDebug)
 	}
@@ -98,6 +100,26 @@ func server() error {
 	state, err := sqlite.New(dbPath, dbPass)
 	if err != nil {
 		return err
+	}
+
+	// If printing owner public key, do so and exit
+	if printOwnerPubKey != "" {
+		keyType, err := fdo.ParseKeyType(printOwnerPubKey)
+		if err != nil {
+			return fmt.Errorf("%w: see usage", err)
+		}
+		key, _, err := state.OwnerKey(keyType)
+		if err != nil {
+			return err
+		}
+		der, err := x509.MarshalPKIXPublicKey(key.Public())
+		if err != nil {
+			return err
+		}
+		return pem.Encode(os.Stdout, &pem.Block{
+			Type:  "PUBLIC KEY",
+			Bytes: der,
+		})
 	}
 
 	useTLS = insecureTLS

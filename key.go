@@ -11,6 +11,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
@@ -50,6 +51,30 @@ func (typ KeyType) String() string {
 		return "ECDSA secp384r1 = NIST-P-384"
 	default:
 		return "unknown"
+	}
+}
+
+// ParseKeyType parses names following the below convention:
+//
+//	RSA2048RESTR: 1, ;; RSA 2048 with restricted key/exponent (PKCS1 1.5 encoding)
+//	RSAPKCS:      5, ;; RSA key, PKCS1, v1.5
+//	RSAPSS:       6, ;; RSA key, PSS
+//	SECP256R1:    10, ;; ECDSA secp256r1 = NIST-P-256 = prime256v1
+//	SECP384R1:    11, ;; ECDSA secp384r1 = NIST-P-384
+func ParseKeyType(name string) (KeyType, error) {
+	switch strings.ToUpper(name) {
+	case "RSA2048RESTR":
+		return Rsa2048RestrKeyType, nil
+	case "RSAPKCS":
+		return RsaPkcsKeyType, nil
+	case "RSAPSS":
+		return RsaPssKeyType, nil
+	case "SECP256R1":
+		return Secp256r1KeyType, nil
+	case "SECP384R1":
+		return Secp384r1KeyType, nil
+	default:
+		return 0, fmt.Errorf("unknown key type: %s", name)
 	}
 }
 
