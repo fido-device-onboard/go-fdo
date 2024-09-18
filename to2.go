@@ -367,6 +367,15 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 	if err != nil {
 		return nil, err
 	}
+	// Assert that owner key matches voucher, in case the key was replaced or
+	// the voucher was not extended before being stored
+	expectedCUPHOwnerKey, err := ov.OwnerPublicKey()
+	if err != nil {
+		return nil, fmt.Errorf("error parsing owner public key from voucher: %w", err)
+	}
+	if !ownerKey.Public().(interface{ Equal(crypto.PublicKey) bool }).Equal(expectedCUPHOwnerKey) {
+		return nil, fmt.Errorf("owner key to be used for CUPHOwnerKey does not match voucher")
+	}
 	s1 := cose.Sign1[ovhProof, []byte]{
 		Header: cose.Header{
 			Unprotected: map[cose.Label]any{
