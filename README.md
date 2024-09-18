@@ -1,5 +1,14 @@
 # FIDO Device Onboard - Go Library
 
+[![Lint](https://github.com/fido-device-onboard/go-fdo/actions/workflows/lint.yml/badge.svg)](https://github.com/fido-device-onboard/go-fdo/actions/workflows/lint.yml)
+[![Test](https://github.com/fido-device-onboard/go-fdo/actions/workflows/test.yml/badge.svg)](https://github.com/fido-device-onboard/go-fdo/actions/workflows/test.yml)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://raw.githubusercontent.com/fido-device-onboard/go-fdo/main/LICENSE)
+[![Building](https://img.shields.io/badge/go-%3E%3D%201.23-blue)](#building-the-example-application)
+[![Go Reference](https://pkg.go.dev/badge/github.com/fido-device-onboard/go-fdo.svg)](https://pkg.go.dev/github.com/fido-device-onboard/go-fdo)
+
+> [!WARNING]
+> This library has not yet completed interop testing with the FIDO Alliance, but will at the next opportunity.
+
 `go-fdo` is a lightweight stdlib-only library for implementing FDO device, owner service, and device initialization server roles.
 
 It implements [FIDO Device Onboard Specification 1.1][fdo] as well as necessary dependencies such as [CBOR][cbor] and [COSE][cose]. Implementations of dependencies are not meant to be complete implementations of their relative specifications, but are supported and any breaking changes to their APIs will be considered a breaking change to `go-fdo`.
