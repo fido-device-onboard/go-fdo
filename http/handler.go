@@ -18,8 +18,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/kex"
 	"github.com/fido-device-onboard/go-fdo/protocol"
 )
 
@@ -172,7 +172,9 @@ func (h Handler) handleRequest(ctx context.Context, w http.ResponseWriter, r *ht
 
 	// Decrypt TO2 messages after 64
 	if protocol.TO2ProveDeviceMsgType < msgType && msgType < protocol.ErrorMsgType {
-		_, sess, err := resp.(*fdo.TO2Server).Session.XSession(ctx)
+		sess, err := resp.(interface {
+			CryptSession(ctx context.Context) (kex.Session, error)
+		}).CryptSession(ctx)
 		if err != nil {
 			writeErr(w, msgType, err)
 			return
@@ -207,7 +209,9 @@ func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, msgTy
 
 	// Encrypt TO2 messages beginning with 64
 	if protocol.TO2ProveDeviceMsgType < respType && respType < protocol.ErrorMsgType {
-		_, sess, err := resp.(*fdo.TO2Server).Session.XSession(ctx)
+		sess, err := resp.(interface {
+			CryptSession(ctx context.Context) (kex.Session, error)
+		}).CryptSession(ctx)
 		if err != nil {
 			writeErr(w, msgType, err)
 			return

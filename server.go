@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/fido-device-onboard/go-fdo/kex"
 	"github.com/fido-device-onboard/go-fdo/plugin"
 	"github.com/fido-device-onboard/go-fdo/protocol"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
@@ -313,4 +314,10 @@ func (s *TO2Server) Respond(ctx context.Context, msgType uint8, msg io.Reader) (
 		errMsg.Timestamp = time.Now().Unix()
 	}
 	return protocol.ErrorMsgType, errMsg
+}
+
+// CryptSession returns the current encryption session.
+func (s *TO2Server) CryptSession(ctx context.Context) (kex.Session, error) {
+	_, sess, err := s.Session.XSession(ctx)
+	return sess, err
 }
