@@ -183,7 +183,6 @@ func TO2(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1
 	go c.Devmod.Write(ctx, c.DeviceModules, sendMTU, serviceInfoWriter)
 
 	// Loop, sending and receiving service info until done
-	defer stopPlugins(c.DeviceModules)
 	if err := exchangeServiceInfo(ctx, transport, proveDeviceNonce, setupDeviceNonce, sendMTU, serviceInfoReader, session, &c); err != nil {
 		errorMsg(ctx, transport, err)
 		return nil, err
@@ -209,11 +208,14 @@ func TO2(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1
 }
 
 // Stop any plugin device modules
-func stopPlugins(deviceModules map[string]serviceinfo.DeviceModule) {
+func stopPlugins(modules *deviceModuleMap) {
 	pluginStopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var pluginStopWg sync.WaitGroup
-	for name, mod := range deviceModules {
+	for name, mod := range modules.modules {
+		if !modules.active[name] {
+			continue
+		}
 		if p, ok := mod.(plugin.Module); ok {
 			pluginStopWg.Add(1)
 			pluginGracefulStopCtx, done := context.WithCancel(pluginStopCtx)
@@ -1029,7 +1031,7 @@ func (s *TO2Server) ownerServiceInfoReady(ctx context.Context, msg io.Reader) (*
 	}
 
 	// Initialize service info modules
-	s.plugins = nil
+	s.plugins = make(map[string]plugin.Module)
 	s.nextModule, s.stop = iter.Pull2(func() iter.Seq2[string, serviceinfo.OwnerModule] {
 		var devmod devmodOwnerModule
 		var ownerModules iter.Seq2[string, serviceinfo.OwnerModule]
@@ -1110,6 +1112,7 @@ func exchangeServiceInfo(ctx context.Context,
 
 	// Track active modules
 	modules := deviceModuleMap{modules: c.DeviceModules, active: make(map[string]bool)}
+	defer stopPlugins(&modules)
 
 	var prevModuleName string
 	for {
