@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: (C) 2024 Intel Corporation
 // SPDX-License-Identifier: Apache 2.0
 
-package fdo_test
+package serviceinfo_test
 
 import (
 	"context"
@@ -12,13 +12,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
 
 func TestDevmodRequired(t *testing.T) {
 	mtu := uint16(1300)
-	for i, devmod := range []fdo.Devmod{
+	for i, devmod := range []serviceinfo.Devmod{
 		{},
 		{Os: runtime.GOOS},
 		{
@@ -54,7 +53,7 @@ func TestDevmodRequired(t *testing.T) {
 }
 
 func TestDevmod(t *testing.T) {
-	devmod := fdo.Devmod{
+	devmod := serviceinfo.Devmod{
 		Os:      runtime.GOOS,
 		Arch:    runtime.GOARCH,
 		Version: "TestOS",

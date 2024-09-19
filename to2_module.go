@@ -108,7 +108,7 @@ func handleActive(prevActive bool, mod serviceinfo.DeviceModule, moduleName stri
 	if !active || prevActive {
 		return active, nil
 	}
-	if _, isUnknown := mod.(serviceinfo.UnknownModule); isUnknown && moduleName != devmodModuleName {
+	if _, isUnknown := mod.(serviceinfo.UnknownModule); isUnknown && moduleName != "devmod" {
 		active = false
 	}
 	if err := send.NextServiceInfo(moduleName, "active"); err != nil {

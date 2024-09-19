@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/hmac"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
+	"github.com/fido-device-onboard/go-fdo/protocol"
 )
 
 // ErrCryptoVerifyFailed indicates that the wrapping error originated from a
@@ -44,7 +46,7 @@ var ErrCryptoVerifyFailed = errors.New("cryptographic verification failed")
 type Voucher struct {
 	Version   uint16
 	Header    cbor.Bstr[VoucherHeader]
-	Hmac      Hmac
+	Hmac      protocol.Hmac
 	CertChain *[]*cbor.X509Certificate
 	Entries   []cose.Sign1Tag[VoucherEntryPayload, []byte]
 }
@@ -65,11 +67,11 @@ type Voucher struct {
 //	OVDevCertChainHashOrNull = Hash / null     ;; CBOR null for Intel® EPID device key
 type VoucherHeader struct {
 	Version         uint16
-	GUID            GUID
-	RvInfo          [][]RvInstruction
+	GUID            protocol.GUID
+	RvInfo          [][]protocol.RvInstruction
 	DeviceInfo      string
-	ManufacturerKey PublicKey
-	CertChainHash   *Hash
+	ManufacturerKey protocol.PublicKey
+	CertChainHash   *protocol.Hash
 }
 
 // Equal compares two ownership voucher headers for equality.
@@ -82,8 +84,8 @@ func (ovh *VoucherHeader) Equal(otherOVH *VoucherHeader) bool {
 	if !bytes.Equal(ovh.GUID[:], otherOVH.GUID[:]) {
 		return false
 	}
-	if !slices.EqualFunc(ovh.RvInfo, otherOVH.RvInfo, func(directivesA, directivesB []RvInstruction) bool {
-		return slices.EqualFunc(directivesA, directivesB, func(instA, instB RvInstruction) bool {
+	if !slices.EqualFunc(ovh.RvInfo, otherOVH.RvInfo, func(directivesA, directivesB []protocol.RvInstruction) bool {
+		return slices.EqualFunc(directivesA, directivesB, func(instA, instB protocol.RvInstruction) bool {
 			return instA.Variable == instB.Variable && bytes.Equal(instA.Value, instB.Value)
 		})
 	}) {
@@ -146,18 +148,11 @@ func (ovh *VoucherHeader) Equal(otherOVH *VoucherHeader) bool {
 //
 // ;;OVSignType = Supporting COSE signature types
 type VoucherEntryPayload struct {
-	PreviousHash Hash
-	HeaderHash   Hash
-	Extra        *cbor.Bstr[ExtraInfo]
-	PublicKey    PublicKey
+	PreviousHash protocol.Hash
+	HeaderHash   protocol.Hash
+	Extra        *cbor.Bstr[map[int][]byte]
+	PublicKey    protocol.PublicKey
 }
-
-// ExtraInfo may be used to pass additional supply-chain information along with
-// the Ownership Voucher. The Device implicitly verifies the plaintext of
-// OVEExtra along with the verification of the Ownership Voucher. An Owner
-// which trusts the Device' verification of the Ownership Voucher may also
-// choose to trust OVEExtra.
-type ExtraInfo map[int][]byte
 
 func (v *Voucher) shallowClone() *Voucher {
 	return &Voucher{
@@ -246,12 +241,12 @@ func (v *Voucher) VerifyCertChainHash() error {
 
 // VerifyManufacturerKey by using a public key hash (generally stored as part
 // of the device credential).
-func (v *Voucher) VerifyManufacturerKey(keyHash Hash) error {
+func (v *Voucher) VerifyManufacturerKey(keyHash protocol.Hash) error {
 	var digest hash.Hash
 	switch keyHash.Algorithm {
-	case Sha256Hash:
+	case protocol.Sha256Hash:
 		digest = sha256.New()
-	case Sha384Hash:
+	case protocol.Sha384Hash:
 		digest = sha512.New384()
 	default:
 		return fmt.Errorf("unsupported hash algorithm for hashing manufacturer public key: %s", keyHash.Algorithm)
@@ -307,11 +302,11 @@ func (v *Voucher) VerifyEntries() error {
 	var initialHash hash.Hash
 	var headerInfoHash []byte
 	switch alg {
-	case Sha256Hash:
+	case protocol.Sha256Hash:
 		initialHash = sha256.New()
 		sum := sha256.Sum256(headerInfo)
 		headerInfoHash = sum[:]
-	case Sha384Hash:
+	case protocol.Sha384Hash:
 		initialHash = sha512.New384()
 		sum := sha512.Sum384(headerInfo)
 		headerInfoHash = sum[:]
@@ -332,7 +327,7 @@ func (v *Voucher) VerifyEntries() error {
 }
 
 // Validate each entry recursively
-func validateNextEntry(prevOwnerKey crypto.PublicKey, alg HashAlg, prevHash hash.Hash, headerInfoHash []byte, i int, entries []cose.Sign1Tag[VoucherEntryPayload, []byte]) error {
+func validateNextEntry(prevOwnerKey crypto.PublicKey, alg protocol.HashAlg, prevHash hash.Hash, headerInfoHash []byte, i int, entries []cose.Sign1Tag[VoucherEntryPayload, []byte]) error {
 	entry := entries[0].Untag()
 
 	// Check payload has a valid COSE signature from the previous owner key
@@ -425,7 +420,13 @@ func verifyCertChain(chain []*x509.Certificate, roots *x509.CertPool) error {
 
 // ExtendVoucher adds a new signed voucher entry to the list and returns the
 // new extended voucher. Vouchers should be treated as immutable structures.
-func ExtendVoucher[T PublicKeyOrChain](v *Voucher, owner crypto.Signer, nextOwner T, extra ExtraInfo) (*Voucher, error) { //nolint:gocyclo
+//
+// ExtraInfo may be used to pass additional supply-chain information along with
+// the Ownership Voucher. The Device implicitly verifies the plaintext of
+// OVEExtra along with the verification of the Ownership Voucher. An Owner
+// which trusts the Device' verification of the Ownership Voucher may also
+// choose to trust OVEExtra.
+func ExtendVoucher[T protocol.PublicKeyOrChain](v *Voucher, owner crypto.Signer, nextOwner T, extra map[int][]byte) (*Voucher, error) { //nolint:gocyclo
 	// This performs a shallow clone, which allows arrays, maps, and pointers
 	// to have their contents modified and both the original and copied voucher
 	// will see the modification. However, this function does not perform a
@@ -474,11 +475,11 @@ func ExtendVoucher[T PublicKeyOrChain](v *Voucher, owner crypto.Signer, nextOwne
 	}
 
 	// Create the next owner PublicKey structure
-	asCOSE := v.Header.Val.ManufacturerKey.Encoding == CoseKeyEnc
+	asCOSE := v.Header.Val.ManufacturerKey.Encoding == protocol.CoseKeyEnc
 	if _, ok := any(nextOwner).([]*x509.Certificate); ok {
 		asCOSE = false
 	}
-	nextOwnerPublicKey, err := newPublicKey(v.Header.Val.ManufacturerKey.Type, nextOwner, asCOSE)
+	nextOwnerPublicKey, err := protocol.NewPublicKey(v.Header.Val.ManufacturerKey.Type, nextOwner, asCOSE)
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling next owner public key: %w", err)
 	}
@@ -494,7 +495,7 @@ func ExtendVoucher[T PublicKeyOrChain](v *Voucher, owner crypto.Signer, nextOwne
 	headerInfo := append(v.Header.Val.GUID[:], []byte(v.Header.Val.DeviceInfo)...)
 	digest := alg.HashFunc().New()
 	_, _ = digest.Write(headerInfo)
-	headerHash := Hash{Algorithm: alg, Value: digest.Sum(nil)}
+	headerHash := protocol.Hash{Algorithm: alg, Value: digest.Sum(nil)}
 
 	// Calculate the hash of the previous entry
 	digest.Reset()
@@ -511,10 +512,10 @@ func ExtendVoucher[T PublicKeyOrChain](v *Voucher, owner crypto.Signer, nextOwne
 			return nil, fmt.Errorf("error computing hash of voucher entry payload: %w", err)
 		}
 	}
-	prevHash := Hash{Algorithm: alg, Value: digest.Sum(nil)}
+	prevHash := protocol.Hash{Algorithm: alg, Value: digest.Sum(nil)}
 
 	// Create and sign next entry
-	usePSS := v.Header.Val.ManufacturerKey.Type == RsaPssKeyType
+	usePSS := v.Header.Val.ManufacturerKey.Type == protocol.RsaPssKeyType
 	entry, err := newSignedEntry(owner, usePSS, VoucherEntryPayload{
 		PreviousHash: prevHash,
 		HeaderHash:   headerHash,
@@ -526,6 +527,47 @@ func ExtendVoucher[T PublicKeyOrChain](v *Voucher, owner crypto.Signer, nextOwne
 	}
 	xv.Entries = append(xv.Entries, *entry)
 	return xv, nil
+}
+
+// hashAlgFor determines the appropriate hash algorithm to use based on the
+// table in section 3.2.2 of the FDO spec
+func hashAlgFor(devicePubKey, ownerPubKey crypto.PublicKey) (protocol.HashAlg, error) {
+	deviceSize, err := hashSizeForPubKey(devicePubKey)
+	if err != nil {
+		return 0, fmt.Errorf("device attestation key: %w", err)
+	}
+	ownerSize, err := hashSizeForPubKey(ownerPubKey)
+	if err != nil {
+		return 0, fmt.Errorf("owner attestation key: %w", err)
+	}
+	switch min(deviceSize, ownerSize) {
+	case 256:
+		return protocol.Sha256Hash, nil
+	case 384:
+		return protocol.Sha384Hash, nil
+	default:
+		panic("only hash sizes of 256 and 384 are included in FDO")
+	}
+}
+
+func hashSizeForPubKey(pubKey crypto.PublicKey) (int, error) {
+	switch key := pubKey.(type) {
+	case *ecdsa.PublicKey:
+		switch curve := key.Curve; curve {
+		case elliptic.P256():
+			return 256, nil
+		case elliptic.P384():
+			return 384, nil
+		default:
+			return 0, fmt.Errorf("unsupported elliptic curve: %s", curve.Params().Name)
+		}
+
+	case *rsa.PublicKey:
+		return key.Size(), nil
+
+	default:
+		return 0, fmt.Errorf("unsupported key type: %T", key)
+	}
 }
 
 func newSignedEntry(owner crypto.Signer, usePSS bool, payload VoucherEntryPayload) (*cose.Sign1Tag[VoucherEntryPayload, []byte], error) {

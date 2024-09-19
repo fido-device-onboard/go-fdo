@@ -30,9 +30,11 @@ import (
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/blob"
 	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/custom"
 	"github.com/fido-device-onboard/go-fdo/fdotest/internal/memory"
 	"github.com/fido-device-onboard/go-fdo/fdotest/internal/token"
 	"github.com/fido-device-onboard/go-fdo/kex"
+	"github.com/fido-device-onboard/go-fdo/protocol"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
 
@@ -40,7 +42,7 @@ const timeout = 10 * time.Second
 
 // OwnerModulesFunc creates an iterator of service info modules for a given
 // device.
-type OwnerModulesFunc func(ctx context.Context, replacementGUID fdo.GUID, info string, chain []*x509.Certificate, devmod fdo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule]
+type OwnerModulesFunc func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule]
 
 // RunClientTestSuite is used to test different implementations of server state
 // methods at an almost end-to-end level (transport is mocked).
@@ -71,10 +73,10 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 
 	transport := &Transport{
 		Tokens: state,
-		DIResponder: &fdo.DIServer[fdo.DeviceMfgInfo]{
+		DIResponder: &fdo.DIServer[custom.DeviceMfgInfo]{
 			Session:  state,
 			Vouchers: state,
-			SignDeviceCertificate: func(info *fdo.DeviceMfgInfo) ([]*x509.Certificate, error) {
+			SignDeviceCertificate: func(info *custom.DeviceMfgInfo) ([]*x509.Certificate, error) {
 				// Validate device info
 				csr := x509.CertificateRequest(info.CertInfo)
 				if err := csr.CheckSignature(); err != nil {
@@ -115,8 +117,8 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 				return chain, nil
 			},
 			AutoExtend: state,
-			RvInfo: func(context.Context, *fdo.Voucher) ([][]fdo.RvInstruction, error) {
-				return [][]fdo.RvInstruction{}, nil
+			RvInfo: func(context.Context, *fdo.Voucher) ([][]protocol.RvInstruction, error) {
+				return [][]protocol.RvInstruction{}, nil
 			},
 		},
 		TO0Responder: &fdo.TO0Server{
@@ -131,10 +133,10 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 			Session:   state,
 			Vouchers:  state,
 			OwnerKeys: state,
-			RvInfo: func(context.Context, fdo.Voucher) ([][]fdo.RvInstruction, error) {
-				return [][]fdo.RvInstruction{}, nil
+			RvInfo: func(context.Context, fdo.Voucher) ([][]protocol.RvInstruction, error) {
+				return [][]protocol.RvInstruction{}, nil
 			},
-			OwnerModules: func(ctx context.Context, replacementGUID fdo.GUID, info string, chain []*x509.Certificate, devmod fdo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
+			OwnerModules: func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 				if ownerModules == nil {
 					return func(yield func(string, serviceinfo.OwnerModule) bool) {}
 				}
@@ -161,35 +163,35 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 	}
 
 	for _, table := range []struct {
-		keyType     fdo.KeyType
-		keyEncoding fdo.KeyEncoding
+		keyType     protocol.KeyType
+		keyEncoding protocol.KeyEncoding
 	}{
 		{
-			keyType:     fdo.Secp256r1KeyType,
-			keyEncoding: fdo.X509KeyEnc,
+			keyType:     protocol.Secp256r1KeyType,
+			keyEncoding: protocol.X509KeyEnc,
 		},
 		{
-			keyType:     fdo.Secp384r1KeyType,
-			keyEncoding: fdo.X509KeyEnc,
+			keyType:     protocol.Secp384r1KeyType,
+			keyEncoding: protocol.X509KeyEnc,
 		},
 		{
-			keyType:     fdo.RsaPkcsKeyType,
-			keyEncoding: fdo.X509KeyEnc,
+			keyType:     protocol.RsaPkcsKeyType,
+			keyEncoding: protocol.X509KeyEnc,
 		},
 		{
-			keyType:     fdo.RsaPssKeyType,
-			keyEncoding: fdo.X509KeyEnc,
+			keyType:     protocol.RsaPssKeyType,
+			keyEncoding: protocol.X509KeyEnc,
 		},
 		{
-			keyType:     fdo.Secp256r1KeyType,
-			keyEncoding: fdo.X5ChainKeyEnc,
+			keyType:     protocol.Secp256r1KeyType,
+			keyEncoding: protocol.X5ChainKeyEnc,
 		},
 		{
-			keyType:     fdo.Secp384r1KeyType,
-			keyEncoding: fdo.X5ChainKeyEnc,
+			keyType:     protocol.Secp384r1KeyType,
+			keyEncoding: protocol.X5ChainKeyEnc,
 		},
 	} {
-		transport.DIResponder.DeviceInfo = func(context.Context, *fdo.DeviceMfgInfo, []*x509.Certificate) (string, fdo.KeyType, fdo.KeyEncoding, error) {
+		transport.DIResponder.DeviceInfo = func(context.Context, *custom.DeviceMfgInfo, []*x509.Certificate) (string, protocol.KeyType, protocol.KeyEncoding, error) {
 			return "test_device", table.keyType, table.keyEncoding, nil
 		}
 		secret := make([]byte, 32)
@@ -200,28 +202,28 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 		t.Run("Key "+table.keyType.String()+" "+table.keyEncoding.String(), func(t *testing.T) {
 			var key crypto.Signer
 			switch table.keyType {
-			case fdo.Secp256r1KeyType:
+			case protocol.Secp256r1KeyType:
 				var err error
 				key, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 				if err != nil {
 					t.Fatalf("error generating device key: %v", err)
 				}
 
-			case fdo.Secp384r1KeyType:
+			case protocol.Secp384r1KeyType:
 				var err error
 				key, err = ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 				if err != nil {
 					t.Fatalf("error generating device key: %v", err)
 				}
 
-			case fdo.RsaPkcsKeyType:
+			case protocol.RsaPkcsKeyType:
 				var err error
 				key, err = rsa.GenerateKey(rand.Reader, 2048)
 				if err != nil {
 					t.Fatalf("error generating device key: %v", err)
 				}
 
-			case fdo.RsaPssKeyType:
+			case protocol.RsaPssKeyType:
 				var err error
 				key, err = rsa.GenerateKey(rand.Reader, 3072)
 				if err != nil {
@@ -252,7 +254,7 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 				if _, err := rand.Read(serial); err != nil {
 					t.Fatalf("error generating serial: %v", err)
 				}
-				cred, err = fdo.DI(context.TODO(), transport, fdo.DeviceMfgInfo{
+				cred, err = fdo.DI(context.TODO(), transport, custom.DeviceMfgInfo{
 					KeyType:      table.keyType,
 					KeyEncoding:  table.keyEncoding,
 					SerialNumber: hex.EncodeToString(serial),
@@ -262,7 +264,7 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 					HmacSha256: hmac.New(sha256.New, secret),
 					HmacSha384: hmac.New(sha512.New384, secret),
 					Key:        key,
-					PSS:        table.keyType == fdo.RsaPssKeyType,
+					PSS:        table.keyType == protocol.RsaPssKeyType,
 				})
 				if err != nil {
 					t.Fatal(err)
@@ -277,19 +279,23 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 			})
 
 			t.Run("Transfer Ownership 0", func(t *testing.T) {
+				if cred == nil {
+					t.Fatal("cred not set due to previous failure")
+				}
+
 				ctx, cancel := context.WithTimeout(context.Background(), timeout)
 				defer cancel()
 				if _, err := fdo.TO1(ctx, transport, *cred, key, &fdo.TO1Options{
-					PSS: table.keyType == fdo.RsaPssKeyType,
+					PSS: table.keyType == protocol.RsaPssKeyType,
 				}); !strings.HasSuffix(err.Error(), fdo.ErrNotFound.Error()) {
 					t.Fatalf("expected TO1 to fail with no resource found, got %v", err)
 				}
 				dnsAddr := "owner.fidoalliance.org"
-				ttl, err := to0.RegisterBlob(ctx, transport, cred.GUID, []fdo.RvTO2Addr{
+				ttl, err := to0.RegisterBlob(ctx, transport, cred.GUID, []protocol.RvTO2Addr{
 					{
 						DNSAddress:        &dnsAddr,
 						Port:              8080,
-						TransportProtocol: fdo.HTTPTransport,
+						TransportProtocol: protocol.HTTPTransport,
 					},
 				})
 				if err != nil {
@@ -299,10 +305,14 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 			})
 
 			t.Run("Transfer Ownership 1 and Transfer Ownership 2", func(t *testing.T) {
+				if cred == nil {
+					t.Fatal("cred not set due to previous failure")
+				}
+
 				ctx, cancel := context.WithTimeout(context.Background(), timeout)
 				defer cancel()
 				to1d, err := fdo.TO1(ctx, transport, *cred, key, &fdo.TO1Options{
-					PSS: table.keyType == fdo.RsaPssKeyType,
+					PSS: table.keyType == protocol.RsaPssKeyType,
 				})
 				if err != nil {
 					t.Fatal(err)
@@ -314,8 +324,8 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 					HmacSha256: hmac.New(sha256.New, secret),
 					HmacSha384: hmac.New(sha512.New384, secret),
 					Key:        key,
-					PSS:        table.keyType == fdo.RsaPssKeyType,
-					Devmod: fdo.Devmod{
+					PSS:        table.keyType == protocol.RsaPssKeyType,
+					Devmod: serviceinfo.Devmod{
 						Os:      runtime.GOOS,
 						Arch:    runtime.GOARCH,
 						Version: "Debian Bookworm",
@@ -338,6 +348,10 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 			})
 
 			t.Run("Transfer Ownership 2 Only", func(t *testing.T) {
+				if cred == nil {
+					t.Fatal("cred not set due to previous failure")
+				}
+
 				ctx, cancel := context.WithTimeout(context.Background(), timeout)
 				defer cancel()
 				var err error
@@ -346,8 +360,8 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 					HmacSha256: hmac.New(sha256.New, secret),
 					HmacSha384: hmac.New(sha512.New384, secret),
 					Key:        key,
-					PSS:        table.keyType == fdo.RsaPssKeyType,
-					Devmod: fdo.Devmod{
+					PSS:        table.keyType == protocol.RsaPssKeyType,
+					Devmod: serviceinfo.Devmod{
 						Os:      runtime.GOOS,
 						Arch:    runtime.GOARCH,
 						Version: "Debian Bookworm",
@@ -370,6 +384,10 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 			})
 
 			t.Run("Transfer Ownership 2 w/ Modules", func(t *testing.T) {
+				if cred == nil {
+					t.Fatal("cred not set due to previous failure")
+				}
+
 				ctx, cancel := context.WithTimeout(context.Background(), timeout)
 				defer cancel()
 				newCred, err := fdo.TO2(ctx, transport, nil, fdo.TO2Config{
@@ -377,8 +395,8 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 					HmacSha256: hmac.New(sha256.New, secret),
 					HmacSha384: hmac.New(sha512.New384, secret),
 					Key:        key,
-					PSS:        table.keyType == fdo.RsaPssKeyType,
-					Devmod: fdo.Devmod{
+					PSS:        table.keyType == protocol.RsaPssKeyType,
+					Devmod: serviceinfo.Devmod{
 						Os:      runtime.GOOS,
 						Arch:    runtime.GOARCH,
 						Version: "Debian Bookworm",

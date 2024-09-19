@@ -20,32 +20,27 @@ import (
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/protocol"
 )
 
 const bearerPrefix = "Bearer "
 
 // Handler implements http.Handler and responds to all DI, TO1, and TO2 message
 // types.
-type Handler[T any] struct {
-	Tokens fdo.TokenService
+type Handler struct {
+	Tokens protocol.TokenService
 
-	DIResponder  *fdo.DIServer[T]
-	TO0Responder *fdo.TO0Server
-	TO1Responder *fdo.TO1Server
-	TO2Responder *fdo.TO2Server
+	DIResponder  protocol.Responder
+	TO0Responder protocol.Responder
+	TO1Responder protocol.Responder
+	TO2Responder protocol.Responder
 
 	// MaxContentLength defaults to 65535. Negative values disable content
 	// length checking.
 	MaxContentLength int64
 }
 
-var _ http.Handler = (*Handler[fdo.DeviceMfgInfo])(nil)
-
-type responder interface {
-	Respond(ctx context.Context, msgType uint8, msg io.Reader) (respType uint8, resp any)
-}
-
-func (h Handler[T]) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Parse message type from request URL
 	typ, err := strconv.ParseUint(r.PathValue("msg"), 10, 8)
 	if err != nil {
@@ -53,7 +48,7 @@ func (h Handler[T]) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	msgType := uint8(typ)
-	protocol := fdo.ProtocolOf(msgType)
+	proto := protocol.Of(msgType)
 
 	// Parse request headers
 	token := r.Header.Get("Authorization")
@@ -65,22 +60,22 @@ func (h Handler[T]) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := h.Tokens.TokenContext(r.Context(), token)
 
 	// Get responder for message
-	var resp responder
+	var resp protocol.Responder
 	var isProtocolStart bool
-	switch protocol {
-	case fdo.DIProtocol:
+	switch proto {
+	case protocol.DIProtocol:
 		resp = h.DIResponder
 		isProtocolStart = msgType == 10
-	case fdo.TO0Protocol:
+	case protocol.TO0Protocol:
 		resp = h.TO0Responder
 		isProtocolStart = msgType == 20
-	case fdo.TO1Protocol:
+	case protocol.TO1Protocol:
 		resp = h.TO1Responder
 		isProtocolStart = msgType == 30
-	case fdo.TO2Protocol:
+	case protocol.TO2Protocol:
 		resp = h.TO2Responder
 		isProtocolStart = msgType == 60
-	case fdo.AnyProtocol:
+	case protocol.AnyProtocol:
 		// Immediately respond to an error
 		if token == "" {
 			return
@@ -98,9 +93,9 @@ func (h Handler[T]) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Inject token state into context to keep method signatures clean while
 	// allowing some implementations to mutate tokens on every message.
 	if isProtocolStart {
-		initToken, err := h.Tokens.NewToken(ctx, protocol)
+		initToken, err := h.Tokens.NewToken(ctx, proto)
 		if err != nil {
-			writeErr(w, msgType, fdo.ErrorMessage{
+			writeErr(w, msgType, protocol.ErrorMessage{
 				Code:          500,
 				PrevMsgType:   msgType,
 				ErrString:     err.Error(),
@@ -119,7 +114,7 @@ func (h Handler[T]) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.handleRequest(ctx, w, r, msgType, resp)
 }
 
-func (h Handler[T]) debugRequest(ctx context.Context, w http.ResponseWriter, r *http.Request, msgType uint8, resp responder) {
+func (h Handler) debugRequest(ctx context.Context, w http.ResponseWriter, r *http.Request, msgType uint8, resp protocol.Responder) {
 	// Dump request
 	debugReq, _ := httputil.DumpRequest(r, false)
 	var saveBody bytes.Buffer
@@ -146,7 +141,7 @@ func (h Handler[T]) debugRequest(ctx context.Context, w http.ResponseWriter, r *
 	_, _ = w.Write(rr.Body.Bytes())
 }
 
-func (h Handler[T]) handleRequest(ctx context.Context, w http.ResponseWriter, r *http.Request, msgType uint8, resp responder) {
+func (h Handler) handleRequest(ctx context.Context, w http.ResponseWriter, r *http.Request, msgType uint8, resp protocol.Responder) {
 	// Validate content length
 	maxSize := h.MaxContentLength
 	if maxSize == 0 {
@@ -176,7 +171,7 @@ func (h Handler[T]) handleRequest(ctx context.Context, w http.ResponseWriter, r 
 	}
 
 	// Decrypt TO2 messages after 64
-	if 64 < msgType && msgType < fdo.ErrorMsgType {
+	if protocol.TO2ProveDeviceMsgType < msgType && msgType < protocol.ErrorMsgType {
 		_, sess, err := resp.(*fdo.TO2Server).Session.XSession(ctx)
 		if err != nil {
 			writeErr(w, msgType, err)
@@ -201,17 +196,17 @@ func (h Handler[T]) handleRequest(ctx context.Context, w http.ResponseWriter, r 
 	h.writeResponse(ctx, w, msgType, msg, resp)
 }
 
-func (h Handler[T]) writeResponse(ctx context.Context, w http.ResponseWriter, msgType uint8, msg io.Reader, resp responder) {
+func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, msgType uint8, msg io.Reader, resp protocol.Responder) {
 	// Perform business logic of message handling
 	respType, respData := resp.Respond(ctx, msgType, msg)
-	if respType == fdo.ErrorMsgType {
+	if respType == protocol.ErrorMsgType {
 		if err := h.Tokens.InvalidateToken(ctx); err != nil {
 			slog.Warn("error invalidating token", "error", err)
 		}
 	}
 
 	// Encrypt TO2 messages beginning with 64
-	if 64 < respType && respType < fdo.ErrorMsgType {
+	if protocol.TO2ProveDeviceMsgType < respType && respType < protocol.ErrorMsgType {
 		_, sess, err := resp.(*fdo.TO2Server).Session.XSession(ctx)
 		if err != nil {
 			writeErr(w, msgType, err)
@@ -233,7 +228,7 @@ func (h Handler[T]) writeResponse(ctx context.Context, w http.ResponseWriter, ms
 	// Invalidate token when finishing a protocol or erroring
 	newToken, _ := h.Tokens.TokenFromContext(ctx)
 	switch respType {
-	case 13, 32, 71, fdo.ErrorMsgType:
+	case 13, 32, 71, protocol.ErrorMsgType:
 		if newToken != "" {
 			ctx := h.Tokens.TokenContext(ctx, newToken)
 			if err := h.Tokens.InvalidateToken(ctx); err != nil {
@@ -263,7 +258,7 @@ func (h Handler[T]) writeResponse(ctx context.Context, w http.ResponseWriter, ms
 }
 
 func writeErr(w http.ResponseWriter, prevMsgType uint8, err error) {
-	var msg fdo.ErrorMessage
+	var msg protocol.ErrorMessage
 	if !errors.As(err, &msg) {
 		msg.Code = 500
 		msg.PrevMsgType = prevMsgType
@@ -279,7 +274,7 @@ func writeErr(w http.ResponseWriter, prevMsgType uint8, err error) {
 
 	w.Header().Add("Content-Length", strconv.Itoa(body.Len()))
 	w.Header().Add("Content-Type", "application/cbor")
-	w.Header().Add("Message-Type", strconv.Itoa(int(fdo.ErrorMsgType)))
+	w.Header().Add("Message-Type", strconv.Itoa(int(protocol.ErrorMsgType)))
 	w.WriteHeader(http.StatusInternalServerError)
 	_, _ = w.Write(body.Bytes())
 }

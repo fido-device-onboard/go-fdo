@@ -12,6 +12,7 @@ import (
 
 	"github.com/fido-device-onboard/go-fdo/cose"
 	"github.com/fido-device-onboard/go-fdo/kex"
+	"github.com/fido-device-onboard/go-fdo/protocol"
 )
 
 /*
@@ -34,33 +35,10 @@ var ErrNotFound = fmt.Errorf("not found")
 
 // ErrUnsupportedKeyType is used when no key of the given type has been added
 // to the server.
-type ErrUnsupportedKeyType KeyType
+type ErrUnsupportedKeyType protocol.KeyType
 
 func (err ErrUnsupportedKeyType) Error() string {
-	return "unsupported key type " + KeyType(err).String()
-}
-
-// TokenService maintains state related to the authorization header or similar
-// token. The purpose of the token is to link API calls to their protocol
-// context within the message stream defined by the FIDO Device Onboard
-// Protocols. The handler for a subsequent message can find this stored state
-// by looking it up using the token as a key.
-type TokenService interface {
-	// NewToken initializes state for a given protocol and return the
-	// associated token.
-	NewToken(context.Context, Protocol) (string, error)
-
-	// InvalidateToken destroys the state associated with a given token.
-	InvalidateToken(context.Context) error
-
-	// TokenContext injects a context with a token value so that it may be used
-	// for any of the XXXState interfaces.
-	TokenContext(context.Context, string) context.Context
-
-	// TokenFromContext gets the token value from a context. This is useful,
-	// because some TokenServices may allow token mutation, such as in the case
-	// of token-encoded state (i.e. JWTs/CWTs).
-	TokenFromContext(context.Context) (string, bool)
+	return "unsupported key type " + protocol.KeyType(err).String()
 }
 
 // DISessionState stores DI protocol state for a particular session.
@@ -85,46 +63,46 @@ type DISessionState interface {
 // TO0SessionState stores TO0 protocol state for a particular session.
 type TO0SessionState interface {
 	// SetTO0SignNonce sets the Nonce expected in TO0.OwnerSign.
-	SetTO0SignNonce(context.Context, Nonce) error
+	SetTO0SignNonce(context.Context, protocol.Nonce) error
 
 	// TO0SignNonce returns the Nonce expected in TO0.OwnerSign.
-	TO0SignNonce(context.Context) (Nonce, error)
+	TO0SignNonce(context.Context) (protocol.Nonce, error)
 }
 
 // TO1SessionState stores TO1 protocol state for a particular session.
 type TO1SessionState interface {
 	// SetTO1ProofNonce sets the Nonce expected in TO1.ProveToRV.
-	SetTO1ProofNonce(context.Context, Nonce) error
+	SetTO1ProofNonce(context.Context, protocol.Nonce) error
 
 	// TO1ProofNonce returns the Nonce expected in TO1.ProveToRV.
-	TO1ProofNonce(context.Context) (Nonce, error)
+	TO1ProofNonce(context.Context) (protocol.Nonce, error)
 }
 
 // TO2SessionState stores TO2 protocol state for a particular session.
 type TO2SessionState interface {
 	// SetGUID associates a voucher GUID with a TO2 session.
-	SetGUID(context.Context, GUID) error
+	SetGUID(context.Context, protocol.GUID) error
 
 	// GUID retrieves the GUID of the voucher associated with the session.
-	GUID(context.Context) (GUID, error)
+	GUID(context.Context) (protocol.GUID, error)
 
 	// SetRvInfo stores the rendezvous instructions to store at the end of TO2.
-	SetRvInfo(context.Context, [][]RvInstruction) error
+	SetRvInfo(context.Context, [][]protocol.RvInstruction) error
 
 	// RvInfo retrieves the rendezvous instructions to store at the end of TO2.
-	RvInfo(context.Context) ([][]RvInstruction, error)
+	RvInfo(context.Context) ([][]protocol.RvInstruction, error)
 
 	// SetReplacementGUID stores the device GUID to persist at the end of TO2.
-	SetReplacementGUID(context.Context, GUID) error
+	SetReplacementGUID(context.Context, protocol.GUID) error
 
 	// ReplacementGUID retrieves the device GUID to persist at the end of TO2.
-	ReplacementGUID(context.Context) (GUID, error)
+	ReplacementGUID(context.Context) (protocol.GUID, error)
 
 	// SetReplacementHmac stores the voucher HMAC to persist at the end of TO2.
-	SetReplacementHmac(context.Context, Hmac) error
+	SetReplacementHmac(context.Context, protocol.Hmac) error
 
 	// ReplacementHmac retrieves the voucher HMAC to persist at the end of TO2.
-	ReplacementHmac(context.Context) (Hmac, error)
+	ReplacementHmac(context.Context) (protocol.Hmac, error)
 
 	// SetXSession updates the current key exchange/encryption session based on
 	// an opaque "authorization" token.
@@ -136,18 +114,18 @@ type TO2SessionState interface {
 
 	// SetProveDeviceNonce stores the Nonce used in TO2.ProveDevice for use in
 	// TO2.Done.
-	SetProveDeviceNonce(context.Context, Nonce) error
+	SetProveDeviceNonce(context.Context, protocol.Nonce) error
 
 	// ProveDeviceNonce returns the Nonce used in TO2.ProveDevice and TO2.Done.
-	ProveDeviceNonce(context.Context) (Nonce, error)
+	ProveDeviceNonce(context.Context) (protocol.Nonce, error)
 
 	// SetSetupDeviceNonce stores the Nonce used in TO2.SetupDevice for use in
 	// TO2.Done2.
-	SetSetupDeviceNonce(context.Context, Nonce) error
+	SetSetupDeviceNonce(context.Context, protocol.Nonce) error
 
 	// SetupDeviceNonce returns the Nonce used in TO2.SetupDevice and
 	// TO2.Done2.
-	SetupDeviceNonce(context.Context) (Nonce, error)
+	SetupDeviceNonce(context.Context) (protocol.Nonce, error)
 
 	// SetMTU sets the max service info size the device may receive.
 	SetMTU(context.Context, uint16) error
@@ -160,17 +138,17 @@ type TO2SessionState interface {
 // TO0 and TO1.
 type RendezvousBlobPersistentState interface {
 	// SetRVBlob sets the owner rendezvous blob for a device.
-	SetRVBlob(context.Context, *Voucher, *cose.Sign1[To1d, []byte], time.Time) error
+	SetRVBlob(context.Context, *Voucher, *cose.Sign1[protocol.To1d, []byte], time.Time) error
 
 	// RVBlob returns the owner rendezvous blob for a device.
-	RVBlob(context.Context, GUID) (*cose.Sign1[To1d, []byte], *Voucher, error)
+	RVBlob(context.Context, protocol.GUID) (*cose.Sign1[protocol.To1d, []byte], *Voucher, error)
 }
 
 // OwnerKeyPersistentState maintains the owner service keys.
 type OwnerKeyPersistentState interface {
 	// OwnerKey returns the private key matching a given key type and optionally
 	// its certificate chain.
-	OwnerKey(KeyType) (crypto.Signer, []*x509.Certificate, error)
+	OwnerKey(protocol.KeyType) (crypto.Signer, []*x509.Certificate, error)
 }
 
 // ManufacturerVoucherPersistentState maintains vouchers created during DI
@@ -189,14 +167,14 @@ type OwnerVoucherPersistentState interface {
 
 	// ReplaceVoucher stores a new voucher, possibly deleting or marking the
 	// previous voucher as replaced.
-	ReplaceVoucher(context.Context, GUID, *Voucher) error
+	ReplaceVoucher(context.Context, protocol.GUID, *Voucher) error
 
 	// RemoveVoucher untracks a voucher, possibly by deleting it or marking it
 	// as removed, and returns it for extension.
-	RemoveVoucher(context.Context, GUID) (*Voucher, error)
+	RemoveVoucher(context.Context, protocol.GUID) (*Voucher, error)
 
 	// Voucher retrieves a voucher by GUID.
-	Voucher(context.Context, GUID) (*Voucher, error)
+	Voucher(context.Context, protocol.GUID) (*Voucher, error)
 }
 
 // The following types are for optional server features.
@@ -206,11 +184,11 @@ type OwnerVoucherPersistentState interface {
 type AutoExtend interface {
 	// ManufacturerKey returns the signer of a given key type and its certificate
 	// chain (required).
-	ManufacturerKey(keyType KeyType) (crypto.Signer, []*x509.Certificate, error)
+	ManufacturerKey(keyType protocol.KeyType) (crypto.Signer, []*x509.Certificate, error)
 
 	// OwnerKey returns the private key matching a given key type and optionally
 	// its certificate chain.
-	OwnerKey(keyType KeyType) (crypto.Signer, []*x509.Certificate, error)
+	OwnerKey(keyType protocol.KeyType) (crypto.Signer, []*x509.Certificate, error)
 }
 
 // AutoTO0 provides the necessary methods for setting a rendezvous blob upon
@@ -218,8 +196,8 @@ type AutoExtend interface {
 type AutoTO0 interface {
 	// OwnerKey returns the private key matching a given key type and optionally
 	// its certificate chain.
-	OwnerKey(keyType KeyType) (crypto.Signer, []*x509.Certificate, error)
+	OwnerKey(keyType protocol.KeyType) (crypto.Signer, []*x509.Certificate, error)
 
 	// SetRVBlob sets the owner rendezvous blob for a device.
-	SetRVBlob(context.Context, *Voucher, *cose.Sign1[To1d, []byte], time.Time) error
+	SetRVBlob(context.Context, *Voucher, *cose.Sign1[protocol.To1d, []byte], time.Time) error
 }

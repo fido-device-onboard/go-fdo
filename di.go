@@ -17,47 +17,8 @@ import (
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
+	"github.com/fido-device-onboard/go-fdo/protocol"
 )
-
-// DI Message Types
-const (
-	diAppStartMsgType       uint8 = 10
-	diSetCredentialsMsgType uint8 = 11
-	diSetHmacMsgType        uint8 = 12
-	diDoneMsgType           uint8 = 13
-)
-
-// DeviceMfgInfo is an example structure for use in DI.AppStart. The structure
-// is not part of the spec, but matches the [C client] and [Java client]
-// implementations.
-//
-// Type definition from C:
-//
-//	MfgInfo.cbor = [
-//	  pkType,                 // as per FDO spec
-//	  pkEnc,                  // as per FDO spec
-//	  serialNo,               // tstr
-//	  modelNo,                // tstr
-//	  CSR,                    // bstr
-//	  OnDie ECDSA cert chain, // bstr OR OMITTED
-//	  test signature,         // bstr OR OMITTED
-//	  MAROE prefix,           // bstr OR OMITTED
-//	]
-//
-//	DeviceMfgInfo = bstr, MfgInfo.cbor (bstr-wrap MfgInfo CBOR bytes)
-//
-// [C client]: https://github.com/fido-device-onboard/client-sdk-fidoiot/
-// [Java client]: https://github.com/fido-device-onboard/pri-fidoiot
-type DeviceMfgInfo struct {
-	KeyType      KeyType
-	KeyEncoding  KeyEncoding
-	SerialNumber string
-	DeviceInfo   string
-	CertInfo     cbor.X509CertificateRequest
-	// ODCAChain          []byte // deprecated
-	// TestSig            []byte // deprecated
-	// TestSigMAROEPrefix []byte // deprecated
-}
 
 // DIConfig contains required device secrets and optional configuration.
 type DIConfig struct {
@@ -137,13 +98,13 @@ func DI(ctx context.Context, transport Transport, info any, c DIConfig) (*Device
 		errorMsg(ctx, transport, err)
 		return nil, err
 	}
-	ownerKeyHash := Hash{Algorithm: alg, Value: ownerKeyDigest.Sum(nil)[:]}
+	ownerKeyHash := protocol.Hash{Algorithm: alg, Value: ownerKeyDigest.Sum(nil)[:]}
 
 	var hmac hash.Hash
 	switch alg {
-	case Sha256Hash:
+	case protocol.Sha256Hash:
 		hmac = c.HmacSha256
-	case Sha384Hash:
+	case protocol.Sha384Hash:
 		hmac = c.HmacSha384
 	}
 	if err := setHmac(ctx, transport, hmac, ovh); err != nil {
@@ -171,7 +132,7 @@ func appStart(ctx context.Context, transport Transport, info any) (*VoucherHeade
 	}
 
 	// Make request
-	typ, resp, err := transport.Send(ctx, diAppStartMsgType, msg, nil)
+	typ, resp, err := transport.Send(ctx, protocol.DIAppStartMsgType, msg, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error sending DI.AppStart: %w", err)
 	}
@@ -179,24 +140,24 @@ func appStart(ctx context.Context, transport Transport, info any) (*VoucherHeade
 
 	// Parse response
 	switch typ {
-	case diSetCredentialsMsgType:
+	case protocol.DISetCredentialsMsgType:
 		captureMsgType(ctx, typ)
 		var setCredentials setCredentialsMsg
 		if err := cbor.NewDecoder(resp).Decode(&setCredentials); err != nil {
-			captureErr(ctx, messageBodyErrCode, "")
+			captureErr(ctx, protocol.MessageBodyErrCode, "")
 			return nil, fmt.Errorf("error parsing DI.SetCredentials request: %w", err)
 		}
 		return &setCredentials.OVHeader.Val, nil
 
-	case ErrorMsgType:
-		var errMsg ErrorMessage
+	case protocol.ErrorMsgType:
+		var errMsg protocol.ErrorMessage
 		if err := cbor.NewDecoder(resp).Decode(&errMsg); err != nil {
 			return nil, fmt.Errorf("error parsing error message contents of DI.AppStart response: %w", err)
 		}
 		return nil, fmt.Errorf("error received from DI.AppStart request: %w", errMsg)
 
 	default:
-		captureErr(ctx, messageBodyErrCode, "")
+		captureErr(ctx, protocol.MessageBodyErrCode, "")
 		return nil, fmt.Errorf("unexpected message type for response to DI.AppStart: %d", typ)
 	}
 }
@@ -264,7 +225,7 @@ func (s *DIServer[T]) setCredentials(ctx context.Context, msg io.Reader) (*setCr
 	}
 
 	// Generate voucher header
-	var guid GUID
+	var guid protocol.GUID
 	if _, err := rand.Read(guid[:]); err != nil {
 		return nil, fmt.Errorf("error generating device GUID: %w", err)
 	}
@@ -273,7 +234,7 @@ func (s *DIServer[T]) setCredentials(ctx context.Context, msg io.Reader) (*setCr
 		GUID:            guid,
 		DeviceInfo:      deviceInfo,
 		ManufacturerKey: *mfgPubKey,
-		CertChainHash: &Hash{
+		CertChainHash: &protocol.Hash{
 			Algorithm: alg,
 			Value:     certChainHash.Sum(nil),
 		},
@@ -297,14 +258,19 @@ func (s *DIServer[T]) setCredentials(ctx context.Context, msg io.Reader) (*setCr
 	}, nil
 }
 
-func encodePublicKey(keyType KeyType, keyEncoding KeyEncoding, chain []*x509.Certificate) (*PublicKey, error) {
+func encodePublicKey(keyType protocol.KeyType, keyEncoding protocol.KeyEncoding, chain []*x509.Certificate) (*protocol.PublicKey, error) {
 	switch keyEncoding {
-	case X509KeyEnc:
-		return newPublicKey(keyType, chain[0].PublicKey, false)
-	case X5ChainKeyEnc:
-		return newPublicKey(keyType, chain, false)
-	case CoseKeyEnc:
-		return newPublicKey(keyType, chain[0].PublicKey, true)
+	case protocol.X509KeyEnc, protocol.CoseKeyEnc:
+		switch keyType {
+		case protocol.Secp256r1KeyType, protocol.Secp384r1KeyType:
+			return protocol.NewPublicKey(keyType, chain[0].PublicKey.(*ecdsa.PublicKey), keyEncoding == protocol.CoseKeyEnc)
+		case protocol.Rsa2048RestrKeyType, protocol.RsaPkcsKeyType, protocol.RsaPssKeyType:
+			return protocol.NewPublicKey(keyType, chain[0].PublicKey.(*rsa.PublicKey), keyEncoding == protocol.CoseKeyEnc)
+		default:
+			return nil, fmt.Errorf("unsupported key type: %s", keyType)
+		}
+	case protocol.X5ChainKeyEnc:
+		return protocol.NewPublicKey(keyType, chain, false)
 	default:
 		return nil, fmt.Errorf("unsupported key encoding: %s", keyEncoding)
 	}
@@ -320,12 +286,12 @@ func setHmac(ctx context.Context, transport Transport, hmac hash.Hash, ovh *Vouc
 
 	// Define request structure
 	var msg struct {
-		Hmac Hmac
+		Hmac protocol.Hmac
 	}
 	msg.Hmac = ovhHash
 
 	// Make request
-	typ, resp, err := transport.Send(ctx, diSetHmacMsgType, msg, nil)
+	typ, resp, err := transport.Send(ctx, protocol.DISetHmacMsgType, msg, nil)
 	if err != nil {
 		return fmt.Errorf("error sending DI.SetHMAC: %w", err)
 	}
@@ -333,20 +299,20 @@ func setHmac(ctx context.Context, transport Transport, hmac hash.Hash, ovh *Vouc
 
 	// Parse response
 	switch typ {
-	case diDoneMsgType:
+	case protocol.DIDoneMsgType:
 		captureMsgType(ctx, typ)
 		return nil
 
-	case ErrorMsgType:
-		var errMsg ErrorMessage
+	case protocol.ErrorMsgType:
+		var errMsg protocol.ErrorMessage
 		if err := cbor.NewDecoder(resp).Decode(&errMsg); err != nil {
-			captureErr(ctx, messageBodyErrCode, "")
+			captureErr(ctx, protocol.MessageBodyErrCode, "")
 			return fmt.Errorf("error parsing error message contents of DI.SetHMAC response: %w", err)
 		}
 		return fmt.Errorf("error received from DI.SetHMAC request: %w", errMsg)
 
 	default:
-		captureErr(ctx, messageBodyErrCode, "")
+		captureErr(ctx, protocol.MessageBodyErrCode, "")
 		return fmt.Errorf("unexpected message type for response to DI.SetHMAC: %d", typ)
 	}
 }
@@ -354,7 +320,7 @@ func setHmac(ctx context.Context, transport Transport, hmac hash.Hash, ovh *Vouc
 // SetHMAC(12) -> Done(13)
 func (s *DIServer[T]) diDone(ctx context.Context, msg io.Reader) (struct{}, error) {
 	var req struct {
-		Hmac Hmac
+		Hmac protocol.Hmac
 	}
 	if err := cbor.NewDecoder(msg).Decode(&req); err != nil {
 		return struct{}{}, fmt.Errorf("error parsing DI.SetHMAC request: %w", err)
@@ -453,7 +419,7 @@ func (s *DIServer[T]) maybeAutoTO0(ctx context.Context, ov *Voucher) error {
 
 	var opts crypto.SignerOpts
 	switch keyType {
-	case Rsa2048RestrKeyType, RsaPkcsKeyType, RsaPssKeyType:
+	case protocol.Rsa2048RestrKeyType, protocol.RsaPkcsKeyType, protocol.RsaPssKeyType:
 		switch rsaPub := nextOwner.Public().(*rsa.PublicKey); rsaPub.Size() {
 		case 2048 / 8:
 			opts = crypto.SHA256
@@ -463,7 +429,7 @@ func (s *DIServer[T]) maybeAutoTO0(ctx context.Context, ov *Voucher) error {
 			return fmt.Errorf("unsupported RSA key size: %d bits", rsaPub.Size()*8)
 		}
 
-		if keyType == RsaPssKeyType {
+		if keyType == protocol.RsaPssKeyType {
 			opts = &rsa.PSSOptions{
 				SaltLength: rsa.PSSSaltLengthEqualsHash,
 				Hash:       opts.(crypto.Hash),
@@ -471,8 +437,8 @@ func (s *DIServer[T]) maybeAutoTO0(ctx context.Context, ov *Voucher) error {
 		}
 	}
 
-	sign1 := cose.Sign1[To1d, []byte]{
-		Payload: cbor.NewByteWrap(To1d{
+	sign1 := cose.Sign1[protocol.To1d, []byte]{
+		Payload: cbor.NewByteWrap(protocol.To1d{
 			RV: s.AutoTO0Addrs,
 		}),
 	}

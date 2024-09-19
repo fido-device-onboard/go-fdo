@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/fdotest"
+	"github.com/fido-device-onboard/go-fdo/protocol"
 	"github.com/fido-device-onboard/go-fdo/sqlite"
 )
 
@@ -58,11 +58,11 @@ func newDB(t *testing.T) (_ *sqlite.DB, cleanup func() error) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for keyType, key := range map[fdo.KeyType]crypto.Signer{
-		fdo.RsaPkcsKeyType:   rsaMfgKey,
-		fdo.RsaPssKeyType:    rsaMfgKey,
-		fdo.Secp256r1KeyType: ec256MfgKey,
-		fdo.Secp384r1KeyType: ec384MfgKey,
+	for keyType, key := range map[protocol.KeyType]crypto.Signer{
+		protocol.RsaPkcsKeyType:   rsaMfgKey,
+		protocol.RsaPssKeyType:    rsaMfgKey,
+		protocol.Secp256r1KeyType: ec256MfgKey,
+		protocol.Secp384r1KeyType: ec384MfgKey,
 	} {
 		chain, err := generateCA(key)
 		if err != nil {
@@ -87,11 +87,11 @@ func newDB(t *testing.T) (_ *sqlite.DB, cleanup func() error) {
 		t.Fatal(err)
 	}
 
-	for keyType, key := range map[fdo.KeyType]crypto.Signer{
-		fdo.RsaPkcsKeyType:   rsaOwnerKey,
-		fdo.RsaPssKeyType:    rsaOwnerKey,
-		fdo.Secp256r1KeyType: ec256OwnerKey,
-		fdo.Secp384r1KeyType: ec384OwnerKey,
+	for keyType, key := range map[protocol.KeyType]crypto.Signer{
+		protocol.RsaPkcsKeyType:   rsaOwnerKey,
+		protocol.RsaPssKeyType:    rsaOwnerKey,
+		protocol.Secp256r1KeyType: ec256OwnerKey,
+		protocol.Secp384r1KeyType: ec384OwnerKey,
 	} {
 		chain, err := generateCA(key)
 		if err != nil {

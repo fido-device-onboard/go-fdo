@@ -14,9 +14,9 @@ type DeviceKeyType uint8
 
 // DeviceKeyType enum as defined in section 4.1
 //
-// 0: FDO key (device key is derived from Unique String)
-// 1: The IDevID in the TPM
-// 2: An LDevID in the TPM
+//	0: FDO key (device key is derived from Unique String)
+//	1: The IDevID in the TPM
+//	2: An LDevID in the TPM
 const (
 	FdoDeviceKey    DeviceKeyType = 0
 	IDevIDDeviceKey DeviceKeyType = 1

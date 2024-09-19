@@ -18,9 +18,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/kex"
+	"github.com/fido-device-onboard/go-fdo/protocol"
 )
 
 // Transport implements FDO message sending capabilities over HTTP. Send may be
@@ -49,8 +49,6 @@ type Transport struct {
 	// length checking.
 	MaxContentLength int64
 }
-
-var _ fdo.Transport = (*Transport)(nil)
 
 // Send sends a single message and receives a single response message.
 //
@@ -93,14 +91,14 @@ func (t *Transport) Send(ctx context.Context, msgType uint8, msg any, sess kex.S
 
 	// Add request headers
 	req.Header.Add("Content-Type", "application/cbor")
-	prot := fdo.ProtocolOf(msgType)
-	if errMsg, ok := msg.(fdo.ErrorMessage); ok {
+	prot := protocol.Of(msgType)
+	if errMsg, ok := msg.(protocol.ErrorMessage); ok {
 		// Error messages use the authorization token for the protocol where
 		// failure occurred
-		prot = fdo.ProtocolOf(errMsg.PrevMsgType)
+		prot = protocol.Of(errMsg.PrevMsgType)
 	}
-	if prot == fdo.UnknownProtocol || prot == fdo.AnyProtocol {
-		return 0, nil, fmt.Errorf("invalid message type: unknown protocol or error message not using fdo.ErrorMessage type")
+	if prot == protocol.UnknownProtocol || prot == protocol.AnyProtocol {
+		return 0, nil, fmt.Errorf("invalid message type: unknown protocol or error message not using protocol.ErrorMessage type")
 	}
 	if token := t.Auth.GetToken(ctx, prot); token != "" {
 		req.Header.Add("Authorization", token)
@@ -138,7 +136,7 @@ func (t *Transport) handleResponse(resp *http.Response, sess kex.Session) (msgTy
 			_ = resp.Body.Close()
 			return 0, nil, fmt.Errorf("request contains invalid message type in path: %w", err)
 		}
-		t.Auth.StoreToken(resp.Request.Context(), fdo.ProtocolOf(uint8(reqType)), token)
+		t.Auth.StoreToken(resp.Request.Context(), protocol.Of(uint8(reqType)), token)
 	}
 
 	// Parse message type from headers (or implicit from response code)
@@ -184,7 +182,7 @@ func (t *Transport) handleResponse(resp *http.Response, sess kex.Session) (msgTy
 	}
 
 	// Decrypt if a key exchange session is provided for types other than error
-	if sess != nil && msgType != fdo.ErrorMsgType {
+	if sess != nil && msgType != protocol.ErrorMsgType {
 		defer func() { _ = resp.Body.Close() }()
 
 		decrypted, err := sess.Decrypt(rand.Reader, content)

@@ -30,8 +30,10 @@ import (
 	"github.com/fido-device-onboard/go-fdo/blob"
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
+	"github.com/fido-device-onboard/go-fdo/custom"
 	"github.com/fido-device-onboard/go-fdo/fsim"
 	"github.com/fido-device-onboard/go-fdo/kex"
+	"github.com/fido-device-onboard/go-fdo/protocol"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
 
@@ -176,7 +178,7 @@ func client() error {
 		HmacSha256: hmac.New(sha256.New, cred.HmacSecret),
 		HmacSha384: hmac.New(sha512.New384, cred.HmacSecret),
 		Key:        cred.PrivateKey,
-		Devmod: fdo.Devmod{
+		Devmod: serviceinfo.Devmod{
 			Os:      runtime.GOOS,
 			Arch:    runtime.GOARCH,
 			Version: "Debian Bookworm",
@@ -254,22 +256,22 @@ func di() error {
 	if err != nil {
 		return fmt.Errorf("error generating random serial number: %w", err)
 	}
-	keyType := fdo.Secp384r1KeyType
+	keyType := protocol.Secp384r1KeyType
 	if diEC256 {
-		keyType = fdo.Secp256r1KeyType
+		keyType = protocol.Secp256r1KeyType
 	}
-	var keyEncoding fdo.KeyEncoding
+	var keyEncoding protocol.KeyEncoding
 	switch {
 	case strings.EqualFold(diKeyEnc, "x509"):
-		keyEncoding = fdo.X509KeyEnc
+		keyEncoding = protocol.X509KeyEnc
 	case strings.EqualFold(diKeyEnc, "x5chain"):
-		keyEncoding = fdo.X5ChainKeyEnc
+		keyEncoding = protocol.X5ChainKeyEnc
 	case strings.EqualFold(diKeyEnc, "cose"):
-		keyEncoding = fdo.CoseKeyEnc
+		keyEncoding = protocol.CoseKeyEnc
 	default:
 		return fmt.Errorf("unsupported key encoding: %s", diKeyEnc)
 	}
-	cred, err := fdo.DI(context.TODO(), tlsTransport(diURL, nil), fdo.DeviceMfgInfo{
+	cred, err := fdo.DI(context.TODO(), tlsTransport(diURL, nil), custom.DeviceMfgInfo{
 		KeyType:      keyType,
 		KeyEncoding:  keyEncoding,
 		SerialNumber: strconv.FormatInt(sn.Int64(), 10),
@@ -292,11 +294,11 @@ func di() error {
 	})
 }
 
-func transferOwnership(rvInfo [][]fdo.RvInstruction, conf fdo.TO2Config) *fdo.DeviceCredential {
-	to1URLs, to2URLs := fdo.BaseHTTP(rvInfo)
+func transferOwnership(rvInfo [][]protocol.RvInstruction, conf fdo.TO2Config) *fdo.DeviceCredential {
+	to1URLs, to2URLs := protocol.BaseHTTP(rvInfo)
 
 	// Try TO1 on each address only once
-	var to1d *cose.Sign1[fdo.To1d, []byte]
+	var to1d *cose.Sign1[protocol.To1d, []byte]
 	for _, baseURL := range to1URLs {
 		var err error
 		to1d, err = fdo.TO1(context.TODO(), tlsTransport(baseURL, nil), conf.Cred, conf.Key, nil)
@@ -321,9 +323,9 @@ func transferOwnership(rvInfo [][]fdo.RvInstruction, conf fdo.TO2Config) *fdo.De
 
 			var scheme, port string
 			switch to2Addr.TransportProtocol {
-			case fdo.HTTPTransport:
+			case protocol.HTTPTransport:
 				scheme, port = "http://", "80"
-			case fdo.HTTPSTransport:
+			case protocol.HTTPSTransport:
 				scheme, port = "https://", "443"
 			default:
 				continue
@@ -355,7 +357,7 @@ func transferOwnership(rvInfo [][]fdo.RvInstruction, conf fdo.TO2Config) *fdo.De
 	return nil
 }
 
-func transferOwnership2(transport fdo.Transport, to1d *cose.Sign1[fdo.To1d, []byte], conf fdo.TO2Config) *fdo.DeviceCredential {
+func transferOwnership2(transport fdo.Transport, to1d *cose.Sign1[protocol.To1d, []byte], conf fdo.TO2Config) *fdo.DeviceCredential {
 	fsims := map[string]serviceinfo.DeviceModule{
 		"fido_alliance": &fsim.Interop{},
 	}

@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: (C) 2024 Intel Corporation
 // SPDX-License-Identifier: Apache 2.0
 
-package fdo
+// Package protocol contains common protocol-related types and values.
+package protocol
 
 // Protocol is the FDO specification-defined protocol.
 type Protocol uint8
@@ -33,8 +34,8 @@ func (p Protocol) String() string {
 	}
 }
 
-// ProtocolOf returns the protocol a given message type belongs to.
-func ProtocolOf(msgType uint8) Protocol {
+// Of returns the protocol a given message type belongs to.
+func Of(msgType uint8) Protocol {
 	switch msgType {
 	case 10, 11, 12, 13:
 		return DIProtocol

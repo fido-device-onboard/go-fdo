@@ -29,13 +29,14 @@ import (
 	"github.com/fido-device-onboard/go-fdo/fdotest/internal/memory"
 	"github.com/fido-device-onboard/go-fdo/fdotest/internal/token"
 	"github.com/fido-device-onboard/go-fdo/kex"
+	"github.com/fido-device-onboard/go-fdo/protocol"
 	"github.com/fido-device-onboard/go-fdo/testdata"
 )
 
 // AllServerState includes all server state interfaces and additional functions
 // needed for testing.
 type AllServerState interface {
-	fdo.TokenService
+	protocol.TokenService
 	fdo.DISessionState
 	fdo.TO0SessionState
 	fdo.TO1SessionState
@@ -44,7 +45,7 @@ type AllServerState interface {
 	fdo.ManufacturerVoucherPersistentState
 	fdo.OwnerVoucherPersistentState
 	fdo.OwnerKeyPersistentState
-	ManufacturerKey(keyType fdo.KeyType) (crypto.Signer, []*x509.Certificate, error)
+	ManufacturerKey(keyType protocol.KeyType) (crypto.Signer, []*x509.Certificate, error)
 }
 
 // RunServerStateSuite is used to test different implementations of all server
@@ -69,9 +70,9 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 
 	t.Run("TokenService", func(t *testing.T) {
 		// Shadow state to limit testable functions
-		var state fdo.TokenService = state
+		var state protocol.TokenService = state
 
-		for _, protocol := range []fdo.Protocol{fdo.DIProtocol, fdo.TO0Protocol, fdo.TO1Protocol, fdo.TO2Protocol} {
+		for _, protocol := range []protocol.Protocol{protocol.DIProtocol, protocol.TO0Protocol, protocol.TO1Protocol, protocol.TO2Protocol} {
 			token, err := state.NewToken(context.Background(), protocol)
 			if err != nil {
 				t.Fatalf("error creating token for %s: %v", protocol, err)
@@ -89,7 +90,7 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 	})
 
 	t.Run("DISessionState", func(t *testing.T) {
-		token, err := state.NewToken(context.TODO(), fdo.DIProtocol)
+		token, err := state.NewToken(context.TODO(), protocol.DIProtocol)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -150,27 +151,27 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 		}
 
 		// Create OVH
-		var guid fdo.GUID
+		var guid protocol.GUID
 		if _, err := rand.Read(guid[:]); err != nil {
 			t.Fatal(err)
 		}
 		ovh := &fdo.VoucherHeader{
 			Version: 101,
 			GUID:    guid,
-			RvInfo: [][]fdo.RvInstruction{
+			RvInfo: [][]protocol.RvInstruction{
 				{
-					{Variable: fdo.RVBypass},
-					{Variable: fdo.RVDns, Value: []byte("owner.fidoalliance.org")},
+					{Variable: protocol.RVBypass},
+					{Variable: protocol.RVDns, Value: []byte("owner.fidoalliance.org")},
 				},
 			},
 			DeviceInfo: "something",
-			ManufacturerKey: fdo.PublicKey{
-				Type:     fdo.RsaPkcsKeyType,
-				Encoding: fdo.X509KeyEnc,
+			ManufacturerKey: protocol.PublicKey{
+				Type:     protocol.RsaPkcsKeyType,
+				Encoding: protocol.X509KeyEnc,
 				Body:     body,
 			},
-			CertChainHash: &fdo.Hash{
-				Algorithm: fdo.Sha256Hash,
+			CertChainHash: &protocol.Hash{
+				Algorithm: protocol.Sha256Hash,
 				Value:     hash.Sum(nil),
 			},
 		}
@@ -192,7 +193,7 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 	})
 
 	t.Run("TO0SessionState", func(t *testing.T) {
-		token, err := state.NewToken(context.TODO(), fdo.TO0Protocol)
+		token, err := state.NewToken(context.TODO(), protocol.TO0Protocol)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -206,7 +207,7 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 		if _, err := state.TO0SignNonce(ctx); !errors.Is(err, fdo.ErrNotFound) {
 			t.Fatalf("expected ErrNotFound, got %v", err)
 		}
-		var nonce fdo.Nonce
+		var nonce protocol.Nonce
 		if _, err := rand.Read(nonce[:]); err != nil {
 			t.Fatal(err)
 		}
@@ -223,7 +224,7 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 	})
 
 	t.Run("TO1SessionState", func(t *testing.T) {
-		token, err := state.NewToken(context.TODO(), fdo.TO1Protocol)
+		token, err := state.NewToken(context.TODO(), protocol.TO1Protocol)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -237,7 +238,7 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 		if _, err := state.TO1ProofNonce(ctx); !errors.Is(err, fdo.ErrNotFound) {
 			t.Fatalf("expected ErrNotFound, got %v", err)
 		}
-		var nonce fdo.Nonce
+		var nonce protocol.Nonce
 		if _, err := rand.Read(nonce[:]); err != nil {
 			t.Fatal(err)
 		}
@@ -255,7 +256,7 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 
 	t.Run("TO2SessionState", func(t *testing.T) {
 		t.Run("GUID", func(t *testing.T) {
-			token, err := state.NewToken(context.TODO(), fdo.TO2Protocol)
+			token, err := state.NewToken(context.TODO(), protocol.TO2Protocol)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -271,7 +272,7 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 			}
 
 			// Store and retrieve GUID
-			var guid fdo.GUID
+			var guid protocol.GUID
 			if _, err := rand.Read(guid[:]); err != nil {
 				t.Fatal(err)
 			}
@@ -289,7 +290,7 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 		})
 
 		t.Run("RvInfo", func(t *testing.T) {
-			token, err := state.NewToken(context.TODO(), fdo.TO2Protocol)
+			token, err := state.NewToken(context.TODO(), protocol.TO2Protocol)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -305,11 +306,11 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 			}
 
 			// Store and retrieve RV info
-			rvInfo := [][]fdo.RvInstruction{
+			rvInfo := [][]protocol.RvInstruction{
 				{
-					{Variable: fdo.RVProtocol, Value: mustMarshal(t, fdo.HTTPTransport)},
-					{Variable: fdo.RVIPAddress, Value: mustMarshal(t, net.IP{127, 0, 0, 1})},
-					{Variable: fdo.RVDevPort, Value: mustMarshal(t, 8080)},
+					{Variable: protocol.RVProtocol, Value: mustMarshal(t, protocol.HTTPTransport)},
+					{Variable: protocol.RVIPAddress, Value: mustMarshal(t, net.IP{127, 0, 0, 1})},
+					{Variable: protocol.RVDevPort, Value: mustMarshal(t, 8080)},
 				},
 			}
 			if err := state.SetRvInfo(ctx, rvInfo); err != nil {
@@ -325,7 +326,7 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 		})
 
 		t.Run("Replacement", func(t *testing.T) {
-			token, err := state.NewToken(context.TODO(), fdo.TO2Protocol)
+			token, err := state.NewToken(context.TODO(), protocol.TO2Protocol)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -339,7 +340,7 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 			if _, err := state.ReplacementGUID(ctx); !errors.Is(err, fdo.ErrNotFound) {
 				t.Fatalf("expected ErrNotFound, got %v", err)
 			}
-			var newGUID fdo.GUID
+			var newGUID protocol.GUID
 			if _, err := rand.Read(newGUID[:]); err != nil {
 				t.Fatal(err)
 			}
@@ -361,8 +362,8 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 			}
 			fakeHmac := hmac.New(sha256.New, []byte("fake key"))
 			_, _ = fakeHmac.Write([]byte("fake voucher header"))
-			newHmac := fdo.Hmac{
-				Algorithm: fdo.HmacSha256Hash,
+			newHmac := protocol.Hmac{
+				Algorithm: protocol.HmacSha256Hash,
 				Value:     fakeHmac.Sum(nil),
 			}
 			if err := state.SetReplacementHmac(ctx, newHmac); err != nil {
@@ -378,7 +379,7 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 		})
 
 		t.Run("KeyExchangeState", func(t *testing.T) {
-			token, err := state.NewToken(context.TODO(), fdo.TO2Protocol)
+			token, err := state.NewToken(context.TODO(), protocol.TO2Protocol)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -410,7 +411,7 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 		})
 
 		t.Run("Nonces", func(t *testing.T) {
-			token, err := state.NewToken(context.TODO(), fdo.TO2Protocol)
+			token, err := state.NewToken(context.TODO(), protocol.TO2Protocol)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -424,7 +425,7 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 			if _, err := state.ProveDeviceNonce(ctx); !errors.Is(err, fdo.ErrNotFound) {
 				t.Fatalf("expected ErrNotFound, got %v", err)
 			}
-			var proveDeviceNonce fdo.Nonce
+			var proveDeviceNonce protocol.Nonce
 			if _, err := rand.Read(proveDeviceNonce[:]); err != nil {
 				t.Fatal(err)
 			}
@@ -442,7 +443,7 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 			if _, err := state.SetupDeviceNonce(ctx); !errors.Is(err, fdo.ErrNotFound) {
 				t.Fatalf("expected ErrNotFound, got %v", err)
 			}
-			var setupDeviceNonce fdo.Nonce
+			var setupDeviceNonce protocol.Nonce
 			if _, err := rand.Read(setupDeviceNonce[:]); err != nil {
 				t.Fatal(err)
 			}
@@ -459,7 +460,7 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 		})
 
 		t.Run("MTU", func(t *testing.T) {
-			token, err := state.NewToken(context.TODO(), fdo.TO2Protocol)
+			token, err := state.NewToken(context.TODO(), protocol.TO2Protocol)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -488,24 +489,24 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 	})
 
 	t.Run("RendezvousBlobPersistentState", func(t *testing.T) {
-		var guid fdo.GUID
+		var guid protocol.GUID
 		if _, err := rand.Read(guid[:]); err != nil {
 			t.Fatal(err)
 		}
 		ov := &fdo.Voucher{Header: *cbor.NewBstr(fdo.VoucherHeader{GUID: guid})}
 		dnsAddr := "owner.fidoalliance.org"
 		fakeHash := sha256.Sum256([]byte("fake blob"))
-		expect := cose.Sign1[fdo.To1d, []byte]{
-			Payload: cbor.NewByteWrap(fdo.To1d{
-				RV: []fdo.RvTO2Addr{
+		expect := cose.Sign1[protocol.To1d, []byte]{
+			Payload: cbor.NewByteWrap(protocol.To1d{
+				RV: []protocol.RvTO2Addr{
 					{
 						DNSAddress:        &dnsAddr,
 						Port:              8080,
-						TransportProtocol: fdo.HTTPTransport,
+						TransportProtocol: protocol.HTTPTransport,
 					},
 				},
-				To0dHash: fdo.Hash{
-					Algorithm: fdo.Sha256Hash,
+				To0dHash: protocol.Hash{
+					Algorithm: protocol.Sha256Hash,
 					Value:     fakeHash[:],
 				},
 			}),
@@ -572,7 +573,7 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 		}
 
 		// Change GUID and replace voucher
-		var newGUID fdo.GUID
+		var newGUID protocol.GUID
 		if _, err := rand.Read(newGUID[:]); err != nil {
 			t.Fatal(err)
 		}
@@ -594,7 +595,7 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 		var state fdo.OwnerKeyPersistentState = state
 
 		// RSA
-		rsaKey, _, err := state.OwnerKey(fdo.RsaPkcsKeyType)
+		rsaKey, _, err := state.OwnerKey(protocol.RsaPkcsKeyType)
 		if err != nil {
 			t.Fatal("RSA owner key", err)
 		}
@@ -603,7 +604,7 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 		}
 
 		// EC
-		ecKey, _, err := state.OwnerKey(fdo.Secp256r1KeyType)
+		ecKey, _, err := state.OwnerKey(protocol.Secp256r1KeyType)
 		if err != nil {
 			t.Fatal("EC owner key", err)
 		}

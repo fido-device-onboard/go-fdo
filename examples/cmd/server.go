@@ -35,8 +35,10 @@ import (
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/custom"
 	"github.com/fido-device-onboard/go-fdo/fsim"
 	transport "github.com/fido-device-onboard/go-fdo/http"
+	"github.com/fido-device-onboard/go-fdo/protocol"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 	"github.com/fido-device-onboard/go-fdo/sqlite"
 )
@@ -117,11 +119,11 @@ func server() error { //nolint:gocyclo
 	useTLS = insecureTLS
 
 	// RV Info
-	prot := fdo.RVProtHTTP
+	prot := protocol.RVProtHTTP
 	if useTLS {
-		prot = fdo.RVProtHTTPS
+		prot = protocol.RVProtHTTPS
 	}
-	rvInfo := [][]fdo.RvInstruction{{{Variable: fdo.RVProtocol, Value: mustMarshal(prot)}}}
+	rvInfo := [][]protocol.RvInstruction{{{Variable: protocol.RVProtocol, Value: mustMarshal(prot)}}}
 	if extAddr == "" {
 		extAddr = addr
 	}
@@ -130,20 +132,20 @@ func server() error { //nolint:gocyclo
 		return fmt.Errorf("invalid external addr: %w", err)
 	}
 	if host == "" {
-		rvInfo[0] = append(rvInfo[0], fdo.RvInstruction{Variable: fdo.RVIPAddress, Value: mustMarshal(net.IP{127, 0, 0, 1})})
+		rvInfo[0] = append(rvInfo[0], protocol.RvInstruction{Variable: protocol.RVIPAddress, Value: mustMarshal(net.IP{127, 0, 0, 1})})
 	} else if hostIP := net.ParseIP(host); hostIP.To4() != nil || hostIP.To16() != nil {
-		rvInfo[0] = append(rvInfo[0], fdo.RvInstruction{Variable: fdo.RVIPAddress, Value: mustMarshal(hostIP)})
+		rvInfo[0] = append(rvInfo[0], protocol.RvInstruction{Variable: protocol.RVIPAddress, Value: mustMarshal(hostIP)})
 	} else {
-		rvInfo[0] = append(rvInfo[0], fdo.RvInstruction{Variable: fdo.RVDns, Value: mustMarshal(host)})
+		rvInfo[0] = append(rvInfo[0], protocol.RvInstruction{Variable: protocol.RVDns, Value: mustMarshal(host)})
 	}
 	portNum, err := strconv.ParseUint(portStr, 10, 16)
 	if err != nil {
 		return fmt.Errorf("invalid external port: %w", err)
 	}
 	port := uint16(portNum)
-	rvInfo[0] = append(rvInfo[0], fdo.RvInstruction{Variable: fdo.RVDevPort, Value: mustMarshal(port)})
+	rvInfo[0] = append(rvInfo[0], protocol.RvInstruction{Variable: protocol.RVDevPort, Value: mustMarshal(port)})
 	if rvBypass {
-		rvInfo[0] = append(rvInfo[0], fdo.RvInstruction{Variable: fdo.RVBypass})
+		rvInfo[0] = append(rvInfo[0], protocol.RvInstruction{Variable: protocol.RVBypass})
 	}
 
 	// Invoke TO0 client if a GUID is specified
@@ -159,7 +161,7 @@ func server() error { //nolint:gocyclo
 	return serveHTTP(rvInfo, state)
 }
 
-func serveHTTP(rvInfo [][]fdo.RvInstruction, state *sqlite.DB) error {
+func serveHTTP(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) error {
 	// Create FDO responder
 	handler, err := newHandler(rvInfo, state)
 	if err != nil {
@@ -197,7 +199,7 @@ func serveHTTP(rvInfo [][]fdo.RvInstruction, state *sqlite.DB) error {
 }
 
 func doPrintOwnerPubKey(state *sqlite.DB) error {
-	keyType, err := fdo.ParseKeyType(printOwnerPubKey)
+	keyType, err := protocol.ParseKeyType(printOwnerPubKey)
 	if err != nil {
 		return fmt.Errorf("%w: see usage", err)
 	}
@@ -263,15 +265,15 @@ func registerRvBlob(host string, port uint16, state *sqlite.DB) error {
 	if len(guidBytes) != 16 {
 		return fmt.Errorf("error parsing GUID of device to register RV blob: must be 16 bytes")
 	}
-	var guid fdo.GUID
+	var guid protocol.GUID
 	copy(guid[:], guidBytes)
 
-	proto := fdo.HTTPTransport
+	proto := protocol.HTTPTransport
 	if useTLS {
-		proto = fdo.HTTPSTransport
+		proto = protocol.HTTPSTransport
 	}
 
-	to2Addrs := []fdo.RvTO2Addr{
+	to2Addrs := []protocol.RvTO2Addr{
 		{
 			DNSAddress:        &host,
 			Port:              port,
@@ -299,7 +301,7 @@ func resell(state *sqlite.DB) error {
 	if len(guidBytes) != 16 {
 		return fmt.Errorf("error parsing GUID of voucher to resell: must be 16 bytes")
 	}
-	var guid fdo.GUID
+	var guid protocol.GUID
 	copy(guid[:], guidBytes)
 
 	// Parse next owner key
@@ -346,7 +348,7 @@ func mustMarshal(v any) []byte {
 }
 
 //nolint:gocyclo
-func newHandler(rvInfo [][]fdo.RvInstruction, state *sqlite.DB) (*transport.Handler[fdo.DeviceMfgInfo], error) {
+func newHandler(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) (*transport.Handler, error) {
 	// Generate manufacturing component keys
 	rsaMfgKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -391,16 +393,16 @@ func newHandler(rvInfo [][]fdo.RvInstruction, state *sqlite.DB) (*transport.Hand
 	if err != nil {
 		return nil, err
 	}
-	if err := state.AddManufacturerKey(fdo.RsaPkcsKeyType, rsaMfgKey, rsaChain); err != nil {
+	if err := state.AddManufacturerKey(protocol.RsaPkcsKeyType, rsaMfgKey, rsaChain); err != nil {
 		return nil, err
 	}
-	if err := state.AddManufacturerKey(fdo.RsaPssKeyType, rsaMfgKey, rsaChain); err != nil {
+	if err := state.AddManufacturerKey(protocol.RsaPssKeyType, rsaMfgKey, rsaChain); err != nil {
 		return nil, err
 	}
-	if err := state.AddManufacturerKey(fdo.Secp256r1KeyType, ec256MfgKey, ec256Chain); err != nil {
+	if err := state.AddManufacturerKey(protocol.Secp256r1KeyType, ec256MfgKey, ec256Chain); err != nil {
 		return nil, err
 	}
-	if err := state.AddManufacturerKey(fdo.Secp384r1KeyType, ec384MfgKey, ec384Chain); err != nil {
+	if err := state.AddManufacturerKey(protocol.Secp384r1KeyType, ec384MfgKey, ec384Chain); err != nil {
 		return nil, err
 	}
 
@@ -417,69 +419,27 @@ func newHandler(rvInfo [][]fdo.RvInstruction, state *sqlite.DB) (*transport.Hand
 	if err != nil {
 		return nil, err
 	}
-	if err := state.AddOwnerKey(fdo.RsaPkcsKeyType, rsaOwnerKey, nil); err != nil {
+	if err := state.AddOwnerKey(protocol.RsaPkcsKeyType, rsaOwnerKey, nil); err != nil {
 		return nil, err
 	}
-	if err := state.AddOwnerKey(fdo.RsaPssKeyType, rsaOwnerKey, nil); err != nil {
+	if err := state.AddOwnerKey(protocol.RsaPssKeyType, rsaOwnerKey, nil); err != nil {
 		return nil, err
 	}
-	if err := state.AddOwnerKey(fdo.Secp256r1KeyType, ec256OwnerKey, nil); err != nil {
+	if err := state.AddOwnerKey(protocol.Secp256r1KeyType, ec256OwnerKey, nil); err != nil {
 		return nil, err
 	}
-	if err := state.AddOwnerKey(fdo.Secp384r1KeyType, ec384OwnerKey, nil); err != nil {
+	if err := state.AddOwnerKey(protocol.Secp384r1KeyType, ec384OwnerKey, nil); err != nil {
 		return nil, err
-	}
-
-	// Sign device certificate
-	signDeviceCertificate := func(info *fdo.DeviceMfgInfo) ([]*x509.Certificate, error) {
-		// Validate device info
-		csr := x509.CertificateRequest(info.CertInfo)
-		if err := csr.CheckSignature(); err != nil {
-			return nil, fmt.Errorf("invalid CSR: %w", err)
-		}
-
-		// Sign CSR
-		key, chain, err := state.ManufacturerKey(info.KeyType)
-		if err != nil {
-			var unsupportedErr fdo.ErrUnsupportedKeyType
-			if errors.As(err, &unsupportedErr) {
-				return nil, unsupportedErr
-			}
-			return nil, fmt.Errorf("error retrieving manufacturer key [type=%s]: %w", info.KeyType, err)
-		}
-		serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
-		serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
-		if err != nil {
-			return nil, fmt.Errorf("error generating certificate serial number: %w", err)
-		}
-		template := &x509.Certificate{
-			SerialNumber: serialNumber,
-			Issuer:       chain[0].Subject,
-			Subject:      csr.Subject,
-			NotBefore:    time.Now(),
-			NotAfter:     time.Now().Add(30 * 360 * 24 * time.Hour), // Matches Java impl
-			KeyUsage:     x509.KeyUsageDigitalSignature,
-		}
-		der, err := x509.CreateCertificate(rand.Reader, template, chain[0], csr.PublicKey, key)
-		if err != nil {
-			return nil, fmt.Errorf("error signing CSR: %w", err)
-		}
-		cert, err := x509.ParseCertificate(der)
-		if err != nil {
-			return nil, fmt.Errorf("error parsing signed device cert: %w", err)
-		}
-		chain = append([]*x509.Certificate{cert}, chain...)
-		return chain, nil
 	}
 
 	// Auto-register RV blob so that TO1 can be tested unless a TO0 address is
 	// given or RV bypass is set
 	var autoTO0 fdo.AutoTO0
-	var autoTO0Addrs []fdo.RvTO2Addr
+	var autoTO0Addrs []protocol.RvTO2Addr
 	if to0Addr == "" && !rvBypass {
 		autoTO0 = state
 
-		to1URLs, _ := fdo.BaseHTTP(rvInfo)
+		to1URLs, _ := protocol.BaseHTTP(rvInfo)
 		to1URL, err := url.Parse(to1URLs[0])
 		if err != nil {
 			return nil, fmt.Errorf("error parsing TO1 URL to use for TO2 addr: %w", err)
@@ -489,12 +449,12 @@ func newHandler(rvInfo [][]fdo.RvInstruction, state *sqlite.DB) (*transport.Hand
 		if err != nil {
 			return nil, fmt.Errorf("error parsing TO1 port to use for TO2: %w", err)
 		}
-		proto := fdo.HTTPTransport
+		proto := protocol.HTTPTransport
 		if useTLS {
-			proto = fdo.HTTPSTransport
+			proto = protocol.HTTPSTransport
 		}
 
-		autoTO0Addrs = []fdo.RvTO2Addr{
+		autoTO0Addrs = []protocol.RvTO2Addr{
 			{
 				DNSAddress:        &to1Host,
 				Port:              uint16(to1Port),
@@ -503,19 +463,19 @@ func newHandler(rvInfo [][]fdo.RvInstruction, state *sqlite.DB) (*transport.Hand
 		}
 	}
 
-	return &transport.Handler[fdo.DeviceMfgInfo]{
+	return &transport.Handler{
 		Tokens: state,
-		DIResponder: &fdo.DIServer[fdo.DeviceMfgInfo]{
+		DIResponder: &fdo.DIServer[custom.DeviceMfgInfo]{
 			Session:               state,
 			Vouchers:              state,
-			SignDeviceCertificate: signDeviceCertificate,
-			DeviceInfo: func(_ context.Context, info *fdo.DeviceMfgInfo, _ []*x509.Certificate) (string, fdo.KeyType, fdo.KeyEncoding, error) {
+			SignDeviceCertificate: custom.SignDeviceCertificate(state),
+			DeviceInfo: func(_ context.Context, info *custom.DeviceMfgInfo, _ []*x509.Certificate) (string, protocol.KeyType, protocol.KeyEncoding, error) {
 				return info.DeviceInfo, info.KeyType, info.KeyEncoding, nil
 			},
 			AutoExtend:   state,
 			AutoTO0:      autoTO0,
 			AutoTO0Addrs: autoTO0Addrs,
-			RvInfo:       func(context.Context, *fdo.Voucher) ([][]fdo.RvInstruction, error) { return rvInfo, nil },
+			RvInfo:       func(context.Context, *fdo.Voucher) ([][]protocol.RvInstruction, error) { return rvInfo, nil },
 		},
 		TO0Responder: &fdo.TO0Server{
 			Session: state,
@@ -529,13 +489,13 @@ func newHandler(rvInfo [][]fdo.RvInstruction, state *sqlite.DB) (*transport.Hand
 			Session:      state,
 			Vouchers:     state,
 			OwnerKeys:    state,
-			RvInfo:       func(context.Context, fdo.Voucher) ([][]fdo.RvInstruction, error) { return rvInfo, nil },
+			RvInfo:       func(context.Context, fdo.Voucher) ([][]protocol.RvInstruction, error) { return rvInfo, nil },
 			OwnerModules: ownerModules,
 		},
 	}, nil
 }
 
-func ownerModules(ctx context.Context, guid fdo.GUID, info string, chain []*x509.Certificate, devmod fdo.Devmod, modules []string) iter.Seq2[string, serviceinfo.OwnerModule] {
+func ownerModules(ctx context.Context, guid protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, modules []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 	return func(yield func(string, serviceinfo.OwnerModule) bool) {
 		if slices.Contains(modules, "fdo.download") {
 			for _, name := range downloads {

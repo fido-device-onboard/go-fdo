@@ -16,10 +16,10 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/fdotest"
 	"github.com/fido-device-onboard/go-fdo/fsim"
 	"github.com/fido-device-onboard/go-fdo/plugin"
+	"github.com/fido-device-onboard/go-fdo/protocol"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
 
@@ -49,7 +49,7 @@ func TestDownloadOwnerPlugin(t *testing.T) {
 			},
 			ErrorLog: fdotest.TestingLog(t),
 		},
-	}, func(ctx context.Context, replacementGUID fdo.GUID, info string, chain []*x509.Certificate, devmod fdo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
+	}, func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 		return func(yield func(string, serviceinfo.OwnerModule) bool) {
 			if !yield("fdo.download", downloadOwnerPlugin) {
 				return
@@ -85,7 +85,7 @@ func TestDownloadDevicePlugin(t *testing.T) {
 
 	fdotest.RunClientTestSuite(t, nil, map[string]serviceinfo.DeviceModule{
 		"fdo.download": downloadDevicePlugin,
-	}, func(ctx context.Context, replacementGUID fdo.GUID, info string, chain []*x509.Certificate, devmod fdo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
+	}, func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 		return func(yield func(string, serviceinfo.OwnerModule) bool) {
 			if !yield("fdo.download", &fsim.DownloadContents[*bytes.Reader]{
 				Name:         "bigfile.test",
@@ -108,7 +108,7 @@ func TestDownloadDevicePlugin(t *testing.T) {
 }
 
 func TestDevmodPlugin(t *testing.T) {
-	expected := fdo.Devmod{
+	expected := serviceinfo.Devmod{
 		Os:      runtime.GOOS,
 		Arch:    runtime.GOARCH,
 		Version: "TestOS",
@@ -144,11 +144,11 @@ func TestDevmodPlugin(t *testing.T) {
 		Module: plugin.NewCommandPluginModule(devmodCmd),
 	}
 
-	var got fdo.Devmod
+	var got serviceinfo.Devmod
 
 	fdotest.RunClientTestSuite(t, nil, map[string]serviceinfo.DeviceModule{
 		"devmod": devmodPlugin,
-	}, func(ctx context.Context, replacementGUID fdo.GUID, info string, chain []*x509.Certificate, devmod fdo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
+	}, func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 		got = devmod
 		return func(yield func(string, serviceinfo.OwnerModule) bool) {}
 	}, nil)

@@ -19,6 +19,7 @@ import (
 	"github.com/fido-device-onboard/go-fdo/blob"
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
+	"github.com/fido-device-onboard/go-fdo/protocol"
 )
 
 /*
@@ -78,7 +79,7 @@ func TestVoucherHeaderDeterministic(t *testing.T) {
 	var ov struct {
 		Version   uint16
 		Header    cbor.Bstr[cbor.RawBytes]
-		Hmac      fdo.Hmac
+		Hmac      protocol.Hmac
 		CertChain *[]*cbor.X509Certificate
 		Entries   []cose.Sign1Tag[fdo.VoucherEntryPayload, []byte]
 	}

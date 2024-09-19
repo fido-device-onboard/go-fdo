@@ -20,14 +20,15 @@ import (
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cose"
+	"github.com/fido-device-onboard/go-fdo/protocol"
 )
 
 // State implements interfaces for state which must be persisted between
 // protocol sessions, but not between server processes.
 type State struct {
-	RVBlobs   map[fdo.GUID]*cose.Sign1[fdo.To1d, []byte]
-	Vouchers  map[fdo.GUID]*fdo.Voucher
-	OwnerKeys map[fdo.KeyType]struct {
+	RVBlobs   map[protocol.GUID]*cose.Sign1[protocol.To1d, []byte]
+	Vouchers  map[protocol.GUID]*fdo.Voucher
+	OwnerKeys map[protocol.KeyType]struct {
 		Key   crypto.Signer
 		Chain []*x509.Certificate
 	}
@@ -65,17 +66,17 @@ func NewState() (*State, error) {
 		return nil, err
 	}
 	return &State{
-		RVBlobs:  make(map[fdo.GUID]*cose.Sign1[fdo.To1d, []byte]),
-		Vouchers: make(map[fdo.GUID]*fdo.Voucher),
-		OwnerKeys: map[fdo.KeyType]struct {
+		RVBlobs:  make(map[protocol.GUID]*cose.Sign1[protocol.To1d, []byte]),
+		Vouchers: make(map[protocol.GUID]*fdo.Voucher),
+		OwnerKeys: map[protocol.KeyType]struct {
 			Key   crypto.Signer
 			Chain []*x509.Certificate
 		}{
-			fdo.Rsa2048RestrKeyType: {Key: rsaKey, Chain: []*x509.Certificate{rsaCert}},
-			fdo.RsaPkcsKeyType:      {Key: rsaKey, Chain: []*x509.Certificate{rsaCert}},
-			fdo.RsaPssKeyType:       {Key: rsaKey, Chain: []*x509.Certificate{rsaCert}},
-			fdo.Secp256r1KeyType:    {Key: ec256Key, Chain: []*x509.Certificate{ec256Cert}},
-			fdo.Secp384r1KeyType:    {Key: ec384Key, Chain: []*x509.Certificate{ec384Cert}},
+			protocol.Rsa2048RestrKeyType: {Key: rsaKey, Chain: []*x509.Certificate{rsaCert}},
+			protocol.RsaPkcsKeyType:      {Key: rsaKey, Chain: []*x509.Certificate{rsaCert}},
+			protocol.RsaPssKeyType:       {Key: rsaKey, Chain: []*x509.Certificate{rsaCert}},
+			protocol.Secp256r1KeyType:    {Key: ec256Key, Chain: []*x509.Certificate{ec256Cert}},
+			protocol.Secp384r1KeyType:    {Key: ec384Key, Chain: []*x509.Certificate{ec384Cert}},
 		},
 	}, nil
 }
@@ -96,7 +97,7 @@ func (s *State) AddVoucher(_ context.Context, ov *fdo.Voucher) error {
 
 // ReplaceVoucher stores a new voucher, possibly deleting or marking the
 // previous voucher as replaced.
-func (s *State) ReplaceVoucher(_ context.Context, oldGUID fdo.GUID, ov *fdo.Voucher) error {
+func (s *State) ReplaceVoucher(_ context.Context, oldGUID protocol.GUID, ov *fdo.Voucher) error {
 	delete(s.Vouchers, oldGUID)
 	s.Vouchers[ov.Header.Val.GUID] = ov
 	return nil
@@ -104,7 +105,7 @@ func (s *State) ReplaceVoucher(_ context.Context, oldGUID fdo.GUID, ov *fdo.Vouc
 
 // RemoveVoucher untracks a voucher, possibly by deleting it or marking it
 // as removed, and returns it for extension.
-func (s *State) RemoveVoucher(ctx context.Context, guid fdo.GUID) (*fdo.Voucher, error) {
+func (s *State) RemoveVoucher(ctx context.Context, guid protocol.GUID) (*fdo.Voucher, error) {
 	ov, ok := s.Vouchers[guid]
 	if !ok {
 		return nil, fdo.ErrNotFound
@@ -114,7 +115,7 @@ func (s *State) RemoveVoucher(ctx context.Context, guid fdo.GUID) (*fdo.Voucher,
 }
 
 // Voucher retrieves a voucher by GUID.
-func (s *State) Voucher(_ context.Context, guid fdo.GUID) (*fdo.Voucher, error) {
+func (s *State) Voucher(_ context.Context, guid protocol.GUID) (*fdo.Voucher, error) {
 	ov, ok := s.Vouchers[guid]
 	if !ok {
 		return nil, fdo.ErrNotFound
@@ -124,7 +125,7 @@ func (s *State) Voucher(_ context.Context, guid fdo.GUID) (*fdo.Voucher, error) 
 
 // OwnerKey returns the private key matching a given key type and optionally
 // its certificate chain.
-func (s *State) OwnerKey(keyType fdo.KeyType) (crypto.Signer, []*x509.Certificate, error) {
+func (s *State) OwnerKey(keyType protocol.KeyType) (crypto.Signer, []*x509.Certificate, error) {
 	key, ok := s.OwnerKeys[keyType]
 	if !ok {
 		return nil, nil, fdo.ErrNotFound
@@ -158,12 +159,12 @@ func newCA(priv crypto.Signer) (*x509.Certificate, error) {
 }
 
 // ManufacturerKey returns the signer of a given key type.
-func (s *State) ManufacturerKey(keyType fdo.KeyType) (crypto.Signer, []*x509.Certificate, error) {
+func (s *State) ManufacturerKey(keyType protocol.KeyType) (crypto.Signer, []*x509.Certificate, error) {
 	return s.OwnerKey(keyType)
 }
 
 // SetRVBlob sets the owner rendezvous blob for a device.
-func (s *State) SetRVBlob(ctx context.Context, ov *fdo.Voucher, to1d *cose.Sign1[fdo.To1d, []byte], exp time.Time) error {
+func (s *State) SetRVBlob(ctx context.Context, ov *fdo.Voucher, to1d *cose.Sign1[protocol.To1d, []byte], exp time.Time) error {
 	// TODO: Handle expiration
 	s.RVBlobs[ov.Header.Val.GUID] = to1d
 	s.Vouchers[ov.Header.Val.GUID] = ov
@@ -171,7 +172,7 @@ func (s *State) SetRVBlob(ctx context.Context, ov *fdo.Voucher, to1d *cose.Sign1
 }
 
 // RVBlob returns the owner rendezvous blob for a device.
-func (s *State) RVBlob(ctx context.Context, guid fdo.GUID) (*cose.Sign1[fdo.To1d, []byte], *fdo.Voucher, error) {
+func (s *State) RVBlob(ctx context.Context, guid protocol.GUID) (*cose.Sign1[protocol.To1d, []byte], *fdo.Voucher, error) {
 	to1d, ok := s.RVBlobs[guid]
 	if !ok {
 		return nil, nil, fdo.ErrNotFound

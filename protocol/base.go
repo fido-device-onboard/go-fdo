@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: (C) 2024 Intel Corporation
 // SPDX-License-Identifier: Apache 2.0
 
-// Package fdo implements version 1.1 of the FDO protocol.
-package fdo
+package protocol
 
 // GUID is implemented as a 128-bit cryptographically strong random number.
 //

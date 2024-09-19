@@ -1,9 +1,11 @@
 // SPDX-FileCopyrightText: (C) 2024 Intel Corporation
 // SPDX-License-Identifier: Apache 2.0
 
-package fdo
+package protocol
 
 import (
+	"encoding/hex"
+	"fmt"
 	"net"
 	"strconv"
 
@@ -80,6 +82,47 @@ type RvMedium uint8
 type RvInstruction struct {
 	Variable RvVar
 	Value    []byte `cbor:",omitempty"`
+}
+
+// RvTO2Addr indicates to the device how to connect to the owner service.
+type RvTO2Addr struct {
+	IPAddress         *net.IP // Can be null, unless DNSAddress is null
+	DNSAddress        *string // Can be null, unless IPAddress is null
+	Port              uint16
+	TransportProtocol TransportProtocol
+}
+
+func (a RvTO2Addr) String() string {
+	var addr string
+	if a.DNSAddress != nil {
+		addr = *a.DNSAddress
+	} else if a.IPAddress != nil {
+		addr = a.IPAddress.String()
+	}
+	if a.Port > 0 {
+		port := strconv.Itoa(int(a.Port))
+		addr = net.JoinHostPort(addr, port)
+	}
+	return fmt.Sprintf("%s://%s", a.TransportProtocol, addr)
+}
+
+// To1d is a "blob" that indicates a network address (RVTO2Addr) where the
+// Device can find a prospective Owner for the TO2 Protocol.
+type To1d struct {
+	RV       []RvTO2Addr
+	To0dHash Hash
+}
+
+func (to1d To1d) String() string {
+	s := "to1d[\n"
+	s += "  RV:\n"
+	for _, addr := range to1d.RV {
+		s += "    - " + addr.String() + "\n"
+	}
+	s += "  To0dHash:\n"
+	s += "    Algorithm: " + to1d.To0dHash.Algorithm.String() + "\n"
+	s += "    Value: " + hex.EncodeToString(to1d.To0dHash.Value) + "\n"
+	return s + "]"
 }
 
 // BaseHTTP parses the valid HTTP and HTTPS URLs from the RV directives.

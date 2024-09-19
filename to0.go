@@ -14,14 +14,7 @@ import (
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
-)
-
-// TO0 Message Types
-const (
-	to0HelloMsgType       uint8 = 20
-	to0HelloAckMsgType    uint8 = 21
-	to0OwnerSignMsgType   uint8 = 22
-	to0AcceptOwnerMsgType uint8 = 23
+	"github.com/fido-device-onboard/go-fdo/protocol"
 )
 
 // DefaultRVBlobTTL is the default requested TTL for a rendezvous blob
@@ -48,7 +41,7 @@ type TO0Client struct {
 // RegisterBlob tells a Rendezvous Server where to direct a given device to its
 // owner service for onboarding. The returned uint32 is the number of seconds
 // before the rendezvous blob must be refreshed by calling [RegisterBlob] again.
-func (c *TO0Client) RegisterBlob(ctx context.Context, transport Transport, guid GUID, addrs []RvTO2Addr) (uint32, error) {
+func (c *TO0Client) RegisterBlob(ctx context.Context, transport Transport, guid protocol.GUID, addrs []protocol.RvTO2Addr) (uint32, error) {
 	ctx = contextWithErrMsg(ctx)
 
 	nonce, err := c.hello(ctx, transport)
@@ -65,43 +58,43 @@ func (c *TO0Client) RegisterBlob(ctx context.Context, transport Transport, guid 
 }
 
 // Hello(20) -> HelloAck(21)
-func (c *TO0Client) hello(ctx context.Context, transport Transport) (Nonce, error) {
+func (c *TO0Client) hello(ctx context.Context, transport Transport) (protocol.Nonce, error) {
 	// Define request structure
 	msg := struct{}{}
 
 	// Make request
-	typ, resp, err := transport.Send(ctx, to0HelloMsgType, msg, nil)
+	typ, resp, err := transport.Send(ctx, protocol.TO0HelloMsgType, msg, nil)
 	if err != nil {
-		return Nonce{}, fmt.Errorf("error sending TO0.Hello: %w", err)
+		return protocol.Nonce{}, fmt.Errorf("error sending TO0.Hello: %w", err)
 	}
 	defer func() { _ = resp.Close() }()
 
 	// Parse response
 	switch typ {
-	case to0HelloAckMsgType:
+	case protocol.TO0HelloAckMsgType:
 		captureMsgType(ctx, typ)
 		var ack to0Ack
 		if err := cbor.NewDecoder(resp).Decode(&ack); err != nil {
-			captureErr(ctx, messageBodyErrCode, "")
-			return Nonce{}, fmt.Errorf("error parsing TO0.HelloAck contents: %w", err)
+			captureErr(ctx, protocol.MessageBodyErrCode, "")
+			return protocol.Nonce{}, fmt.Errorf("error parsing TO0.HelloAck contents: %w", err)
 		}
 		return ack.NonceTO0Sign, nil
 
-	case ErrorMsgType:
-		var errMsg ErrorMessage
+	case protocol.ErrorMsgType:
+		var errMsg protocol.ErrorMessage
 		if err := cbor.NewDecoder(resp).Decode(&errMsg); err != nil {
-			return Nonce{}, fmt.Errorf("error parsing error message contents of TO0.Hello response: %w", err)
+			return protocol.Nonce{}, fmt.Errorf("error parsing error message contents of TO0.Hello response: %w", err)
 		}
-		return Nonce{}, fmt.Errorf("error received from TO0.Hello request: %w", errMsg)
+		return protocol.Nonce{}, fmt.Errorf("error received from TO0.Hello request: %w", errMsg)
 
 	default:
-		captureErr(ctx, messageBodyErrCode, "")
-		return Nonce{}, fmt.Errorf("unexpected message type for response to TO0.Hello: %d", typ)
+		captureErr(ctx, protocol.MessageBodyErrCode, "")
+		return protocol.Nonce{}, fmt.Errorf("unexpected message type for response to TO0.Hello: %d", typ)
 	}
 }
 
 type to0Ack struct {
-	NonceTO0Sign Nonce
+	NonceTO0Sign protocol.Nonce
 }
 
 // Hello(20) -> HelloAck(21)
@@ -112,7 +105,7 @@ func (s *TO0Server) helloAck(ctx context.Context, msg io.Reader) (*to0Ack, error
 	}
 
 	// Generate and store nonce
-	var nonce Nonce
+	var nonce protocol.Nonce
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return nil, fmt.Errorf("error generating nonce for TO0 sign: %w", err)
 	}
@@ -128,16 +121,16 @@ func (s *TO0Server) helloAck(ctx context.Context, msg io.Reader) (*to0Ack, error
 type to0d struct {
 	Voucher      Voucher
 	WaitSeconds  uint32
-	NonceTO0Sign Nonce
+	NonceTO0Sign protocol.Nonce
 }
 
 type ownerSign struct {
 	To0d cbor.Bstr[to0d]
-	To1d cose.Sign1Tag[To1d, []byte]
+	To1d cose.Sign1Tag[protocol.To1d, []byte]
 }
 
 // OwnerSign(22) -> AcceptOwner(23)
-func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid GUID, ttl uint32, nonce Nonce, addrs []RvTO2Addr) (negotiatedTTL uint32, _ error) {
+func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid protocol.GUID, ttl uint32, nonce protocol.Nonce, addrs []protocol.RvTO2Addr) (negotiatedTTL uint32, _ error) {
 	// Create and hash to0d
 	ov, err := c.Vouchers.Voucher(ctx, guid)
 	if err != nil {
@@ -165,13 +158,13 @@ func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid GUI
 	} else if err != nil {
 		return 0, fmt.Errorf("error getting owner key [type=%s]: %w", keyType, err)
 	}
-	opts, err := signOptsFor(ownerKey, keyType == RsaPssKeyType)
+	opts, err := signOptsFor(ownerKey, keyType == protocol.RsaPssKeyType)
 	if err != nil {
 		return 0, fmt.Errorf("error determining signing options for TO0.OwnerSign: %w", err)
 	}
-	to1d := cose.Sign1[To1d, []byte]{Payload: cbor.NewByteWrap(To1d{
+	to1d := cose.Sign1[protocol.To1d, []byte]{Payload: cbor.NewByteWrap(protocol.To1d{
 		RV: addrs,
-		To0dHash: Hash{
+		To0dHash: protocol.Hash{
 			Algorithm: alg,
 			Value:     to0dHash.Sum(nil),
 		},
@@ -187,7 +180,7 @@ func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid GUI
 	}
 
 	// Make request
-	typ, resp, err := transport.Send(ctx, to0OwnerSignMsgType, msg, nil)
+	typ, resp, err := transport.Send(ctx, protocol.TO0OwnerSignMsgType, msg, nil)
 	if err != nil {
 		return 0, fmt.Errorf("error sending TO0.OwnerSign: %w", err)
 	}
@@ -195,24 +188,24 @@ func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid GUI
 
 	// Parse response
 	switch typ {
-	case to0AcceptOwnerMsgType:
+	case protocol.TO0AcceptOwnerMsgType:
 		captureMsgType(ctx, typ)
 		var accept to0AcceptOwner
 		if err := cbor.NewDecoder(resp).Decode(&accept); err != nil {
-			captureErr(ctx, messageBodyErrCode, "")
+			captureErr(ctx, protocol.MessageBodyErrCode, "")
 			return 0, fmt.Errorf("error parsing TO0.AcceptOwner contents: %w", err)
 		}
 		return accept.WaitSeconds, nil
 
-	case ErrorMsgType:
-		var errMsg ErrorMessage
+	case protocol.ErrorMsgType:
+		var errMsg protocol.ErrorMessage
 		if err := cbor.NewDecoder(resp).Decode(&errMsg); err != nil {
 			return 0, fmt.Errorf("error parsing error message contents of TO0.OwnerSign response: %w", err)
 		}
 		return 0, fmt.Errorf("error received from TO0.OwnerSign request: %w", errMsg)
 
 	default:
-		captureErr(ctx, messageBodyErrCode, "")
+		captureErr(ctx, protocol.MessageBodyErrCode, "")
 		return 0, fmt.Errorf("unexpected message type for response to TO0.OwnerSign: %d", typ)
 	}
 }
@@ -225,7 +218,7 @@ type to0AcceptOwner struct {
 func (s *TO0Server) acceptOwner(ctx context.Context, msg io.Reader) (*to0AcceptOwner, error) {
 	var sig ownerSign
 	if err := cbor.NewDecoder(msg).Decode(&sig); err != nil {
-		captureErr(ctx, invalidMessageErrCode, "")
+		captureErr(ctx, protocol.InvalidMessageErrCode, "")
 		return nil, fmt.Errorf("error decoding TO0.OwnerSign request: %w", err)
 	}
 
@@ -235,18 +228,18 @@ func (s *TO0Server) acceptOwner(ctx context.Context, msg io.Reader) (*to0AcceptO
 		return nil, fmt.Errorf("error hashing to0d structure: %w", err)
 	}
 	if !bytes.Equal(to0dHash.Sum(nil), sig.To1d.Payload.Val.To0dHash.Value) {
-		captureErr(ctx, invalidMessageErrCode, "")
+		captureErr(ctx, protocol.InvalidMessageErrCode, "")
 		return nil, fmt.Errorf("to0d did not match hash in to1d")
 	}
 
 	// Verify ownership voucher is valid
 	ov := sig.To0d.Val.Voucher
 	if len(ov.Entries) == 0 {
-		captureErr(ctx, invalidMessageErrCode, "")
+		captureErr(ctx, protocol.InvalidMessageErrCode, "")
 		return nil, fmt.Errorf("voucher has not been extended")
 	}
 	if err := ov.VerifyEntries(); err != nil {
-		captureErr(ctx, invalidMessageErrCode, "")
+		captureErr(ctx, protocol.InvalidMessageErrCode, "")
 		return nil, fmt.Errorf("voucher is not valid: %w", err)
 	}
 

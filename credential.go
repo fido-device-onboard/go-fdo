@@ -3,6 +3,8 @@
 
 package fdo
 
+import "github.com/fido-device-onboard/go-fdo/protocol"
+
 // DeviceCredential is non-normative, but the [TPM Draft Spec] proposes a CBOR
 // encoding, so that will be used, excluding the key type/handle.
 //
@@ -20,7 +22,7 @@ package fdo
 type DeviceCredential struct {
 	Version       uint16
 	DeviceInfo    string
-	GUID          GUID
-	RvInfo        [][]RvInstruction
-	PublicKeyHash Hash // expected to be a hash of the entire CBOR structure (not just pkBody) for Voucher.VerifyEntries to succeed
+	GUID          protocol.GUID
+	RvInfo        [][]protocol.RvInstruction
+	PublicKeyHash protocol.Hash // expected to be a hash of the entire CBOR structure (not just pkBody) for Voucher.VerifyEntries to succeed
 }

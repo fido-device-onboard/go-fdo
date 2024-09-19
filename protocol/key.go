@@ -1,12 +1,11 @@
 // SPDX-FileCopyrightText: (C) 2024 Intel Corporation
 // SPDX-License-Identifier: Apache 2.0
 
-package fdo
+package protocol
 
 import (
 	"crypto"
 	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/rsa"
 	"crypto/x509"
 	"errors"
@@ -92,11 +91,6 @@ const (
 	Secp384r1KeyType KeyType = 11
 )
 
-// PublicKeyOrChain is a constraint for supported FDO PublicKey types.
-type PublicKeyOrChain interface {
-	*ecdsa.PublicKey | *rsa.PublicKey | []*x509.Certificate
-}
-
 // KeyEncoding is an FDO pkEnc enum.
 //
 //	pkEnc = (
@@ -134,6 +128,11 @@ const (
 	CoseKeyEnc KeyEncoding = 3
 )
 
+// PublicKeyOrChain is a constraint for supported FDO PublicKey types.
+type PublicKeyOrChain interface {
+	*ecdsa.PublicKey | *rsa.PublicKey | []*x509.Certificate
+}
+
 // PublicKey encodes public key information in FDO messages and vouchers.
 type PublicKey struct {
 	Type     KeyType
@@ -152,8 +151,10 @@ func (pub PublicKey) String() string {
 	return s
 }
 
-func newPublicKey(typ KeyType, pub any, asCOSE bool) (*PublicKey, error) {
-	switch pub := pub.(type) {
+// NewPublicKey creates a public key structure encoded as X509, X5Chain, or a
+// COSE Key, depending on the type of pub and the value of asCOSE.
+func NewPublicKey[T PublicKeyOrChain](typ KeyType, pub T, asCOSE bool) (*PublicKey, error) {
+	switch pub := any(pub).(type) {
 	case []*x509.Certificate:
 		chain := make([]*cbor.X509Certificate, len(pub))
 		for i, cert := range pub {
@@ -313,45 +314,4 @@ func (pub *PublicKey) parseCose() error {
 	}
 	pub.key = pubkey
 	return nil
-}
-
-// hashAlgFor determines the appropriate hash algorithm to use based on the
-// table in section 3.2.2 of the FDO spec
-func hashAlgFor(devicePubKey, ownerPubKey crypto.PublicKey) (HashAlg, error) {
-	deviceSize, err := hashSizeForPubKey(devicePubKey)
-	if err != nil {
-		return 0, fmt.Errorf("device attestation key: %w", err)
-	}
-	ownerSize, err := hashSizeForPubKey(ownerPubKey)
-	if err != nil {
-		return 0, fmt.Errorf("owner attestation key: %w", err)
-	}
-	switch min(deviceSize, ownerSize) {
-	case 256:
-		return Sha256Hash, nil
-	case 384:
-		return Sha384Hash, nil
-	default:
-		panic("only hash sizes of 256 and 384 are included in FDO")
-	}
-}
-
-func hashSizeForPubKey(pubKey crypto.PublicKey) (int, error) {
-	switch key := pubKey.(type) {
-	case *ecdsa.PublicKey:
-		switch curve := key.Curve; curve {
-		case elliptic.P256():
-			return 256, nil
-		case elliptic.P384():
-			return 384, nil
-		default:
-			return 0, fmt.Errorf("unsupported elliptic curve: %s", curve.Params().Name)
-		}
-
-	case *rsa.PublicKey:
-		return key.Size(), nil
-
-	default:
-		return 0, fmt.Errorf("unsupported key type: %T", key)
-	}
 }

@@ -5,6 +5,7 @@ package fdo
 
 import (
 	"github.com/fido-device-onboard/go-fdo/cose"
+	"github.com/fido-device-onboard/go-fdo/protocol"
 )
 
 // Entity Attestation Tokens (EAT)
@@ -121,7 +122,7 @@ type eatoken map[cose.Label]any
 
 // NewEAToken creates an eatoken with the expected required and additional
 // claims.
-func newEAT(guid GUID, nonce Nonce, fdo any, other map[cose.Label]any) eatoken {
+func newEAT(guid protocol.GUID, nonce protocol.Nonce, fdo any, other map[cose.Label]any) eatoken {
 	if other == nil {
 		other = make(map[cose.Label]any)
 	}
