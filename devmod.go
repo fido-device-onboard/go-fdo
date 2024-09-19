@@ -330,17 +330,14 @@ func (d *devmodOwnerModule) parseModules(messageBody io.Reader) error {
 		} else if err != nil {
 			return err
 		}
-		// TODO: Validate that Start+Len <= numModules if FDO 1.2 spec is made
-		// more clear, i.e. chunk.Start+chunk.Len > d.numModules
+		// If the FDO 1.2 spec is made more clear, validate that start plus len
+		// is less than or equal to numModules.
 		if chunk.Start < 0 || chunk.Start > d.numModules || chunk.Len < 0 || len(chunk.Modules) != chunk.Len {
 			return fmt.Errorf("invalid devmod module chunk")
 		}
 
 		// Handle implementations that don't use the first array item to
 		// indicate the start index of the full module array to populate.
-		//
-		// TODO: Remove this in FDO 1.2 when the spec is made more clear on how
-		// to use the index.
 		if idx := slices.Index(d.Modules, ""); idx != -1 && chunk.Start != idx {
 			chunk.Start = idx
 		}
@@ -359,10 +356,6 @@ func (d *devmodOwnerModule) ProduceInfo(_ context.Context, _ *serviceinfo.Produc
 		if slices.Contains(d.Modules, "") {
 			return false, false, fmt.Errorf("modules list did not match nummodules or included an empty module name")
 		}
-		// TODO: Enable this check when FDO 1.2 clarifies the requirement
-		// if !slices.Contains(d.Modules, "devmod") {
-		// 	return false, false, fmt.Errorf("modules list did not include devmod")
-		// }
 		return false, true, nil
 	}
 	return false, false, nil

@@ -7,7 +7,10 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/sha512"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"flag"
@@ -142,14 +145,37 @@ func client() error {
 		level.Set(slog.LevelDebug)
 	}
 
+	// Perform DI if given a URL
+	if diURL != "" {
+		return di()
+	}
+
+	// Read device credential blob to configure client for TO1/TO2
+	blobData, err := os.ReadFile(filepath.Clean(blobPath))
+	if err != nil {
+		return fmt.Errorf("error reading blob credential %q: %w", blobPath, err)
+	}
+	var cred blob.DeviceCredential
+	if err := cbor.Unmarshal(blobData, &cred); err != nil {
+		return fmt.Errorf("error parsing blob credential %q: %w", blobPath, err)
+	}
+
+	// If print option was given, stop here
+	if printDevice {
+		fmt.Printf("%+v\n", cred)
+		return nil
+	}
+
+	// Try TO1+TO2
 	kexCipherSuiteID, ok := kex.CipherSuiteByName(cipherSuite)
 	if !ok {
 		return fmt.Errorf("invalid key exchange cipher suite: %s", cipherSuite)
 	}
-
-	cli := &fdo.Client{
-		Transport: tlsTransport(nil),
-		Cred:      fdo.DeviceCredential{Version: 101},
+	newDC := transferOwnership(cred.RvInfo, fdo.TO2Config{
+		Cred:       cred.DeviceCredential,
+		HmacSha256: hmac.New(sha256.New, cred.HmacSecret),
+		HmacSha384: hmac.New(sha512.New384, cred.HmacSecret),
+		Key:        cred.PrivateKey,
 		Devmod: fdo.Devmod{
 			Os:      runtime.GOOS,
 			Arch:    runtime.GOARCH,
@@ -160,38 +186,7 @@ func client() error {
 		},
 		KeyExchange: kex.Suite(kexSuite),
 		CipherSuite: kexCipherSuiteID,
-	}
-
-	// Perform DI if given a URL
-	if diURL != "" {
-		return di(cli)
-	}
-
-	// Read device credential blob to configure client for TO1/TO2
-	blobFile, err := os.Open(filepath.Clean(blobPath))
-	if err != nil {
-		return fmt.Errorf("error opening blob credential %q: %w", blobPath, err)
-	}
-	defer func() { _ = blobFile.Close() }()
-
-	var cred blob.DeviceCredential
-	if err := cbor.NewDecoder(blobFile).Decode(&cred); err != nil {
-		_ = blobFile.Close()
-		return fmt.Errorf("error parsing blob credential %q: %w", blobPath, err)
-	}
-	_ = blobFile.Close()
-	cli.Cred = cred.DeviceCredential
-	cli.Hmac = cred.HmacSecret
-	cli.Key = cred.PrivateKey
-
-	// If print option was given, stop here
-	if printDevice {
-		fmt.Printf("%+v\n", cred)
-		return nil
-	}
-
-	// Try TO1+TO2
-	newDC := transferOwnership(cli, cred.RvInfo)
+	})
 	if rvOnly {
 		return nil
 	}
@@ -225,13 +220,13 @@ func saveBlob(dc blob.DeviceCredential) error {
 	return nil
 }
 
-func di(cli *fdo.Client) error {
+func di() error {
 	// Generate new key and secret
 	secret := make([]byte, 32)
 	if _, err := rand.Read(secret); err != nil {
 		return fmt.Errorf("error generating device secret: %w", err)
 	}
-	cli.Hmac = blob.Hmac(secret)
+	hmacSha256, hmacSha384 := hmac.New(sha256.New, secret), hmac.New(sha512.New384, secret)
 
 	curve := elliptic.P384()
 	if diEC256 {
@@ -241,7 +236,6 @@ func di(cli *fdo.Client) error {
 	if err != nil {
 		return fmt.Errorf("error generating device key: %w", err)
 	}
-	cli.Key = key
 
 	// Generate Java implementation-compatible mfg string
 	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
@@ -275,12 +269,16 @@ func di(cli *fdo.Client) error {
 	default:
 		return fmt.Errorf("unsupported key encoding: %s", diKeyEnc)
 	}
-	cred, err := cli.DeviceInitialize(context.TODO(), diURL, fdo.DeviceMfgInfo{
+	cred, err := fdo.DI(context.TODO(), tlsTransport(diURL, nil), fdo.DeviceMfgInfo{
 		KeyType:      keyType,
 		KeyEncoding:  keyEncoding,
 		SerialNumber: strconv.FormatInt(sn.Int64(), 10),
 		DeviceInfo:   "gotest",
 		CertInfo:     cbor.X509CertificateRequest(*csr),
+	}, fdo.DIConfig{
+		HmacSha256: hmacSha256,
+		HmacSha384: hmacSha384,
+		Key:        key,
 	})
 	if err != nil {
 		return err
@@ -294,14 +292,14 @@ func di(cli *fdo.Client) error {
 	})
 }
 
-func transferOwnership(cli *fdo.Client, rvInfo [][]fdo.RvInstruction) *fdo.DeviceCredential {
+func transferOwnership(rvInfo [][]fdo.RvInstruction, conf fdo.TO2Config) *fdo.DeviceCredential {
 	to1URLs, to2URLs := fdo.BaseHTTP(rvInfo)
 
 	// Try TO1 on each address only once
 	var to1d *cose.Sign1[fdo.To1d, []byte]
 	for _, baseURL := range to1URLs {
 		var err error
-		to1d, err = cli.TransferOwnership1(context.TODO(), baseURL)
+		to1d, err = fdo.TO1(context.TODO(), tlsTransport(baseURL, nil), conf.Cred, conf.Key, nil)
 		if err != nil {
 			slog.Error("TO1 failed", "base URL", baseURL, "error", err)
 			continue
@@ -348,7 +346,7 @@ func transferOwnership(cli *fdo.Client, rvInfo [][]fdo.RvInstruction) *fdo.Devic
 
 	// Try TO2 on each address only once
 	for _, baseURL := range to2URLs {
-		newDC := transferOwnership2(cli, baseURL, to1d)
+		newDC := transferOwnership2(tlsTransport(baseURL, nil), to1d, conf)
 		if newDC != nil {
 			return newDC
 		}
@@ -357,7 +355,7 @@ func transferOwnership(cli *fdo.Client, rvInfo [][]fdo.RvInstruction) *fdo.Devic
 	return nil
 }
 
-func transferOwnership2(cli *fdo.Client, baseURL string, to1d *cose.Sign1[fdo.To1d, []byte]) *fdo.DeviceCredential {
+func transferOwnership2(transport fdo.Transport, to1d *cose.Sign1[fdo.To1d, []byte], conf fdo.TO2Config) *fdo.DeviceCredential {
 	fsims := map[string]serviceinfo.DeviceModule{
 		"fido_alliance": &fsim.Interop{},
 	}
@@ -374,10 +372,11 @@ func transferOwnership2(cli *fdo.Client, baseURL string, to1d *cose.Sign1[fdo.To
 			FS: uploads,
 		}
 	}
+	conf.DeviceModules = fsims
 
-	cred, err := cli.TransferOwnership2(context.TODO(), baseURL, to1d, fsims)
+	cred, err := fdo.TO2(context.TODO(), transport, to1d, conf)
 	if err != nil {
-		slog.Error("TO2 failed", "base URL", baseURL, "error", err)
+		slog.Error("TO2 failed", "error", err)
 		return nil
 	}
 	return cred

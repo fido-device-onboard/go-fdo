@@ -11,10 +11,14 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"iter"
+	"log/slog"
 	"math"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
@@ -45,25 +49,212 @@ var (
 	to2OwnerPubKeyClaim = cose.Label{Int64: 257}
 )
 
-type ovhValidationContext struct {
-	OVH                 VoucherHeader
-	OVHHmac             Hmac
-	NumVoucherEntries   int
-	PublicKeyToValidate crypto.PublicKey
+// TO2Config contains the device credential, including secrets and keys,
+// optional configuration, and service info modules.
+type TO2Config struct {
+	// Non-secret device credential data.
+	Cred DeviceCredential
+
+	// HMAC-SHA256 with a device secret that does not change when ownership is
+	// transferred. HMAC-SHA256 support is always required by spec, so this
+	// field must be non-nil.
+	HmacSha256 hash.Hash
+
+	// HMAC-SHA384 with a device secret that does not change when ownership is
+	// transferred. HMAC-SHA384 support is optional by spec, so this field may
+	// be nil iff Key is RSA 2048 or EC P-256.
+	//
+	// This hash.Hash may optionally implement the following interface to
+	// return errors from Reset/Write/Sum, noting that implementations of
+	// hash.Hash are not supposed to return non-nil errors from Write.
+	//
+	// 	type FallibleHash interface {
+	// 		Error() error
+	// 	}
+	HmacSha384 hash.Hash
+
+	// An ECDSA or RSA private key that may or may not be implemented with the
+	// stdlib ecdsa and rsa packages.
+	Key crypto.Signer
+
+	// When true and an RSA key is used as a crypto.Signer argument, RSA-SSAPSS
+	// will be used for signing.
+	PSS bool
+
+	// Devmod contains all required and any number of optional messages.
+	//
+	// Alternatively to setting this field, a devmod module may be provided in
+	// the arguments to TransferOwnership2 where the module must provide any
+	// devmod messages EXCEPT nummodules and modules via its Yield method.
+	//
+	// Note: The device plugin will be yielded to exactly once and is expected
+	// to provide all required and desired fields and yield. It may then exit.
+	Devmod Devmod
+
+	// Each ServiceInfo module will be reported in devmod and potentially
+	// activated and used. If a devmod module is included in this list, it
+	// overrides the Devmod field in TO2Config. The custom devmod should not
+	// send nummodules or modules messages, as these will always be sent upon
+	// module completion.
+	DeviceModules map[string]serviceinfo.DeviceModule
+
+	// Selects the key exchange suite to use. If unset, it defaults to ECDH384.
+	KeyExchange kex.Suite
+
+	// Selects the cipher suite to use for encryption. If unset, it defaults to
+	// A256GCM.
+	CipherSuite kex.CipherSuiteID
+
+	// Maximum transmission unit (MTU) to tell owner service to send with. If
+	// zero, the default of 1300 will be used. The value chosen can make a
+	// difference for performance when using service info to exchange large
+	// amounts of data, but choosing the best value depends on network
+	// configuration (e.g. jumbo packets) and transport (overhead size).
+	MaxServiceInfoSizeReceive uint16
+}
+
+// TO2 runs the TO2 protocol and returns a DeviceCredential with replaced GUID,
+// rendezvous info, and owner public key. It requires that a device credential,
+// hmac secret, and key are all provided as configuration.
+//
+// A to1d signed blob is expected if rendezvous bypass is not used. This blob
+// is output from TO1.
+//
+// It has the side effect of performing service info modules, which may include
+// actions such as downloading files.
+func TO2(ctx context.Context, transport Transport, to1d *cose.Sign1[To1d, []byte], c TO2Config) (*DeviceCredential, error) {
+	ctx = contextWithErrMsg(ctx)
+
+	// Configure defaults
+	if c.KeyExchange == "" {
+		c.KeyExchange = kex.ECDH384Suite
+	}
+	if c.CipherSuite == 0 {
+		c.CipherSuite = kex.A256GcmCipher
+	}
+	if c.MaxServiceInfoSizeReceive == 0 {
+		c.MaxServiceInfoSizeReceive = serviceinfo.DefaultMTU
+	}
+	if c.DeviceModules == nil {
+		c.DeviceModules = make(map[string]serviceinfo.DeviceModule)
+	}
+
+	// TODO: Validate key exchange options using table in 3.6.5
+
+	// Mutually attest the device and owner service
+	//
+	// Results: Replacement ownership voucher, nonces to be retransmitted in
+	// Done/Done2 messages
+	proveDeviceNonce, originalOVH, session, err := verifyOwner(ctx, transport, to1d, &c)
+	if err != nil {
+		errorMsg(ctx, transport, err)
+		return nil, err
+	}
+	setupDeviceNonce, partialOVH, err := proveDevice(ctx, transport, proveDeviceNonce, session, &c)
+	if err != nil {
+		errorMsg(ctx, transport, err)
+		return nil, err
+	}
+	replacementOVH := &VoucherHeader{
+		Version:         originalOVH.Version,
+		GUID:            partialOVH.GUID,
+		RvInfo:          partialOVH.RvInfo,
+		DeviceInfo:      originalOVH.DeviceInfo,
+		ManufacturerKey: partialOVH.ManufacturerKey,
+		CertChainHash:   originalOVH.CertChainHash,
+	}
+
+	// Select the appropriate hash algorithm
+	ownerPubKey, _ := partialOVH.ManufacturerKey.Public()
+	alg, err := hashAlgFor(c.Key.Public(), ownerPubKey)
+	if err != nil {
+		return nil, fmt.Errorf("error selecting the appropriate hash algorithm: %w", err)
+	}
+
+	// Prepare to send and receive service info, determining the transmit MTU
+	sendMTU, err := sendReadyServiceInfo(ctx, transport, alg, replacementOVH, session, &c)
+	if err != nil {
+		errorMsg(ctx, transport, err)
+		return nil, err
+	}
+
+	// Start synchronously writing the initial device service info. This occurs
+	// in a goroutine because the pipe is unbuffered and needs to be
+	// concurrently read by the send/receive service info loop.
+	serviceInfoReader, serviceInfoWriter := serviceinfo.NewChunkOutPipe(0)
+	defer func() { _ = serviceInfoWriter.Close() }()
+
+	// Send devmod KVs in initial ServiceInfo
+	go c.Devmod.Write(ctx, c.DeviceModules, sendMTU, serviceInfoWriter)
+
+	// Loop, sending and receiving service info until done
+	defer stopPlugins(c.DeviceModules)
+	if err := exchangeServiceInfo(ctx, transport, proveDeviceNonce, setupDeviceNonce, sendMTU, serviceInfoReader, session, &c); err != nil {
+		errorMsg(ctx, transport, err)
+		return nil, err
+	}
+
+	// Hash new initial owner public key and return replacement device
+	// credential
+	replacementKeyDigest := alg.HashFunc().New()
+	if err := cbor.NewEncoder(replacementKeyDigest).Encode(replacementOVH.ManufacturerKey); err != nil {
+		err = fmt.Errorf("error computing hash of replacement owner key: %w", err)
+		errorMsg(ctx, transport, err)
+		return nil, err
+	}
+	replacementPublicKeyHash := Hash{Algorithm: alg, Value: replacementKeyDigest.Sum(nil)[:]}
+
+	return &DeviceCredential{
+		Version:       replacementOVH.Version,
+		DeviceInfo:    replacementOVH.DeviceInfo,
+		GUID:          replacementOVH.GUID,
+		RvInfo:        replacementOVH.RvInfo,
+		PublicKeyHash: replacementPublicKeyHash,
+	}, nil
+}
+
+// Stop any plugin device modules
+func stopPlugins(deviceModules map[string]serviceinfo.DeviceModule) {
+	pluginStopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var pluginStopWg sync.WaitGroup
+	for name, mod := range deviceModules {
+		if p, ok := mod.(plugin.Module); ok {
+			pluginStopWg.Add(1)
+			pluginGracefulStopCtx, done := context.WithCancel(pluginStopCtx)
+
+			// Allow Graceful stop up to the original shared timeout
+			go func(p plugin.Module) {
+				defer done()
+				if err := p.GracefulStop(pluginGracefulStopCtx); err != nil && !errors.Is(err, context.Canceled) { //nolint:revive,staticcheck
+					slog.Warn("graceful stop failed", "module", name, "error", err)
+				}
+			}(p)
+
+			// Force stop after the shared timeout expires or graceful stop
+			// completes
+			go func(p plugin.Module) {
+				<-pluginGracefulStopCtx.Done()
+				_ = p.Stop()
+				pluginStopWg.Done()
+			}(p)
+		}
+	}
+	pluginStopWg.Wait()
 }
 
 // Verify owner by sending HelloDevice and validating the response, as well as
 // all ownership voucher entries, which are retrieved iteratively with
 // subsequence requests.
-func (c *Client) verifyOwner(ctx context.Context, baseURL string, to1d *cose.Sign1[To1d, []byte]) (Nonce, *VoucherHeader, kex.Session, error) {
+func verifyOwner(ctx context.Context, transport Transport, to1d *cose.Sign1[To1d, []byte], c *TO2Config) (Nonce, *VoucherHeader, kex.Session, error) {
 	// Construct ownership voucher from parts received from the owner service
-	proveDeviceNonce, info, session, err := c.helloDevice(ctx, baseURL)
+	proveDeviceNonce, info, session, err := sendHelloDevice(ctx, transport, c)
 	if err != nil {
 		return Nonce{}, nil, nil, err
 	}
 	var entries []cose.Sign1Tag[VoucherEntryPayload, []byte]
 	for i := 0; i < info.NumVoucherEntries; i++ {
-		entry, err := c.nextOVEntry(ctx, baseURL, i)
+		entry, err := sendNextOVEntry(ctx, transport, i)
 		if err != nil {
 			return Nonce{}, nil, nil, err
 		}
@@ -76,7 +267,7 @@ func (c *Client) verifyOwner(ctx context.Context, baseURL string, to1d *cose.Sig
 	}
 
 	// Verify ownership voucher header
-	if err := ov.VerifyHeader(c.Hmac); err != nil {
+	if err := ov.VerifyHeader(c.HmacSha256, c.HmacSha384); err != nil {
 		captureErr(ctx, invalidMessageErrCode, "")
 		return Nonce{}, nil, nil, fmt.Errorf("bad ownership voucher header from TO2.ProveOVHdr: %w", err)
 	}
@@ -145,10 +336,17 @@ type helloDeviceMsg struct {
 	SigInfoA             sigInfo
 }
 
+type ovhValidationContext struct {
+	OVH                 VoucherHeader
+	OVHHmac             Hmac
+	NumVoucherEntries   int
+	PublicKeyToValidate crypto.PublicKey
+}
+
 // HelloDevice(60) -> ProveOVHdr(61)
 //
 //nolint:gocyclo // This is very complex validation that is better understood linearly
-func (c *Client) helloDevice(ctx context.Context, baseURL string) (Nonce, *ovhValidationContext, kex.Session, error) {
+func sendHelloDevice(ctx context.Context, transport Transport, c *TO2Config) (Nonce, *ovhValidationContext, kex.Session, error) {
 	// Generate a new nonce
 	var proveOVNonce Nonce
 	if _, err := rand.Read(proveOVNonce[:]); err != nil {
@@ -172,7 +370,7 @@ func (c *Client) helloDevice(ctx context.Context, baseURL string) (Nonce, *ovhVa
 	}
 
 	// Make a request
-	typ, resp, err := c.Transport.Send(ctx, baseURL, to2HelloDeviceMsgType, hello, nil)
+	typ, resp, err := transport.Send(ctx, to2HelloDeviceMsgType, hello, nil)
 	if err != nil {
 		return Nonce{}, nil, nil, err
 	}
@@ -421,7 +619,7 @@ func (s *TO2Server) ownerKey(keyType KeyType, keyEncoding KeyEncoding) (crypto.S
 }
 
 // GetOVNextEntry(62) -> OVNextEntry(63)
-func (c *Client) nextOVEntry(ctx context.Context, baseURL string, i int) (*cose.Sign1Tag[VoucherEntryPayload, []byte], error) {
+func sendNextOVEntry(ctx context.Context, transport Transport, i int) (*cose.Sign1Tag[VoucherEntryPayload, []byte], error) {
 	// Define request structure
 	msg := struct {
 		OVEntryNum int
@@ -430,7 +628,7 @@ func (c *Client) nextOVEntry(ctx context.Context, baseURL string, i int) (*cose.
 	}
 
 	// Make request
-	typ, resp, err := c.Transport.Send(ctx, baseURL, to2GetOVNextEntryMsgType, msg, nil)
+	typ, resp, err := transport.Send(ctx, to2GetOVNextEntryMsgType, msg, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error sending TO2.GetOVNextEntry: %w", err)
 	}
@@ -499,7 +697,7 @@ func (s *TO2Server) ovNextEntry(ctx context.Context, msg io.Reader) (*ovEntry, e
 }
 
 // ProveDevice(64) -> SetupDevice(65)
-func (c *Client) proveDevice(ctx context.Context, baseURL string, proveDeviceNonce Nonce, session kex.Session) (Nonce, *VoucherHeader, error) {
+func proveDevice(ctx context.Context, transport Transport, proveDeviceNonce Nonce, session kex.Session, c *TO2Config) (Nonce, *VoucherHeader, error) {
 	// Generate a new nonce
 	var setupDeviceNonce Nonce
 	if _, err := rand.Read(setupDeviceNonce[:]); err != nil {
@@ -533,7 +731,7 @@ func (c *Client) proveDevice(ctx context.Context, baseURL string, proveDeviceNon
 	msg := token.Tag()
 
 	// Make request
-	typ, resp, err := c.Transport.Send(ctx, baseURL, to2ProveDeviceMsgType, msg, kex.DecryptOnly{Session: session})
+	typ, resp, err := transport.Send(ctx, to2ProveDeviceMsgType, msg, kex.DecryptOnly{Session: session})
 	if err != nil {
 		return Nonce{}, nil, fmt.Errorf("error sending TO2.ProveDevice: %w", err)
 	}
@@ -714,17 +912,18 @@ type deviceServiceInfoReady struct {
 }
 
 // DeviceServiceInfoReady(66) -> OwnerServiceInfoReady(67)
-func (c *Client) readyServiceInfo(ctx context.Context, baseURL string, alg HashAlg, replacementOVH *VoucherHeader, session kex.Session) (maxDeviceServiceInfoSiz uint16, err error) {
+func sendReadyServiceInfo(ctx context.Context, transport Transport, alg HashAlg, replacementOVH *VoucherHeader, sess kex.Session, c *TO2Config) (maxDeviceServiceInfoSiz uint16, err error) {
 	// Calculate the new OVH HMac similar to DI.SetHMAC
+	var h hash.Hash
 	switch alg {
 	case Sha256Hash, HmacSha256Hash:
-		alg = HmacSha256Hash
+		h = c.HmacSha256
 	case Sha384Hash, HmacSha384Hash:
-		alg = HmacSha384Hash
+		h = c.HmacSha384
 	default:
 		panic("only SHA256 and SHA384 are supported in FDO")
 	}
-	replacementHmac, err := hmacHash(c.Hmac, alg, replacementOVH)
+	replacementHmac, err := hmacHash(h, replacementOVH)
 	if err != nil {
 		return 0, fmt.Errorf("error computing HMAC of ownership voucher header: %w", err)
 	}
@@ -736,7 +935,7 @@ func (c *Client) readyServiceInfo(ctx context.Context, baseURL string, alg HashA
 	}
 
 	// Make request
-	typ, resp, err := c.Transport.Send(ctx, baseURL, to2DeviceServiceInfoReadyMsgType, msg, session)
+	typ, resp, err := transport.Send(ctx, to2DeviceServiceInfoReadyMsgType, msg, sess)
 	if err != nil {
 		return 0, fmt.Errorf("error sending TO2.DeviceServiceInfoReady: %w", err)
 	}
@@ -837,7 +1036,7 @@ func (s *TO2Server) ownerServiceInfoReady(ctx context.Context, msg io.Reader) (*
 			ownerModules(func(moduleName string, mod serviceinfo.OwnerModule) bool {
 				if p, ok := mod.(plugin.Module); ok {
 					// Collect plugins before yielding the module
-					s.plugins = append(s.plugins, p)
+					s.plugins[moduleName] = p
 				}
 				return yield(moduleName, mod)
 			})
@@ -861,13 +1060,13 @@ type done2Msg struct {
 }
 
 // loop[DeviceServiceInfo(68) -> OwnerServiceInfo(69)]
-func (c *Client) exchangeServiceInfo(ctx context.Context,
-	baseURL string,
+func exchangeServiceInfo(ctx context.Context,
+	transport Transport,
 	proveDvNonce, setupDvNonce Nonce,
 	mtu uint16,
 	initInfo *serviceinfo.ChunkReader,
-	deviceModules map[string]serviceinfo.DeviceModule,
-	session kex.Session,
+	sess kex.Session,
+	c *TO2Config,
 ) error {
 	// Shadow context to ensure that any goroutines still running after this
 	// function exits will shutdown
@@ -877,7 +1076,6 @@ func (c *Client) exchangeServiceInfo(ctx context.Context,
 	// Subtract 3 bytes from MTU to account for a CBOR header indicating "array
 	// of 256-65535 items" and 2 more bytes for "array of two" plus the first
 	// item indicating "IsMoreServiceInfo"
-	// TODO: Should this only be 3?
 	mtu -= 5
 
 	// 1000 service info buffered in and out means up to ~1MB of data for
@@ -886,7 +1084,7 @@ func (c *Client) exchangeServiceInfo(ctx context.Context,
 	ownerInfo, ownerInfoIn := serviceinfo.NewChunkInPipe(1000)
 
 	// Send initial device info (devmod)
-	totalRounds, done, err := c.exchangeServiceInfoRound(ctx, baseURL, mtu, initInfo, ownerInfoIn, session)
+	totalRounds, done, err := exchangeServiceInfoRound(ctx, transport, mtu, initInfo, ownerInfoIn, sess)
 	_ = initInfo.Close()
 	if err != nil {
 		return fmt.Errorf("error sending devmod: %w", err)
@@ -898,11 +1096,11 @@ func (c *Client) exchangeServiceInfo(ctx context.Context,
 		return fmt.Errorf("exceeded 1e6 rounds of service info exchange")
 	}
 	if done {
-		return c.done(ctx, baseURL, proveDvNonce, setupDvNonce, session)
+		return sendDone(ctx, transport, proveDvNonce, setupDvNonce, sess)
 	}
 
 	// Track active modules
-	modules := deviceModuleMap{modules: deviceModules, active: make(map[string]bool)}
+	modules := deviceModuleMap{modules: c.DeviceModules, active: make(map[string]bool)}
 
 	var prevModuleName string
 	for {
@@ -930,7 +1128,7 @@ func (c *Client) exchangeServiceInfo(ctx context.Context,
 		// the owner service without it allowing the device to respond, the
 		// device will deadlock.
 		nextOwnerInfo, ownerInfoIn := serviceinfo.NewChunkInPipe(1000)
-		rounds, done, err := c.exchangeServiceInfoRound(ctx, baseURL, mtu, deviceInfo, ownerInfoIn, session)
+		rounds, done, err := exchangeServiceInfoRound(ctx, transport, mtu, deviceInfo, ownerInfoIn, sess)
 		if err != nil {
 			_ = ownerInfoIn.CloseWithError(err)
 			return err
@@ -964,18 +1162,18 @@ func (c *Client) exchangeServiceInfo(ctx context.Context,
 		}
 	}
 
-	return c.done(ctx, baseURL, proveDvNonce, setupDvNonce, session)
+	return sendDone(ctx, transport, proveDvNonce, setupDvNonce, sess)
 }
 
 // Done(70) -> Done2(71)
-func (c *Client) done(ctx context.Context, baseURL string, proveDvNonce, setupDvNonce Nonce, session kex.Session) error {
+func sendDone(ctx context.Context, transport Transport, proveDvNonce, setupDvNonce Nonce, sess kex.Session) error {
 	// Finalize TO2 by sending Done message
 	msg := doneMsg{
 		NonceTO2ProveDv: proveDvNonce,
 	}
 
 	// Make request
-	typ, resp, err := c.Transport.Send(ctx, baseURL, to2DoneMsgType, msg, session)
+	typ, resp, err := transport.Send(ctx, to2DoneMsgType, msg, sess)
 	if err != nil {
 		return fmt.Errorf("error sending TO2.Done: %w", err)
 	}
@@ -1035,8 +1233,8 @@ func (info ownerServiceInfo) String() string {
 //
 // TODO: Track current round number and stop at 1e6 rather than only checking
 // if exceeded after this recursive function completes.
-func (c *Client) exchangeServiceInfoRound(ctx context.Context, baseURL string, mtu uint16,
-	r *serviceinfo.ChunkReader, w *serviceinfo.ChunkWriter, session kex.Session,
+func exchangeServiceInfoRound(ctx context.Context, transport Transport, mtu uint16,
+	r *serviceinfo.ChunkReader, w *serviceinfo.ChunkWriter, sess kex.Session,
 ) (int, bool, error) {
 	// Create DeviceServiceInfo request structure
 	var msg deviceServiceInfo
@@ -1061,7 +1259,7 @@ func (c *Client) exchangeServiceInfoRound(ctx context.Context, baseURL string, m
 	}
 
 	// Send request
-	ownerServiceInfo, err := c.deviceServiceInfo(ctx, baseURL, msg, session)
+	ownerServiceInfo, err := sendDeviceServiceInfo(ctx, transport, msg, sess)
 	if err != nil {
 		return 0, false, err
 	}
@@ -1076,7 +1274,7 @@ func (c *Client) exchangeServiceInfoRound(ctx context.Context, baseURL string, m
 	// Recurse when there's more service info to send from device or receive
 	// from owner without allowing the other side to respond
 	if msg.IsMoreServiceInfo || ownerServiceInfo.IsMoreServiceInfo {
-		rounds, done, err := c.exchangeServiceInfoRound(ctx, baseURL, mtu, r, w, session)
+		rounds, done, err := exchangeServiceInfoRound(ctx, transport, mtu, r, w, sess)
 		return rounds + 1, done, err
 	}
 
@@ -1084,9 +1282,9 @@ func (c *Client) exchangeServiceInfoRound(ctx context.Context, baseURL string, m
 }
 
 // DeviceServiceInfo(68) -> OwnerServiceInfo(69)
-func (c *Client) deviceServiceInfo(ctx context.Context, baseURL string, msg deviceServiceInfo, session kex.Session) (*ownerServiceInfo, error) {
+func sendDeviceServiceInfo(ctx context.Context, transport Transport, msg deviceServiceInfo, sess kex.Session) (*ownerServiceInfo, error) {
 	// Make request
-	typ, resp, err := c.Transport.Send(ctx, baseURL, to2DeviceServiceInfoMsgType, msg, session)
+	typ, resp, err := transport.Send(ctx, to2DeviceServiceInfoMsgType, msg, sess)
 	if err != nil {
 		return nil, fmt.Errorf("error sending TO2.DeviceServiceInfo: %w", err)
 	}

@@ -66,10 +66,5 @@ func (p *Producer) WriteChunk(messageName string, messageBody []byte) error {
 	return nil
 }
 
-// AutoChunk writes one or more service info. When the MTU is exceeded...
-// TODO: How to queue unsent service info chunks? What about non-affinity?
-//
-// func (p *Producer) AutoChunk(messageName string) io.Writer
-
 // ServiceInfo returns all ServiceInfo, guaranteed to fit within the MTU.
 func (p *Producer) ServiceInfo() []*KV { return p.info }

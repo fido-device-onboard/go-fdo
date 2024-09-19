@@ -4,6 +4,7 @@
 package fdo
 
 import (
+	"context"
 	"fmt"
 	"time"
 )
@@ -153,3 +154,35 @@ func (e ErrorMessage) String() string {
 
 // Error implements the standard error interface.
 func (e ErrorMessage) Error() string { return e.String() }
+
+func errorMsg(ctx context.Context, transport Transport, err error) {
+	// If no previous message, then exit, because the protocol hasn't started
+	errMsg := errMsgFromContext(ctx)
+	if errMsg.PrevMsgType == 0 {
+		return
+	}
+
+	// Default to error code 500, error message of err parameter, and timestamp
+	// of the current time
+	if errMsg.Code == 0 {
+		errMsg.Code = internalServerErrCode
+	}
+	if errMsg.ErrString == "" {
+		errMsg.ErrString = err.Error()
+	}
+	if errMsg.Timestamp == 0 {
+		errMsg.Timestamp = time.Now().Unix()
+	}
+
+	// Create a new context, because the previous one may have expired, thus
+	// causing the protocol failure
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Send error, but ignore the response, only making sure to close the
+	// reader if one is returned
+	_, rc, err := transport.Send(ctx, ErrorMsgType, errMsg, nil)
+	if err == nil && rc != nil {
+		_ = rc.Close()
+	}
+}

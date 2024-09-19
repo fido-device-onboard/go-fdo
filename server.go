@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"log/slog"
 	"time"
 
 	"github.com/fido-device-onboard/go-fdo/plugin"
@@ -186,7 +187,7 @@ type TO2Server struct {
 	// Server affinity state
 	nextModule func() (string, serviceinfo.OwnerModule, bool)
 	stop       func()
-	plugins    []plugin.Module
+	plugins    map[string]plugin.Module
 
 	// Optional configuration
 	MaxDeviceServiceInfoSize uint16
@@ -271,17 +272,15 @@ func (s *TO2Server) Respond(ctx context.Context, msgType uint8, msg io.Reader) (
 		// Start goroutines to gracefully/forcefully stop plugins. Stopping is
 		// given an absolute timeout not tied to the expiration of the request
 		// context.
-		//
-		// TODO: Make timeout configurable?
 		pluginStopCtx, _ := context.WithTimeout(context.Background(), 5*time.Second) //nolint:govet
-		for _, p := range s.plugins {
+		for name, p := range s.plugins {
 			pluginGracefulStopCtx, done := context.WithCancel(pluginStopCtx)
 
 			// Allow Graceful stop up to the original shared timeout
 			go func(p plugin.Module) {
 				defer done()
 				if err := p.GracefulStop(pluginGracefulStopCtx); err != nil && !errors.Is(err, context.Canceled) { //nolint:revive,staticcheck
-					// TODO: Write to error log
+					slog.Warn("graceful stop failed", "module", name, "error", err)
 				}
 			}(p)
 

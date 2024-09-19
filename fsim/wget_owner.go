@@ -16,8 +16,6 @@ import (
 // Implement owner service info module for
 // https://github.com/fido-alliance/fdo-sim/blob/main/fsim-repository/fdo.wget.md
 
-const fdoWgetModule = "fdo.wget"
-
 // WgetCommand implements the fdo.wget owner module.
 type WgetCommand struct {
 	// Name to download file as
@@ -43,24 +41,26 @@ var _ serviceinfo.OwnerModule = (*WgetCommand)(nil)
 func (w *WgetCommand) HandleInfo(ctx context.Context, messageName string, messageBody io.Reader) error {
 	switch messageName {
 	case "active":
-		// TODO: Check that active is true
-		var ignore bool
-		if err := cbor.NewDecoder(messageBody).Decode(&ignore); err != nil {
-			return fmt.Errorf("error decoding message %s:%s: %w", fdoWgetModule, messageName, err)
+		var deviceActive bool
+		if err := cbor.NewDecoder(messageBody).Decode(&deviceActive); err != nil {
+			return fmt.Errorf("error decoding message %s: %w", messageName, err)
+		}
+		if !deviceActive {
+			return fmt.Errorf("device service info module is not active")
 		}
 		return nil
 
 	case "error":
 		var msg string
 		if err := cbor.NewDecoder(messageBody).Decode(&msg); err != nil {
-			return fmt.Errorf("error decoding message %s:%s: %w", fdoWgetModule, messageName, err)
+			return fmt.Errorf("error decoding message %s: %w", messageName, err)
 		}
 		return fmt.Errorf("device reported error: %s", msg)
 
 	case "done":
 		var n int64
 		if err := cbor.NewDecoder(messageBody).Decode(&n); err != nil {
-			return fmt.Errorf("error decoding message %s:%s: %w", fdoWgetModule, messageName, err)
+			return fmt.Errorf("error decoding message %s: %w", messageName, err)
 		}
 		if w.Length > 0 && n != w.Length {
 			return fmt.Errorf("device downloaded %d bytes, expected %d bytes", n, w.Length)

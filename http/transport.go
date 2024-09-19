@@ -26,6 +26,10 @@ import (
 // Transport implements FDO message sending capabilities over HTTP. Send may be
 // used for sending one message and receiving one response message.
 type Transport struct {
+	// The http/https URL, potentially including a path prefix, but without
+	// /fdo/101/msg.
+	BaseURL string
+
 	// Client to use for HTTP requests. Nil indicates that the default client
 	// should be used.
 	Client *http.Client
@@ -51,7 +55,7 @@ var _ fdo.Transport = (*Transport)(nil)
 // Send sends a single message and receives a single response message.
 //
 //nolint:gocyclo
-func (t *Transport) Send(ctx context.Context, base string, msgType uint8, msg any, sess kex.Session) (respType uint8, _ io.ReadCloser, _ error) {
+func (t *Transport) Send(ctx context.Context, msgType uint8, msg any, sess kex.Session) (respType uint8, _ io.ReadCloser, _ error) {
 	// Initialize default values
 	if t.Client == nil {
 		t.Client = http.DefaultClient
@@ -74,7 +78,7 @@ func (t *Transport) Send(ctx context.Context, base string, msgType uint8, msg an
 	}
 
 	// Create request with URL and body
-	uri, err := url.JoinPath(base, "fdo/101/msg", strconv.Itoa(int(msgType)))
+	uri, err := url.JoinPath(t.BaseURL, "fdo/101/msg", strconv.Itoa(int(msgType)))
 	if err != nil {
 		return 0, nil, fmt.Errorf("error parsing base URL: %w", err)
 	}

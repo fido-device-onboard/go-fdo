@@ -8,6 +8,8 @@ package blob
 import (
 	"crypto"
 	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/sha512"
 	"fmt"
 	"hash"
 	"io"
@@ -22,7 +24,7 @@ type DeviceCredential struct {
 	fdo.DeviceCredential
 
 	// Secrets that would otherwise be stored inside a TPM or other enclave.
-	HmacSecret Hmac
+	HmacSecret []byte
 	PrivateKey Pkcs8Key
 }
 
@@ -53,12 +55,9 @@ func (dc DeviceCredential) String() string {
 	return s + "]"
 }
 
-var _ fdo.KeyedHasher = (*DeviceCredential)(nil)
-
-// NewHmac returns a key-based hash (Hmac) using the given hash function some
-// secret.
-func (dc *DeviceCredential) NewHmac(alg fdo.HashAlg) (hash.Hash, error) {
-	return hmac.New(alg.HashFunc().New, dc.HmacSecret), nil
+// HMACs returns hmac hashes for SHA256 and SHA384.
+func (dc *DeviceCredential) HMACs() (hmacSha256, hmacSha384 hash.Hash) {
+	return hmac.New(sha256.New, dc.HmacSecret), hmac.New(sha512.New384, dc.HmacSecret)
 }
 
 var _ crypto.Signer = (*DeviceCredential)(nil)

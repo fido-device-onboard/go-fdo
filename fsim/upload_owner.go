@@ -22,8 +22,6 @@ import (
 // Implement owner service info module for
 // https://github.com/fido-alliance/fdo-sim/blob/main/fsim-repository/fdo.upload.md
 
-const fdoUploadModule = "fdo.upload"
-
 // UploadRequest implements the fdo.upload owner module.
 type UploadRequest struct {
 	// Directory to place uploaded file
@@ -56,16 +54,18 @@ var _ serviceinfo.OwnerModule = (*UploadRequest)(nil)
 func (u *UploadRequest) HandleInfo(ctx context.Context, messageName string, messageBody io.Reader) error {
 	switch messageName {
 	case "active":
-		// TODO: Check that active is true
-		var ignore bool
-		if err := cbor.NewDecoder(messageBody).Decode(&ignore); err != nil {
-			return fmt.Errorf("error decoding message %s:%s: %w", fdoUploadModule, messageName, err)
+		var deviceActive bool
+		if err := cbor.NewDecoder(messageBody).Decode(&deviceActive); err != nil {
+			return fmt.Errorf("error decoding message %s: %w", messageName, err)
+		}
+		if !deviceActive {
+			return fmt.Errorf("device service info module is not active")
 		}
 		return nil
 
 	case "length":
 		if err := cbor.NewDecoder(messageBody).Decode(&u.length); err != nil {
-			return fmt.Errorf("error decoding message %s:%s: %w", fdoUploadModule, messageName, err)
+			return fmt.Errorf("error decoding message %s: %w", messageName, err)
 		}
 		return nil
 
@@ -89,7 +89,7 @@ func (u *UploadRequest) HandleInfo(ctx context.Context, messageName string, mess
 			if err := cbor.NewDecoder(messageBody).Decode(&chunk); errors.Is(err, io.EOF) {
 				break
 			} else if err != nil {
-				return fmt.Errorf("error decoding message %s:%s: %w", fdoUploadModule, messageName, err)
+				return fmt.Errorf("error decoding message %s: %w", messageName, err)
 			}
 			n, err := io.MultiWriter(u.temp, u.hash).Write(chunk)
 			if err != nil {
@@ -101,7 +101,7 @@ func (u *UploadRequest) HandleInfo(ctx context.Context, messageName string, mess
 
 	case "sha-384":
 		if err := cbor.NewDecoder(messageBody).Decode(&u.sha384); err != nil {
-			return fmt.Errorf("error decoding message %s:%s: %w", fdoUploadModule, messageName, err)
+			return fmt.Errorf("error decoding message %s: %w", messageName, err)
 		}
 		return nil
 

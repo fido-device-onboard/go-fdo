@@ -271,18 +271,17 @@ func registerRvBlob(host string, port uint16, state *sqlite.DB) error {
 		proto = fdo.HTTPSTransport
 	}
 
-	refresh, err := (&fdo.TO0Client{
-		Transport: tlsTransport(nil),
-		Addrs: []fdo.RvTO2Addr{
-			{
-				DNSAddress:        &host,
-				Port:              port,
-				TransportProtocol: proto,
-			},
+	to2Addrs := []fdo.RvTO2Addr{
+		{
+			DNSAddress:        &host,
+			Port:              port,
+			TransportProtocol: proto,
 		},
+	}
+	refresh, err := (&fdo.TO0Client{
 		Vouchers:  state,
 		OwnerKeys: state,
-	}).RegisterBlob(context.Background(), to0Addr, guid)
+	}).RegisterBlob(context.Background(), tlsTransport(to0Addr, nil), guid, to2Addrs)
 	if err != nil {
 		return fmt.Errorf("error performing to0: %w", err)
 	}

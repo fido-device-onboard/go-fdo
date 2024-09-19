@@ -57,5 +57,5 @@ func (p TransportProtocol) String() string {
 type Transport interface {
 	// Send a message and receive a response. The response reader should always
 	// be closed.
-	Send(ctx context.Context, baseURL string, msgType uint8, msg any, sess kex.Session) (respType uint8, _ io.ReadCloser, _ error)
+	Send(ctx context.Context, msgType uint8, msg any, sess kex.Session) (respType uint8, _ io.ReadCloser, _ error)
 }

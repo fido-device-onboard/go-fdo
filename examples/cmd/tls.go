@@ -15,7 +15,7 @@ import (
 
 var insecureTLS bool
 
-func tlsTransport(conf *tls.Config) fdo.Transport {
+func tlsTransport(baseURL string, conf *tls.Config) fdo.Transport {
 	if conf == nil {
 		conf = &tls.Config{
 			InsecureSkipVerify: insecureTLS, //nolint:gosec
@@ -23,6 +23,7 @@ func tlsTransport(conf *tls.Config) fdo.Transport {
 	}
 
 	return &http.Transport{
+		BaseURL: baseURL,
 		Client: &net_http.Client{Transport: &net_http.Transport{
 			Proxy: net_http.ProxyFromEnvironment,
 			DialContext: (&net.Dialer{

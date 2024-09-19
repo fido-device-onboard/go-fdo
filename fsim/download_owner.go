@@ -16,8 +16,6 @@ import (
 // Implement owner service info module for
 // https://github.com/fido-alliance/fdo-sim/blob/main/fsim-repository/fdo.download.md
 
-const fdoDownloadModule = "fdo.download"
-
 // DownloadContents implements an owner module for fdo.download using a seekable
 // reader, such as an [*os.File].
 type DownloadContents[T io.ReadSeeker] struct {
@@ -40,10 +38,12 @@ var _ serviceinfo.OwnerModule = (*DownloadContents[io.ReadSeekCloser])(nil)
 func (d *DownloadContents[T]) HandleInfo(ctx context.Context, messageName string, messageBody io.Reader) error {
 	switch messageName {
 	case "active":
-		// TODO: Check that active is true
-		var ignore bool
-		if err := cbor.NewDecoder(messageBody).Decode(&ignore); err != nil {
-			return fmt.Errorf("error decoding message %s:%s: %w", fdoDownloadModule, messageName, err)
+		var deviceActive bool
+		if err := cbor.NewDecoder(messageBody).Decode(&deviceActive); err != nil {
+			return fmt.Errorf("error decoding message %s: %w", messageName, err)
+		}
+		if !deviceActive {
+			return fmt.Errorf("device service info module is not active")
 		}
 		return nil
 
@@ -55,7 +55,7 @@ func (d *DownloadContents[T]) HandleInfo(ctx context.Context, messageName string
 		}()
 		var errCode int64
 		if err := cbor.NewDecoder(messageBody).Decode(&errCode); err != nil {
-			return fmt.Errorf("error decoding message %s:%s: %w", fdoDownloadModule, messageName, err)
+			return fmt.Errorf("error decoding message %s: %w", messageName, err)
 		}
 		if errCode == -1 && d.MustDownload {
 			return fmt.Errorf("device failed to download %q", d.Name)

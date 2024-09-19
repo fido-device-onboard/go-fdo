@@ -200,8 +200,8 @@ func (v *Voucher) OwnerPublicKey() (crypto.PublicKey, error) {
 
 // VerifyHeader checks that the OVHeader was not modified by comparing the HMAC
 // generated using the secret from the device credentials.
-func (v *Voucher) VerifyHeader(deviceCredential KeyedHasher) error {
-	return hmacVerify(deviceCredential, v.Hmac, &v.Header.Val)
+func (v *Voucher) VerifyHeader(hmacSha256, hmacSha384 hash.Hash) error {
+	return hmacVerify(hmacSha256, hmacSha384, v.Hmac, &v.Header.Val)
 }
 
 // VerifyDeviceCertChain using trusted roots. If roots is nil then the last

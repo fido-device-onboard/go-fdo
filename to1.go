@@ -6,7 +6,9 @@ package fdo
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"crypto/rand"
+	"crypto/rsa"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -48,26 +50,67 @@ func (a RvTO2Addr) String() string {
 	return fmt.Sprintf("%s://%s", a.TransportProtocol, addr)
 }
 
+// TO1Options contains optional configuration values.
+type TO1Options struct {
+	// When true and an RSA key is used as a crypto.Signer argument, RSA-SSAPSS
+	// will be used for signing.
+	PSS bool
+}
+
+// TO1 runs the TO1 protocol and returns the owner service (TO2) addresses. It
+// requires that a device credential, hmac secret, and key are all configured
+// on the client.
+func TO1(ctx context.Context, transport Transport, cred DeviceCredential, key crypto.Signer, opts *TO1Options) (*cose.Sign1[To1d, []byte], error) {
+	ctx = contextWithErrMsg(ctx)
+
+	var usePSS bool
+	if opts != nil {
+		usePSS = opts.PSS
+	}
+	signOpts, err := signOptsFor(key, usePSS)
+	if err != nil {
+		return nil, fmt.Errorf("error determining signing options: %w", err)
+	}
+
+	nonce, err := helloRv(ctx, transport, cred, key, signOpts)
+	if err != nil {
+		errorMsg(ctx, transport, err)
+		return nil, err
+	}
+
+	blob, err := proveToRv(ctx, transport, cred, nonce, key, signOpts)
+	if err != nil {
+		errorMsg(ctx, transport, err)
+		return nil, err
+	}
+
+	return blob, nil
+}
+
 type helloRV struct {
 	GUID     GUID
 	ASigInfo sigInfo
 }
 
 // HelloRV(30) -> HelloRVAck(31)
-func (c *Client) helloRv(ctx context.Context, baseURL string) (Nonce, error) {
-	eASigInfo, err := sigInfoFor(c.Key, c.PSS)
+func helloRv(ctx context.Context, transport Transport, cred DeviceCredential, key crypto.Signer, opts crypto.SignerOpts) (Nonce, error) {
+	var usePSS bool
+	if _, ok := opts.(*rsa.PSSOptions); ok {
+		usePSS = true
+	}
+	eASigInfo, err := sigInfoFor(key, usePSS)
 	if err != nil {
 		return Nonce{}, fmt.Errorf("error determining eASigInfo for TO1.HelloRV: %w", err)
 	}
 
 	// Define request structure
 	msg := helloRV{
-		GUID:     c.Cred.GUID,
+		GUID:     cred.GUID,
 		ASigInfo: *eASigInfo,
 	}
 
 	// Make request
-	typ, resp, err := c.Transport.Send(ctx, baseURL, to1HelloRVMsgType, msg, nil)
+	typ, resp, err := transport.Send(ctx, to1HelloRVMsgType, msg, nil)
 	if err != nil {
 		return Nonce{}, fmt.Errorf("error sending TO1.HelloRV: %w", err)
 	}
@@ -152,22 +195,18 @@ func (to1d To1d) String() string {
 }
 
 // ProveToRV(32) -> RVRedirect(33)
-func (c *Client) proveToRv(ctx context.Context, baseURL string, nonce Nonce) (*cose.Sign1[To1d, []byte], error) {
+func proveToRv(ctx context.Context, transport Transport, cred DeviceCredential, nonce Nonce, key crypto.Signer, opts crypto.SignerOpts) (*cose.Sign1[To1d, []byte], error) {
 	// Define request structure
 	token := cose.Sign1[eatoken, []byte]{
-		Payload: cbor.NewByteWrap(newEAT(c.Cred.GUID, nonce, nil, nil)),
+		Payload: cbor.NewByteWrap(newEAT(cred.GUID, nonce, nil, nil)),
 	}
-	opts, err := signOptsFor(c.Key, c.PSS)
-	if err != nil {
-		return nil, fmt.Errorf("error determining signing options for TO1.ProveToRV: %w", err)
-	}
-	if err := token.Sign(c.Key, nil, nil, opts); err != nil {
+	if err := token.Sign(key, nil, nil, opts); err != nil {
 		return nil, fmt.Errorf("error signing EAT payload for TO1.ProveToRV: %w", err)
 	}
 	msg := token.Tag()
 
 	// Make request
-	typ, resp, err := c.Transport.Send(ctx, baseURL, to1ProveToRVMsgType, msg, nil)
+	typ, resp, err := transport.Send(ctx, to1ProveToRVMsgType, msg, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error sending TO1.ProveToRV: %w", err)
 	}

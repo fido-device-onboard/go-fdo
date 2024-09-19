@@ -135,7 +135,7 @@ func TestVerifyUnextendedVoucher(t *testing.T) {
 
 	cred := readCredential(t)
 
-	if err := ov.VerifyHeader(cred); err != nil {
+	if err := ov.VerifyHeader(cred.HMACs()); err != nil {
 		t.Errorf("error verifying voucher header: %v", err)
 	}
 

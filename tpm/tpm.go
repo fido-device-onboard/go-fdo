@@ -6,10 +6,6 @@
 package tpm
 
 import (
-	"crypto"
-	"hash"
-	"io"
-
 	"github.com/fido-device-onboard/go-fdo"
 )
 
@@ -37,25 +33,3 @@ type DeviceCredential struct {
 	// Path to the TPM resource manager
 	TpmRmPath string `cbor:"-"`
 }
-
-var _ fdo.KeyedHasher = (*DeviceCredential)(nil)
-
-// NewHmac returns a key-based hash (Hmac) using the given hash function some
-// secret.
-func (dc *DeviceCredential) NewHmac(alg fdo.HashAlg) (hash.Hash, error) {
-	panic("unimplemented")
-}
-
-var _ crypto.Signer = (*DeviceCredential)(nil)
-
-// Public returns the corresponding public key.
-func (dc *DeviceCredential) Public() crypto.PublicKey {
-	panic("unimplemented")
-}
-
-// Sign signs digest with the private key.
-func (dc *DeviceCredential) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
-	panic("unimplemented")
-}
-
-// TODO: Helper methods for loading/storing to TPM

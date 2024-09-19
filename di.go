@@ -11,6 +11,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"fmt"
+	"hash"
 	"io"
 	"time"
 
@@ -58,8 +59,109 @@ type DeviceMfgInfo struct {
 	// TestSigMAROEPrefix []byte // deprecated
 }
 
+// DIConfig contains required device secrets and optional configuration.
+type DIConfig struct {
+	// HMAC-SHA256 with a device secret that does not change when ownership is
+	// transferred. HMAC-SHA256 support is always required by spec, so this
+	// field must be non-nil.
+	//
+	// This hash.Hash may optionally implement the following interface to
+	// return errors from Reset/Write/Sum, noting that implementations of
+	// hash.Hash are not supposed to return non-nil errors from Write.
+	//
+	// 	type FallibleHash interface {
+	// 		Error() error
+	// 	}
+	HmacSha256 hash.Hash
+
+	// HMAC-SHA384 with a device secret that does not change when ownership is
+	// transferred. HMAC-SHA384 support is optional by spec, so this field may
+	// be nil iff Key is RSA 2048 or EC P-256.
+	//
+	// This hash.Hash may optionally implement the following interface to
+	// return errors from Reset/Write/Sum, noting that implementations of
+	// hash.Hash are not supposed to return non-nil errors from Write.
+	//
+	// 	type FallibleHash interface {
+	// 		Error() error
+	// 	}
+	HmacSha384 hash.Hash
+
+	// An ECDSA or RSA private key
+	Key crypto.Signer
+
+	// When true and an RSA key is used as a crypto.Signer argument, RSA-SSAPSS
+	// will be used for signing
+	PSS bool
+}
+
+// DI runs the DI protocol and returns the voucher header and manufacturer
+// public key hash. It requires that the client is configured with an HMAC
+// secret, but not necessarily a key.
+//
+// The device is identified to the manufacturing component by the ID string,
+// which may be a device serial, MAC address, or similar. There is generally an
+// expectation of network trust for DI.
+//
+// The device certificate chain should be created before DI is performed,
+// because the manufacturing component signs the ownership voucher, but isn't
+// necessarily the root of trust for the device's identity and may or may not
+// validate the device's presented certificate chain.
+//
+// However, the [Java server] implementation expects a certificate signing
+// request marshaled in the device info and performs certificate signing, so
+// PKI and voucher signing duties may be simultaneously handled by the
+// manufacturing component.
+//
+// [Java server]: https://github.com/fido-device-onboard/pri-fidoiot
+func DI(ctx context.Context, transport Transport, info any, c DIConfig) (*DeviceCredential, error) {
+	ctx = contextWithErrMsg(ctx)
+
+	ovh, err := appStart(ctx, transport, info)
+	if err != nil {
+		errorMsg(ctx, transport, err)
+		return nil, err
+	}
+
+	// Select the appropriate hash algorithm
+	ownerPubKey, _ := ovh.ManufacturerKey.Public()
+	alg, err := hashAlgFor(c.Key.Public(), ownerPubKey)
+	if err != nil {
+		return nil, fmt.Errorf("error selecting the appropriate hash algorithm: %w", err)
+	}
+
+	// Hash initial owner public key
+	ownerKeyDigest := alg.HashFunc().New()
+	if err := cbor.NewEncoder(ownerKeyDigest).Encode(ovh.ManufacturerKey); err != nil {
+		err = fmt.Errorf("error computing hash of initial owner (manufacturer) key: %w", err)
+		errorMsg(ctx, transport, err)
+		return nil, err
+	}
+	ownerKeyHash := Hash{Algorithm: alg, Value: ownerKeyDigest.Sum(nil)[:]}
+
+	var hmac hash.Hash
+	switch alg {
+	case Sha256Hash:
+		hmac = c.HmacSha256
+	case Sha384Hash:
+		hmac = c.HmacSha384
+	}
+	if err := setHmac(ctx, transport, hmac, ovh); err != nil {
+		errorMsg(ctx, transport, err)
+		return nil, err
+	}
+
+	return &DeviceCredential{
+		Version:       ovh.Version,
+		DeviceInfo:    ovh.DeviceInfo,
+		GUID:          ovh.GUID,
+		RvInfo:        ovh.RvInfo,
+		PublicKeyHash: ownerKeyHash,
+	}, nil
+}
+
 // AppStart(10) -> SetCredentials(11)
-func (c *Client) appStart(ctx context.Context, baseURL string, info any) (*VoucherHeader, error) {
+func appStart(ctx context.Context, transport Transport, info any) (*VoucherHeader, error) {
 	// Define request structure
 	var msg struct {
 		DeviceMfgInfo *cbor.Bstr[any]
@@ -69,7 +171,7 @@ func (c *Client) appStart(ctx context.Context, baseURL string, info any) (*Vouch
 	}
 
 	// Make request
-	typ, resp, err := c.Transport.Send(ctx, baseURL, diAppStartMsgType, msg, nil)
+	typ, resp, err := transport.Send(ctx, diAppStartMsgType, msg, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error sending DI.AppStart: %w", err)
 	}
@@ -209,22 +311,9 @@ func encodePublicKey(keyType KeyType, keyEncoding KeyEncoding, chain []*x509.Cer
 }
 
 // SetHMAC(12) -> Done(13)
-func (c *Client) setHmac(ctx context.Context, baseURL string, ovh *VoucherHeader) (err error) {
+func setHmac(ctx context.Context, transport Transport, hmac hash.Hash, ovh *VoucherHeader) (err error) {
 	// Compute HMAC
-	ownerPubKey, _ := ovh.ManufacturerKey.Public()
-	alg, err := hashAlgFor(c.Key.Public(), ownerPubKey)
-	if err != nil {
-		return fmt.Errorf("error selecting the appropriate hash algorithm: %w", err)
-	}
-	switch alg {
-	case Sha256Hash:
-		alg = HmacSha256Hash
-	case Sha384Hash:
-		alg = HmacSha384Hash
-	default:
-		panic("only SHA256 and SHA384 are supported in FDO")
-	}
-	ovhHash, err := hmacHash(c.Hmac, alg, ovh)
+	ovhHash, err := hmacHash(hmac, ovh)
 	if err != nil {
 		return fmt.Errorf("error computing HMAC of ownership voucher header: %w", err)
 	}
@@ -236,7 +325,7 @@ func (c *Client) setHmac(ctx context.Context, baseURL string, ovh *VoucherHeader
 	msg.Hmac = ovhHash
 
 	// Make request
-	typ, resp, err := c.Transport.Send(ctx, baseURL, diSetHmacMsgType, msg, nil)
+	typ, resp, err := transport.Send(ctx, diSetHmacMsgType, msg, nil)
 	if err != nil {
 		return fmt.Errorf("error sending DI.SetHMAC: %w", err)
 	}

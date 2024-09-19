@@ -8,8 +8,11 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/sha512"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
@@ -151,34 +154,10 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 		},
 		T: t,
 	}
-	dnsAddr := "owner.fidoalliance.org"
 
 	to0 := &fdo.TO0Client{
-		Transport: transport,
-		Addrs: []fdo.RvTO2Addr{
-			{
-				DNSAddress:        &dnsAddr,
-				Port:              8080,
-				TransportProtocol: fdo.HTTPTransport,
-			},
-		},
 		Vouchers:  state,
 		OwnerKeys: state,
-	}
-
-	cli := &fdo.Client{
-		Transport: transport,
-		Cred:      fdo.DeviceCredential{Version: 101},
-		Devmod: fdo.Devmod{
-			Os:      runtime.GOOS,
-			Arch:    runtime.GOARCH,
-			Version: "Debian Bookworm",
-			Device:  "go-validation",
-			FileSep: ";",
-			Bin:     runtime.GOARCH,
-		},
-		KeyExchange: kex.ECDH256Suite,
-		CipherSuite: kex.A128GcmCipher,
 	}
 
 	for _, table := range []struct {
@@ -213,50 +192,49 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 		transport.DIResponder.DeviceInfo = func(context.Context, *fdo.DeviceMfgInfo, []*x509.Certificate) (string, fdo.KeyType, fdo.KeyEncoding, error) {
 			return "test_device", table.keyType, table.keyEncoding, nil
 		}
+		secret := make([]byte, 32)
+		if _, err := rand.Read(secret); err != nil {
+			t.Fatalf("error generating device secret: %v", err)
+		}
+
 		t.Run("Key "+table.keyType.String()+" "+table.keyEncoding.String(), func(t *testing.T) {
+			var key crypto.Signer
+			switch table.keyType {
+			case fdo.Secp256r1KeyType:
+				var err error
+				key, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+				if err != nil {
+					t.Fatalf("error generating device key: %v", err)
+				}
+
+			case fdo.Secp384r1KeyType:
+				var err error
+				key, err = ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+				if err != nil {
+					t.Fatalf("error generating device key: %v", err)
+				}
+
+			case fdo.RsaPkcsKeyType:
+				var err error
+				key, err = rsa.GenerateKey(rand.Reader, 2048)
+				if err != nil {
+					t.Fatalf("error generating device key: %v", err)
+				}
+
+			case fdo.RsaPssKeyType:
+				var err error
+				key, err = rsa.GenerateKey(rand.Reader, 3072)
+				if err != nil {
+					t.Fatalf("error generating device key: %v", err)
+				}
+
+			default:
+				panic("unsupported key type " + table.keyType.String())
+			}
+
+			var cred *fdo.DeviceCredential
+
 			t.Run("Device Initialization", func(t *testing.T) {
-				secret := make([]byte, 32)
-				if _, err := rand.Read(secret); err != nil {
-					t.Fatalf("error generating device secret: %v", err)
-				}
-				cli.Hmac = blob.Hmac(secret)
-
-				var key crypto.Signer
-				switch table.keyType {
-				case fdo.Secp256r1KeyType:
-					var err error
-					key, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-					if err != nil {
-						t.Fatalf("error generating device key: %v", err)
-					}
-
-				case fdo.Secp384r1KeyType:
-					var err error
-					key, err = ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
-					if err != nil {
-						t.Fatalf("error generating device key: %v", err)
-					}
-
-				case fdo.RsaPkcsKeyType:
-					var err error
-					key, err = rsa.GenerateKey(rand.Reader, 2048)
-					if err != nil {
-						t.Fatalf("error generating device key: %v", err)
-					}
-
-				case fdo.RsaPssKeyType:
-					var err error
-					key, err = rsa.GenerateKey(rand.Reader, 3072)
-					if err != nil {
-						t.Fatalf("error generating device key: %v", err)
-					}
-					cli.PSS = true
-
-				default:
-					panic("unsupported key type " + table.keyType.String())
-				}
-				cli.Key = key
-
 				// Generate Java implementation-compatible mfg string
 				csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
 					Subject: pkix.Name{CommonName: "device.go-fdo"},
@@ -274,33 +252,46 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 				if _, err := rand.Read(serial); err != nil {
 					t.Fatalf("error generating serial: %v", err)
 				}
-				cred, err := cli.DeviceInitialize(context.TODO(), "", fdo.DeviceMfgInfo{
+				cred, err = fdo.DI(context.TODO(), transport, fdo.DeviceMfgInfo{
 					KeyType:      table.keyType,
 					KeyEncoding:  table.keyEncoding,
 					SerialNumber: hex.EncodeToString(serial),
 					DeviceInfo:   "gotest",
 					CertInfo:     cbor.X509CertificateRequest(*csr),
+				}, fdo.DIConfig{
+					HmacSha256: hmac.New(sha256.New, secret),
+					HmacSha384: hmac.New(sha512.New384, secret),
+					Key:        key,
+					PSS:        table.keyType == fdo.RsaPssKeyType,
 				})
 				if err != nil {
 					t.Fatal(err)
 				}
-				cli.Cred = *cred
 
 				t.Logf("Credential: %s", blob.DeviceCredential{
 					Active:           true,
 					DeviceCredential: *cred,
-					HmacSecret:       []byte(cli.Hmac.(blob.Hmac)),
-					PrivateKey:       blob.Pkcs8Key{PrivateKey: cli.Key},
+					HmacSecret:       secret,
+					PrivateKey:       blob.Pkcs8Key{PrivateKey: key},
 				})
 			})
 
 			t.Run("Transfer Ownership 0", func(t *testing.T) {
 				ctx, cancel := context.WithTimeout(context.Background(), timeout)
 				defer cancel()
-				if _, err := cli.TransferOwnership1(ctx, ""); !strings.HasSuffix(err.Error(), fdo.ErrNotFound.Error()) {
+				if _, err := fdo.TO1(ctx, transport, *cred, key, &fdo.TO1Options{
+					PSS: table.keyType == fdo.RsaPssKeyType,
+				}); !strings.HasSuffix(err.Error(), fdo.ErrNotFound.Error()) {
 					t.Fatalf("expected TO1 to fail with no resource found, got %v", err)
 				}
-				ttl, err := to0.RegisterBlob(ctx, "", cli.Cred.GUID)
+				dnsAddr := "owner.fidoalliance.org"
+				ttl, err := to0.RegisterBlob(ctx, transport, cred.GUID, []fdo.RvTO2Addr{
+					{
+						DNSAddress:        &dnsAddr,
+						Port:              8080,
+						TransportProtocol: fdo.HTTPTransport,
+					},
+				})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -310,45 +301,95 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 			t.Run("Transfer Ownership 1 and Transfer Ownership 2", func(t *testing.T) {
 				ctx, cancel := context.WithTimeout(context.Background(), timeout)
 				defer cancel()
-				to1d, err := cli.TransferOwnership1(ctx, "")
+				to1d, err := fdo.TO1(ctx, transport, *cred, key, &fdo.TO1Options{
+					PSS: table.keyType == fdo.RsaPssKeyType,
+				})
 				if err != nil {
 					t.Fatal(err)
 				}
 				t.Logf("RV Blob: %+v", to1d)
 
-				newCred, err := cli.TransferOwnership2(ctx, "", to1d, nil)
+				cred, err = fdo.TO2(ctx, transport, to1d, fdo.TO2Config{
+					Cred:       *cred,
+					HmacSha256: hmac.New(sha256.New, secret),
+					HmacSha384: hmac.New(sha512.New384, secret),
+					Key:        key,
+					PSS:        table.keyType == fdo.RsaPssKeyType,
+					Devmod: fdo.Devmod{
+						Os:      runtime.GOOS,
+						Arch:    runtime.GOARCH,
+						Version: "Debian Bookworm",
+						Device:  "go-validation",
+						FileSep: ";",
+						Bin:     runtime.GOARCH,
+					},
+					KeyExchange: kex.ECDH256Suite,
+					CipherSuite: kex.A128GcmCipher,
+				})
 				if err != nil {
 					t.Fatal(err)
 				}
 				t.Logf("New credential: %s", blob.DeviceCredential{
 					Active:           true,
-					DeviceCredential: *newCred,
-					HmacSecret:       []byte(cli.Hmac.(blob.Hmac)),
-					PrivateKey:       blob.Pkcs8Key{PrivateKey: cli.Key},
+					DeviceCredential: *cred,
+					HmacSecret:       secret,
+					PrivateKey:       blob.Pkcs8Key{PrivateKey: key},
 				})
-				cli.Cred = *newCred
 			})
 
 			t.Run("Transfer Ownership 2 Only", func(t *testing.T) {
 				ctx, cancel := context.WithTimeout(context.Background(), timeout)
 				defer cancel()
-				newCred, err := cli.TransferOwnership2(ctx, "", nil, nil)
+				var err error
+				cred, err = fdo.TO2(ctx, transport, nil, fdo.TO2Config{
+					Cred:       *cred,
+					HmacSha256: hmac.New(sha256.New, secret),
+					HmacSha384: hmac.New(sha512.New384, secret),
+					Key:        key,
+					PSS:        table.keyType == fdo.RsaPssKeyType,
+					Devmod: fdo.Devmod{
+						Os:      runtime.GOOS,
+						Arch:    runtime.GOARCH,
+						Version: "Debian Bookworm",
+						Device:  "go-validation",
+						FileSep: ";",
+						Bin:     runtime.GOARCH,
+					},
+					KeyExchange: kex.ECDH256Suite,
+					CipherSuite: kex.A128GcmCipher,
+				})
 				if err != nil {
 					t.Fatal(err)
 				}
 				t.Logf("New credential: %s", blob.DeviceCredential{
 					Active:           true,
-					DeviceCredential: *newCred,
-					HmacSecret:       []byte(cli.Hmac.(blob.Hmac)),
-					PrivateKey:       blob.Pkcs8Key{PrivateKey: cli.Key},
+					DeviceCredential: *cred,
+					HmacSecret:       secret,
+					PrivateKey:       blob.Pkcs8Key{PrivateKey: key},
 				})
-				cli.Cred = *newCred
 			})
 
 			t.Run("Transfer Ownership 2 w/ Modules", func(t *testing.T) {
 				ctx, cancel := context.WithTimeout(context.Background(), timeout)
 				defer cancel()
-				newCred, err := cli.TransferOwnership2(ctx, "", nil, deviceModules)
+				newCred, err := fdo.TO2(ctx, transport, nil, fdo.TO2Config{
+					Cred:       *cred,
+					HmacSha256: hmac.New(sha256.New, secret),
+					HmacSha384: hmac.New(sha512.New384, secret),
+					Key:        key,
+					PSS:        table.keyType == fdo.RsaPssKeyType,
+					Devmod: fdo.Devmod{
+						Os:      runtime.GOOS,
+						Arch:    runtime.GOARCH,
+						Version: "Debian Bookworm",
+						Device:  "go-validation",
+						FileSep: ";",
+						Bin:     runtime.GOARCH,
+					},
+					DeviceModules: deviceModules,
+					KeyExchange:   kex.ECDH256Suite,
+					CipherSuite:   kex.A128GcmCipher,
+				})
 				if customExpect != nil {
 					customExpect(t, err)
 					if err != nil {
@@ -360,10 +401,10 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 				t.Logf("New credential: %s", blob.DeviceCredential{
 					Active:           true,
 					DeviceCredential: *newCred,
-					HmacSecret:       []byte(cli.Hmac.(blob.Hmac)),
-					PrivateKey:       blob.Pkcs8Key{PrivateKey: cli.Key},
+					HmacSecret:       secret,
+					PrivateKey:       blob.Pkcs8Key{PrivateKey: key},
 				})
-				cli.Cred = *newCred
+				cred = newCred
 			})
 		})
 	}

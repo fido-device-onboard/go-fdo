@@ -64,10 +64,12 @@ func (c *RunCommand) HandleInfo(ctx context.Context, messageName string, message
 func (c *RunCommand) handleInfo(ctx context.Context, messageName string, messageBody io.Reader) error { //nolint:gocyclo // Message dispatch is best understood as a large switch stmt
 	switch messageName {
 	case "active":
-		// TODO: Check that active is true
-		var ignore bool
-		if err := cbor.NewDecoder(messageBody).Decode(&ignore); err != nil {
-			return fmt.Errorf("error decoding message %q: %w", messageName, err)
+		var deviceActive bool
+		if err := cbor.NewDecoder(messageBody).Decode(&deviceActive); err != nil {
+			return fmt.Errorf("error decoding message %s: %w", messageName, err)
+		}
+		if !deviceActive {
+			return fmt.Errorf("device service info module is not active")
 		}
 		return nil
 

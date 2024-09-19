@@ -6,6 +6,8 @@ package fdo
 import (
 	"crypto"
 	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/sha512"
 	"fmt"
 	"hash"
 
@@ -73,40 +75,67 @@ func (alg HashAlg) HashFunc() crypto.Hash {
 	panic("HashAlg missing switch case(s)")
 }
 
-// KeyedHasher implements HMAC functionality
-type KeyedHasher interface {
-	// NewHmac returns a key-based hash (Hmac) using the given hash function
-	// some secret.
-	NewHmac(HashAlg) (hash.Hash, error)
+type fallibleHash interface {
+	Err() error
 }
 
 // Compute an hmac.
-func hmacHash(dc KeyedHasher, alg HashAlg, v any) (Hmac, error) {
-	mac, err := dc.NewHmac(alg)
-	if err != nil {
-		return Hmac{}, fmt.Errorf("error starting new hmac: %w", err)
+func hmacHash(h hash.Hash, v any) (Hmac, error) {
+	var hmac Hmac
+	switch size := h.Size(); size {
+	case sha256.Size:
+		hmac.Algorithm = HmacSha256Hash
+		if h == nil {
+			panic("HMAC-SHA256 support is required")
+		}
+	case sha512.Size384:
+		hmac.Algorithm = HmacSha384Hash
+		if h == nil {
+			return Hmac{}, fmt.Errorf("unsupported hash algorithm: HMAC-SHA384")
+		}
+	default:
+		return Hmac{}, fmt.Errorf("unsupported hash size: %d", size)
 	}
-	if err := cbor.NewEncoder(mac).Encode(v); err != nil {
+
+	h.Reset()
+	if err := cbor.NewEncoder(h).Encode(v); err != nil {
 		return Hmac{}, fmt.Errorf("error computing hmac: marshaling payload: %w", err)
 	}
-	return Hmac{
-		Algorithm: alg,
-		Value:     mac.Sum(nil),
-	}, nil
+	hmac.Value = h.Sum(nil)
+	if fallible, ok := h.(fallibleHash); ok {
+		return Hmac{}, fmt.Errorf("error computing hmac: %w", fallible.Err())
+	}
+	return hmac, nil
 }
 
 // hmacVerify encodes the given value to CBOR and verifies that the given HMAC
 // matches it. If the cryptographic portion of verification fails, then
 // ErrCryptoVerifyFailed is wrapped.
-func hmacVerify(dc KeyedHasher, h1 Hmac, v any) error {
-	h2, err := dc.NewHmac(h1.Algorithm)
-	if err != nil {
-		return fmt.Errorf("error starting new hmac: %w", err)
+func hmacVerify(h256, h384 hash.Hash, h1 Hmac, v any) error {
+	if h256 == nil {
+		panic("HMAC-SHA256 support is required")
 	}
-	if err := cbor.NewEncoder(h2).Encode(v); err != nil {
-		return err
+
+	var h hash.Hash
+	switch h1.Algorithm {
+	case HmacSha256Hash:
+		h = h256
+	case HmacSha384Hash:
+		h = h384
 	}
-	if !hmac.Equal(h1.Value, h2.Sum(nil)) {
+	if h == nil {
+		return fmt.Errorf("unsupported hash algorithm: %s", h1.Algorithm)
+	}
+
+	h.Reset()
+	if err := cbor.NewEncoder(h).Encode(v); err != nil {
+		return fmt.Errorf("error computing hmac: marshaling payload: %w", err)
+	}
+	mac2 := h.Sum(nil)
+	if fallible, ok := h.(fallibleHash); ok {
+		return fmt.Errorf("error computing hmac: %w", fallible.Err())
+	}
+	if !hmac.Equal(h1.Value, mac2) {
 		return fmt.Errorf("%w: hmac did not match", ErrCryptoVerifyFailed)
 	}
 	return nil

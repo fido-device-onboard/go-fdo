@@ -29,16 +29,8 @@ const (
 const DefaultRVBlobTTL = 4_294_967_295 // max uint32
 
 // TO0Client is used by owner services communicating with rendezvous services.
-// Unlike [Client], it is not used by devices.
+// Unlike [DOClient], it is not used by devices.
 type TO0Client struct {
-	// Transport performs message passing and may be implemented over TCP,
-	// HTTP, CoAP, and others
-	Transport Transport
-
-	// Addrs are the network address(es) where the device can find its owner
-	// service for onboarding.
-	Addrs []RvTO2Addr
-
 	// Vouchers is used to lookup the ownership voucher for registering a
 	// rendezvous blob for a given device.
 	Vouchers OwnerVoucherPersistentState
@@ -54,12 +46,12 @@ type TO0Client struct {
 }
 
 // RegisterBlob tells a Rendezvous Server where to direct a given device to its
-// owner service. The returned uint32 is the number of seconds before the
-// rendezvous blob must be refreshed by calling [RegisterBlob] again.
-func (c *TO0Client) RegisterBlob(ctx context.Context, baseURL string, guid GUID) (uint32, error) {
+// owner service for onboarding. The returned uint32 is the number of seconds
+// before the rendezvous blob must be refreshed by calling [RegisterBlob] again.
+func (c *TO0Client) RegisterBlob(ctx context.Context, transport Transport, guid GUID, addrs []RvTO2Addr) (uint32, error) {
 	ctx = contextWithErrMsg(ctx)
 
-	nonce, err := c.hello(ctx, baseURL)
+	nonce, err := c.hello(ctx, transport)
 	if err != nil {
 		return 0, err
 	}
@@ -69,16 +61,16 @@ func (c *TO0Client) RegisterBlob(ctx context.Context, baseURL string, guid GUID)
 		ttl = DefaultRVBlobTTL
 	}
 
-	return c.ownerSign(ctx, baseURL, nonce, ttl, guid)
+	return c.ownerSign(ctx, transport, guid, ttl, nonce, addrs)
 }
 
 // Hello(20) -> HelloAck(21)
-func (c *TO0Client) hello(ctx context.Context, baseURL string) (Nonce, error) {
+func (c *TO0Client) hello(ctx context.Context, transport Transport) (Nonce, error) {
 	// Define request structure
 	msg := struct{}{}
 
 	// Make request
-	typ, resp, err := c.Transport.Send(ctx, baseURL, to0HelloMsgType, msg, nil)
+	typ, resp, err := transport.Send(ctx, to0HelloMsgType, msg, nil)
 	if err != nil {
 		return Nonce{}, fmt.Errorf("error sending TO0.Hello: %w", err)
 	}
@@ -145,7 +137,7 @@ type ownerSign struct {
 }
 
 // OwnerSign(22) -> AcceptOwner(23)
-func (c *TO0Client) ownerSign(ctx context.Context, baseURL string, nonce Nonce, ttl uint32, guid GUID) (negotiatedTTL uint32, _ error) {
+func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid GUID, ttl uint32, nonce Nonce, addrs []RvTO2Addr) (negotiatedTTL uint32, _ error) {
 	// Create and hash to0d
 	ov, err := c.Vouchers.Voucher(ctx, guid)
 	if err != nil {
@@ -178,7 +170,7 @@ func (c *TO0Client) ownerSign(ctx context.Context, baseURL string, nonce Nonce, 
 		return 0, fmt.Errorf("error determining signing options for TO0.OwnerSign: %w", err)
 	}
 	to1d := cose.Sign1[To1d, []byte]{Payload: cbor.NewByteWrap(To1d{
-		RV: c.Addrs,
+		RV: addrs,
 		To0dHash: Hash{
 			Algorithm: alg,
 			Value:     to0dHash.Sum(nil),
@@ -195,7 +187,7 @@ func (c *TO0Client) ownerSign(ctx context.Context, baseURL string, nonce Nonce, 
 	}
 
 	// Make request
-	typ, resp, err := c.Transport.Send(ctx, baseURL, to0OwnerSignMsgType, msg, nil)
+	typ, resp, err := transport.Send(ctx, to0OwnerSignMsgType, msg, nil)
 	if err != nil {
 		return 0, fmt.Errorf("error sending TO0.OwnerSign: %w", err)
 	}
