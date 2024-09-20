@@ -609,9 +609,9 @@ func (s *TO2Server) ownerKey(keyType protocol.KeyType, keyEncoding protocol.KeyE
 	case protocol.X509KeyEnc, protocol.CoseKeyEnc:
 		switch keyType {
 		case protocol.Secp256r1KeyType, protocol.Secp384r1KeyType:
-			pubkey, err = protocol.NewPublicKey(keyType, chain[0].PublicKey.(*ecdsa.PublicKey), keyEncoding == protocol.CoseKeyEnc)
+			pubkey, err = protocol.NewPublicKey(keyType, key.Public().(*ecdsa.PublicKey), keyEncoding == protocol.CoseKeyEnc)
 		case protocol.Rsa2048RestrKeyType, protocol.RsaPkcsKeyType, protocol.RsaPssKeyType:
-			pubkey, err = protocol.NewPublicKey(keyType, chain[0].PublicKey.(*rsa.PublicKey), keyEncoding == protocol.CoseKeyEnc)
+			pubkey, err = protocol.NewPublicKey(keyType, key.Public().(*rsa.PublicKey), keyEncoding == protocol.CoseKeyEnc)
 		default:
 			return nil, nil, fmt.Errorf("unsupported key type: %s", keyType)
 		}
