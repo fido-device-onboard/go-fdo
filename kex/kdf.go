@@ -12,7 +12,7 @@ import (
 	"math"
 )
 
-// kdf implements FIPS 800-108 using the parameters defined in FDO.
+// kdf implements NIST 800-108 using the parameters defined in FDO.
 func kdf(hash crypto.Hash, shSe, contextRand []byte, bits uint16) ([]byte, error) {
 	// NIST SP 800-108 KDF in Counter Mode
 	//
