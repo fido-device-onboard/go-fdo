@@ -18,7 +18,7 @@ linters-settings:
   gocyclo:
     min-complexity: 15
   goimports:
-    local-prefixes: github.com/intel-innersource/
+    local-prefixes: github.com/fido-device-onboard/go-fdo
   misspell:
     locale: US
 
