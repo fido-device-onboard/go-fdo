@@ -64,8 +64,6 @@ const (
 	A256GCM EncryptAlgorithm = 3
 )
 
-const gcmNonceSize = 96 / 8
-
 /*
 AES-CCM Algorithm Values
 
@@ -159,7 +157,7 @@ func aesGcm(key []byte) (Crypter, error) {
 	if err != nil {
 		return nil, err
 	}
-	aead, err := cipher.NewGCMWithNonceSize(b, gcmNonceSize)
+	aead, err := cipher.NewGCM(b)
 	if err != nil {
 		return nil, err
 	}
