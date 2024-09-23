@@ -11,6 +11,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"hash"
@@ -23,6 +24,7 @@ import (
 	"time"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/cbor/cdn"
 	"github.com/fido-device-onboard/go-fdo/cose"
 	"github.com/fido-device-onboard/go-fdo/kex"
 	"github.com/fido-device-onboard/go-fdo/plugin"
@@ -1168,7 +1170,14 @@ func exchangeServiceInfo(ctx context.Context,
 			return fmt.Errorf("exceeded 1e6 rounds of service info exchange")
 		}
 		if done {
-			break
+			// Process final service info from message with IsDone
+			deviceInfo, discard := serviceinfo.NewChunkOutPipe(1000)
+			go discardDeviceInfo(deviceInfo)
+			ctxWithMTU := context.WithValue(ctx, serviceinfo.MTUKey{}, mtu)
+			_ = handleOwnerModuleMessages(ctxWithMTU, prevModuleName, modules, ownerInfo, discard)
+
+			// Continue TO2
+			return sendDone(ctx, transport, proveDvNonce, setupDvNonce, sess)
 		}
 
 		// If there is no ServiceInfo to send and the last owner response did
@@ -1186,8 +1195,25 @@ func exchangeServiceInfo(ctx context.Context,
 			ownerInfo = nextOwnerInfo
 		}
 	}
+}
 
-	return sendDone(ctx, transport, proveDvNonce, setupDvNonce, sess)
+func discardDeviceInfo(deviceInfo *serviceinfo.ChunkReader) {
+	for {
+		kv, err := deviceInfo.ReadChunk(math.MaxUint16)
+		if err != nil && !errors.Is(err, io.EOF) {
+			slog.Warn("reading device service info for discard", "error", err)
+		}
+		if err != nil {
+			return
+		}
+		prettyValue, err := cdn.FromCBOR(kv.Val)
+		if err != nil {
+			prettyValue = "h'" + hex.EncodeToString(kv.Val) + "'"
+		}
+		slog.Warn("discarding device service info message because owner sent IsDone",
+			"name", kv.Key, "value", prettyValue,
+		)
+	}
 }
 
 // Done(70) -> Done2(71)
