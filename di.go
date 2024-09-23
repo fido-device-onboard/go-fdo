@@ -85,7 +85,10 @@ func DI(ctx context.Context, transport Transport, info any, c DIConfig) (*Device
 	}
 
 	// Select the appropriate hash algorithm
-	ownerPubKey, _ := ovh.ManufacturerKey.Public()
+	ownerPubKey, err := ovh.ManufacturerKey.Public()
+	if err != nil {
+		return nil, fmt.Errorf("error parsing manufacturer public key type from received ownership voucher header: %w", err)
+	}
 	alg, err := hashAlgFor(c.Key.Public(), ownerPubKey)
 	if err != nil {
 		return nil, fmt.Errorf("error selecting the appropriate hash algorithm: %w", err)
