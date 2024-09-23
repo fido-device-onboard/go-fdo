@@ -418,7 +418,11 @@ func newHandler(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) (*transport
 	}
 
 	// Generate owner keys
-	rsaOwnerKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	rsa2048OwnerKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, err
+	}
+	rsa3072OwnerKey, err := rsa.GenerateKey(rand.Reader, 3072)
 	if err != nil {
 		return nil, err
 	}
@@ -430,10 +434,13 @@ func newHandler(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) (*transport
 	if err != nil {
 		return nil, err
 	}
-	if err := state.AddOwnerKey(protocol.RsaPkcsKeyType, rsaOwnerKey, nil); err != nil {
+	if err := state.AddOwnerKey(protocol.Rsa2048RestrKeyType, rsa2048OwnerKey, nil); err != nil {
 		return nil, err
 	}
-	if err := state.AddOwnerKey(protocol.RsaPssKeyType, rsaOwnerKey, nil); err != nil {
+	if err := state.AddOwnerKey(protocol.RsaPkcsKeyType, rsa3072OwnerKey, nil); err != nil {
+		return nil, err
+	}
+	if err := state.AddOwnerKey(protocol.RsaPssKeyType, rsa3072OwnerKey, nil); err != nil {
 		return nil, err
 	}
 	if err := state.AddOwnerKey(protocol.Secp256r1KeyType, ec256OwnerKey, nil); err != nil {
