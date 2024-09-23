@@ -604,6 +604,12 @@ func (s *TO2Server) ownerKey(keyType protocol.KeyType, keyEncoding protocol.KeyE
 		return nil, nil, fmt.Errorf("error getting owner key [type=%s]: %w", keyType, err)
 	}
 
+	// Default to X509 key encoding if owner key does not have a certificate
+	// chain
+	if keyEncoding == protocol.X5ChainKeyEnc && len(chain) == 0 {
+		keyEncoding = protocol.X509KeyEnc
+	}
+
 	var pubkey *protocol.PublicKey
 	switch keyEncoding {
 	case protocol.X509KeyEnc, protocol.CoseKeyEnc:
