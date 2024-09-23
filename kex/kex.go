@@ -16,9 +16,9 @@ import (
 // All Sessions from Suites in this package implement encoding.BinaryMarshaler
 // and encoding.BinaryUnmarshaler.
 type Session interface {
-	// Parameter generates the private key and exchange parameter to send to
-	// its peer. This function will generate a new key every time it is called.
-	// This method is used by both the client and server.
+	// Parameter generates the exchange parameter to send to its peer. This
+	// function will generate a new parameter every time it is called. This
+	// method is used by both the client and server.
 	Parameter(rand io.Reader) ([]byte, error)
 
 	// SetParameter sets the received parameter from the client. This method is

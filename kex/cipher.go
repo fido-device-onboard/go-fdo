@@ -5,6 +5,7 @@ package kex
 
 import (
 	"crypto"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -100,6 +101,13 @@ type CipherSuite struct {
 	// Hash used for generating encryption and verification keys during key
 	// exchange
 	PRFHash crypto.Hash
+}
+
+func (c CipherSuite) String() string {
+	return fmt.Sprintf(`CipherSuite[
+  EncryptAlg   %d
+  MacAlg       %d
+]`, c.EncryptAlg, c.MacAlg)
 }
 
 var ciphers = make(map[CipherSuiteID]CipherSuite)

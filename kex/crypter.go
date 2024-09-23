@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
@@ -20,6 +21,20 @@ type SessionCrypter struct {
 
 	SEK []byte
 	SVK []byte
+}
+
+func (s SessionCrypter) String() string {
+	return fmt.Sprintf(`SessionCrypter[
+  ID   %d
+  %s
+  SEK  %x
+  SVK  %x
+]`,
+		s.ID,
+		strings.ReplaceAll(s.Cipher.String(), "\n", "\n  "),
+		s.SEK,
+		s.SVK,
+	)
 }
 
 // Encrypt uses a session key to encrypt a payload. Depending on the suite,

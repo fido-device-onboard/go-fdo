@@ -13,13 +13,9 @@ import (
 	"io"
 	"math"
 	"math/big"
+	"strings"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
-)
-
-const (
-	ec256RandomLength = 16
-	ec384RandomLength = 48
 )
 
 func init() {
@@ -27,9 +23,12 @@ func init() {
 		string(ECDH256Suite),
 		func(xA []byte, cipher CipherSuiteID) Session {
 			return &ECDHSession{
-				Curve: elliptic.P256(),
-				xA:    xA,
-				xB:    []byte{},
+				curve:    elliptic.P256(),
+				randSize: 16,
+
+				xA: xA,
+				xB: []byte{},
+
 				SessionCrypter: SessionCrypter{
 					ID:     cipher,
 					Cipher: cipher.Suite(),
@@ -43,9 +42,12 @@ func init() {
 		string(ECDH384Suite),
 		func(xA []byte, cipher CipherSuiteID) Session {
 			return &ECDHSession{
-				Curve: elliptic.P384(),
-				xA:    xA,
-				xB:    []byte{},
+				curve:    elliptic.P384(),
+				randSize: 48,
+
+				xA: xA,
+				xB: []byte{},
+
 				SessionCrypter: SessionCrypter{
 					ID:     cipher,
 					Cipher: cipher.Suite(),
@@ -60,35 +62,48 @@ func init() {
 // ECDHSession implements a Session using elliptic curve cryptography. Sessions
 // are created using [Suite.New].
 type ECDHSession struct {
+	// Static configuration
+	curve    elliptic.Curve
+	randSize int
+
 	// Key exchange data
-	Curve elliptic.Curve
-	xA    []byte
-	xB    []byte
-	priv  *ecdsa.PrivateKey
+	xA   []byte
+	xB   []byte
+	priv *ecdsa.PrivateKey
 
 	// Session encrypt/decrypt data
 	SessionCrypter
 }
 
-// Parameter generates the private key and exchange parameter to send to
-// its peer. This function will generate a new key every time it is called.
-// This method is used by both the client and server.
+func (s ECDHSession) String() string {
+	return fmt.Sprintf(`ECDH[
+  curve     %s
+  randSize  %d
+  xA        %x
+  xB        %x
+  %s
+]`,
+		s.curve.Params().Name,
+		s.randSize,
+		s.xA,
+		s.xB,
+		strings.ReplaceAll(s.SessionCrypter.String(), "\n", "\n  "),
+	)
+}
+
+// Parameter generates the exchange parameter to send to its peer. This
+// function will generate a new parameter every time it is called. This
+// method is used by both the client and server.
 func (s *ECDHSession) Parameter(rand io.Reader) ([]byte, error) {
 	// Generate a new key
-	ecKey, err := ecdsa.GenerateKey(s.Curve, rand)
+	ecKey, err := ecdsa.GenerateKey(s.curve, rand)
 	if err != nil {
 		return nil, err
 	}
 	s.priv = ecKey
 
 	// Generate random bytes for a length that is curve-dependent
-	var r []byte
-	switch s.Curve {
-	case elliptic.P256():
-		r = make([]byte, ec256RandomLength)
-	case elliptic.P384():
-		r = make([]byte, ec384RandomLength)
-	}
+	r := make([]byte, s.randSize)
 	if _, err := rand.Read(r); err != nil {
 		return nil, err
 	}
@@ -108,8 +123,8 @@ func (s *ECDHSession) Parameter(rand io.Reader) ([]byte, error) {
 	}
 	s.xB = xX
 
-	// Compute session keys
-	sek, svk, err := computeSymmetricKeys(ecKey, s.xA, s.xB, s.Cipher)
+	// Compute session key
+	sek, svk, err := ecSymmetricKey(ecKey, s.xA, s.xB, s.Cipher)
 	if err != nil {
 		return nil, fmt.Errorf("error computing symmetric keys: %w", err)
 	}
@@ -123,8 +138,8 @@ func (s *ECDHSession) Parameter(rand io.Reader) ([]byte, error) {
 func (s *ECDHSession) SetParameter(xB []byte) error {
 	s.xB = xB
 
-	// Compute session keys
-	sek, svk, err := computeSymmetricKeys(s.priv, s.xA, s.xB, s.Cipher)
+	// Compute session key
+	sek, svk, err := ecSymmetricKey(s.priv, s.xA, s.xB, s.Cipher)
 	if err != nil {
 		return fmt.Errorf("error computing symmetric keys: %w", err)
 	}
@@ -185,7 +200,7 @@ func (p *ecdhParam) UnmarshalBinary(b []byte) error {
 	return nil
 }
 
-func computeSymmetricKeys(ecKey *ecdsa.PrivateKey, xA, xB []byte, cipher CipherSuite) (sek, svk []byte, err error) {
+func ecSymmetricKey(ecKey *ecdsa.PrivateKey, xA, xB []byte, cipher CipherSuite) (sek, svk []byte, err error) {
 	// Decode parameters
 	var paramA, paramB ecdhParam
 	if err := paramA.UnmarshalBinary(xA); err != nil {
@@ -196,7 +211,7 @@ func computeSymmetricKeys(ecKey *ecdsa.PrivateKey, xA, xB []byte, cipher CipherS
 	}
 
 	// Compute shared secret
-	shse, err := sharedSecret(ecKey, paramA, paramB)
+	shSe, err := ecSharedSecret(ecKey, paramA, paramB)
 	if err != nil {
 		return nil, nil, fmt.Errorf("error computing shared secret: %w", err)
 	}
@@ -206,16 +221,16 @@ func computeSymmetricKeys(ecKey *ecdsa.PrivateKey, xA, xB []byte, cipher CipherS
 	if cipher.MacAlg != 0 {
 		svkSize = cipher.MacAlg.KeySize()
 	}
-	symKey, err := kdf(cipher.PRFHash, shse, []byte{}, (sekSize+svkSize)*8)
+	symKey, err := kdf(cipher.PRFHash, shSe, []byte{}, (sekSize+svkSize)*8)
 	if err != nil {
-		return nil, nil, fmt.Errorf("error deriving symmetric key: %w", err)
+		return nil, nil, fmt.Errorf("kdf: %w", err)
 	}
 
 	return symKey[:sekSize], symKey[sekSize:], nil
 }
 
 // Compute the ECDH shared secret
-func sharedSecret(key *ecdsa.PrivateKey, paramA, paramB ecdhParam) ([]byte, error) {
+func ecSharedSecret(key *ecdsa.PrivateKey, paramA, paramB ecdhParam) ([]byte, error) {
 	// Determine which param is "other"
 	var other ecdhParam
 	switch {
@@ -254,10 +269,10 @@ func sharedSecret(key *ecdsa.PrivateKey, paramA, paramB ecdhParam) ([]byte, erro
 }
 
 type ecdhPersist struct {
-	Is384  bool
-	ParamA []byte
-	ParamB []byte
-	Key    []byte
+	RandSize int
+	ParamA   []byte
+	ParamB   []byte
+	Key      []byte
 
 	Cipher CipherSuiteID
 	SEK    []byte
@@ -275,13 +290,13 @@ func (s *ECDHSession) MarshalCBOR() ([]byte, error) {
 		keyBytes = key
 	}
 	return cbor.Marshal(ecdhPersist{
-		Is384:  s.Curve == elliptic.P384(),
-		ParamA: s.xA,
-		ParamB: s.xB,
-		Key:    keyBytes,
-		Cipher: s.ID,
-		SEK:    s.SEK,
-		SVK:    s.SVK,
+		RandSize: s.randSize,
+		ParamA:   s.xA,
+		ParamB:   s.xB,
+		Key:      keyBytes,
+		Cipher:   s.ID,
+		SEK:      s.SEK,
+		SVK:      s.SVK,
 	})
 }
 
@@ -293,7 +308,7 @@ func (s *ECDHSession) UnmarshalCBOR(data []byte) error {
 	}
 
 	curve := elliptic.P256()
-	if persist.Is384 {
+	if persist.RandSize == 48 {
 		curve = elliptic.P384()
 	}
 
@@ -303,10 +318,11 @@ func (s *ECDHSession) UnmarshalCBOR(data []byte) error {
 	}
 
 	*s = ECDHSession{
-		Curve: curve,
-		xA:    persist.ParamA,
-		xB:    persist.ParamB,
-		priv:  key,
+		curve:    curve,
+		randSize: persist.RandSize,
+		xA:       persist.ParamA,
+		xB:       persist.ParamB,
+		priv:     key,
 
 		SessionCrypter: SessionCrypter{
 			ID:     persist.Cipher,

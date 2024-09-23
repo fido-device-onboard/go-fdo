@@ -4,40 +4,15 @@
 package kex_test
 
 import (
-	"bytes"
 	"crypto/rand"
 	"testing"
 
 	"github.com/fido-device-onboard/go-fdo/kex"
 )
 
-func TestECDH256Exchange(t *testing.T) {
-	serverSess := kex.ECDH256Suite.New(nil, kex.A128GcmCipher)
-	xA, err := serverSess.Parameter(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	clientSess := kex.ECDH256Suite.New(xA, kex.A128GcmCipher)
-	xB, err := clientSess.Parameter(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if err := serverSess.SetParameter(xB); err != nil {
-		t.Fatal(err)
-	}
-
-	if !bytes.Equal(
-		serverSess.(*kex.ECDHSession).SEK,
-		clientSess.(*kex.ECDHSession).SEK,
-	) {
-		t.Fatal("expected client and server sessions to have matching symmetric keys")
-	}
-
-	if len(serverSess.(*kex.ECDHSession).SVK) > 0 ||
-		len(clientSess.(*kex.ECDHSession).SVK) > 0 {
-		t.Fatal("expected client and server sessions to have no SVK")
+func TestECDHExchange(t *testing.T) {
+	for _, suite := range []kex.Suite{kex.ECDH256Suite, kex.ECDH384Suite} {
+		t.Run(string(suite), testSuite(suite))
 	}
 }
 
