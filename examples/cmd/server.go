@@ -350,7 +350,11 @@ func mustMarshal(v any) []byte {
 //nolint:gocyclo
 func newHandler(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) (*transport.Handler, error) {
 	// Generate manufacturing component keys
-	rsaMfgKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	rsa2048MfgKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, err
+	}
+	rsa3072MfgKey, err := rsa.GenerateKey(rand.Reader, 3072)
 	if err != nil {
 		return nil, err
 	}
@@ -381,7 +385,11 @@ func newHandler(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) (*transport
 		}
 		return []*x509.Certificate{cert}, nil
 	}
-	rsaChain, err := generateCA(rsaMfgKey)
+	rsa2048Chain, err := generateCA(rsa2048MfgKey)
+	if err != nil {
+		return nil, err
+	}
+	rsa3072Chain, err := generateCA(rsa3072MfgKey)
 	if err != nil {
 		return nil, err
 	}
@@ -393,10 +401,13 @@ func newHandler(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) (*transport
 	if err != nil {
 		return nil, err
 	}
-	if err := state.AddManufacturerKey(protocol.RsaPkcsKeyType, rsaMfgKey, rsaChain); err != nil {
+	if err := state.AddManufacturerKey(protocol.Rsa2048RestrKeyType, rsa2048MfgKey, rsa2048Chain); err != nil {
 		return nil, err
 	}
-	if err := state.AddManufacturerKey(protocol.RsaPssKeyType, rsaMfgKey, rsaChain); err != nil {
+	if err := state.AddManufacturerKey(protocol.RsaPkcsKeyType, rsa3072MfgKey, rsa3072Chain); err != nil {
+		return nil, err
+	}
+	if err := state.AddManufacturerKey(protocol.RsaPssKeyType, rsa3072MfgKey, rsa3072Chain); err != nil {
 		return nil, err
 	}
 	if err := state.AddManufacturerKey(protocol.Secp256r1KeyType, ec256MfgKey, ec256Chain); err != nil {
