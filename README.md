@@ -100,7 +100,7 @@ Key types:
   - SECP256R1
   - SECP384R1
 
-Key exchange suites:
+Encryption suites:
   - A128GCM
   - A192GCM
   - A256GCM
@@ -111,7 +111,7 @@ Key exchange suites:
   - COSEAES256CBC
   - COSEAES256CTR
 
-Encryption suites:
+Key exchange suites:
   - DHKEXid14
   - DHKEXid15
   - ASYMKEX2048
