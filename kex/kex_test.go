@@ -6,6 +6,7 @@ package kex_test
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/rsa"
 	"encoding"
 	"reflect"
 	"testing"
@@ -15,8 +16,13 @@ import (
 
 func testSuite(suite kex.Suite) func(t *testing.T) {
 	return func(t *testing.T) {
+		ownerKey, err := rsa.GenerateKey(rand.Reader, 3072)
+		if err != nil {
+			t.Fatal(err)
+		}
+
 		serverSess := suite.New(nil, kex.A128GcmCipher)
-		xA, err := serverSess.Parameter(rand.Reader)
+		xA, err := serverSess.Parameter(rand.Reader, &ownerKey.PublicKey)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -24,18 +30,18 @@ func testSuite(suite kex.Suite) func(t *testing.T) {
 		testEncodeDecode(t, suite, serverSess)
 
 		clientSess := suite.New(xA, kex.A128GcmCipher)
-		xB, err := clientSess.Parameter(rand.Reader)
+		xB, err := clientSess.Parameter(rand.Reader, &ownerKey.PublicKey)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		// testEncodeDecode(t, suite, clientSess)
+		testEncodeDecode(t, suite, clientSess)
 
-		if err := serverSess.SetParameter(xB); err != nil {
+		if err := serverSess.SetParameter(xB, ownerKey); err != nil {
 			t.Fatal(err)
 		}
 
-		// testEncodeDecode(t, suite, serverSess)
+		testEncodeDecode(t, suite, serverSess)
 
 		if !bytes.Equal(
 			reflect.ValueOf(serverSess).Elem().FieldByName("SEK").Bytes(),

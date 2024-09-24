@@ -5,10 +5,12 @@ package main
 
 import (
 	"context"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/hmac"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/sha512"
 	"crypto/x509"
@@ -42,7 +44,7 @@ var clientFlags = flag.NewFlagSet("client", flag.ContinueOnError)
 var (
 	blobPath    string
 	diURL       string
-	diEC256     bool
+	diKey       string
 	diKeyEnc    string
 	kexSuite    string
 	cipherSuite string
@@ -132,7 +134,7 @@ func init() {
 	clientFlags.BoolVar(&insecureTLS, "insecure-tls", false, "Skip TLS certificate verification")
 	clientFlags.StringVar(&dlDir, "download", "", "A `dir` to download files into (FSIM disabled if empty)")
 	clientFlags.StringVar(&diURL, "di", "", "HTTP base `URL` for DI server")
-	clientFlags.BoolVar(&diEC256, "di-ec256", false, "Use Secp256r1 EC key for device credential")
+	clientFlags.StringVar(&diKey, "di-key", "ec384", "Key for device credential [options: ec256, ec384, rsa2048, rsa3072]")
 	clientFlags.StringVar(&diKeyEnc, "di-key-enc", "x509", "Public key encoding to use for manufacturer key [x509,x5chain,cose]")
 	clientFlags.StringVar(&kexSuite, "kex", "ECDH384", "Name of cipher `suite` to use for key exchange (see usage)")
 	clientFlags.StringVar(&cipherSuite, "cipher", "A128GCM", "Name of cipher `suite` to use for encryption (see usage)")
@@ -222,7 +224,7 @@ func saveBlob(dc blob.DeviceCredential) error {
 	return nil
 }
 
-func di() error {
+func di() (err error) {
 	// Generate new key and secret
 	secret := make([]byte, 32)
 	if _, err := rand.Read(secret); err != nil {
@@ -230,11 +232,24 @@ func di() error {
 	}
 	hmacSha256, hmacSha384 := hmac.New(sha256.New, secret), hmac.New(sha512.New384, secret)
 
-	curve := elliptic.P384()
-	if diEC256 {
-		curve = elliptic.P256()
+	var keyType protocol.KeyType
+	var key crypto.Signer
+	switch diKey {
+	case "ec256":
+		keyType = protocol.Secp256r1KeyType
+		key, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	case "ec384":
+		keyType = protocol.Secp384r1KeyType
+		key, err = ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	case "rsa2048":
+		keyType = protocol.Rsa2048RestrKeyType
+		key, err = rsa.GenerateKey(rand.Reader, 2048)
+	case "rsa3072":
+		keyType = protocol.RsaPkcsKeyType
+		key, err = rsa.GenerateKey(rand.Reader, 3072)
+	default:
+		return fmt.Errorf("unknown key type: %s", diKey)
 	}
-	key, err := ecdsa.GenerateKey(curve, rand.Reader)
 	if err != nil {
 		return fmt.Errorf("error generating device key: %w", err)
 	}
@@ -255,10 +270,6 @@ func di() error {
 	sn, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
 	if err != nil {
 		return fmt.Errorf("error generating random serial number: %w", err)
-	}
-	keyType := protocol.Secp384r1KeyType
-	if diEC256 {
-		keyType = protocol.Secp256r1KeyType
 	}
 	var keyEncoding protocol.KeyEncoding
 	switch {

@@ -165,30 +165,44 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 	for _, table := range []struct {
 		keyType     protocol.KeyType
 		keyEncoding protocol.KeyEncoding
+		keyExchange kex.Suite
+		cipherSuite kex.CipherSuiteID
 	}{
 		{
 			keyType:     protocol.Secp256r1KeyType,
 			keyEncoding: protocol.X509KeyEnc,
+			keyExchange: kex.ECDH256Suite,
+			cipherSuite: kex.A128GcmCipher,
 		},
 		{
 			keyType:     protocol.Secp384r1KeyType,
 			keyEncoding: protocol.X509KeyEnc,
+			keyExchange: kex.ECDH384Suite,
+			cipherSuite: kex.A128GcmCipher,
 		},
 		{
-			keyType:     protocol.RsaPkcsKeyType,
+			keyType:     protocol.Rsa2048RestrKeyType,
 			keyEncoding: protocol.X509KeyEnc,
+			keyExchange: kex.ASYMKEX2048Suite,
+			cipherSuite: kex.A128GcmCipher,
 		},
 		{
 			keyType:     protocol.RsaPssKeyType,
 			keyEncoding: protocol.X509KeyEnc,
+			keyExchange: kex.DHKEXid15Suite,
+			cipherSuite: kex.A128GcmCipher,
 		},
 		{
 			keyType:     protocol.Secp256r1KeyType,
 			keyEncoding: protocol.X5ChainKeyEnc,
+			keyExchange: kex.DHKEXid14Suite,
+			cipherSuite: kex.A128GcmCipher,
 		},
 		{
 			keyType:     protocol.Secp384r1KeyType,
 			keyEncoding: protocol.X5ChainKeyEnc,
+			keyExchange: kex.DHKEXid15Suite,
+			cipherSuite: kex.A128GcmCipher,
 		},
 	} {
 		transport.DIResponder.DeviceInfo = func(context.Context, *custom.DeviceMfgInfo, []*x509.Certificate) (string, protocol.KeyType, protocol.KeyEncoding, error) {
@@ -216,9 +230,16 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 					t.Fatalf("error generating device key: %v", err)
 				}
 
-			case protocol.RsaPkcsKeyType:
+			case protocol.Rsa2048RestrKeyType:
 				var err error
 				key, err = rsa.GenerateKey(rand.Reader, 2048)
+				if err != nil {
+					t.Fatalf("error generating device key: %v", err)
+				}
+
+			case protocol.RsaPkcsKeyType:
+				var err error
+				key, err = rsa.GenerateKey(rand.Reader, 3072)
 				if err != nil {
 					t.Fatalf("error generating device key: %v", err)
 				}
@@ -333,8 +354,8 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 						FileSep: ";",
 						Bin:     runtime.GOARCH,
 					},
-					KeyExchange: kex.ECDH256Suite,
-					CipherSuite: kex.A128GcmCipher,
+					KeyExchange: table.keyExchange,
+					CipherSuite: table.cipherSuite,
 				})
 				if err != nil {
 					t.Fatal(err)
@@ -369,8 +390,8 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 						FileSep: ";",
 						Bin:     runtime.GOARCH,
 					},
-					KeyExchange: kex.ECDH256Suite,
-					CipherSuite: kex.A128GcmCipher,
+					KeyExchange: table.keyExchange,
+					CipherSuite: table.cipherSuite,
 				})
 				if err != nil {
 					t.Fatal(err)
@@ -405,8 +426,8 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 						Bin:     runtime.GOARCH,
 					},
 					DeviceModules: deviceModules,
-					KeyExchange:   kex.ECDH256Suite,
-					CipherSuite:   kex.A128GcmCipher,
+					KeyExchange:   table.keyExchange,
+					CipherSuite:   table.cipherSuite,
 				})
 				if customExpect != nil {
 					customExpect(t, err)

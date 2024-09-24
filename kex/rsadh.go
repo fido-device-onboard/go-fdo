@@ -4,10 +4,10 @@
 package kex
 
 import (
+	"crypto/rsa"
 	"encoding"
 	"fmt"
 	"io"
-	"log"
 	"math/big"
 	"strings"
 
@@ -125,7 +125,7 @@ func bigIntBytes(i *big.Int) []byte {
 // Parameter generates the exchange parameter to send to its peer. This
 // function will generate a new parameter every time it is called. This
 // method is used by both the client and server.
-func (s *RSADHSession) Parameter(rand io.Reader) ([]byte, error) {
+func (s *RSADHSession) Parameter(rand io.Reader, _ *rsa.PublicKey) ([]byte, error) {
 	// Create a random parameter x and compute exchange parameter with the
 	// formula g^x mod p
 	r := make([]byte, s.paramSize)
@@ -156,11 +156,10 @@ func (s *RSADHSession) Parameter(rand io.Reader) ([]byte, error) {
 
 // SetParameter sets the received parameter from the client. This method is
 // only called by a server.
-func (s *RSADHSession) SetParameter(xB []byte) error {
+func (s *RSADHSession) SetParameter(xB []byte, _ *rsa.PrivateKey) error {
 	s.xB = new(big.Int).SetBytes(xB)
 
 	// Compute session key
-	log.Printf("%#v", s)
 	sek, svk, err := rsaSymmetricKey(s.xB, s.a, s.p, s.Cipher)
 	if err != nil {
 		return fmt.Errorf("error computing symmetric keys: %w", err)

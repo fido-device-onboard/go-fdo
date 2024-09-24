@@ -88,7 +88,9 @@ func keyTypeFor(alg cose.SignatureAlgorithm) (protocol.KeyType, crypto.SignerOpt
 		return protocol.Secp256r1KeyType, nil, nil
 	case cose.ES384Alg:
 		return protocol.Secp384r1KeyType, nil, nil
-	case cose.RS256Alg, cose.RS384Alg:
+	case cose.RS256Alg:
+		return protocol.Rsa2048RestrKeyType, alg, nil
+	case cose.RS384Alg:
 		return protocol.RsaPkcsKeyType, alg, nil
 	case cose.PS256Alg, cose.PS384Alg:
 		return protocol.RsaPssKeyType, &rsa.PSSOptions{

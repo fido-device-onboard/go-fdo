@@ -5,6 +5,7 @@
 package kex
 
 import (
+	"crypto/rsa"
 	"io"
 )
 
@@ -19,11 +20,15 @@ type Session interface {
 	// Parameter generates the exchange parameter to send to its peer. This
 	// function will generate a new parameter every time it is called. This
 	// method is used by both the client and server.
-	Parameter(rand io.Reader) ([]byte, error)
+	//
+	// The public key parameter is only used for ASYMKEX* suites.
+	Parameter(rand io.Reader, ownerKey *rsa.PublicKey) ([]byte, error)
 
 	// SetParameter sets the received parameter from the client. This method is
 	// only called by a server.
-	SetParameter([]byte) error
+	//
+	// The private key parameter is only used for ASYMKEX* suites.
+	SetParameter(xB []byte, ownerKey *rsa.PrivateKey) error
 
 	// Encrypt uses a session key to encrypt a payload. Depending on the suite,
 	// the result may be a plain COSE_Encrypt0 or one wrapped by COSE_Mac0.

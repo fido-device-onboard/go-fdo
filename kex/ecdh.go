@@ -6,6 +6,7 @@ package kex
 import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/rsa"
 	"crypto/x509"
 	"encoding"
 	"encoding/binary"
@@ -94,7 +95,7 @@ func (s ECDHSession) String() string {
 // Parameter generates the exchange parameter to send to its peer. This
 // function will generate a new parameter every time it is called. This
 // method is used by both the client and server.
-func (s *ECDHSession) Parameter(rand io.Reader) ([]byte, error) {
+func (s *ECDHSession) Parameter(rand io.Reader, _ *rsa.PublicKey) ([]byte, error) {
 	// Generate a new key
 	ecKey, err := ecdsa.GenerateKey(s.curve, rand)
 	if err != nil {
@@ -135,7 +136,7 @@ func (s *ECDHSession) Parameter(rand io.Reader) ([]byte, error) {
 
 // SetParameter sets the received parameter from the client. This method is
 // only called by a server.
-func (s *ECDHSession) SetParameter(xB []byte) error {
+func (s *ECDHSession) SetParameter(xB []byte, _ *rsa.PrivateKey) error {
 	s.xB = xB
 
 	// Compute session key

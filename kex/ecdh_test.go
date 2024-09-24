@@ -18,13 +18,13 @@ func TestECDHExchange(t *testing.T) {
 
 func TestBadECDH256Exchange(t *testing.T) {
 	serverSess := kex.ECDH256Suite.New(nil, kex.A128GcmCipher)
-	xA, err := serverSess.Parameter(rand.Reader)
+	xA, err := serverSess.Parameter(rand.Reader, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	clientSess := kex.ECDH384Suite.New(xA, kex.A128GcmCipher)
-	if _, err := clientSess.Parameter(rand.Reader); err == nil {
+	if _, err := clientSess.Parameter(rand.Reader, nil); err == nil {
 		t.Fatal("expected error creating parameter with wrong curve")
 	}
 }

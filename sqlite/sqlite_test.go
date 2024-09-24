@@ -46,7 +46,11 @@ func newDB(t *testing.T) (_ *sqlite.DB, cleanup func() error) {
 	state.DebugLog = fdotest.TestingLog(t)
 
 	// Add manufacturer keys
-	rsaMfgKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	rsa2048MfgKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rsa3072MfgKey, err := rsa.GenerateKey(rand.Reader, 3072)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,10 +63,11 @@ func newDB(t *testing.T) (_ *sqlite.DB, cleanup func() error) {
 		t.Fatal(err)
 	}
 	for keyType, key := range map[protocol.KeyType]crypto.Signer{
-		protocol.RsaPkcsKeyType:   rsaMfgKey,
-		protocol.RsaPssKeyType:    rsaMfgKey,
-		protocol.Secp256r1KeyType: ec256MfgKey,
-		protocol.Secp384r1KeyType: ec384MfgKey,
+		protocol.Rsa2048RestrKeyType: rsa2048MfgKey,
+		protocol.RsaPkcsKeyType:      rsa3072MfgKey,
+		protocol.RsaPssKeyType:       rsa3072MfgKey,
+		protocol.Secp256r1KeyType:    ec256MfgKey,
+		protocol.Secp384r1KeyType:    ec384MfgKey,
 	} {
 		chain, err := generateCA(key)
 		if err != nil {
@@ -74,7 +79,11 @@ func newDB(t *testing.T) (_ *sqlite.DB, cleanup func() error) {
 	}
 
 	// Add owner keys
-	rsaOwnerKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	rsa2048OwnerKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rsa3072OwnerKey, err := rsa.GenerateKey(rand.Reader, 3072)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,10 +97,11 @@ func newDB(t *testing.T) (_ *sqlite.DB, cleanup func() error) {
 	}
 
 	for keyType, key := range map[protocol.KeyType]crypto.Signer{
-		protocol.RsaPkcsKeyType:   rsaOwnerKey,
-		protocol.RsaPssKeyType:    rsaOwnerKey,
-		protocol.Secp256r1KeyType: ec256OwnerKey,
-		protocol.Secp384r1KeyType: ec384OwnerKey,
+		protocol.Rsa2048RestrKeyType: rsa2048OwnerKey,
+		protocol.RsaPkcsKeyType:      rsa3072OwnerKey,
+		protocol.RsaPssKeyType:       rsa3072OwnerKey,
+		protocol.Secp256r1KeyType:    ec256OwnerKey,
+		protocol.Secp384r1KeyType:    ec384OwnerKey,
 	} {
 		chain, err := generateCA(key)
 		if err != nil {

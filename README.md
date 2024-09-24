@@ -42,8 +42,8 @@ Client options:
         Print HTTP contents
   -di URL
         HTTP base URL for DI server
-  -di-ec256
-        Use Secp256r1 EC key for device credential
+  -di-key string
+        Key for device credential [options: ec256, ec384, rsa2048, rsa3072] (default "ec384")
   -di-key-enc string
         Public key encoding to use for manufacturer key [x509,x5chain,cose] (default "x509")
   -download dir
