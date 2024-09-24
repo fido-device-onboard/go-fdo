@@ -104,8 +104,8 @@ Encryption suites:
   - A128GCM
   - A192GCM
   - A256GCM
-  - AES-CCM-64-128-128
-  - AES-CCM-64-128-256
+  - AES-CCM-64-128-128 (not implemented)
+  - AES-CCM-64-128-256 (not implemented)
   - COSEAES128CBC
   - COSEAES128CTR
   - COSEAES256CBC
@@ -207,6 +207,26 @@ TO1 Blob: to1d[
     Algorithm: Sha256Hash
     Value: 340129067ad5839e2a5424baa3e7aa4bb984f610f29123b47b56353f47d71145
 ]
+```
+
+### Testing Key Exchanges
+
+First, start a server in a separate console.
+
+```console
+$ go run ./examples/cmd server -http 127.0.0.1:9999 -db ./test.db
+[2024-09-01 00:00:00] INFO: Listening
+  local: 127.0.0.1:9999
+  external: 127.0.0.1:9999
+```
+
+Then DI, followed by TO1 and TO2 may be run. To use ASYMKEX* key exchange, the device key must be RSA. To specify the device key type, use `-di-key` when running DI.
+
+```console
+$ go run ./examples/cmd client -di http://127.0.0.1:9999 -di-key rsa2048
+Success
+$ go run ./examples/cmd client -kex ASYMKEX2048
+Success
 ```
 
 ### Testing Resale Protocol

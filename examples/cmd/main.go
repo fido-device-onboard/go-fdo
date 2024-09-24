@@ -46,8 +46,8 @@ Encryption suites:
   - A128GCM
   - A192GCM
   - A256GCM
-  - AES-CCM-64-128-128
-  - AES-CCM-64-128-256
+  - AES-CCM-64-128-128 (not implemented)
+  - AES-CCM-64-128-256 (not implemented)
   - COSEAES128CBC
   - COSEAES128CTR
   - COSEAES256CBC
