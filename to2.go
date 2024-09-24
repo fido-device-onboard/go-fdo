@@ -1174,7 +1174,7 @@ func exchangeServiceInfo(ctx context.Context,
 			deviceInfo, discard := serviceinfo.NewChunkOutPipe(1000)
 			go discardDeviceInfo(deviceInfo)
 			ctxWithMTU := context.WithValue(ctx, serviceinfo.MTUKey{}, mtu)
-			_ = handleOwnerModuleMessages(ctxWithMTU, prevModuleName, modules, ownerInfo, discard)
+			_ = handleOwnerModuleMessages(ctxWithMTU, prevModuleName, modules, nextOwnerInfo, discard)
 
 			// Continue TO2
 			return sendDone(ctx, transport, proveDvNonce, setupDvNonce, sess)
