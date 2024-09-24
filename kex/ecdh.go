@@ -4,16 +4,15 @@
 package kex
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
+	"bytes"
+	"crypto/ecdh"
 	"crypto/rsa"
-	"crypto/x509"
 	"encoding"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"math"
-	"math/big"
+	"reflect"
 	"strings"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
@@ -24,7 +23,6 @@ func init() {
 		string(ECDH256Suite),
 		func(xA []byte, cipher CipherSuiteID) Session {
 			return &ECDHSession{
-				curve:    elliptic.P256(),
 				randSize: 16,
 
 				xA: xA,
@@ -43,7 +41,6 @@ func init() {
 		string(ECDH384Suite),
 		func(xA []byte, cipher CipherSuiteID) Session {
 			return &ECDHSession{
-				curve:    elliptic.P384(),
 				randSize: 48,
 
 				xA: xA,
@@ -64,32 +61,64 @@ func init() {
 // are created using [Suite.New].
 type ECDHSession struct {
 	// Static configuration
-	curve    elliptic.Curve
 	randSize int
 
 	// Key exchange data
 	xA   []byte
 	xB   []byte
-	priv *ecdsa.PrivateKey
+	priv *ecdh.PrivateKey
 
 	// Session encrypt/decrypt data
 	SessionCrypter
 }
 
 func (s ECDHSession) String() string {
+	var keyBytes []byte
+	if s.priv != nil {
+		keyBytes = s.priv.Bytes()
+	}
 	return fmt.Sprintf(`ECDH[
-  curve     %s
   randSize  %d
   xA        %x
   xB        %x
+  key       %x
   %s
 ]`,
-		s.curve.Params().Name,
 		s.randSize,
 		s.xA,
 		s.xB,
+		keyBytes,
 		strings.ReplaceAll(s.SessionCrypter.String(), "\n", "\n  "),
 	)
+}
+
+// Equal compares two key exchange sessions. If an Equal method is not
+// implemented, the sessions can be compared with reflect.DeepEqual.
+func (s *ECDHSession) Equal(other Session) bool {
+	s1, ok := other.(*ECDHSession)
+	if !ok || s1 == nil {
+		return false
+	}
+	sCopy, s1Copy := *s, *s1
+
+	// ECDH private keys have a random component, so they will not be deeply
+	// equal after constructing from the marshaled form
+	switch {
+	case sCopy.priv != nil && s1Copy.priv != nil:
+		// Both have private keys, so compare
+		if !bytes.Equal(sCopy.priv.Bytes(), s1Copy.priv.Bytes()) {
+			return false
+		}
+	case sCopy.priv == nil && s1Copy.priv == nil:
+		// Both do not have a private key
+	default:
+		// One has a private key and the other does not
+		return false
+	}
+	sCopy.priv = nil
+	s1Copy.priv = nil
+
+	return reflect.DeepEqual(sCopy, s1Copy)
 }
 
 // Parameter generates the exchange parameter to send to its peer. This
@@ -97,7 +126,14 @@ func (s ECDHSession) String() string {
 // method is used by both the client and server.
 func (s *ECDHSession) Parameter(rand io.Reader, _ *rsa.PublicKey) ([]byte, error) {
 	// Generate a new key
-	ecKey, err := ecdsa.GenerateKey(s.curve, rand)
+	var curve ecdh.Curve
+	switch s.randSize {
+	case 16:
+		curve = ecdh.P256()
+	case 48:
+		curve = ecdh.P384()
+	}
+	ecKey, err := curve.GenerateKey(rand)
 	if err != nil {
 		return nil, err
 	}
@@ -111,8 +147,7 @@ func (s *ECDHSession) Parameter(rand io.Reader, _ *rsa.PublicKey) ([]byte, error
 
 	// Marshal and store param
 	xX, err := ecdhParam{
-		X:    ecKey.PublicKey.X,
-		Y:    ecKey.PublicKey.Y,
+		Pub:  ecKey.PublicKey().Bytes(),
 		Rand: r,
 	}.MarshalBinary()
 	if err != nil {
@@ -150,19 +185,14 @@ func (s *ECDHSession) SetParameter(xB []byte, _ *rsa.PrivateKey) error {
 }
 
 type ecdhParam struct {
-	X, Y *big.Int
+	Pub  []byte
 	Rand []byte
 }
 
 func (p ecdhParam) MarshalBinary() ([]byte, error) {
-	xb, yb := p.X.Bytes(), p.Y.Bytes()
-	xbLen := len(xb)
-	if xbLen > math.MaxUint16 {
-		return nil, fmt.Errorf("x contains too many bytes")
-	}
-	ybLen := len(yb)
-	if ybLen > math.MaxUint16 {
-		return nil, fmt.Errorf("y contains too many bytes")
+	pubLen := len(p.Pub)
+	if pubLen > math.MaxUint16 {
+		return nil, fmt.Errorf("pub contains too many bytes")
 	}
 	randLen := len(p.Rand)
 	if randLen > math.MaxUint16 {
@@ -170,18 +200,16 @@ func (p ecdhParam) MarshalBinary() ([]byte, error) {
 	}
 
 	var b []byte
-	b = binary.BigEndian.AppendUint16(b, uint16(xbLen))
-	b = append(b, xb...)
-	b = binary.BigEndian.AppendUint16(b, uint16(ybLen))
-	b = append(b, yb...)
+	b = binary.BigEndian.AppendUint16(b, uint16(pubLen))
+	b = append(b, p.Pub...)
 	b = binary.BigEndian.AppendUint16(b, uint16(randLen))
 	b = append(b, p.Rand...)
 	return b, nil
 }
 
 func (p *ecdhParam) UnmarshalBinary(b []byte) error {
-	var xb, yb, rb []byte
-	for _, bb := range []*[]byte{&xb, &yb, &rb} {
+	var pb, rb []byte
+	for _, bb := range []*[]byte{&pb, &rb} {
 		if len(b) < 2 {
 			return io.ErrUnexpectedEOF
 		}
@@ -194,14 +222,13 @@ func (p *ecdhParam) UnmarshalBinary(b []byte) error {
 		b = b[bLen:]
 	}
 
-	p.X = new(big.Int).SetBytes(xb)
-	p.Y = new(big.Int).SetBytes(yb)
+	p.Pub = pb
 	p.Rand = rb
 
 	return nil
 }
 
-func ecSymmetricKey(ecKey *ecdsa.PrivateKey, xA, xB []byte, cipher CipherSuite) (sek, svk []byte, err error) {
+func ecSymmetricKey(ecKey *ecdh.PrivateKey, xA, xB []byte, cipher CipherSuite) (sek, svk []byte, err error) {
 	// Decode parameters
 	var paramA, paramB ecdhParam
 	if err := paramA.UnmarshalBinary(xA); err != nil {
@@ -231,36 +258,26 @@ func ecSymmetricKey(ecKey *ecdsa.PrivateKey, xA, xB []byte, cipher CipherSuite) 
 }
 
 // Compute the ECDH shared secret
-func ecSharedSecret(key *ecdsa.PrivateKey, paramA, paramB ecdhParam) ([]byte, error) {
+func ecSharedSecret(key *ecdh.PrivateKey, paramA, paramB ecdhParam) ([]byte, error) {
 	// Determine which param is "other"
 	var other ecdhParam
 	switch {
-	case paramA.X.Cmp(key.PublicKey.X) == 0 &&
-		paramA.Y.Cmp(key.PublicKey.Y) == 0:
+	case bytes.Equal(paramA.Pub, key.PublicKey().Bytes()):
 		other = paramB
-	case paramB.X.Cmp(key.PublicKey.X) == 0 &&
-		paramB.Y.Cmp(key.PublicKey.Y) == 0:
+	case bytes.Equal(paramB.Pub, key.PublicKey().Bytes()):
 		other = paramA
 	default:
 		return nil, fmt.Errorf("neither parameter for the shared secret matched the session private key")
 	}
 
 	// Create ECDH public key from parameter
-	ecdhPub, err := (&ecdsa.PublicKey{
-		Curve: key.Curve,
-		X:     other.X,
-		Y:     other.Y,
-	}).ECDH()
+	ecdhPub, err := key.Curve().NewPublicKey(other.Pub)
 	if err != nil {
 		return nil, fmt.Errorf("error converting public key from param to ECDH (mismatched curves?): %w", err)
 	}
 
 	// Perform ECDH to get shared secret
-	ecdhKey, err := key.ECDH()
-	if err != nil {
-		return nil, err
-	}
-	shx, err := ecdhKey.ECDH(ecdhPub)
+	shx, err := key.ECDH(ecdhPub)
 	if err != nil {
 		return nil, err
 	}
@@ -284,11 +301,7 @@ type ecdhPersist struct {
 func (s *ECDHSession) MarshalCBOR() ([]byte, error) {
 	var keyBytes []byte
 	if s.priv != nil {
-		key, err := x509.MarshalECPrivateKey(s.priv)
-		if err != nil {
-			return nil, err
-		}
-		keyBytes = key
+		keyBytes = s.priv.Bytes()
 	}
 	return cbor.Marshal(ecdhPersist{
 		RandSize: s.randSize,
@@ -308,18 +321,19 @@ func (s *ECDHSession) UnmarshalCBOR(data []byte) error {
 		return err
 	}
 
-	curve := elliptic.P256()
-	if persist.RandSize == 48 {
-		curve = elliptic.P384()
+	var curve ecdh.Curve
+	switch s.randSize {
+	case 16:
+		curve = ecdh.P256()
+	case 48:
+		curve = ecdh.P384()
 	}
-
-	key, err := x509.ParseECPrivateKey(persist.Key)
+	key, err := curve.NewPrivateKey(persist.Key)
 	if err != nil && len(persist.Key) > 0 {
 		return fmt.Errorf("error parsing EC key: %w", err)
 	}
 
 	*s = ECDHSession{
-		curve:    curve,
 		randSize: persist.RandSize,
 		xA:       persist.ParamA,
 		xB:       persist.ParamB,

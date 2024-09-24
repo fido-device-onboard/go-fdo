@@ -68,7 +68,11 @@ func testEncodeDecode(t *testing.T, suite kex.Suite, sess kex.Session) {
 		t.Fatal(err)
 	}
 
-	if !reflect.DeepEqual(sess, load) {
+	if equaler, ok := sess.(interface{ Equal(kex.Session) bool }); ok {
+		if !equaler.Equal(load) {
+			t.Fatalf("session encode/decode:\nexpected %s\ngot %s", sess, load)
+		}
+	} else if !reflect.DeepEqual(sess, load) {
 		t.Fatalf("session encode/decode:\nexpected %s\ngot %s", sess, load)
 	}
 }
