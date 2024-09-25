@@ -442,7 +442,8 @@ func (s *DIServer[T]) maybeAutoTO0(ctx context.Context, ov *Voucher) error {
 
 	sign1 := cose.Sign1[protocol.To1d, []byte]{
 		Payload: cbor.NewByteWrap(protocol.To1d{
-			RV: s.AutoTO0Addrs,
+			RV:       s.AutoTO0Addrs,
+			To0dHash: protocol.Hash{Algorithm: protocol.Sha256Hash},
 		}),
 	}
 	if err := sign1.Sign(nextOwner, nil, nil, opts); err != nil {
