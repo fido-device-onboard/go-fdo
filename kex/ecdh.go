@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/big"
 	"reflect"
 	"strings"
 
@@ -185,31 +186,35 @@ func (s *ECDHSession) SetParameter(xB []byte, _ *rsa.PrivateKey) error {
 }
 
 type ecdhParam struct {
-	Pub  []byte
+	Pub  []byte // Encoded following SEC 1, Version 2.0, Section 2.3.3
 	Rand []byte
 }
 
 func (p ecdhParam) MarshalBinary() ([]byte, error) {
-	pubLen := len(p.Pub)
-	if pubLen > math.MaxUint16 {
-		return nil, fmt.Errorf("pub contains too many bytes")
+	pointLen := (len(p.Pub) - 1) / 2
+	if pointLen < 0 || pointLen > math.MaxUint16 {
+		panic("invalid public key - too large")
 	}
+	pointLen16 := uint16(pointLen) // needed to satisfy gosec
+
 	randLen := len(p.Rand)
 	if randLen > math.MaxUint16 {
 		return nil, fmt.Errorf("rand contains too many bytes")
 	}
 
 	var b []byte
-	b = binary.BigEndian.AppendUint16(b, uint16(pubLen))
-	b = append(b, p.Pub...)
+	b = binary.BigEndian.AppendUint16(b, pointLen16)
+	b = append(b, p.Pub[1:1+pointLen]...)
+	b = binary.BigEndian.AppendUint16(b, pointLen16)
+	b = append(b, p.Pub[1+pointLen:1+2*pointLen]...)
 	b = binary.BigEndian.AppendUint16(b, uint16(randLen))
 	b = append(b, p.Rand...)
 	return b, nil
 }
 
 func (p *ecdhParam) UnmarshalBinary(b []byte) error {
-	var pb, rb []byte
-	for _, bb := range []*[]byte{&pb, &rb} {
+	var xb, yb, rb []byte
+	for _, bb := range []*[]byte{&xb, &yb, &rb} {
 		if len(b) < 2 {
 			return io.ErrUnexpectedEOF
 		}
@@ -222,7 +227,11 @@ func (p *ecdhParam) UnmarshalBinary(b []byte) error {
 		b = b[bLen:]
 	}
 
-	p.Pub = pb
+	pointLen := max(len(xb), len(yb))
+	p.Pub = make([]byte, 1+2*pointLen)
+	p.Pub[0] = 4 // Uncompressed form marker
+	new(big.Int).SetBytes(xb).FillBytes(p.Pub[1 : 1+pointLen])
+	new(big.Int).SetBytes(yb).FillBytes(p.Pub[1+pointLen : 1+2*pointLen])
 	p.Rand = rb
 
 	return nil
