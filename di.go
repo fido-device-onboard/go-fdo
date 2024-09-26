@@ -31,7 +31,7 @@ type DIConfig struct {
 	// hash.Hash are not supposed to return non-nil errors from Write.
 	//
 	// 	type FallibleHash interface {
-	// 		Error() error
+	// 		Err() error
 	// 	}
 	HmacSha256 hash.Hash
 
@@ -44,7 +44,7 @@ type DIConfig struct {
 	// hash.Hash are not supposed to return non-nil errors from Write.
 	//
 	// 	type FallibleHash interface {
-	// 		Error() error
+	// 		Err() error
 	// 	}
 	HmacSha384 hash.Hash
 
