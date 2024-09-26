@@ -1,19 +1,19 @@
 // SPDX-FileCopyrightText: (C) 2024 Intel Corporation
 // SPDX-License-Identifier: Apache 2.0
 
-package kex
+// Package nistkdf implements a NIST 800-108 KDF using the parameters defined in FDO.
+package nistkdf
 
 import (
 	"crypto"
 	"crypto/hmac"
 	"crypto/sha512"
 	"encoding/binary"
-	"fmt"
 	"math"
 )
 
-// kdf implements NIST 800-108 using the parameters defined in FDO.
-func kdf(hash crypto.Hash, shSe, contextRand []byte, bits uint16) ([]byte, error) {
+// KDF implements NIST 800-108 using the parameters defined in FDO.
+func KDF(hash crypto.Hash, shSe, contextRand []byte, bits uint16) []byte {
 	// NIST SP 800-108 KDF in Counter Mode
 	//
 	// Parameters:
@@ -49,7 +49,7 @@ func kdf(hash crypto.Hash, shSe, contextRand []byte, bits uint16) ([]byte, error
 	case sha512.Size384:
 		h = sha512.Size384
 	default:
-		return nil, fmt.Errorf("unsupported hash size")
+		panic("unsupported hash size")
 	}
 
 	// Input
@@ -67,7 +67,7 @@ func kdf(hash crypto.Hash, shSe, contextRand []byte, bits uint16) ([]byte, error
 
 	// 2.
 	if n > math.MaxUint8 {
-		return nil, fmt.Errorf("n too large")
+		panic("n too large")
 	}
 	// Equivalent to
 	//
@@ -90,9 +90,7 @@ func kdf(hash crypto.Hash, shSe, contextRand []byte, bits uint16) ([]byte, error
 		// a.
 		digest.Reset()
 		input[0] = i + 1
-		if _, err := digest.Write(input); err != nil {
-			return nil, err
-		}
+		_, _ = digest.Write(input)
 
 		// b.
 		result = append(result, digest.Sum(nil)...)
@@ -102,5 +100,5 @@ func kdf(hash crypto.Hash, shSe, contextRand []byte, bits uint16) ([]byte, error
 	kOut := result[:L/8]
 
 	// Output
-	return kOut, nil
+	return kOut
 }

@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/internal/nistkdf"
 )
 
 func init() {
@@ -258,10 +259,7 @@ func ecSymmetricKey(ecKey *ecdh.PrivateKey, xA, xB []byte, cipher CipherSuite) (
 	if cipher.MacAlg != 0 {
 		svkSize = cipher.MacAlg.KeySize()
 	}
-	symKey, err := kdf(cipher.PRFHash, shSe, []byte{}, (sekSize+svkSize)*8)
-	if err != nil {
-		return nil, nil, fmt.Errorf("kdf: %w", err)
-	}
+	symKey := nistkdf.KDF(cipher.PRFHash, shSe, []byte{}, (sekSize+svkSize)*8)
 
 	return symKey[:sekSize], symKey[sekSize:], nil
 }

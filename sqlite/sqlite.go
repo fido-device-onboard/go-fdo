@@ -24,9 +24,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ncruces/go-sqlite3/driver"         // Load database/sql driver
-	_ "github.com/ncruces/go-sqlite3/embed"        // Load sqlite WASM binary
-	_ "github.com/ncruces/go-sqlite3/vfs/adiantum" // Encryption VFS
+	"github.com/ncruces/go-sqlite3/driver"  // Load database/sql driver
+	_ "github.com/ncruces/go-sqlite3/embed" // Load sqlite WASM binary
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
@@ -34,6 +33,7 @@ import (
 	"github.com/fido-device-onboard/go-fdo/custom"
 	"github.com/fido-device-onboard/go-fdo/kex"
 	"github.com/fido-device-onboard/go-fdo/protocol"
+	_ "github.com/fido-device-onboard/go-fdo/sqlite/xts" // Encryption VFS
 )
 
 // DB implements FDO server state persistence.
@@ -45,13 +45,13 @@ type DB struct {
 }
 
 // New creates or opens a SQLite database file using a single non-pooled
-// connection. If a password is specified, then the adiantum VFS will be used
+// connection. If a password is specified, then the xts VFS will be used
 // with a text key.
 func New(filename, password string) (*DB, error) {
 	// Open a new or existing DB
 	query := "?_pragma=foreign_keys(ON)"
 	if password != "" {
-		query += fmt.Sprintf("&vfs=adiantum&_pragma=textkey(%q)", password)
+		query += fmt.Sprintf("&vfs=xts&_pragma=textkey(%q)", password)
 	}
 	connector, err := (&driver.SQLite{}).OpenConnector("file:" + filepath.Clean(filename) + query)
 	if err != nil {
@@ -147,7 +147,7 @@ func New(filename, password string) (*DB, error) {
 		if _, err := db.Exec(sql); err != nil {
 			_ = db.Close()
 			if password != "" && strings.Contains(err.Error(), "file is not a database") {
-				return nil, fmt.Errorf("invalid database password")
+				return nil, fmt.Errorf("incorrect or missing database password")
 			}
 			return nil, fmt.Errorf("error creating tables: %w", err)
 		}

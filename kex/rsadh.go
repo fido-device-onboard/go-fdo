@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/internal/nistkdf"
 )
 
 var prime14, prime15 *big.Int
@@ -178,10 +179,7 @@ func rsaSymmetricKey(other, own, p *big.Int, cipher CipherSuite) (sek, svk []byt
 	if cipher.MacAlg != 0 {
 		svkSize = cipher.MacAlg.KeySize()
 	}
-	symKey, err := kdf(cipher.PRFHash, shSe, []byte{}, (sekSize+svkSize)*8)
-	if err != nil {
-		return nil, nil, fmt.Errorf("kdf: %w", err)
-	}
+	symKey := nistkdf.KDF(cipher.PRFHash, shSe, []byte{}, (sekSize+svkSize)*8)
 
 	return symKey[:sekSize], symKey[sekSize:], nil
 }

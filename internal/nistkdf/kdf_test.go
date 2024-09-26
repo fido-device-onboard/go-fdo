@@ -1,14 +1,15 @@
 // SPDX-FileCopyrightText: (C) 2024 Intel Corporation
 // SPDX-License-Identifier: Apache 2.0
 
-// Package kex implements the Key Exchange subprotocol of FDO.
-package kex
+package nistkdf_test
 
 import (
 	"bytes"
 	"crypto"
 	"encoding/hex"
 	"testing"
+
+	"github.com/fido-device-onboard/go-fdo/internal/nistkdf"
 )
 
 func TestKnownResult(t *testing.T) {
@@ -24,10 +25,7 @@ func TestKnownResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := kdf(crypto.SHA256, shSe, nil, 256)
-	if err != nil {
-		t.Fatal(err)
-	}
+	got := nistkdf.KDF(crypto.SHA256, shSe, nil, 256)
 	if !bytes.Equal(expect, got) {
 		t.Fatalf("expected %x, got %x", expect, got)
 	}

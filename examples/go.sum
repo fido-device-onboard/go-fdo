@@ -60,5 +60,3 @@ gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
 gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
 hermannm.dev/devlog v0.4.1 h1:U9pVaGo2ieRyDGP+AxXa7knpfHjqpwHJ3e42oxJ4cws=
 hermannm.dev/devlog v0.4.1/go.mod h1:GZOMC2V1GutRWWlre21AScHju48/KompKih1Bs21gRg=
-lukechampine.com/adiantum v1.1.1 h1:4fp6gTxWCqpEbLy40ExiYDDED3oUNWx5cTqBCtPdZqA=
-lukechampine.com/adiantum v1.1.1/go.mod h1:LrAYVnTYLnUtE/yMp5bQr0HstAf060YUF8nM0B6+rUw=

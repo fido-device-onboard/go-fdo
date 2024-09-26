@@ -27,5 +27,4 @@ require (
 	golang.org/x/crypto v0.26.0 // indirect
 	golang.org/x/sys v0.24.0 // indirect
 	golang.org/x/term v0.23.0 // indirect
-	lukechampine.com/adiantum v1.1.1 // indirect
 )
