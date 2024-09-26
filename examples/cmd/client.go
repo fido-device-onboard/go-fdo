@@ -37,6 +37,7 @@ import (
 	"github.com/fido-device-onboard/go-fdo/kex"
 	"github.com/fido-device-onboard/go-fdo/protocol"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
+	"github.com/fido-device-onboard/go-fdo/tpm"
 )
 
 var clientFlags = flag.NewFlagSet("client", flag.ContinueOnError)
@@ -48,6 +49,7 @@ var (
 	diKeyEnc    string
 	kexSuite    string
 	cipherSuite string
+	tpmPath     string
 	printDevice bool
 	rvOnly      bool
 	dlDir       string
@@ -137,6 +139,7 @@ func init() {
 	clientFlags.StringVar(&diKey, "di-key", "ec384", "Key for device credential [options: ec256, ec384, rsa2048, rsa3072]")
 	clientFlags.StringVar(&diKeyEnc, "di-key-enc", "x509", "Public key encoding to use for manufacturer key [x509,x5chain,cose]")
 	clientFlags.StringVar(&kexSuite, "kex", "ECDH384", "Name of cipher `suite` to use for key exchange (see usage)")
+	clientFlags.StringVar(&tpmPath, "tpm", "", "Use a TPM at `path` for device credential secrets")
 	clientFlags.StringVar(&cipherSuite, "cipher", "A128GCM", "Name of cipher `suite` to use for encryption (see usage)")
 	clientFlags.BoolVar(&printDevice, "print", false, "Print device credential blob and stop")
 	clientFlags.BoolVar(&rvOnly, "rv-only", false, "Perform TO1 then stop")
@@ -155,19 +158,12 @@ func client() error {
 	}
 
 	// Read device credential blob to configure client for TO1/TO2
-	blobData, err := os.ReadFile(filepath.Clean(blobPath))
-	if err != nil {
-		return fmt.Errorf("error reading blob credential %q: %w", blobPath, err)
+	dc, hmacSha256, hmacSha384, privateKey, cleanup, err := readCred()
+	if err == nil {
+		defer func() { _ = cleanup() }()
 	}
-	var cred blob.DeviceCredential
-	if err := cbor.Unmarshal(blobData, &cred); err != nil {
-		return fmt.Errorf("error parsing blob credential %q: %w", blobPath, err)
-	}
-
-	// If print option was given, stop here
-	if printDevice {
-		fmt.Printf("%+v\n", cred)
-		return nil
+	if err != nil || printDevice {
+		return err
 	}
 
 	// Try TO1+TO2
@@ -175,11 +171,11 @@ func client() error {
 	if !ok {
 		return fmt.Errorf("invalid key exchange cipher suite: %s", cipherSuite)
 	}
-	newDC := transferOwnership(cred.RvInfo, fdo.TO2Config{
-		Cred:       cred.DeviceCredential,
-		HmacSha256: hmac.New(sha256.New, cred.HmacSecret),
-		HmacSha384: hmac.New(sha512.New384, cred.HmacSecret),
-		Key:        cred.PrivateKey,
+	newDC := transferOwnership(dc.RvInfo, fdo.TO2Config{
+		Cred:       *dc,
+		HmacSha256: hmacSha256,
+		HmacSha384: hmacSha384,
+		Key:        privateKey,
 		Devmod: serviceinfo.Devmod{
 			Os:      runtime.GOOS,
 			Arch:    runtime.GOARCH,
@@ -199,32 +195,10 @@ func client() error {
 	}
 
 	// Store new credential
-	cred.DeviceCredential = *newDC
-	return saveBlob(cred)
+	return updateCred(*newDC)
 }
 
-func saveBlob(dc blob.DeviceCredential) error {
-	// Encode device credential to temp file
-	tmp, err := os.CreateTemp(".", "fdo_cred_*")
-	if err != nil {
-		return fmt.Errorf("error creating temp file for device credential: %w", err)
-	}
-	defer func() { _ = tmp.Close() }()
-
-	if err := cbor.NewEncoder(tmp).Encode(dc); err != nil {
-		return err
-	}
-
-	// Rename temp file to given blob path
-	_ = tmp.Close()
-	if err := os.Rename(tmp.Name(), blobPath); err != nil {
-		return fmt.Errorf("error renaming temp blob credential to %q: %w", blobPath, err)
-	}
-
-	return nil
-}
-
-func di() (err error) {
+func di() (err error) { //nolint:gocyclo
 	// Generate new key and secret
 	secret := make([]byte, 32)
 	if _, err := rand.Read(secret); err != nil {
@@ -252,6 +226,16 @@ func di() (err error) {
 	}
 	if err != nil {
 		return fmt.Errorf("error generating device key: %w", err)
+	}
+
+	// If using a TPM, swap key/hmac for that
+	if tpmPath != "" {
+		var cleanup func() error
+		hmacSha256, hmacSha384, key, cleanup, err = tpmCred()
+		if err != nil {
+			return err
+		}
+		defer func() { _ = cleanup() }()
 	}
 
 	// Generate Java implementation-compatible mfg string
@@ -297,7 +281,13 @@ func di() (err error) {
 		return err
 	}
 
-	return saveBlob(blob.DeviceCredential{
+	if tpmPath != "" {
+		return saveCred(tpm.DeviceCredential{
+			DeviceCredential: *cred,
+			DeviceKey:        tpm.FdoDeviceKey,
+		})
+	}
+	return saveCred(blob.DeviceCredential{
 		Active:           true,
 		DeviceCredential: *cred,
 		HmacSecret:       secret,

@@ -9,9 +9,10 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/fido-device-onboard/go-fdo/tpm"
 	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/google/go-tpm/tpm2/transport/simulator"
+
+	"github.com/fido-device-onboard/go-fdo/tpm"
 )
 
 func TestHmac(t *testing.T) {
@@ -19,10 +20,13 @@ func TestHmac(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error opening opening TPM simulator: %v", err)
 	}
-	defer func() { _ = sim.Close() }()
+	defer func() {
+		if err := sim.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 
-	// Note: Simulator does not support SHA384
-	for _, alg := range []crypto.Hash{crypto.SHA256} {
+	for _, alg := range []crypto.Hash{crypto.SHA256, crypto.SHA384} {
 		msg := []byte("ThanksForAllTheFish\n")
 		expected := tpmHMAC(t, sim, alg, msg)
 
@@ -36,9 +40,9 @@ func TestHmac(t *testing.T) {
 		})
 
 		t.Run(fmt.Sprintf("%s multi-write", alg), func(t *testing.T) {
-			h := tpm.Hmac{
-				TPM: sim,
-				Alg: alg,
+			h, err := tpm.NewHmac(sim, alg)
+			if err != nil {
+				t.Fatalf("new hmac: %v", err)
 			}
 			defer func() {
 				if err := h.Close(); err != nil {
@@ -48,13 +52,13 @@ func TestHmac(t *testing.T) {
 
 			// Multi-write sequence
 			_, _ = h.Write(msg[0:3])
-			if h.Err() != nil {
-				t.Fatalf("hmac write (1/2): %v", h.Err())
+			if err := h.Err(); err != nil {
+				t.Fatalf("hmac write (1/2): %v", err)
 			}
 
 			_, _ = h.Write(msg[3:])
-			if h.Err() != nil {
-				t.Fatalf("hmac write (2/2): %v", h.Err())
+			if err := h.Err(); err != nil {
+				t.Fatalf("hmac write (2/2): %v", err)
 			}
 
 			got := h.Sum(nil)
@@ -65,9 +69,9 @@ func TestHmac(t *testing.T) {
 		})
 
 		t.Run(fmt.Sprintf("%s empty sum", alg), func(t *testing.T) {
-			h := tpm.Hmac{
-				TPM: sim,
-				Alg: alg,
+			h, err := tpm.NewHmac(sim, alg)
+			if err != nil {
+				t.Fatalf("new hmac: %v", err)
 			}
 			defer func() {
 				if err := h.Close(); err != nil {
@@ -76,8 +80,8 @@ func TestHmac(t *testing.T) {
 			}()
 
 			got := h.Sum(nil)
-			if h.Err() != nil {
-				t.Errorf("hmac sum: %v", h.Err())
+			if err := h.Err(); err != nil {
+				t.Errorf("hmac sum: %v", err)
 			}
 
 			if len(got) == 0 {
@@ -87,9 +91,9 @@ func TestHmac(t *testing.T) {
 		})
 
 		t.Run(fmt.Sprintf("%s with reset", alg), func(t *testing.T) {
-			h := tpm.Hmac{
-				TPM: sim,
-				Alg: alg,
+			h, err := tpm.NewHmac(sim, alg)
+			if err != nil {
+				t.Fatalf("new hmac: %v", err)
 			}
 			defer func() {
 				if err := h.Close(); err != nil {
@@ -98,15 +102,15 @@ func TestHmac(t *testing.T) {
 			}()
 
 			_ = h.Sum(nil)
-			if h.Err() != nil {
-				t.Fatalf("hmac sum: %v", h.Err())
+			if err := h.Err(); err != nil {
+				t.Fatalf("hmac sum: %v", err)
 			}
 
 			// Reset HMAC
 			h.Reset()
 			_, _ = h.Write(msg)
-			if h.Err() != nil {
-				t.Fatalf("write after reset: %v", h.Err())
+			if err := h.Err(); err != nil {
+				t.Fatalf("write after reset: %v", err)
 			}
 			got := h.Sum(nil)
 
@@ -114,13 +118,12 @@ func TestHmac(t *testing.T) {
 				t.Errorf("got %x, expected %x", got, expected)
 			}
 		})
-
 	}
 
 	t.Run("Multi-HMAC", func(t *testing.T) {
-		h1 := tpm.Hmac{
-			TPM: sim,
-			Alg: crypto.SHA256,
+		h1, err := tpm.NewHmac(sim, crypto.SHA256)
+		if err != nil {
+			t.Fatalf("new hmac 1: %v", err)
 		}
 		defer func() {
 			if err := h1.Close(); err != nil {
@@ -128,9 +131,9 @@ func TestHmac(t *testing.T) {
 			}
 		}()
 
-		h2 := tpm.Hmac{
-			TPM: sim,
-			Alg: crypto.SHA256,
+		h2, err := tpm.NewHmac(sim, crypto.SHA256)
+		if err != nil {
+			t.Fatalf("new hmac 2: %v", err)
 		}
 		defer func() {
 			if err := h2.Close(); err != nil {
@@ -141,20 +144,19 @@ func TestHmac(t *testing.T) {
 		_ = h1.Sum(nil)
 		_ = h2.Sum(nil)
 
-		if h1.Err() != nil {
-			t.Fatalf("hmac first key: %v", h1.Err())
+		if err := h1.Err(); err != nil {
+			t.Fatalf("hmac first key: %v", err)
 		}
 
-		if h2.Err() != nil {
-			t.Fatalf("hmac second key: %v", h2.Err())
+		if err := h2.Err(); err != nil {
+			t.Fatalf("hmac second key: %v", err)
 		}
-
 	})
 
 	t.Run("Reset completed", func(t *testing.T) {
-		h1 := tpm.Hmac{
-			TPM: sim,
-			Alg: crypto.SHA256,
+		h1, err := tpm.NewHmac(sim, crypto.SHA256)
+		if err != nil {
+			t.Fatalf("new hmac: %v", err)
 		}
 		defer func() {
 			if err := h1.Close(); err != nil {
@@ -163,8 +165,8 @@ func TestHmac(t *testing.T) {
 		}()
 
 		_ = h1.Sum(nil)
-		if h1.Err() != nil {
-			t.Errorf("no error expected")
+		if err := h1.Err(); err != nil {
+			t.Errorf("no error expected, got %v", err)
 		}
 
 		n, _ := h1.Write([]byte{42})
@@ -176,15 +178,13 @@ func TestHmac(t *testing.T) {
 		if h1.Err() == nil {
 			t.Errorf("expected sum error for completed hmac")
 		}
-
 	})
-
 }
 
 func tpmHMAC(t *testing.T, sim transport.TPMCloser, alg crypto.Hash, msg []byte) []byte {
-	h := tpm.Hmac{
-		TPM: sim,
-		Alg: alg,
+	h, err := tpm.NewHmac(sim, alg)
+	if err != nil {
+		t.Fatalf("new hmac: %v", err)
 	}
 	defer func() {
 		if err := h.Close(); err != nil {
@@ -192,20 +192,19 @@ func tpmHMAC(t *testing.T, sim transport.TPMCloser, alg crypto.Hash, msg []byte)
 		}
 	}()
 
-	bs := h.BlockSize()
-	if bs != 1024 {
-		t.Errorf("Expected block size 1024, got %d", bs)
-	}
-
 	n, _ := h.Write(msg)
-	if h.Err() != nil {
-		t.Fatalf("hmac write: %v", h.Err())
-		return []byte{}
+	if err := h.Err(); err != nil {
+		t.Fatalf("hmac write: %v", err)
 	}
 
 	if n != len(msg) {
 		t.Errorf("hmac write: expected %d bytes, got %d", len(msg), n)
 	}
 
-	return h.Sum(nil)
+	sum := h.Sum(nil)
+	if err := h.Err(); err != nil {
+		t.Fatalf("hmac sum: %v", err)
+	}
+
+	return sum
 }
