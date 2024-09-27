@@ -159,7 +159,7 @@ func client() error {
 
 	// Read device credential blob to configure client for TO1/TO2
 	dc, hmacSha256, hmacSha384, privateKey, cleanup, err := readCred()
-	if err == nil {
+	if err == nil && cleanup != nil {
 		defer func() { _ = cleanup() }()
 	}
 	if err != nil || printDevice {
