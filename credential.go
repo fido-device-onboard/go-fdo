@@ -3,7 +3,9 @@
 
 package fdo
 
-import "github.com/fido-device-onboard/go-fdo/protocol"
+import (
+	"github.com/fido-device-onboard/go-fdo/protocol"
+)
 
 // DeviceCredential is non-normative, but the [TPM Draft Spec] proposes a CBOR
 // encoding, so that will be used, excluding the key type/handle.

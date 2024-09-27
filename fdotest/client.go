@@ -295,7 +295,7 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 					Active:           true,
 					DeviceCredential: *cred,
 					HmacSecret:       secret,
-					PrivateKey:       blob.Pkcs8Key{PrivateKey: key},
+					PrivateKey:       blob.Pkcs8Key{Signer: key},
 				})
 			})
 
@@ -364,7 +364,7 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 					Active:           true,
 					DeviceCredential: *cred,
 					HmacSecret:       secret,
-					PrivateKey:       blob.Pkcs8Key{PrivateKey: key},
+					PrivateKey:       blob.Pkcs8Key{Signer: key},
 				})
 			})
 
@@ -400,7 +400,7 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 					Active:           true,
 					DeviceCredential: *cred,
 					HmacSecret:       secret,
-					PrivateKey:       blob.Pkcs8Key{PrivateKey: key},
+					PrivateKey:       blob.Pkcs8Key{Signer: key},
 				})
 			})
 
@@ -441,7 +441,7 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 					Active:           true,
 					DeviceCredential: *newCred,
 					HmacSecret:       secret,
-					PrivateKey:       blob.Pkcs8Key{PrivateKey: key},
+					PrivateKey:       blob.Pkcs8Key{Signer: key},
 				})
 				cred = newCred
 			})

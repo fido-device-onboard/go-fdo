@@ -9,6 +9,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"encoding/asn1"
 	"errors"
 	"fmt"
 	"io"
@@ -51,10 +52,10 @@ func (s1 *Sign1[P, A]) Sign(key crypto.Signer, payload *P, additionalData A, opt
 		return err
 	}
 
-	// When an *ecdsa.PrivateKey is used, override its Sign implementation
+	// When an ECDSA key is used, override its Sign implementation
 	// to use RFC8152 signature encoding rather than ASN1.
-	if eckey, ok := key.(*ecdsa.PrivateKey); ok {
-		key = RFC8152Signer{eckey}
+	if _, ok := key.Public().(*ecdsa.PublicKey); ok {
+		key = RFC8152Signer{key}
 	}
 
 	// Put algorithm ID in the signature protected header before signing
@@ -202,25 +203,32 @@ type signature1[P, A any] struct {
 // RFC8152Signer wraps an ECDSA private key and uses the signature encoding
 // required by COSE.
 type RFC8152Signer struct {
-	PrivateKey *ecdsa.PrivateKey
+	crypto.Signer
 }
-
-// Public returns the public key corresponding to the opaque,
-// private key.
-func (key RFC8152Signer) Public() crypto.PublicKey { return key.PrivateKey.Public() }
 
 // Sign implements crypto.Signer.
 func (key RFC8152Signer) Sign(rand io.Reader, digest []byte, _ crypto.SignerOpts) ([]byte, error) {
-	r, s, err := ecdsa.Sign(rand, key.PrivateKey, digest)
+	sig, err := key.Signer.Sign(rand, digest, nil)
 	if err != nil {
 		return nil, err
 	}
 
+	// Decode ASN.1 signature
+	var asn1Sig struct {
+		R *big.Int
+		S *big.Int
+	}
+	if extra, err := asn1.Unmarshal(sig, &asn1Sig); err != nil {
+		return nil, fmt.Errorf("error unmarshaling ECDSA ASN.1 signature: %w", err)
+	} else if len(extra) > 0 {
+		return nil, fmt.Errorf("unparsed signature data")
+	}
+
 	// Encode signature following RFC8152 8.1.
-	n := (key.PrivateKey.Params().N.BitLen() + 7) / 8
+	n := (key.Public().(*ecdsa.PublicKey).Params().N.BitLen() + 7) / 8
 	sigBytes := make([]byte, n*2)
-	r.FillBytes(sigBytes[:n])
-	s.FillBytes(sigBytes[n:])
+	asn1Sig.R.FillBytes(sigBytes[:n])
+	asn1Sig.S.FillBytes(sigBytes[n:])
 	return sigBytes, nil
 }
 

@@ -9,13 +9,14 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
-	"math/big"
 	"strings"
 	"testing"
 
 	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/google/go-tpm/tpm2/transport/simulator"
 
+	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/cose"
 	"github.com/fido-device-onboard/go-fdo/tpm"
 )
 
@@ -111,11 +112,7 @@ func TestPublicKey(t *testing.T) {
 			// Verify the test signature
 			switch pub := key.Public().(type) {
 			case *ecdsa.PublicKey:
-				// Decode signature following RFC8152 8.1.
-				n := (pub.Params().N.BitLen() + 7) / 8
-				r := new(big.Int).SetBytes(sig[:n])
-				s := new(big.Int).SetBytes(sig[n:])
-				if !ecdsa.Verify(pub, digest, r, s) {
+				if !ecdsa.VerifyASN1(pub, digest, sig) {
 					t.Fatalf("error verifying ECDSA signature")
 				}
 
@@ -136,5 +133,32 @@ func TestPublicKey(t *testing.T) {
 				t.Fatalf("unexpected key type: %T", pub)
 			}
 		})
+	}
+}
+
+func TestRFC8152Signer(t *testing.T) {
+	sim, err := simulator.OpenSimulator()
+	if err != nil {
+		t.Fatalf("error opening opening TPM simulator: %v", err)
+	}
+	defer func() {
+		if err := sim.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+
+	key, err := tpm.GenerateECKey(sim, elliptic.P256())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s1 := cose.Sign1[int, []byte]{Payload: cbor.NewByteWrap(11)}
+	if err := s1.Sign(key, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s1.Verify(key.Public(), nil, nil); err != nil {
+		t.Fatal(err)
+	} else if !ok {
+		t.Error("signature verification failed")
 	}
 }

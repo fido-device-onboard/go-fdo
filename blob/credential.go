@@ -31,7 +31,7 @@ type DeviceCredential struct {
 func (dc DeviceCredential) String() string {
 	var key crypto.PrivateKey
 	if dc.PrivateKey.IsValid() {
-		key = dc.PrivateKey.PrivateKey
+		key = dc.PrivateKey.Signer
 	}
 	s := fmt.Sprintf(`blobcred[
   Active        %t

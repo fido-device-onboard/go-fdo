@@ -56,6 +56,8 @@ Client options:
         Print device credential blob and stop
   -rv-only
         Perform TO1 then stop
+  -tpm path
+        Use a TPM at path for device credential secrets
   -upload files
         List of dirs and files to upload files from, comma-separated and/or flag provided multiple times (FSIM disabled if empty)
 

@@ -291,7 +291,7 @@ func di() (err error) { //nolint:gocyclo
 		Active:           true,
 		DeviceCredential: *cred,
 		HmacSecret:       secret,
-		PrivateKey:       blob.Pkcs8Key{PrivateKey: key},
+		PrivateKey:       blob.Pkcs8Key{Signer: key},
 	})
 }
 

@@ -124,7 +124,7 @@ func readCredential(t *testing.T) *blob.DeviceCredential {
 		Active:           rustCred.Active,
 		DeviceCredential: rustCred.DeviceCredential,
 		HmacSecret:       rustCred.Secrets["Plain"]["hmac_secret"],
-		PrivateKey:       blob.Pkcs8Key{PrivateKey: privateKey},
+		PrivateKey:       blob.Pkcs8Key{Signer: privateKey},
 	}
 }
 

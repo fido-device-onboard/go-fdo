@@ -3,7 +3,9 @@
 
 package tpm
 
-import "github.com/fido-device-onboard/go-fdo"
+import (
+	"github.com/fido-device-onboard/go-fdo"
+)
 
 // DeviceKeyType enumerates how DeviceKey is encoded and stored.
 type DeviceKeyType uint8
@@ -22,7 +24,7 @@ const (
 // DeviceCredential marshals to the structure defined in the
 // [TPM Draft Spec](https://fidoalliance.org/specs/FDO/securing-fdo-in-tpm-v1.0-rd-20231010/securing-fdo-in-tpm-v1.0-rd-20231010.html).
 type DeviceCredential struct {
-	fdo.DeviceCredential `cbor:",flat5"`
-	DeviceKey            DeviceKeyType
-	DeviceKeyHandle      uint32
+	fdo.DeviceCredential
+	DeviceKey       DeviceKeyType
+	DeviceKeyHandle uint32
 }

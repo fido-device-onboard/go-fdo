@@ -8,6 +8,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rsa"
+	"encoding/asn1"
 	"fmt"
 	"io"
 	"math"
@@ -171,7 +172,7 @@ func (key *key) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) ([]b
 		return nil, fmt.Errorf("unable to sign digest: %w", err)
 	}
 
-	switch pub := key.PublicKey.(type) {
+	switch key.PublicKey.(type) {
 	case *ecdsa.PublicKey:
 		ecdsaSig, err := sig.Signature.Signature.ECDSA()
 		if err != nil {
@@ -179,13 +180,10 @@ func (key *key) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) ([]b
 		}
 		r := new(big.Int).SetBytes(ecdsaSig.SignatureR.Buffer)
 		s := new(big.Int).SetBytes(ecdsaSig.SignatureS.Buffer)
-
-		// Encode signature following RFC8152 8.1.
-		n := (pub.Params().N.BitLen() + 7) / 8
-		sigBytes := make([]byte, n*2)
-		r.FillBytes(sigBytes[:n])
-		s.FillBytes(sigBytes[n:])
-		return sigBytes, nil
+		return asn1.Marshal(struct {
+			R *big.Int
+			S *big.Int
+		}{R: r, S: s})
 
 	case *rsa.PublicKey:
 		if _, ok := opts.(*rsa.PSSOptions); ok {
