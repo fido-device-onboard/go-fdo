@@ -136,8 +136,6 @@ func TO2(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1
 		c.DeviceModules = make(map[string]serviceinfo.DeviceModule)
 	}
 
-	// TODO: Validate key exchange options using table in 3.6.5
-
 	// Mutually attest the device and owner service
 	//
 	// Results: Replacement ownership voucher, nonces to be retransmitted in
@@ -253,6 +251,15 @@ func verifyOwner(ctx context.Context, transport Transport, to1d *cose.Sign1[prot
 	proveDeviceNonce, info, session, err := sendHelloDevice(ctx, transport, c)
 	if err != nil {
 		return protocol.Nonce{}, nil, nil, nil, err
+	}
+	if !c.KeyExchange.Valid(c.Key.Public(), info.PublicKeyToValidate) {
+		return protocol.Nonce{}, nil, nil, nil, fmt.Errorf(
+			"key exchange %s is invalid for the device and owner attestation types",
+			c.KeyExchange,
+		)
+	}
+	if !kex.Available(c.KeyExchange, c.CipherSuite) {
+		return protocol.Nonce{}, nil, nil, nil, fmt.Errorf("unsupported key exchange/cipher suite")
 	}
 	var entries []cose.Sign1Tag[VoucherEntryPayload, []byte]
 	for i := 0; i < info.NumVoucherEntries; i++ {
@@ -561,7 +568,13 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 	}
 
 	// Begin key exchange
-	if !kex.IsValid(hello.KexSuiteName, hello.CipherSuite) {
+	if !hello.KexSuiteName.Valid(hello.SigInfoA.Type, expectedCUPHOwnerKey) {
+		return nil, fmt.Errorf(
+			"key exchange %s is invalid for the device and owner attestation types",
+			hello.KexSuiteName,
+		)
+	}
+	if !kex.Available(hello.KexSuiteName, hello.CipherSuite) {
 		return nil, fmt.Errorf("unsupported key exchange/cipher suite")
 	}
 	sess := hello.KexSuiteName.New(nil, hello.CipherSuite)

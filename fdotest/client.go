@@ -192,18 +192,6 @@ func RunClientTestSuite(t *testing.T, state AllServerState, deviceModules map[st
 			keyExchange: kex.DHKEXid15Suite,
 			cipherSuite: kex.A128GcmCipher,
 		},
-		{
-			keyType:     protocol.Secp256r1KeyType,
-			keyEncoding: protocol.X5ChainKeyEnc,
-			keyExchange: kex.DHKEXid14Suite,
-			cipherSuite: kex.A128GcmCipher,
-		},
-		{
-			keyType:     protocol.Secp384r1KeyType,
-			keyEncoding: protocol.X5ChainKeyEnc,
-			keyExchange: kex.DHKEXid15Suite,
-			cipherSuite: kex.A128GcmCipher,
-		},
 	} {
 		transport.DIResponder.DeviceInfo = func(context.Context, *custom.DeviceMfgInfo, []*x509.Certificate) (string, protocol.KeyType, protocol.KeyEncoding, error) {
 			return "test_device", table.keyType, table.keyEncoding, nil
