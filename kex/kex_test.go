@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/kex"
 )
 
@@ -53,6 +54,50 @@ func testSuite(suite kex.Suite) func(t *testing.T) {
 		if len(reflect.ValueOf(serverSess).Elem().FieldByName("SVK").Bytes()) > 0 ||
 			len(reflect.ValueOf(clientSess).Elem().FieldByName("SVK").Bytes()) > 0 {
 			t.Fatal("expected client and server sessions to have no SVK")
+		}
+
+		type example struct {
+			A int
+			B []byte
+			C struct {
+				D string
+				E uint
+			}
+		}
+		expect := example{
+			A: 7,
+			B: []byte{0x00, 0x01, 0x02},
+			C: struct {
+				D string
+				E uint
+			}{
+				D: "Hello world!",
+				E: 0,
+			},
+		}
+
+		encrypted, err := serverSess.Encrypt(rand.Reader, expect)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var buf bytes.Buffer
+		if err := cbor.NewEncoder(&buf).Encode(encrypted); err != nil {
+			t.Fatal(err)
+		}
+
+		decrypted, err := clientSess.Decrypt(rand.Reader, &buf)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var got example
+		if err := cbor.Unmarshal(decrypted, &got); err != nil {
+			t.Fatal(err)
+		}
+
+		if !reflect.DeepEqual(expect, got) {
+			t.Fatalf("expected %#v, got %#v", expect, got)
 		}
 	}
 }
