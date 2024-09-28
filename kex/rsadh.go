@@ -172,7 +172,8 @@ func (s *RSADHSession) SetParameter(xB []byte, _ *rsa.PrivateKey) error {
 
 func rsaSymmetricKey(other, own, p *big.Int, cipher CipherSuite) (sek, svk []byte, err error) {
 	// Compute shared secret
-	shSe := new(big.Int).Exp(other, own, p).Bytes()
+	shSe := make([]byte, len(p.Bytes()))
+	new(big.Int).Exp(other, own, p).FillBytes(shSe)
 
 	// Derive a symmetric key
 	sekSize, svkSize := cipher.EncryptAlg.KeySize(), uint16(0)
