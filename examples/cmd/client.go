@@ -23,10 +23,12 @@ import (
 	"math/big"
 	"net"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/blob"
@@ -152,6 +154,21 @@ func client() error {
 		level.Set(slog.LevelDebug)
 	}
 
+	// Catch interrupts
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt)
+	go func() {
+		defer signal.Stop(sigs)
+
+		select {
+		case <-ctx.Done():
+		case <-sigs:
+			cancel()
+		}
+	}()
+
 	// Perform DI if given a URL
 	if diURL != "" {
 		return di()
@@ -171,7 +188,7 @@ func client() error {
 	if !ok {
 		return fmt.Errorf("invalid key exchange cipher suite: %s", cipherSuite)
 	}
-	newDC := transferOwnership(dc.RvInfo, fdo.TO2Config{
+	newDC := transferOwnership(ctx, dc.RvInfo, fdo.TO2Config{
 		Cred:       *dc,
 		HmacSha256: hmacSha256,
 		HmacSha384: hmacSha384,
@@ -295,14 +312,11 @@ func di() (err error) { //nolint:gocyclo
 	})
 }
 
-func transferOwnership(rvInfo [][]protocol.RvInstruction, conf fdo.TO2Config) *fdo.DeviceCredential { //nolint:gocyclo
-	var to1URLs, to2URLs []string
+func transferOwnership(ctx context.Context, rvInfo [][]protocol.RvInstruction, conf fdo.TO2Config) *fdo.DeviceCredential { //nolint:gocyclo
+	var to2URLs []string
 	directives := protocol.ParseDeviceRvInfo(rvInfo)
 	for _, directive := range directives {
 		if !directive.Bypass {
-			for _, url := range directive.URLs {
-				to1URLs = append(to1URLs, url.String())
-			}
 			continue
 		}
 		for _, url := range directive.URLs {
@@ -312,14 +326,30 @@ func transferOwnership(rvInfo [][]protocol.RvInstruction, conf fdo.TO2Config) *f
 
 	// Try TO1 on each address only once
 	var to1d *cose.Sign1[protocol.To1d, []byte]
-	for _, baseURL := range to1URLs {
-		var err error
-		to1d, err = fdo.TO1(context.TODO(), tlsTransport(baseURL, nil), conf.Cred, conf.Key, nil)
-		if err != nil {
-			slog.Error("TO1 failed", "base URL", baseURL, "error", err)
+TO1:
+	for _, directive := range directives {
+		if directive.Bypass {
 			continue
 		}
-		break
+
+		for _, url := range directive.URLs {
+			var err error
+			to1d, err = fdo.TO1(context.TODO(), tlsTransport(url.String(), nil), conf.Cred, conf.Key, nil)
+			if err != nil {
+				slog.Error("TO1 failed", "base URL", url.String(), "error", err)
+				continue
+			}
+			break TO1
+		}
+
+		if directive.Delay != 0 {
+			// A 25% plus or minus jitter is allowed by spec
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(directive.Delay):
+			}
+		}
 	}
 	if to1d != nil {
 		for _, to2Addr := range to1d.Payload.Val.RV {
