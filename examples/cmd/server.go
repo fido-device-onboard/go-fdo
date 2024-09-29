@@ -25,7 +25,6 @@ import (
 	"math/big"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -457,27 +456,27 @@ func newHandler(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) (*transport
 	if to0Addr == "" && !rvBypass {
 		autoTO0 = state
 
-		to1URLs, _ := protocol.BaseHTTP(rvInfo)
-		to1URL, err := url.Parse(to1URLs[0])
-		if err != nil {
-			return nil, fmt.Errorf("error parsing TO1 URL to use for TO2 addr: %w", err)
-		}
-		to1Host := to1URL.Hostname()
-		to1Port, err := strconv.ParseUint(to1URL.Port(), 10, 16)
-		if err != nil {
-			return nil, fmt.Errorf("error parsing TO1 port to use for TO2: %w", err)
-		}
-		proto := protocol.HTTPTransport
-		if useTLS {
-			proto = protocol.HTTPSTransport
-		}
+		for _, directive := range protocol.ParseDeviceRvInfo(rvInfo) {
+			if directive.Bypass {
+				continue
+			}
 
-		autoTO0Addrs = []protocol.RvTO2Addr{
-			{
-				DNSAddress:        &to1Host,
-				Port:              uint16(to1Port),
-				TransportProtocol: proto,
-			},
+			for _, url := range directive.URLs {
+				to1Host := url.Hostname()
+				to1Port, err := strconv.ParseUint(url.Port(), 10, 16)
+				if err != nil {
+					return nil, fmt.Errorf("error parsing TO1 port to use for TO2: %w", err)
+				}
+				proto := protocol.HTTPTransport
+				if useTLS {
+					proto = protocol.HTTPSTransport
+				}
+				autoTO0Addrs = append(autoTO0Addrs, protocol.RvTO2Addr{
+					DNSAddress:        &to1Host,
+					Port:              uint16(to1Port),
+					TransportProtocol: proto,
+				})
+			}
 		}
 	}
 

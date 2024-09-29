@@ -7,7 +7,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
+	"net/url"
+	"slices"
 	"strconv"
+	"time"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 )
@@ -37,46 +40,20 @@ type RvVar uint8
 
 // Rendezvous Protocols
 const (
-	RVProtRest    RvProt = 0
-	RVProtHTTP    RvProt = 1
-	RVProtHTTPS   RvProt = 2
-	RVProtTCP     RvProt = 3
-	RVProtTLS     RvProt = 4
-	RVProtCoapTCP RvProt = 5
-	RVProtCoapUDP RvProt = 6
+	RVProtRest    uint8 = 0
+	RVProtHTTP    uint8 = 1
+	RVProtHTTPS   uint8 = 2
+	RVProtTCP     uint8 = 3
+	RVProtTLS     uint8 = 4
+	RVProtCoapTCP uint8 = 5
+	RVProtCoapUDP uint8 = 6
 )
-
-// RvProt is an RVProtocolValue.
-type RvProt uint8
 
 // Rendezvous Media
 const (
-	RVMedEth0    RvMedium = 0
-	RVMedEth1    RvMedium = 1
-	RVMedEth2    RvMedium = 2
-	RVMedEth3    RvMedium = 3
-	RVMedEth4    RvMedium = 4
-	RVMedEth5    RvMedium = 5
-	RVMedEth6    RvMedium = 6
-	RVMedEth7    RvMedium = 7
-	RVMedEth8    RvMedium = 8
-	RVMedEth9    RvMedium = 9
-	RVMedEthAll  RvMedium = 20
-	RVMedWifi0   RvMedium = 10
-	RVMedWifi1   RvMedium = 11
-	RVMedWifi2   RvMedium = 12
-	RVMedWifi3   RvMedium = 13
-	RVMedWifi4   RvMedium = 14
-	RVMedWifi5   RvMedium = 15
-	RVMedWifi6   RvMedium = 16
-	RVMedWifi7   RvMedium = 17
-	RVMedWifi8   RvMedium = 18
-	RVMedWifi9   RvMedium = 19
-	RVMedWifiAll RvMedium = 21
+	RVMedEthAll  uint8 = 20
+	RVMedWifiAll uint8 = 21
 )
-
-// RvMedium is an RVMediumValue.
-type RvMedium uint8
 
 // RvInstruction contains a paired rendezvous variable identifier and value.
 type RvInstruction struct {
@@ -125,95 +102,236 @@ func (to1d To1d) String() string {
 	return s + "]"
 }
 
-// BaseHTTP parses the valid HTTP and HTTPS URLs from the RV directives.
-//
-//nolint:gocyclo
-func BaseHTTP(rvInfo [][]RvInstruction) (to1URLs, to2URLs []string) {
-	for _, directive := range rvInfo {
-		m := make(map[RvVar][][]byte)
-		for _, instruction := range directive {
-			m[instruction.Variable] = append(m[instruction.Variable], instruction.Value)
-		}
+// RvDirective is a fully parsed group of instructions.
+type RvDirective struct {
+	// Addresses
 
-		// Check the protocol is HTTP(S)
-		var prot RvProt
-		switch protVals := m[RVProtocol]; len(protVals) {
-		case 0:
-			// default to HTTPS
-			prot = RVProtHTTPS
-		case 1:
-			if err := cbor.Unmarshal(protVals[0], &prot); err != nil {
-				// bad protocol
-				continue
-			}
-		default:
-			// too many protocols
+	URLs   []*url.URL
+	Bypass bool
+
+	// Network interface configuration
+
+	EthIface  *uint8 // 20 means try all
+	WlanIface *uint8 // 21 means try all
+	WlanSSID  string
+	WlanPass  string
+
+	// Other
+
+	Delay      time.Duration
+	External   bool
+	ServerCert *Hash
+	ServerCA   *Hash
+}
+
+// ParseDeviceRvInfo parses all directives for a device.
+func ParseDeviceRvInfo(rvInfo [][]RvInstruction) []RvDirective {
+	directives := make([]RvDirective, len(rvInfo))
+	for i, vars := range rvInfo {
+		dir := parseDirective(vars, true)
+		if dir == nil {
 			continue
 		}
-		if prot != RVProtHTTP && prot != RVProtHTTPS {
-			// non-HTTP(S)
+		directives[i] = *dir
+	}
+	return directives
+}
+
+// ParseOwnerRvInfo parses all directives for an owner service.
+func ParseOwnerRvInfo(rvInfo [][]RvInstruction) []RvDirective {
+	directives := make([]RvDirective, len(rvInfo))
+	for i, vars := range rvInfo {
+		dir := parseDirective(vars, false)
+		if dir == nil {
 			continue
 		}
+		directives[i] = *dir
+	}
+	return directives
+}
 
-		// Parse the RV server addr(s)
-		var dnsAddrs []string
-		for _, dnsAddrVal := range m[RVDns] {
-			var dnsAddr string
-			if err := cbor.Unmarshal(dnsAddrVal, &dnsAddr); err != nil {
-				// must be a string
-				continue
-			}
-			dnsAddrs = append(dnsAddrs, dnsAddr)
-		}
-		var ipAddrs []net.IP
-		for _, ipAddrVal := range m[RVIPAddress] {
-			var ipAddr net.IP
-			if err := cbor.Unmarshal(ipAddrVal, &ipAddr); err != nil || (ipAddr.To4() == nil && ipAddr.To16() == nil) {
-				// must be IPv4 or IPv6
-				continue
-			}
-			ipAddrs = append(ipAddrs, ipAddr)
-		}
-		var portNum uint16
-		switch portVals := m[RVDevPort]; len(portVals) {
-		case 0:
-			portNum = 443
-			if prot == RVProtHTTP {
-				portNum = 80
-			}
-		case 1:
-			if err := cbor.Unmarshal(portVals[0], &portNum); err != nil {
-				// must be a valid number
-				continue
-			}
-		default:
-			// must have 0 or 1 port specified
-			continue
-		}
-
-		// Construct and collect URLs
-		scheme := "https://"
-		if prot == RVProtHTTP {
-			scheme = "http://"
-		}
-		port := strconv.Itoa(int(portNum))
-		for _, host := range dnsAddrs {
-			url := scheme + net.JoinHostPort(host, port)
-			if _, rvBypass := m[RVBypass]; rvBypass {
-				to2URLs = append(to2URLs, url)
-			} else {
-				to1URLs = append(to1URLs, url)
-			}
-		}
-		for _, ip := range ipAddrs {
-			url := scheme + net.JoinHostPort(ip.String(), port)
-			if _, rvBypass := m[RVBypass]; rvBypass {
-				to2URLs = append(to2URLs, url)
-			} else {
-				to1URLs = append(to1URLs, url)
-			}
-		}
+func parseDirective(vars []RvInstruction, device bool) *RvDirective { //nolint:gocyclo
+	// Check directive applicability
+	if !device && slices.ContainsFunc(vars, func(i RvInstruction) bool {
+		return i.Variable == RVDevOnly
+	}) {
+		return nil
+	}
+	if device && slices.ContainsFunc(vars, func(i RvInstruction) bool {
+		return i.Variable == RVOwnerOnly
+	}) {
+		return nil
 	}
 
-	return to1URLs, to2URLs
+	// Address fields
+	var dir RvDirective
+	dir.URLs = parseURLs(vars, device)
+	dir.Bypass = slices.ContainsFunc(vars, func(i RvInstruction) bool {
+		return i.Variable == RVBypass
+	})
+
+	// Network interface fields
+	_ = slices.ContainsFunc(vars, func(i RvInstruction) bool {
+		if i.Variable != RVMedium {
+			return false
+		}
+		var medium uint8
+		if err := cbor.Unmarshal(i.Value, &medium); err == nil {
+			switch {
+			case medium < 10:
+				dir.EthIface = &medium
+			case medium < 20:
+				medium -= 10
+				dir.WlanIface = &medium
+			case medium == RVMedEthAll:
+				dir.EthIface = &medium
+			case medium == RVMedWifiAll:
+				dir.WlanIface = &medium
+			}
+		}
+		return true
+	})
+	_ = slices.ContainsFunc(vars, func(i RvInstruction) bool {
+		if i.Variable != RVWifiSsid {
+			return false
+		}
+
+		var ssid string
+		if err := cbor.Unmarshal(i.Value, &ssid); err == nil {
+			dir.WlanSSID = ssid
+		}
+		return true
+	})
+	_ = slices.ContainsFunc(vars, func(i RvInstruction) bool {
+		if i.Variable != RVWifiPw {
+			return false
+		}
+
+		var pass string
+		if err := cbor.Unmarshal(i.Value, &pass); err == nil {
+			dir.WlanPass = pass
+		}
+		return true
+	})
+
+	// Other fields
+	_ = slices.ContainsFunc(vars, func(i RvInstruction) bool {
+		if i.Variable != RVDelaysec {
+			return false
+		}
+
+		var secs time.Duration
+		if err := cbor.Unmarshal(i.Value, &secs); err == nil {
+			dir.Delay = secs * time.Second
+		}
+		return true
+	})
+	dir.External = slices.ContainsFunc(vars, func(i RvInstruction) bool {
+		return i.Variable == RVExtRV
+	})
+	_ = slices.ContainsFunc(vars, func(i RvInstruction) bool {
+		if i.Variable != RVSvCertHash {
+			return false
+		}
+
+		var hash Hash
+		if err := cbor.Unmarshal(i.Value, &hash); err == nil {
+			dir.ServerCert = &hash
+		}
+		return true
+	})
+	_ = slices.ContainsFunc(vars, func(i RvInstruction) bool {
+		if i.Variable != RVClCertHash {
+			return false
+		}
+
+		var hash Hash
+		if err := cbor.Unmarshal(i.Value, &hash); err == nil {
+			dir.ServerCA = &hash
+		}
+		return true
+	})
+
+	return &dir
+}
+
+func parseURLs(vars []RvInstruction, device bool) (urls []*url.URL) { //nolint:gocyclo
+	// Collect URL info
+	scheme, port := "tls", ""
+	_ = slices.ContainsFunc(vars, func(i RvInstruction) bool {
+		if i.Variable != RVProtocol {
+			return false
+		}
+		var proto uint8
+		if err := cbor.Unmarshal(i.Value, &proto); err == nil {
+			switch proto {
+			case RVProtRest:
+				// Unsupported, use default
+			case RVProtHTTP:
+				scheme, port = "http", "80"
+			case RVProtHTTPS:
+				scheme, port = "https", "443"
+			case RVProtTCP:
+				scheme = "tcp"
+			case RVProtTLS:
+				scheme = "tls"
+			case RVProtCoapTCP:
+				scheme, port = "coap+tcp", "5683"
+			case RVProtCoapUDP:
+				scheme, port = "coap", "5683"
+			}
+		}
+		return true
+	})
+	_ = slices.ContainsFunc(vars, func(i RvInstruction) bool {
+		if (device && i.Variable != RVDevPort) || (!device && i.Variable != RVOwnerPort) {
+			return false
+		}
+
+		var portU16 uint16
+		if err := cbor.Unmarshal(i.Value, &portU16); err == nil {
+			port = strconv.Itoa(int(portU16))
+		}
+		return true
+	})
+	var dnsAddr string
+	_ = slices.ContainsFunc(vars, func(i RvInstruction) bool {
+		if i.Variable != RVDns {
+			return false
+		}
+		_ = cbor.Unmarshal(i.Value, &dnsAddr)
+		return true
+	})
+	var ipAddr net.IP
+	_ = slices.ContainsFunc(vars, func(i RvInstruction) bool {
+		if i.Variable != RVIPAddress {
+			return false
+		}
+		_ = cbor.Unmarshal(i.Value, &ipAddr)
+		return true
+	})
+
+	// Assemble URLs
+	if dnsAddr != "" {
+		host := dnsAddr
+		if port != "" {
+			host = net.JoinHostPort(host, port)
+		}
+		urls = append(urls, &url.URL{
+			Scheme: scheme,
+			Host:   host,
+		})
+	}
+	if len(ipAddr) > 0 {
+		host := ipAddr.String()
+		if port != "" {
+			host = net.JoinHostPort(host, port)
+		}
+		urls = append(urls, &url.URL{
+			Scheme: scheme,
+			Host:   host,
+		})
+	}
+
+	return urls
 }

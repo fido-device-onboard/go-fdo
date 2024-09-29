@@ -295,8 +295,20 @@ func di() (err error) { //nolint:gocyclo
 	})
 }
 
-func transferOwnership(rvInfo [][]protocol.RvInstruction, conf fdo.TO2Config) *fdo.DeviceCredential {
-	to1URLs, to2URLs := protocol.BaseHTTP(rvInfo)
+func transferOwnership(rvInfo [][]protocol.RvInstruction, conf fdo.TO2Config) *fdo.DeviceCredential { //nolint:gocyclo
+	var to1URLs, to2URLs []string
+	directives := protocol.ParseDeviceRvInfo(rvInfo)
+	for _, directive := range directives {
+		if !directive.Bypass {
+			for _, url := range directive.URLs {
+				to1URLs = append(to1URLs, url.String())
+			}
+			continue
+		}
+		for _, url := range directive.URLs {
+			to2URLs = append(to2URLs, url.String())
+		}
+	}
 
 	// Try TO1 on each address only once
 	var to1d *cose.Sign1[protocol.To1d, []byte]
