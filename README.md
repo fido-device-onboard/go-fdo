@@ -86,6 +86,8 @@ Server options:
         The path to a PEM-encoded x.509 public key for the next owner
   -rv-bypass
         Skip TO1
+  -rv-delay seconds
+        Delay TO1 by N seconds
   -to0 addr
         Rendezvous server address to register RV blobs (disables self-registration)
   -to0-guid guid

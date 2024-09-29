@@ -55,6 +55,7 @@ var (
 	resaleGUID       string
 	resaleKey        string
 	rvBypass         bool
+	rvDelay          int
 	printOwnerPubKey string
 	importVoucher    string
 	downloads        stringList
@@ -85,6 +86,7 @@ func init() {
 	serverFlags.StringVar(&resaleKey, "resale-key", "", "The `path` to a PEM-encoded x.509 public key for the next owner")
 	serverFlags.BoolVar(&insecureTLS, "insecure-tls", false, "Listen with a self-signed TLS certificate")
 	serverFlags.BoolVar(&rvBypass, "rv-bypass", false, "Skip TO1")
+	serverFlags.IntVar(&rvDelay, "rv-delay", 0, "Delay TO1 by N `seconds`")
 	serverFlags.StringVar(&printOwnerPubKey, "print-owner-public", "", "Print owner public key of `type` and exit")
 	serverFlags.StringVar(&importVoucher, "import-voucher", "", "Import a PEM encoded voucher file at `path`")
 	serverFlags.Var(&downloads, "download", "Use fdo.download FSIM for each `file` (flag may be used multiple times)")
@@ -146,6 +148,9 @@ func server() error { //nolint:gocyclo
 	if rvBypass {
 		rvInfo[0] = append(rvInfo[0], protocol.RvInstruction{Variable: protocol.RVBypass})
 	}
+
+	// Test RVDelay by introducing a delay before TO1
+	rvInfo = append([][]protocol.RvInstruction{{{Variable: protocol.RVDelaysec, Value: mustMarshal(rvDelay)}}}, rvInfo...)
 
 	// Invoke TO0 client if a GUID is specified
 	if to0GUID != "" {
