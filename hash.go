@@ -42,7 +42,9 @@ func hmacHash(h hash.Hash, v any) (protocol.Hmac, error) {
 	}
 	hmac.Value = h.Sum(nil)
 	if fallible, ok := h.(fallibleHash); ok {
-		return protocol.Hmac{}, fmt.Errorf("error computing hmac: %w", fallible.Err())
+		if err := fallible.Err(); err != nil {
+			return protocol.Hmac{}, fmt.Errorf("error computing hmac: %w", err)
+		}
 	}
 	return hmac, nil
 }
@@ -72,7 +74,9 @@ func hmacVerify(h256, h384 hash.Hash, h1 protocol.Hmac, v any) error {
 	}
 	mac2 := h.Sum(nil)
 	if fallible, ok := h.(fallibleHash); ok {
-		return fmt.Errorf("error computing hmac: %w", fallible.Err())
+		if err := fallible.Err(); err != nil {
+			return fmt.Errorf("error computing hmac: %w", err)
+		}
 	}
 	if !hmac.Equal(h1.Value, mac2) {
 		return fmt.Errorf("%w: hmac did not match", ErrCryptoVerifyFailed)
