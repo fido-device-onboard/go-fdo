@@ -309,6 +309,53 @@ s0hciw==
 -----END OWNERSHIP VOUCHER-----
 ```
 
+### Testing with a TPM
+
+First, start a server in a separate console.
+
+```console
+$ go run ./examples/cmd server -http 127.0.0.1:9999 -db ./test.db
+[2024-09-01 00:00:00] INFO: Listening
+  local: 127.0.0.1:9999
+  external: 127.0.0.1:9999
+```
+
+Then run DI, with the TPM resource manager path specified. The key type must always be explicit through the `-di-key` flag.
+
+```console
+$ go run ./examples/cmd client -di http://127.0.0.1:9999 -di-key ec384 -tpm /dev/tpmrm0
+[2024-09-01 00:00:00] INFO: tpm: max input buffer size undefined, using default
+  size: 1024
+Success
+```
+
+Finally, run TO1/TO2.
+
+```console
+$ go run ./examples/cmd client -di-key ec384 -tpm /dev/tpmrm0
+[2024-09-01 00:00:00] INFO: tpm: max input buffer size undefined, using default
+  size: 1024
+Success
+```
+
+The TPM simulator may be used with 3 caveats:
+
+1. RSA3072 keys are not supported
+2. OpenSSL libraries and headers must be installed
+3. The `tpmsim` build tag must be used
+
+```console
+$ go run -tags tpmsim ./examples/cmd client -di http://127.0.0.1:9999 -di-key rsa2048 -tpm simulator
+[2024-09-01 00:00:00] INFO: tpm: max input buffer size undefined, using default
+  size: 1024
+Success
+
+$ go run -tags tpmsim ./examples/cmd client -di-key rsa2048 -tpm simulator
+[2024-09-01 00:00:00] INFO: tpm: max input buffer size undefined, using default
+  size: 1024
+Success
+```
+
 ## FIPS Compliance
 
 To build a FIPS 140-2 certifiable binary, use the [Microsoft Go][Microsoft Go] toolchain and be sure to deploy with a FIPS-compliant version of OpenSSL 3.0.
