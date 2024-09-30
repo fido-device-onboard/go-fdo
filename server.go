@@ -86,6 +86,20 @@ func (s *DIServer[T]) Respond(ctx context.Context, msgType uint8, msg io.Reader)
 type TO0Server struct {
 	Session TO0SessionState
 	RVBlobs RendezvousBlobPersistentState
+
+	// AcceptVoucher is an optional function which, when given, is used to
+	// determine whether to accept a voucher from a client.
+	//
+	// If AcceptVoucher is not set, then all vouchers will be accepted. It is
+	// expected that some other means of authorization is used in this case.
+	AcceptVoucher func(context.Context, Voucher) (accept bool, err error)
+
+	// NegotiateTTL is an optional function to select a validity period for a
+	// rendezvous blob based on the requested number of seconds and the
+	// ownership voucher contents.
+	//
+	// If NegotiateTTL is not set, the requested TTL will be used.
+	NegotiateTTL func(requestedSeconds uint32, ov Voucher) (waitSeconds uint32)
 }
 
 // Respond validates a request and returns the appropriate response message.

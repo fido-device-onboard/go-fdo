@@ -243,10 +243,21 @@ func (s *TO0Server) acceptOwner(ctx context.Context, msg io.Reader) (*to0AcceptO
 		return nil, fmt.Errorf("voucher is not valid: %w", err)
 	}
 
-	// TODO: Use optional callback to decide whether to accept voucher
+	// Use optional callback to decide whether to accept voucher
+	if s.AcceptVoucher != nil {
+		if accept, err := s.AcceptVoucher(ctx, ov); err != nil {
+			return nil, err
+		} else if !accept {
+			captureErr(ctx, protocol.InvalidMessageErrCode, "")
+			return nil, fmt.Errorf("voucher has been rejected")
+		}
+	}
 
-	// TODO: Allow adjusting rendezvous blob mapping validity period
+	// Allow adjusting rendezvous blob mapping validity period
 	negotiatedTTL := sig.To0d.Val.WaitSeconds
+	if s.NegotiateTTL != nil {
+		negotiatedTTL = s.NegotiateTTL(negotiatedTTL, ov)
+	}
 
 	// Store rendezvous blob
 	expiration := time.Now().Add(time.Duration(negotiatedTTL) * time.Second)
