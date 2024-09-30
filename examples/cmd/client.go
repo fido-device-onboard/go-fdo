@@ -55,6 +55,7 @@ var (
 	printDevice bool
 	rvOnly      bool
 	dlDir       string
+	echoCmds    bool
 	uploads     = make(fsVar)
 	wgetDir     string
 )
@@ -135,17 +136,18 @@ func (files fsVar) Open(path string) (fs.File, error) {
 
 func init() {
 	clientFlags.StringVar(&blobPath, "blob", "cred.bin", "File path of device credential blob")
+	clientFlags.StringVar(&cipherSuite, "cipher", "A128GCM", "Name of cipher `suite` to use for encryption (see usage)")
 	clientFlags.BoolVar(&debug, "debug", debug, "Print HTTP contents")
-	clientFlags.BoolVar(&insecureTLS, "insecure-tls", false, "Skip TLS certificate verification")
 	clientFlags.StringVar(&dlDir, "download", "", "A `dir` to download files into (FSIM disabled if empty)")
 	clientFlags.StringVar(&diURL, "di", "", "HTTP base `URL` for DI server")
 	clientFlags.StringVar(&diKey, "di-key", "ec384", "Key for device credential [options: ec256, ec384, rsa2048, rsa3072]")
 	clientFlags.StringVar(&diKeyEnc, "di-key-enc", "x509", "Public key encoding to use for manufacturer key [x509,x5chain,cose]")
+	clientFlags.BoolVar(&echoCmds, "echo-commands", false, "Echo all commands received to stdout (FSIM disabled if false)")
 	clientFlags.StringVar(&kexSuite, "kex", "ECDH384", "Name of cipher `suite` to use for key exchange (see usage)")
-	clientFlags.StringVar(&tpmPath, "tpm", "", "Use a TPM at `path` for device credential secrets")
-	clientFlags.StringVar(&cipherSuite, "cipher", "A128GCM", "Name of cipher `suite` to use for encryption (see usage)")
+	clientFlags.BoolVar(&insecureTLS, "insecure-tls", false, "Skip TLS certificate verification")
 	clientFlags.BoolVar(&printDevice, "print", false, "Print device credential blob and stop")
 	clientFlags.BoolVar(&rvOnly, "rv-only", false, "Perform TO1 then stop")
+	clientFlags.StringVar(&tpmPath, "tpm", "", "Use a TPM at `path` for device credential secrets")
 	clientFlags.Var(&uploads, "upload", "List of dirs and `files` to upload files from, "+
 		"comma-separated and/or flag provided multiple times (FSIM disabled if empty)")
 	clientFlags.StringVar(&wgetDir, "wget-dir", "", "A `dir` to wget files into (FSIM disabled if empty)")
@@ -417,6 +419,15 @@ func transferOwnership2(transport fdo.Transport, to1d *cose.Sign1[protocol.To1d,
 					name = filepath.Base(name)
 				}
 				return filepath.Join(dlDir, filepath.Clean(name))
+			},
+		}
+	}
+	if echoCmds {
+		fsims["fdo.command"] = &fsim.Command{
+			Timeout: time.Second,
+			Transform: func(cmd string, args []string) (string, []string) {
+				return "sh", []string{"-c",
+					fmt.Sprintf("echo %q", strings.Join(args, " "))}
 			},
 		}
 	}

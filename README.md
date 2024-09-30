@@ -48,6 +48,8 @@ Client options:
         Public key encoding to use for manufacturer key [x509,x5chain,cose] (default "x509")
   -download dir
         A dir to download files into (FSIM disabled if empty)
+  -echo-commands
+        Echo all commands received to stdout (FSIM disabled if false)
   -insecure-tls
         Skip TLS certificate verification
   -kex suite

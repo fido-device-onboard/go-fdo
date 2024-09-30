@@ -28,6 +28,10 @@ type Command struct {
 	// If Timeout is zero, then a default of 1 hour will be used.
 	Timeout time.Duration
 
+	// Transform, if set, modifies a command and arguments before executing
+	// them.
+	Transform func(name string, arg []string) (newName string, newArg []string)
+
 	// Message data
 	arg0    string
 	args    cbor.Bstr[[]string]
@@ -110,6 +114,9 @@ func (c *Command) execute(ctx context.Context) error {
 	name, arg := c.arg0, c.args.Val
 	if name == "" {
 		return fmt.Errorf("no command was given to execute")
+	}
+	if c.Transform != nil {
+		name, arg = c.Transform(name, arg)
 	}
 
 	timeout := c.Timeout
