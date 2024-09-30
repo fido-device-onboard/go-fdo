@@ -179,6 +179,9 @@ func client() error {
 	}
 
 	// Read device credential blob to configure client for TO1/TO2
+	if tpmPath == "simulator" {
+		return fmt.Errorf("TPM simulator only supported for DI")
+	}
 	dc, hmacSha256, hmacSha384, privateKey, cleanup, err := readCred()
 	if err == nil && cleanup != nil {
 		defer func() { _ = cleanup() }()

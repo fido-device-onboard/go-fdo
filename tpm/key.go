@@ -16,7 +16,6 @@ import (
 	"strconv"
 
 	"github.com/google/go-tpm/tpm2"
-	"github.com/google/go-tpm/tpm2/transport"
 )
 
 // Key is a closeable signer. Resources are limited in TPMs, so keys should be closed when not in
@@ -27,7 +26,7 @@ type Key interface {
 }
 
 // GenerateECKey creates a new EC private key.
-func GenerateECKey(t transport.TPM, curve elliptic.Curve) (Key, error) {
+func GenerateECKey(t TPM, curve elliptic.Curve) (Key, error) {
 	switch curve {
 	case elliptic.P256():
 		return generateECKey(t, tpm2.TPMECCNistP256, tpm2.TPMAlgSHA256)
@@ -38,7 +37,7 @@ func GenerateECKey(t transport.TPM, curve elliptic.Curve) (Key, error) {
 	}
 }
 
-func generateECKey(t transport.TPM, curveID tpm2.TPMECCCurve, hashAlg tpm2.TPMAlgID) (Key, error) {
+func generateECKey(t TPM, curveID tpm2.TPMECCCurve, hashAlg tpm2.TPMAlgID) (Key, error) {
 	handle, err := newPrimaryKey(t, ecKeyTemplate(curveID, hashAlg))
 	if err != nil {
 		return nil, fmt.Errorf("creating EC private key: %w", err)
@@ -79,7 +78,7 @@ func ecKeyTemplate(curveID tpm2.TPMECCCurve, hashAlg tpm2.TPMAlgID) tpm2.TPMTPub
 	}
 }
 
-func readPublicECKey(t transport.TPM, handle tpm2.NamedHandle) (*ecdsa.PublicKey, error) {
+func readPublicECKey(t TPM, handle tpm2.NamedHandle) (*ecdsa.PublicKey, error) {
 	resp, err := tpm2.ReadPublic{ObjectHandle: handle.Handle}.Execute(t)
 	if err != nil {
 		return nil, fmt.Errorf("reading public data: %w", err)
@@ -117,17 +116,17 @@ func readPublicECKey(t transport.TPM, handle tpm2.NamedHandle) (*ecdsa.PublicKey
 
 // GenerateRSAKey creates a new RSA key of either 2048 or 3072 bit size. If 2048 is used, the key
 // will use an exponent of 65537.
-func GenerateRSAKey(t transport.TPM, bits int) (Key, error) {
+func GenerateRSAKey(t TPM, bits int) (Key, error) {
 	return generateRSAKey(t, bits, false)
 }
 
 // GenerateRSAPSSKey creates a new RSA key of either 2048 or 3072 bit size to be used for PSS
 // signatures.
-func GenerateRSAPSSKey(t transport.TPM, bits int) (Key, error) {
+func GenerateRSAPSSKey(t TPM, bits int) (Key, error) {
 	return generateRSAKey(t, bits, true)
 }
 
-func generateRSAKey(t transport.TPM, bits int, pss bool) (Key, error) {
+func generateRSAKey(t TPM, bits int, pss bool) (Key, error) {
 	handle, err := newPrimaryKey(t, rsaKeyTemplate(bits, pss))
 	if err != nil {
 		return nil, fmt.Errorf("creating RSA private key: %w", err)
@@ -145,7 +144,7 @@ func generateRSAKey(t transport.TPM, bits int, pss bool) (Key, error) {
 }
 
 type key struct {
-	Device    transport.TPM
+	Device    TPM
 	Handle    *tpm2.NamedHandle
 	PublicKey crypto.PublicKey
 }
@@ -213,7 +212,7 @@ func (key *key) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) ([]b
 // key is used to wrap the child key.
 //
 // Seed + Template will always generate the same key.
-func newPrimaryKey(t transport.TPM, template tpm2.TPMTPublic) (*tpm2.NamedHandle, error) {
+func newPrimaryKey(t TPM, template tpm2.TPMTPublic) (*tpm2.NamedHandle, error) {
 	resp, err := tpm2.CreatePrimary{
 		PrimaryHandle: tpm2.TPMRHEndorsement,
 		InPublic:      tpm2.New2B(template),
@@ -276,7 +275,7 @@ func rsaKeyTemplate(bits int, pss bool) tpm2.TPMTPublic {
 	}
 }
 
-func readPublicRsaKey(t transport.TPM, handle tpm2.NamedHandle) (*rsa.PublicKey, error) {
+func readPublicRsaKey(t TPM, handle tpm2.NamedHandle) (*rsa.PublicKey, error) {
 	resp, err := tpm2.ReadPublic{ObjectHandle: handle.Handle}.Execute(t)
 	if err != nil {
 		return nil, fmt.Errorf("reading public data: %w", err)

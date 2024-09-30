@@ -4,6 +4,8 @@
 package tpm
 
 import (
+	"fmt"
+
 	"github.com/fido-device-onboard/go-fdo"
 )
 
@@ -27,4 +29,25 @@ type DeviceCredential struct {
 	fdo.DeviceCredential
 	DeviceKey       DeviceKeyType
 	DeviceKeyHandle uint32
+}
+
+func (dc DeviceCredential) String() string {
+	s := fmt.Sprintf(`tpmcred[
+  Version          %d
+  DeviceInfo      %q
+  GUID             %x
+  PublicKeyHash
+    Algorithm      %s
+    Value          %x
+  DeviceKey        %d
+  DeviceKeyHandle  %d
+  RvInfo
+`, dc.Version, dc.DeviceInfo, dc.GUID, dc.PublicKeyHash.Algorithm, dc.PublicKeyHash.Value, dc.DeviceKey, dc.DeviceKeyHandle)
+	for _, directive := range dc.RvInfo {
+		s += "    >\n"
+		for _, instruction := range directive {
+			s += fmt.Sprintf("      %d = %x\n", instruction.Variable, instruction.Value)
+		}
+	}
+	return s + "]"
 }

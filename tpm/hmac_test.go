@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/google/go-tpm/tpm2/transport/simulator"
 
 	"github.com/fido-device-onboard/go-fdo/tpm"
@@ -181,7 +180,7 @@ func TestHmac(t *testing.T) {
 	})
 }
 
-func tpmHMAC(t *testing.T, sim transport.TPMCloser, alg crypto.Hash, msg []byte) []byte {
+func tpmHMAC(t *testing.T, sim tpm.Closer, alg crypto.Hash, msg []byte) []byte {
 	h, err := tpm.NewHmac(sim, alg)
 	if err != nil {
 		t.Fatalf("new hmac: %v", err)

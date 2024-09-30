@@ -59,7 +59,7 @@ func TestClientWithDataModules(t *testing.T) {
 	errc := make(chan error)
 	go func() { errc <- srv.Serve(lis) }()
 
-	fdotest.RunClientTestSuite(t, nil, map[string]serviceinfo.DeviceModule{
+	fdotest.RunClientTestSuite(t, nil, nil, map[string]serviceinfo.DeviceModule{
 		"fdo.download": &fsim.Download{
 			CreateTemp: func() (*os.File, error) {
 				return os.CreateTemp("testdata", "fdo.download_*")
@@ -221,7 +221,7 @@ func TestClientWithMockDownloadOwner(t *testing.T) {
 		},
 	}
 
-	fdotest.RunClientTestSuite(t, nil, map[string]serviceinfo.DeviceModule{
+	fdotest.RunClientTestSuite(t, nil, nil, map[string]serviceinfo.DeviceModule{
 		"fdo.download": &fsim.Download{
 			CreateTemp: func() (*os.File, error) {
 				return os.CreateTemp("testdata", "fdo.download_*")
@@ -246,7 +246,7 @@ func TestClientWithCommandModule(t *testing.T) {
 	}
 	runs := make(chan runData, 1000)
 
-	fdotest.RunClientTestSuite(t, nil, map[string]serviceinfo.DeviceModule{
+	fdotest.RunClientTestSuite(t, nil, nil, map[string]serviceinfo.DeviceModule{
 		"fdo.command": &fsim.Command{
 			Timeout: 10 * time.Second,
 		},

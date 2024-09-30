@@ -14,7 +14,6 @@ import (
 	"log/slog"
 
 	"github.com/google/go-tpm/tpm2"
-	"github.com/google/go-tpm/tpm2/transport"
 )
 
 // Hmac is a hash.Hash which may contain an error state and must be closed to avoid resource leaks.
@@ -26,7 +25,7 @@ type Hmac interface {
 
 // NewHmac returns an HMAC for either SHA256 or SHA384 (if supported by the TPM). To avoid a
 // resource leak, the hash must always be closed.
-func NewHmac(t transport.TPM, h crypto.Hash) (Hmac, error) {
+func NewHmac(t TPM, h crypto.Hash) (Hmac, error) {
 	auth, closeSession, err := tpm2.HMACSession(t, tpm2.TPMAlgSHA256, 16)
 	if err != nil {
 		return nil, fmt.Errorf("create HMAC key authorization session: %w", err)
@@ -54,7 +53,7 @@ func (c *sessionCloser) Close() error {
 }
 
 type hmac struct {
-	Device transport.TPM
+	Device TPM
 	Auth   tpm2.Session
 	Hash   crypto.Hash
 
@@ -305,7 +304,7 @@ const defaultMaxDigestBuffer = 1024
 
 // getMaxInputBuffer returns the TPM's maximum input buffer size parameter, usually a
 // TPM2B_MAX_BUFFER; see Part 2, Structures, section 6.13.
-func getMaxInputBuffer(t transport.TPM) uint32 {
+func getMaxInputBuffer(t TPM) uint32 {
 	capability, err := tpm2.GetCapability{Capability: tpm2.TPMCapTPMProperties}.Execute(t)
 	if err != nil {
 		slog.Warn("tpm: get capability failed", "error", err)

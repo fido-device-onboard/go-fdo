@@ -9,6 +9,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/sha512"
+	"flag"
 	"fmt"
 	"hash"
 	"os"
@@ -21,7 +22,15 @@ import (
 )
 
 func tpmCred() (hash.Hash, hash.Hash, crypto.Signer, func() error, error) {
-	tpmc, err := tpm.Open(tpmPath)
+	var diKeyFlagSet bool
+	clientFlags.Visit(func(flag *flag.Flag) {
+		diKeyFlagSet = diKeyFlagSet || flag.Name == "di-key"
+	})
+	if !diKeyFlagSet {
+		return nil, nil, nil, nil, fmt.Errorf("-di-key must be set explicitly when using a TPM")
+	}
+
+	tpmc, err := tpmOpen(tpmPath)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
@@ -46,7 +55,11 @@ func tpmCred() (hash.Hash, hash.Hash, crypto.Signer, func() error, error) {
 	case "rsa2048":
 		key, err = tpm.GenerateRSAKey(tpmc, 2048)
 	case "rsa3072":
-		key, err = tpm.GenerateRSAKey(tpmc, 3072)
+		if tpmPath == "simulator" {
+			err = fmt.Errorf("TPM simulator does not support RSA3072")
+		} else {
+			key, err = tpm.GenerateRSAKey(tpmc, 3072)
+		}
 	default:
 		err = fmt.Errorf("unsupported key type: %s", diKey)
 	}
@@ -68,7 +81,7 @@ func readCred() (_ *fdo.DeviceCredential, hmacSha256, hmacSha384 hash.Hash, key 
 		// DeviceCredential requires integrity, so it is stored as a file and
 		// expected to be protected. In the future, it should be stored in the
 		// TPM and access-protected with a policy.
-		var dc fdo.DeviceCredential
+		var dc tpm.DeviceCredential
 		if err := readCredFile(&dc); err != nil {
 			return nil, nil, nil, nil, nil, err
 		}
@@ -77,7 +90,7 @@ func readCred() (_ *fdo.DeviceCredential, hmacSha256, hmacSha384 hash.Hash, key 
 		if err != nil {
 			return nil, nil, nil, nil, nil, err
 		}
-		return &dc, hmacSha256, hmacSha384, key, cleanup, nil
+		return &dc.DeviceCredential, hmacSha256, hmacSha384, key, cleanup, nil
 	}
 
 	var dc blob.DeviceCredential

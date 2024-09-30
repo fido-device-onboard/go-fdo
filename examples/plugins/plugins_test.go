@@ -39,7 +39,7 @@ func TestDownloadOwnerPlugin(t *testing.T) {
 	downloadOwnerCmd.Stderr = fdotest.TestingLog(t)
 	downloadOwnerPlugin := &plugin.OwnerModule{Module: plugin.NewCommandPluginModule(downloadOwnerCmd)}
 
-	fdotest.RunClientTestSuite(t, nil, map[string]serviceinfo.DeviceModule{
+	fdotest.RunClientTestSuite(t, nil, nil, map[string]serviceinfo.DeviceModule{
 		"fdo.download": &fsim.Download{
 			CreateTemp: func() (*os.File, error) {
 				return os.CreateTemp(".", "fdo.download_*")
@@ -83,7 +83,7 @@ func TestDownloadDevicePlugin(t *testing.T) {
 		Module: plugin.NewCommandPluginModule(downloadDeviceCmd),
 	}
 
-	fdotest.RunClientTestSuite(t, nil, map[string]serviceinfo.DeviceModule{
+	fdotest.RunClientTestSuite(t, nil, nil, map[string]serviceinfo.DeviceModule{
 		"fdo.download": downloadDevicePlugin,
 	}, func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 		return func(yield func(string, serviceinfo.OwnerModule) bool) {
@@ -146,7 +146,7 @@ func TestDevmodPlugin(t *testing.T) {
 
 	var got serviceinfo.Devmod
 
-	fdotest.RunClientTestSuite(t, nil, map[string]serviceinfo.DeviceModule{
+	fdotest.RunClientTestSuite(t, nil, nil, map[string]serviceinfo.DeviceModule{
 		"devmod": devmodPlugin,
 	}, func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 		got = devmod

@@ -25,7 +25,7 @@ import (
 const mockModuleName = "fdotest.mock"
 
 func TestClient(t *testing.T) {
-	fdotest.RunClientTestSuite(t, nil, nil, nil, nil)
+	fdotest.RunClientTestSuite(t, nil, nil, nil, nil, nil)
 }
 
 func TestClientWithMockModule(t *testing.T) {
@@ -47,7 +47,7 @@ func TestClientWithMockModule(t *testing.T) {
 		},
 	}
 
-	fdotest.RunClientTestSuite(t, nil, map[string]serviceinfo.DeviceModule{
+	fdotest.RunClientTestSuite(t, nil, nil, map[string]serviceinfo.DeviceModule{
 		mockModuleName: deviceModule,
 	}, func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 		return func(yield func(string, serviceinfo.OwnerModule) bool) {
@@ -82,7 +82,7 @@ func TestClientWithMockModuleAndAutoUnchunking(t *testing.T) {
 		},
 	}
 
-	fdotest.RunClientTestSuite(t, nil, map[string]serviceinfo.DeviceModule{
+	fdotest.RunClientTestSuite(t, nil, nil, map[string]serviceinfo.DeviceModule{
 		mockModuleName: deviceModule,
 	}, func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 		return func(yield func(string, serviceinfo.OwnerModule) bool) {
@@ -134,7 +134,7 @@ func TestClientWithCustomDevmod(t *testing.T) {
 			},
 		}
 
-		fdotest.RunClientTestSuite(t, nil, map[string]serviceinfo.DeviceModule{
+		fdotest.RunClientTestSuite(t, nil, nil, map[string]serviceinfo.DeviceModule{
 			"devmod": customDevmod,
 		}, nil, func(t *testing.T, err error) {
 			if err == nil || !strings.Contains(err.Error(), "missing required devmod field: bin") {
@@ -172,7 +172,7 @@ func TestClientWithCustomDevmod(t *testing.T) {
 			},
 		}
 
-		fdotest.RunClientTestSuite(t, nil, map[string]serviceinfo.DeviceModule{
+		fdotest.RunClientTestSuite(t, nil, nil, map[string]serviceinfo.DeviceModule{
 			"devmod": customDevmod,
 		}, nil, nil)
 	})
@@ -183,7 +183,7 @@ func TestClientWithPluginModule(t *testing.T) {
 	devicePlugin.Routines = fdotest.ModuleNameOnlyRoutines(mockModuleName)
 	ownerPlugins := make(chan *fdotest.MockPlugin, 1000)
 
-	fdotest.RunClientTestSuite(t, nil, map[string]serviceinfo.DeviceModule{
+	fdotest.RunClientTestSuite(t, nil, nil, map[string]serviceinfo.DeviceModule{
 		mockModuleName: struct {
 			plugin.Module
 			serviceinfo.DeviceModule

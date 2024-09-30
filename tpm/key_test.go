@@ -12,7 +12,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/google/go-tpm/tpm2/transport/simulator"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
@@ -33,33 +32,33 @@ func TestPublicKey(t *testing.T) {
 
 	for _, test := range []struct {
 		Name string
-		Gen  func(transport.TPM) (tpm.Key, error)
+		Gen  func(tpm.TPM) (tpm.Key, error)
 		Hash crypto.Hash
 	}{
 		{
 			Name: "RSA-SSA-2048",
-			Gen: func(t transport.TPM) (tpm.Key, error) {
+			Gen: func(t tpm.TPM) (tpm.Key, error) {
 				return tpm.GenerateRSAKey(t, 2048)
 			},
 			Hash: crypto.SHA256,
 		},
 		{
 			Name: "RSA-PSS-2048",
-			Gen: func(t transport.TPM) (tpm.Key, error) {
+			Gen: func(t tpm.TPM) (tpm.Key, error) {
 				return tpm.GenerateRSAPSSKey(t, 2048)
 			},
 			Hash: crypto.SHA256,
 		},
 		{
 			Name: "EC-P256",
-			Gen: func(t transport.TPM) (tpm.Key, error) {
+			Gen: func(t tpm.TPM) (tpm.Key, error) {
 				return tpm.GenerateECKey(t, elliptic.P256())
 			},
 			Hash: crypto.SHA256,
 		},
 		{
 			Name: "EC-P384",
-			Gen: func(t transport.TPM) (tpm.Key, error) {
+			Gen: func(t tpm.TPM) (tpm.Key, error) {
 				return tpm.GenerateECKey(t, elliptic.P384())
 			},
 			Hash: crypto.SHA384,
@@ -70,14 +69,14 @@ func TestPublicKey(t *testing.T) {
 		//
 		// {
 		// 	Name: "RSA-SSA-3072",
-		//	Gen: func(t transport.TPM) (crypto.Signer, error) {
+		//	Gen: func(t tpm.TPM) (crypto.Signer, error) {
 		//		return tpm.GenerateRSAKey(t, 3072)
 		//	},
 		// 	Hash: crypto.SHA384,
 		// },
 		// {
 		// 	Name: "RSA-PSS-3072",
-		//	Gen: func(t transport.TPM) (crypto.Signer, error) {
+		//	Gen: func(t tpm.TPM) (crypto.Signer, error) {
 		//		return tpm.GenerateRSAPSSKey(t, 3072)
 		//	},
 		// 	Hash: crypto.SHA384,
