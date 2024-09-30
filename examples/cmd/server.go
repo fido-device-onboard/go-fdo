@@ -25,7 +25,9 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -61,6 +63,7 @@ var (
 	downloads        stringList
 	uploadDir        string
 	uploadReqs       stringList
+	wgets            stringList
 )
 
 type stringList []string
@@ -92,6 +95,7 @@ func init() {
 	serverFlags.Var(&downloads, "download", "Use fdo.download FSIM for each `file` (flag may be used multiple times)")
 	serverFlags.StringVar(&uploadDir, "upload-dir", "uploads", "The directory `path` to put file uploads")
 	serverFlags.Var(&uploadReqs, "upload", "Use fdo.upload FSIM for each `file` (flag may be used multiple times)")
+	serverFlags.Var(&wgets, "wget", "Use fdo.wget FSIM for each `url` (flag may be used multiple times)")
 }
 
 func server() error { //nolint:gocyclo
@@ -542,6 +546,21 @@ func ownerModules(ctx context.Context, guid protocol.GUID, info string, chain []
 				if !yield("fdo.upload", &fsim.UploadRequest{
 					Dir:  uploadDir,
 					Name: name,
+				}) {
+					return
+				}
+			}
+		}
+
+		if slices.Contains(modules, "fdo.wget") {
+			for _, urlString := range wgets {
+				url, err := url.Parse(urlString)
+				if err != nil || url.Path == "" {
+					continue
+				}
+				if !yield("fdo.wget", &fsim.WgetCommand{
+					Name: path.Base(url.Path),
+					URL:  url,
 				}) {
 					return
 				}

@@ -56,6 +56,7 @@ var (
 	rvOnly      bool
 	dlDir       string
 	uploads     = make(fsVar)
+	wgetDir     string
 )
 
 type fsVar map[string]string
@@ -147,6 +148,7 @@ func init() {
 	clientFlags.BoolVar(&rvOnly, "rv-only", false, "Perform TO1 then stop")
 	clientFlags.Var(&uploads, "upload", "List of dirs and `files` to upload files from, "+
 		"comma-separated and/or flag provided multiple times (FSIM disabled if empty)")
+	clientFlags.StringVar(&wgetDir, "wget-dir", "", "A `dir` to wget files into (FSIM disabled if empty)")
 }
 
 func client() error {
@@ -406,15 +408,36 @@ func transferOwnership2(transport fdo.Transport, to1d *cose.Sign1[protocol.To1d,
 	}
 	if dlDir != "" {
 		fsims["fdo.download"] = &fsim.Download{
+			CreateTemp: func() (*os.File, error) {
+				return os.CreateTemp(dlDir, ".fdo.download_*")
+			},
 			NameToPath: func(name string) string {
-				// TODO: Enforce chroot-like security
-				return filepath.Join(dlDir, name)
+				// If the path tries to escape the directory, just use the file name
+				if !filepath.IsLocal(name) {
+					name = filepath.Base(name)
+				}
+				return filepath.Join(dlDir, filepath.Clean(name))
 			},
 		}
 	}
 	if len(uploads) > 0 {
 		fsims["fdo.upload"] = &fsim.Upload{
 			FS: uploads,
+		}
+	}
+	if wgetDir != "" {
+		fsims["fdo.wget"] = &fsim.Wget{
+			CreateTemp: func() (*os.File, error) {
+				return os.CreateTemp(wgetDir, ".fdo.wget_*")
+			},
+			NameToPath: func(name string) string {
+				// If the path tries to escape the directory, just use the file name
+				if !filepath.IsLocal(name) {
+					name = filepath.Base(name)
+				}
+				return filepath.Join(wgetDir, filepath.Clean(name))
+			},
+			Timeout: 10 * time.Second,
 		}
 	}
 	conf.DeviceModules = fsims

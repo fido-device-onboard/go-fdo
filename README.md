@@ -60,6 +60,8 @@ Client options:
         Use a TPM at path for device credential secrets
   -upload files
         List of dirs and files to upload files from, comma-separated and/or flag provided multiple times (FSIM disabled if empty)
+  -wget-dir dir
+        A dir to wget files into (FSIM disabled if empty)
 
 Server options:
   -db string
@@ -96,6 +98,8 @@ Server options:
         Use fdo.upload FSIM for each file (flag may be used multiple times)
   -upload-dir path
         The directory path to put file uploads (default "uploads")
+  -wget url
+        Use fdo.wget FSIM for each url (flag may be used multiple times)
 
 Key types:
   - RSA2048RESTR
