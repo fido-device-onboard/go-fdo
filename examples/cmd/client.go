@@ -227,6 +227,7 @@ func di() (err error) { //nolint:gocyclo
 	}
 	hmacSha256, hmacSha384 := hmac.New(sha256.New, secret), hmac.New(sha512.New384, secret)
 
+	var sigAlg x509.SignatureAlgorithm
 	var keyType protocol.KeyType
 	var key crypto.Signer
 	switch diKey {
@@ -240,6 +241,7 @@ func di() (err error) { //nolint:gocyclo
 		keyType = protocol.Rsa2048RestrKeyType
 		key, err = rsa.GenerateKey(rand.Reader, 2048)
 	case "rsa3072":
+		sigAlg = x509.SHA384WithRSA
 		keyType = protocol.RsaPkcsKeyType
 		key, err = rsa.GenerateKey(rand.Reader, 3072)
 	default:
@@ -261,7 +263,8 @@ func di() (err error) { //nolint:gocyclo
 
 	// Generate Java implementation-compatible mfg string
 	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
-		Subject: pkix.Name{CommonName: "device.go-fdo"},
+		Subject:            pkix.Name{CommonName: "device.go-fdo"},
+		SignatureAlgorithm: sigAlg,
 	}, key)
 	if err != nil {
 		return fmt.Errorf("error creating CSR for device certificate chain: %w", err)
