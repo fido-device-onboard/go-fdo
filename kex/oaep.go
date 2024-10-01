@@ -4,6 +4,7 @@
 package kex
 
 import (
+	"bytes"
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding"
@@ -91,14 +92,16 @@ func (s *OAEPSession) Parameter(rand io.Reader, ownerKey *rsa.PublicKey) ([]byte
 
 	// Store the parameter unencrypted
 	if s.xA == nil {
-		s.xA = x
+		s.xA = bytes.Clone(x)
 
 		// Owner random is only signed, not encrypted
 		return x, nil
 	}
-	s.xB = x
+	s.xB = bytes.Clone(x)
 
 	// Compute session key
+	defer clear(s.xB)
+	defer clear(s.xA)
 	sek, svk, err := oaepSymmetricKey(s.xB, s.xA, s.Cipher)
 	if err != nil {
 		return nil, fmt.Errorf("error computing symmetric keys: %w", err)
@@ -106,9 +109,6 @@ func (s *OAEPSession) Parameter(rand io.Reader, ownerKey *rsa.PublicKey) ([]byte
 	s.SEK, s.SVK = sek, svk
 
 	// Encrypt the parameter (device random only) before sending
-	if ownerKey == nil {
-		return nil, fmt.Errorf("owner key must be an in-memory RSA private key (i.e. not a TPM)")
-	}
 	return rsa.EncryptOAEP(sha256.New(), rand, ownerKey, x, nil)
 }
 
@@ -126,6 +126,8 @@ func (s *OAEPSession) SetParameter(xB []byte, ownerKey *rsa.PrivateKey) (err err
 	}
 
 	// Compute session key
+	defer clear(s.xB)
+	defer clear(s.xA)
 	sek, svk, err := oaepSymmetricKey(s.xB, s.xA, s.Cipher)
 	if err != nil {
 		return fmt.Errorf("error computing symmetric keys: %w", err)
@@ -137,6 +139,7 @@ func (s *OAEPSession) SetParameter(xB []byte, ownerKey *rsa.PrivateKey) (err err
 
 func oaepSymmetricKey(deviceRandom, ownerRandom []byte, cipher CipherSuite) (sek, svk []byte, err error) {
 	shSe := deviceRandom
+	defer clear(shSe)
 	contextRand := ownerRandom
 
 	// Derive a symmetric key

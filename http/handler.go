@@ -179,6 +179,7 @@ func (h Handler) handleRequest(ctx context.Context, w http.ResponseWriter, r *ht
 			writeErr(w, msgType, err)
 			return
 		}
+		defer sess.Destroy()
 		defer func() { _ = r.Body.Close() }()
 
 		decrypted, err := sess.Decrypt(rand.Reader, msg)
@@ -216,6 +217,7 @@ func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, msgTy
 			writeErr(w, msgType, err)
 			return
 		}
+		defer sess.Destroy()
 
 		if debugEnabled() {
 			body, _ := cbor.Marshal(respData)

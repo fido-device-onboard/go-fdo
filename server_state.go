@@ -106,6 +106,8 @@ type TO2SessionState interface {
 
 	// SetXSession updates the current key exchange/encryption session based on
 	// an opaque "authorization" token.
+	//
+	// The Session value is not safe to use after the function returns.
 	SetXSession(context.Context, kex.Suite, kex.Session) error
 
 	// XSession returns the current key exchange/encryption session based on an

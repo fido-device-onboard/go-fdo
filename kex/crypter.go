@@ -98,3 +98,10 @@ func (s SessionCrypter) Decrypt(rand io.Reader, r io.Reader) ([]byte, error) {
 	}
 	return []byte(*raw), nil
 }
+
+// Destroy zeroes secrets that last until the end of the session. This means SEK/SVK, but not
+// exchanged parameters, which can be destroyed automatically when SEK/SVK are derived.
+func (s *SessionCrypter) Destroy() {
+	clear(s.SEK)
+	clear(s.SVK)
+}

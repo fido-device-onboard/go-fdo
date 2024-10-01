@@ -14,9 +14,11 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding"
 	"fmt"
 	"io"
 	"math/big"
+	"reflect"
 	"time"
 
 	"github.com/fido-device-onboard/go-fdo"
@@ -395,7 +397,7 @@ func (s Service) ReplacementHmac(ctx context.Context) (protocol.Hmac, error) {
 // opaque "authorization" token.
 func (s Service) SetXSession(ctx context.Context, suite kex.Suite, sess kex.Session) error {
 	return update(ctx, s, func(state *to2State) error {
-		state.KeyExchange.Suite, state.KeyExchange.Sess = suite, sess
+		state.KeyExchange.Suite, state.KeyExchange.Sess = suite, cloneSession(sess, suite)
 		return nil
 	})
 }
@@ -409,9 +411,23 @@ func (s Service) XSession(ctx context.Context) (xSuite kex.Suite, xSession kex.S
 		}
 		xSuite = state.KeyExchange.Suite
 		xSession = state.KeyExchange.Sess
+		xSession = cloneSession(xSession, xSuite)
 		return struct{}{}, nil
 	})
 	return xSuite, xSession, err
+}
+
+func cloneSession(sess kex.Session, suite kex.Suite) kex.Session {
+	cipher := kex.CipherSuiteID(reflect.ValueOf(sess).Elem().FieldByName("SessionCrypter").FieldByName("ID").Int())
+	data, err := sess.(encoding.BinaryMarshaler).MarshalBinary()
+	if err != nil {
+		panic(err)
+	}
+	cloned := suite.New(nil, cipher)
+	if err := cloned.(encoding.BinaryUnmarshaler).UnmarshalBinary(data); err != nil {
+		panic(err)
+	}
+	return cloned
 }
 
 // SetProveDeviceNonce stores the Nonce used in TO2.ProveDevice for use in

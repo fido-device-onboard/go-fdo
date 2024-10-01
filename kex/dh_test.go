@@ -9,7 +9,7 @@ import (
 	"github.com/fido-device-onboard/go-fdo/kex"
 )
 
-func TestDHKEXExchange(t *testing.T) {
+func TestDHExchange(t *testing.T) {
 	for _, suite := range []kex.Suite{kex.DHKEXid14Suite, kex.DHKEXid15Suite} {
 		t.Run(string(suite), testSuite(suite))
 	}

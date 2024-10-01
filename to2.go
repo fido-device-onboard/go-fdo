@@ -19,6 +19,7 @@ import (
 	"iter"
 	"log/slog"
 	"math"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -140,12 +141,13 @@ func TO2(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1
 	//
 	// Results: Replacement ownership voucher, nonces to be retransmitted in
 	// Done/Done2 messages
-	proveDeviceNonce, ownerPublicKey, originalOVH, session, err := verifyOwner(ctx, transport, to1d, &c)
+	proveDeviceNonce, ownerPublicKey, originalOVH, sess, err := verifyOwner(ctx, transport, to1d, &c)
 	if err != nil {
 		errorMsg(ctx, transport, err)
 		return nil, err
 	}
-	setupDeviceNonce, partialOVH, err := proveDevice(ctx, transport, proveDeviceNonce, ownerPublicKey, session, &c)
+	defer sess.Destroy()
+	setupDeviceNonce, partialOVH, err := proveDevice(ctx, transport, proveDeviceNonce, ownerPublicKey, sess, &c)
 	if err != nil {
 		errorMsg(ctx, transport, err)
 		return nil, err
@@ -170,7 +172,7 @@ func TO2(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1
 	}
 
 	// Prepare to send and receive service info, determining the transmit MTU
-	sendMTU, err := sendReadyServiceInfo(ctx, transport, alg, replacementOVH, session, &c)
+	sendMTU, err := sendReadyServiceInfo(ctx, transport, alg, replacementOVH, sess, &c)
 	if err != nil {
 		errorMsg(ctx, transport, err)
 		return nil, err
@@ -186,7 +188,7 @@ func TO2(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1
 	go c.Devmod.Write(ctx, c.DeviceModules, sendMTU, serviceInfoWriter)
 
 	// Loop, sending and receiving service info until done
-	if err := exchangeServiceInfo(ctx, transport, proveDeviceNonce, setupDeviceNonce, sendMTU, serviceInfoReader, session, &c); err != nil {
+	if err := exchangeServiceInfo(ctx, transport, proveDeviceNonce, setupDeviceNonce, sendMTU, serviceInfoReader, sess, &c); err != nil {
 		errorMsg(ctx, transport, err)
 		return nil, err
 	}
@@ -247,25 +249,35 @@ func stopPlugins(modules *deviceModuleMap) {
 // all ownership voucher entries, which are retrieved iteratively with
 // subsequence requests.
 func verifyOwner(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1d, []byte], c *TO2Config) (protocol.Nonce, crypto.PublicKey, *VoucherHeader, kex.Session, error) {
-	// Construct ownership voucher from parts received from the owner service
-	proveDeviceNonce, info, session, err := sendHelloDevice(ctx, transport, c)
+	proveDeviceNonce, info, sess, err := sendHelloDevice(ctx, transport, c)
 	if err != nil {
 		return protocol.Nonce{}, nil, nil, nil, err
 	}
 	if !c.KeyExchange.Valid(c.Key.Public(), info.PublicKeyToValidate) {
+		sess.Destroy()
 		return protocol.Nonce{}, nil, nil, nil, fmt.Errorf(
 			"key exchange %s is invalid for the device and owner attestation types",
 			c.KeyExchange,
 		)
 	}
 	if !kex.Available(c.KeyExchange, c.CipherSuite) {
+		sess.Destroy()
 		return protocol.Nonce{}, nil, nil, nil, fmt.Errorf("unsupported key exchange/cipher suite")
 	}
+	if err := verifyVoucher(ctx, transport, to1d, info, c); err != nil {
+		sess.Destroy()
+		return protocol.Nonce{}, nil, nil, nil, err
+	}
+	return proveDeviceNonce, info.PublicKeyToValidate, &info.OVH, sess, nil
+}
+
+func verifyVoucher(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1d, []byte], info *ovhValidationContext, c *TO2Config) error {
+	// Construct ownership voucher from parts received from the owner service
 	var entries []cose.Sign1Tag[VoucherEntryPayload, []byte]
 	for i := 0; i < info.NumVoucherEntries; i++ {
 		entry, err := sendNextOVEntry(ctx, transport, i)
 		if err != nil {
-			return protocol.Nonce{}, nil, nil, nil, err
+			return err
 		}
 		entries = append(entries, *entry)
 	}
@@ -278,7 +290,7 @@ func verifyOwner(ctx context.Context, transport Transport, to1d *cose.Sign1[prot
 	// Verify ownership voucher header
 	if err := ov.VerifyHeader(c.HmacSha256, c.HmacSha384); err != nil {
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
-		return protocol.Nonce{}, nil, nil, nil, fmt.Errorf("bad ownership voucher header from TO2.ProveOVHdr: %w", err)
+		return fmt.Errorf("bad ownership voucher header from TO2.ProveOVHdr: %w", err)
 	}
 
 	// Verify that the owner service corresponds to the most recent device
@@ -286,14 +298,14 @@ func verifyOwner(ctx context.Context, transport Transport, to1d *cose.Sign1[prot
 	// and/or manufacturer key corresponding to the stored device credentials.
 	if err := ov.VerifyManufacturerKey(c.Cred.PublicKeyHash); err != nil {
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
-		return protocol.Nonce{}, nil, nil, nil, fmt.Errorf("bad ownership voucher header from TO2.ProveOVHdr: manufacturer key: %w", err)
+		return fmt.Errorf("bad ownership voucher header from TO2.ProveOVHdr: manufacturer key: %w", err)
 	}
 
 	// Verify each entry in the voucher's list by performing iterative
 	// signature and hash (header and GUID/devInfo) checks.
 	if err := ov.VerifyEntries(); err != nil {
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
-		return protocol.Nonce{}, nil, nil, nil, fmt.Errorf("bad ownership voucher entries from TO2.ProveOVHdr: %w", err)
+		return fmt.Errorf("bad ownership voucher entries from TO2.ProveOVHdr: %w", err)
 	}
 
 	// Ensure that the voucher entry chain ends with given owner key.
@@ -309,17 +321,17 @@ func verifyOwner(ctx context.Context, transport Transport, to1d *cose.Sign1[prot
 	}
 	expectedOwnerPub, err := ownerPub.Public()
 	if err != nil {
-		return protocol.Nonce{}, nil, nil, nil, fmt.Errorf("error parsing last public key of ownership voucher: %w", err)
+		return fmt.Errorf("error parsing last public key of ownership voucher: %w", err)
 	}
 	if !info.PublicKeyToValidate.(interface{ Equal(crypto.PublicKey) bool }).Equal(expectedOwnerPub) {
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
-		return protocol.Nonce{}, nil, nil, nil, fmt.Errorf("owner public key did not match last entry in ownership voucher")
+		return fmt.Errorf("owner public key did not match last entry in ownership voucher")
 	}
 
 	// If no to1d blob was given, then immmediately return. This will be the
 	// case when RV bypass was used.
 	if to1d == nil {
-		return proveDeviceNonce, info.PublicKeyToValidate, &info.OVH, session, nil
+		return nil
 	}
 
 	// If the TO1.RVRedirect signature does not verify, the Device must assume
@@ -327,13 +339,13 @@ func verifyOwner(ctx context.Context, transport Transport, to1d *cose.Sign1[prot
 	// immediately with an error code message.
 	if ok, err := to1d.Verify(expectedOwnerPub, nil, nil); err != nil {
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
-		return protocol.Nonce{}, nil, nil, nil, fmt.Errorf("error verifying to1d signature: %w", err)
+		return fmt.Errorf("error verifying to1d signature: %w", err)
 	} else if !ok {
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
-		return protocol.Nonce{}, nil, nil, nil, fmt.Errorf("%w: to1d signature verification failed", ErrCryptoVerifyFailed)
+		return fmt.Errorf("%w: to1d signature verification failed", ErrCryptoVerifyFailed)
 	}
 
-	return proveDeviceNonce, info.PublicKeyToValidate, &info.OVH, session, nil
+	return nil
 }
 
 type helloDeviceMsg struct {
@@ -584,11 +596,13 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 		return nil, fmt.Errorf("error generating client key exchange parameter: %w", err)
 	}
 	if err := s.Session.SetXSession(ctx, hello.KexSuiteName, sess); err != nil {
+		clear(xA)
 		return nil, fmt.Errorf("error storing key exchange session: %w", err)
 	}
 
 	// Send begin proof
 	if mfgKeyType := ov.Header.Val.ManufacturerKey.Type; keyType != mfgKeyType {
+		clear(xA)
 		return nil, fmt.Errorf("device sig info has key type %q, must be %q to match manufacturer key", keyType, mfgKeyType)
 	}
 	s1 := cose.Sign1[ovhProof, []byte]{
@@ -610,10 +624,17 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 		}),
 	}
 	if err := s1.Sign(ownerKey, nil, nil, opts); err != nil {
+		clear(xA)
 		return nil, fmt.Errorf("error signing TO2.ProveOVHdr payload: %w", err)
 	}
 
-	return s1.Tag(), nil
+	// The lifetime of xA is until the transport has marshaled and sent the proof. Therefore, the
+	// best option for clearing the secret is to set a finalizer (unfortunately).
+	proof := s1.Tag()
+	runtime.SetFinalizer(proof, func(proof *cose.Sign1Tag[ovhProof, []byte]) {
+		clear(proof.Payload.Val.KeyExchangeA)
+	})
+	return proof, nil
 }
 
 func (s *TO2Server) ownerKey(keyType protocol.KeyType, keyEncoding protocol.KeyEncoding) (crypto.Signer, *protocol.PublicKey, error) {
@@ -734,7 +755,7 @@ func (s *TO2Server) ovNextEntry(ctx context.Context, msg io.Reader) (*ovEntry, e
 }
 
 // ProveDevice(64) -> SetupDevice(65)
-func proveDevice(ctx context.Context, transport Transport, proveDeviceNonce protocol.Nonce, ownerPublicKey crypto.PublicKey, session kex.Session, c *TO2Config) (protocol.Nonce, *VoucherHeader, error) {
+func proveDevice(ctx context.Context, transport Transport, proveDeviceNonce protocol.Nonce, ownerPublicKey crypto.PublicKey, sess kex.Session, c *TO2Config) (protocol.Nonce, *VoucherHeader, error) {
 	// Generate a new nonce
 	var setupDeviceNonce protocol.Nonce
 	if _, err := rand.Read(setupDeviceNonce[:]); err != nil {
@@ -743,10 +764,11 @@ func proveDevice(ctx context.Context, transport Transport, proveDeviceNonce prot
 
 	// Define request structure
 	rsaOwnerPublicKey, _ := ownerPublicKey.(*rsa.PublicKey)
-	paramB, err := session.Parameter(rand.Reader, rsaOwnerPublicKey)
+	xB, err := sess.Parameter(rand.Reader, rsaOwnerPublicKey)
 	if err != nil {
 		return protocol.Nonce{}, nil, fmt.Errorf("error generating key exchange session parameters: %w", err)
 	}
+	defer clear(xB)
 	token := cose.Sign1[eatoken, []byte]{
 		Header: cose.Header{
 			Unprotected: map[cose.Label]any{
@@ -756,7 +778,7 @@ func proveDevice(ctx context.Context, transport Transport, proveDeviceNonce prot
 		Payload: cbor.NewByteWrap(newEAT(c.Cred.GUID, proveDeviceNonce, struct {
 			KeyExchangeB []byte
 		}{
-			KeyExchangeB: paramB,
+			KeyExchangeB: xB,
 		}, nil)),
 	}
 	opts, err := signOptsFor(c.Key, c.PSS)
@@ -769,7 +791,7 @@ func proveDevice(ctx context.Context, transport Transport, proveDeviceNonce prot
 	msg := token.Tag()
 
 	// Make request
-	typ, resp, err := transport.Send(ctx, protocol.TO2ProveDeviceMsgType, msg, kex.DecryptOnly{Session: session})
+	typ, resp, err := transport.Send(ctx, protocol.TO2ProveDeviceMsgType, msg, kex.DecryptOnly{Session: sess})
 	if err != nil {
 		return protocol.Nonce{}, nil, fmt.Errorf("error sending TO2.ProveDevice: %w", err)
 	}
@@ -895,6 +917,7 @@ func (s *TO2Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1
 	if err != nil {
 		return nil, fmt.Errorf("error getting associated key exchange session: %w", err)
 	}
+	defer sess.Destroy()
 	keyType := ov.Header.Val.ManufacturerKey.Type
 	ownerKey, ownerPublicKey, err := s.ownerKey(keyType, ov.Header.Val.ManufacturerKey.Encoding)
 	if err != nil {

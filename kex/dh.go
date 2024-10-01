@@ -37,7 +37,7 @@ func init() {
 			if xA != nil {
 				paramA = new(big.Int).SetBytes(xA)
 			}
-			return &RSADHSession{
+			return &DHSession{
 				p:         prime14,
 				g:         2,
 				paramSize: 32,
@@ -60,7 +60,7 @@ func init() {
 			if xA != nil {
 				paramA = new(big.Int).SetBytes(xA)
 			}
-			return &RSADHSession{
+			return &DHSession{
 				p:         prime15,
 				g:         2,
 				paramSize: 96,
@@ -78,9 +78,9 @@ func init() {
 	)
 }
 
-// RSADHSession implements a Session using RSA keys from Diffie-Hellman key
-// exchange. Sessions are created using [Suite.New].
-type RSADHSession struct {
+// DHSession implements a Session using Diffie-Hellman key exchange. Sessions are created using
+// [Suite.New].
+type DHSession struct {
 	// Static configuration
 	p         *big.Int
 	g         int
@@ -94,8 +94,8 @@ type RSADHSession struct {
 	SessionCrypter
 }
 
-func (s RSADHSession) String() string {
-	return fmt.Sprintf(`RSADH[
+func (s DHSession) String() string {
+	return fmt.Sprintf(`DH[
   p     %x
   g     %d
   size  %d
@@ -123,10 +123,9 @@ func bigIntBytes(i *big.Int) []byte {
 	return i.Bytes()
 }
 
-// Parameter generates the exchange parameter to send to its peer. This
-// function will generate a new parameter every time it is called. This
-// method is used by both the client and server.
-func (s *RSADHSession) Parameter(rand io.Reader, _ *rsa.PublicKey) ([]byte, error) {
+// Parameter generates the exchange parameter to send to its peer. This function will generate a
+// new parameter every time it is called. This method is used by both the client and server.
+func (s *DHSession) Parameter(rand io.Reader, _ *rsa.PublicKey) ([]byte, error) {
 	// Create a random parameter x and compute exchange parameter with the
 	// formula g^x mod p
 	r := make([]byte, s.paramSize)
@@ -146,7 +145,9 @@ func (s *RSADHSession) Parameter(rand io.Reader, _ *rsa.PublicKey) ([]byte, erro
 	s.b = x
 
 	// Compute session key
-	sek, svk, err := rsaSymmetricKey(s.xA, s.b, s.p, s.Cipher)
+	defer func() { s.b.SetBytes(nil); s.b = nil }()
+	defer func() { s.xA.SetBytes(nil); s.xA = nil }()
+	sek, svk, err := dhSymmetricKey(s.xA, s.b, s.p, s.Cipher)
 	if err != nil {
 		return nil, fmt.Errorf("error computing symmetric keys: %w", err)
 	}
@@ -155,13 +156,15 @@ func (s *RSADHSession) Parameter(rand io.Reader, _ *rsa.PublicKey) ([]byte, erro
 	return xX.Bytes(), nil
 }
 
-// SetParameter sets the received parameter from the client. This method is
-// only called by a server.
-func (s *RSADHSession) SetParameter(xB []byte, _ *rsa.PrivateKey) error {
+// SetParameter sets the received parameter from the client. This method is only called by a
+// server.
+func (s *DHSession) SetParameter(xB []byte, _ *rsa.PrivateKey) error {
 	s.xB = new(big.Int).SetBytes(xB)
 
 	// Compute session key
-	sek, svk, err := rsaSymmetricKey(s.xB, s.a, s.p, s.Cipher)
+	defer func() { s.xB.SetBytes(nil); s.xB = nil }()
+	defer func() { s.a.SetBytes(nil); s.a = nil }()
+	sek, svk, err := dhSymmetricKey(s.xB, s.a, s.p, s.Cipher)
 	if err != nil {
 		return fmt.Errorf("error computing symmetric keys: %w", err)
 	}
@@ -170,10 +173,28 @@ func (s *RSADHSession) SetParameter(xB []byte, _ *rsa.PrivateKey) error {
 	return nil
 }
 
-func rsaSymmetricKey(other, own, p *big.Int, cipher CipherSuite) (sek, svk []byte, err error) {
+func dhSymmetricKey(other, own, p *big.Int, cipher CipherSuite) (sek, svk []byte, err error) {
+	// Check that the received public key is valid. DH public keys generated using safe-prime
+	// groups will always be in [2, p - 2].
+	//
+	// See NIST SP 800-56A Rev. 3, sections 5.6.2.3.2 and 6.1.2.1
+	if two := new(big.Int).SetInt64(2); other.Cmp(two) < 0 ||
+		other.Cmp(new(big.Int).Sub(p, two)) > 0 {
+		return nil, nil, fmt.Errorf("received invalid public key")
+	}
+
 	// Compute shared secret
 	shSe := make([]byte, len(p.Bytes()))
-	new(big.Int).Exp(other, own, p).FillBytes(shSe)
+	secretInt := new(big.Int).Exp(other, own, p)
+	defer func() { secretInt.SetBytes(nil) }()
+	// Secret must not be <= 1 or equal to p-1 (see NIST SP 800-56A Rev. 3, sections 5.7.1.1 and
+	// 6.1.2.1)
+	if one := new(big.Int).SetInt64(1); secretInt.Cmp(one) <= 0 ||
+		secretInt.Cmp(new(big.Int).Sub(p, one)) == 0 {
+		return nil, nil, fmt.Errorf("invalid shared secret")
+	}
+	secretInt.FillBytes(shSe)
+	defer clear(shSe)
 
 	// Derive a symmetric key
 	sekSize, svkSize := cipher.EncryptAlg.KeySize(), uint16(0)
@@ -185,7 +206,7 @@ func rsaSymmetricKey(other, own, p *big.Int, cipher CipherSuite) (sek, svk []byt
 	return symKey[:sekSize], symKey[sekSize:], nil
 }
 
-type rsadhPersist struct {
+type dhPersist struct {
 	Prime     []byte
 	Generator int
 
@@ -201,8 +222,8 @@ type rsadhPersist struct {
 }
 
 // MarshalCBOR implements [cbor.Marshaler].
-func (s *RSADHSession) MarshalCBOR() ([]byte, error) {
-	persist := rsadhPersist{
+func (s *DHSession) MarshalCBOR() ([]byte, error) {
+	persist := dhPersist{
 		Prime:     s.p.Bytes(),
 		Generator: s.g,
 		ParamSize: s.paramSize,
@@ -227,13 +248,13 @@ func (s *RSADHSession) MarshalCBOR() ([]byte, error) {
 }
 
 // UnmarshalCBOR implements [cbor.Unmarshaler].
-func (s *RSADHSession) UnmarshalCBOR(data []byte) error {
-	var persist rsadhPersist
+func (s *DHSession) UnmarshalCBOR(data []byte) error {
+	var persist dhPersist
 	if err := cbor.Unmarshal(data, &persist); err != nil {
 		return err
 	}
 
-	*s = RSADHSession{
+	*s = DHSession{
 		p:         new(big.Int).SetBytes(persist.Prime),
 		g:         persist.Generator,
 		paramSize: persist.ParamSize,
@@ -261,11 +282,11 @@ func (s *RSADHSession) UnmarshalCBOR(data []byte) error {
 	return nil
 }
 
-var _ encoding.BinaryMarshaler = (*RSADHSession)(nil)
-var _ encoding.BinaryUnmarshaler = (*RSADHSession)(nil)
+var _ encoding.BinaryMarshaler = (*DHSession)(nil)
+var _ encoding.BinaryUnmarshaler = (*DHSession)(nil)
 
 // MarshalBinary implements encoding.BinaryMarshaler
-func (s *RSADHSession) MarshalBinary() ([]byte, error) { return s.MarshalCBOR() }
+func (s *DHSession) MarshalBinary() ([]byte, error) { return s.MarshalCBOR() }
 
 // UnmarshalBinary implements encoding.BinaryUnmarshaler
-func (s *RSADHSession) UnmarshalBinary(data []byte) error { return s.UnmarshalCBOR(data) }
+func (s *DHSession) UnmarshalBinary(data []byte) error { return s.UnmarshalCBOR(data) }

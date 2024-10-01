@@ -156,13 +156,16 @@ func (s *ECDHSession) Parameter(rand io.Reader, _ *rsa.PublicKey) ([]byte, error
 		return nil, err
 	}
 	if s.xA == nil {
-		s.xA = xX
+		s.xA = bytes.Clone(xX)
 		return xX, nil
 	}
-	s.xB = xX
+	s.xB = bytes.Clone(xX)
 
 	// Compute session key
-	sek, svk, err := ecSymmetricKey(ecKey, s.xA, s.xB, s.Cipher)
+	defer clear(s.xB)
+	defer clear(s.xA)
+	defer func() { s.priv = nil }() // No API to zero private component
+	sek, svk, err := ecdhSymmetricKey(ecKey, s.xA, s.xB, s.Cipher)
 	if err != nil {
 		return nil, fmt.Errorf("error computing symmetric keys: %w", err)
 	}
@@ -177,7 +180,10 @@ func (s *ECDHSession) SetParameter(xB []byte, _ *rsa.PrivateKey) error {
 	s.xB = xB
 
 	// Compute session key
-	sek, svk, err := ecSymmetricKey(s.priv, s.xA, s.xB, s.Cipher)
+	defer clear(s.xB)
+	defer clear(s.xA)
+	defer func() { s.priv = nil }() // No API to zero private component
+	sek, svk, err := ecdhSymmetricKey(s.priv, s.xA, s.xB, s.Cipher)
 	if err != nil {
 		return fmt.Errorf("error computing symmetric keys: %w", err)
 	}
@@ -238,7 +244,7 @@ func (p *ecdhParam) UnmarshalBinary(b []byte) error {
 	return nil
 }
 
-func ecSymmetricKey(ecKey *ecdh.PrivateKey, xA, xB []byte, cipher CipherSuite) (sek, svk []byte, err error) {
+func ecdhSymmetricKey(ecKey *ecdh.PrivateKey, xA, xB []byte, cipher CipherSuite) (sek, svk []byte, err error) {
 	// Decode parameters
 	var paramA, paramB ecdhParam
 	if err := paramA.UnmarshalBinary(xA); err != nil {
@@ -249,10 +255,11 @@ func ecSymmetricKey(ecKey *ecdh.PrivateKey, xA, xB []byte, cipher CipherSuite) (
 	}
 
 	// Compute shared secret
-	shSe, err := ecSharedSecret(ecKey, paramA, paramB)
+	shSe, err := ecdhSharedSecret(ecKey, paramA, paramB)
 	if err != nil {
 		return nil, nil, fmt.Errorf("error computing shared secret: %w", err)
 	}
+	defer clear(shSe)
 
 	// Derive a symmetric key
 	sekSize, svkSize := cipher.EncryptAlg.KeySize(), uint16(0)
@@ -265,7 +272,7 @@ func ecSymmetricKey(ecKey *ecdh.PrivateKey, xA, xB []byte, cipher CipherSuite) (
 }
 
 // Compute the ECDH shared secret
-func ecSharedSecret(key *ecdh.PrivateKey, paramA, paramB ecdhParam) ([]byte, error) {
+func ecdhSharedSecret(key *ecdh.PrivateKey, paramA, paramB ecdhParam) ([]byte, error) {
 	// Determine which param is "other"
 	var other ecdhParam
 	switch {
