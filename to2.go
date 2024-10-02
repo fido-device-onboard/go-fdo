@@ -19,6 +19,7 @@ import (
 	"iter"
 	"log/slog"
 	"math"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -109,6 +110,11 @@ type TO2Config struct {
 	// amounts of data, but choosing the best value depends on network
 	// configuration (e.g. jumbo packets) and transport (overhead size).
 	MaxServiceInfoSizeReceive uint16
+
+	// Allow for the Credential Reuse Protocol (Section 7) to be used. If not
+	// enabled, TO2 will fail with CredReuseErrCode (102) if reuse is
+	// attempted by the owner service.
+	AllowCredentialReuse bool
 }
 
 // TO2 runs the TO2 protocol and returns a DeviceCredential with replaced GUID,
@@ -120,6 +126,9 @@ type TO2Config struct {
 //
 // It has the side effect of performing service info modules, which may include
 // actions such as downloading files.
+//
+// If the Credential Reuse protocol is allowed and occurs, then the returned
+// device credential will be nil.
 func TO2(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1d, []byte], c TO2Config) (*DeviceCredential, error) {
 	ctx = contextWithErrMsg(ctx)
 
@@ -152,23 +161,27 @@ func TO2(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1
 		errorMsg(ctx, transport, err)
 		return nil, err
 	}
-	replacementOVH := &VoucherHeader{
-		Version:         originalOVH.Version,
-		GUID:            partialOVH.GUID,
-		RvInfo:          partialOVH.RvInfo,
-		DeviceInfo:      originalOVH.DeviceInfo,
-		ManufacturerKey: partialOVH.ManufacturerKey,
-		CertChainHash:   originalOVH.CertChainHash,
-	}
 
-	// Select the appropriate hash algorithm
-	ownerPubKey, err := partialOVH.ManufacturerKey.Public()
-	if err != nil {
-		return nil, fmt.Errorf("error parsing manufacturer public key type from incomplete replacement ownership voucher header: %w", err)
-	}
-	alg, err := hashAlgFor(c.Key.Public(), ownerPubKey)
-	if err != nil {
-		return nil, fmt.Errorf("error selecting the appropriate hash algorithm: %w", err)
+	// Select the appropriate hash algorithm for HMAC and public key hash
+	alg := c.Cred.PublicKeyHash.Algorithm
+	var replacementOVH *VoucherHeader
+	if partialOVH != nil {
+		nextOwnerPublicKey, err := partialOVH.ManufacturerKey.Public()
+		if err != nil {
+			return nil, fmt.Errorf("error parsing manufacturer public key type from incomplete replacement ownership voucher header: %w", err)
+		}
+		alg, err = hashAlgFor(c.Key.Public(), nextOwnerPublicKey)
+		if err != nil {
+			return nil, fmt.Errorf("error selecting the appropriate hash algorithm: %w", err)
+		}
+		replacementOVH = &VoucherHeader{
+			Version:         originalOVH.Version,
+			GUID:            partialOVH.GUID,
+			RvInfo:          partialOVH.RvInfo,
+			DeviceInfo:      originalOVH.DeviceInfo,
+			ManufacturerKey: partialOVH.ManufacturerKey,
+			CertChainHash:   originalOVH.CertChainHash,
+		}
 	}
 
 	// Prepare to send and receive service info, determining the transmit MTU
@@ -191,6 +204,11 @@ func TO2(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1
 	if err := exchangeServiceInfo(ctx, transport, proveDeviceNonce, setupDeviceNonce, sendMTU, serviceInfoReader, sess, &c); err != nil {
 		errorMsg(ctx, transport, err)
 		return nil, err
+	}
+
+	// If using the Credential Reuse protocol the device credential is not updated
+	if replacementOVH == nil {
+		return nil, nil
 	}
 
 	// Hash new initial owner public key and return replacement device
@@ -810,11 +828,15 @@ func proveDevice(ctx context.Context, transport Transport, proveDeviceNonce prot
 			captureErr(ctx, protocol.InvalidMessageErrCode, "")
 			return protocol.Nonce{}, nil, fmt.Errorf("nonce in TO2.SetupDevice did not match nonce sent in TO2.ProveDevice")
 		}
-		return setupDeviceNonce, &VoucherHeader{
+		replacementOVH := &VoucherHeader{
 			GUID:            setupDevice.Payload.Val.GUID,
 			RvInfo:          setupDevice.Payload.Val.RendezvousInfo,
 			ManufacturerKey: setupDevice.Payload.Val.Owner2Key,
-		}, nil
+		}
+		if credReuse, err := reuseCredentials(ctx, replacementOVH, ownerPublicKey, c); err != nil || credReuse {
+			return setupDeviceNonce, nil, err
+		}
+		return setupDeviceNonce, replacementOVH, nil
 
 	case protocol.ErrorMsgType:
 		var errMsg protocol.ErrorMessage
@@ -827,6 +849,24 @@ func proveDevice(ctx context.Context, transport Transport, proveDeviceNonce prot
 		captureErr(ctx, protocol.MessageBodyErrCode, "")
 		return protocol.Nonce{}, nil, fmt.Errorf("unexpected message type for response to TO2.ProveDevice: %d", typ)
 	}
+}
+
+func reuseCredentials(ctx context.Context, replacementOVH *VoucherHeader, ownerPublicKey crypto.PublicKey, c *TO2Config) (bool, error) {
+	replacementOwnerPublicKey, err := replacementOVH.ManufacturerKey.Public()
+	if err != nil {
+		captureErr(ctx, protocol.InvalidMessageErrCode, "")
+		return false, fmt.Errorf("owner key in TO2.SetupDevice could not be parsed: %w", err)
+	}
+	if replacementOVH.GUID != c.Cred.GUID ||
+		!reflect.DeepEqual(replacementOVH.RvInfo, c.Cred.RvInfo) ||
+		!replacementOwnerPublicKey.(interface{ Equal(crypto.PublicKey) bool }).Equal(ownerPublicKey) {
+		return false, nil
+	}
+	if !c.AllowCredentialReuse {
+		captureErr(ctx, protocol.CredReuseErrCode, "")
+		return false, fmt.Errorf("credential reuse is not enabled")
+	}
+	return true, nil
 }
 
 type deviceSetup struct {
@@ -931,28 +971,31 @@ func (s *TO2Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1
 		return nil, fmt.Errorf("error updating associated key exchange session: %w", err)
 	}
 
-	// Get configured RV info
-	rvInfo, err := s.RvInfo(ctx, *ov)
-	if err != nil {
-		return nil, fmt.Errorf("error determining rendezvous info for device: %w", err)
-	}
-	if err := s.Session.SetRvInfo(ctx, rvInfo); err != nil {
-		return nil, fmt.Errorf("error storing rendezvous info for device: %w", err)
-	}
-
-	// Generate a replacement GUID
+	// Get replacement GUID and rendezvous directives
 	var replacementGUID protocol.GUID
-	if _, err := rand.Read(replacementGUID[:]); err != nil {
-		return nil, fmt.Errorf("error generating replacement GUID for device: %w", err)
-	}
-	if err := s.Session.SetReplacementGUID(ctx, replacementGUID); err != nil {
-		return nil, fmt.Errorf("error storing replacement GUID for device: %w", err)
+	var replacementRvInfo [][]protocol.RvInstruction
+	if s.ReuseCredential != nil && s.ReuseCredential(ctx, *ov) {
+		replacementGUID = ov.Header.Val.GUID
+		replacementRvInfo = ov.Header.Val.RvInfo
+	} else {
+		if _, err := rand.Read(replacementGUID[:]); err != nil {
+			return nil, fmt.Errorf("error generating replacement GUID for device: %w", err)
+		}
+		if err := s.Session.SetReplacementGUID(ctx, replacementGUID); err != nil {
+			return nil, fmt.Errorf("error storing replacement GUID for device: %w", err)
+		}
+		if replacementRvInfo, err = s.RvInfo(ctx, *ov); err != nil {
+			return nil, fmt.Errorf("error determining rendezvous info for device: %w", err)
+		}
+		if err := s.Session.SetRvInfo(ctx, replacementRvInfo); err != nil {
+			return nil, fmt.Errorf("error storing rendezvous info for device: %w", err)
+		}
 	}
 
 	// Respond with device setup
 	s1 := cose.Sign1[deviceSetup, []byte]{
 		Payload: cbor.NewByteWrap(deviceSetup{
-			RendezvousInfo:  rvInfo,
+			RendezvousInfo:  replacementRvInfo,
 			GUID:            replacementGUID,
 			NonceTO2SetupDv: setupDeviceNonce,
 			Owner2Key:       *ownerPublicKey,
@@ -985,14 +1028,18 @@ func sendReadyServiceInfo(ctx context.Context, transport Transport, alg protocol
 	default:
 		panic("only SHA256 and SHA384 are supported in FDO")
 	}
-	replacementHmac, err := hmacHash(h, replacementOVH)
-	if err != nil {
-		return 0, fmt.Errorf("error computing HMAC of ownership voucher header: %w", err)
+	var hmac *protocol.Hash
+	if replacementOVH != nil {
+		replacementHmac, err := hmacHash(h, replacementOVH)
+		if err != nil {
+			return 0, fmt.Errorf("error computing HMAC of ownership voucher header: %w", err)
+		}
+		hmac = &replacementHmac
 	}
 
 	// Define request structure
 	msg := deviceServiceInfoReady{
-		Hmac:                    &replacementHmac,
+		Hmac:                    hmac,
 		MaxOwnerServiceInfoSize: &c.MaxServiceInfoSizeReceive,
 	}
 
@@ -1042,14 +1089,6 @@ func (s *TO2Server) ownerServiceInfoReady(ctx context.Context, msg io.Reader) (*
 		return nil, fmt.Errorf("error decoding TO2.DeviceServiceInfoReady request: %w", err)
 	}
 
-	// Store new HMAC for voucher replacement
-	if deviceReady.Hmac == nil {
-		return nil, fmt.Errorf("device did not send a replacement voucher HMAC")
-	}
-	if err := s.Session.SetReplacementHmac(ctx, *deviceReady.Hmac); err != nil {
-		return nil, fmt.Errorf("error storing replacement voucher HMAC for device: %w", err)
-	}
-
 	// Set send MTU
 	mtu := uint16(serviceinfo.DefaultMTU)
 	if deviceReady.MaxOwnerServiceInfoSize != nil {
@@ -1059,25 +1098,32 @@ func (s *TO2Server) ownerServiceInfoReady(ctx context.Context, msg io.Reader) (*
 		return nil, fmt.Errorf("error storing max service info size to send to device: %w", err)
 	}
 
-	// Get voucher and voucher replacement state
-	currentGUID, err := s.Session.GUID(ctx)
+	// Get current voucher
+	guid, err := s.Session.GUID(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving associated device GUID of proof session: %w", err)
 	}
-	currentOV, err := s.Vouchers.Voucher(ctx, currentGUID)
+	ov, err := s.Vouchers.Voucher(ctx, guid)
 	if err != nil {
-		return nil, fmt.Errorf("error retrieving voucher for device %x: %w", currentGUID, err)
+		return nil, fmt.Errorf("error retrieving voucher for device %x: %w", guid, err)
 	}
-	replacementGUID, err := s.Session.ReplacementGUID(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("error retrieving replacement GUID for device: %w", err)
-	}
-	info := currentOV.Header.Val.DeviceInfo
+	info := ov.Header.Val.DeviceInfo
 	var deviceCertChain []*x509.Certificate
-	if currentOV.CertChain != nil {
-		deviceCertChain = make([]*x509.Certificate, len(*currentOV.CertChain))
-		for i, cert := range *currentOV.CertChain {
+	if ov.CertChain != nil {
+		deviceCertChain = make([]*x509.Certificate, len(*ov.CertChain))
+		for i, cert := range *ov.CertChain {
 			deviceCertChain[i] = (*x509.Certificate)(cert)
+		}
+	}
+
+	// If not using the Credential Reuse Protocol (i.e. device sends an HMAC),
+	// then store the HMAC and get the replacement GUID
+	if deviceReady.Hmac != nil {
+		if err := s.Session.SetReplacementHmac(ctx, *deviceReady.Hmac); err != nil {
+			return nil, fmt.Errorf("error storing replacement voucher HMAC for device: %w", err)
+		}
+		if guid, err = s.Session.ReplacementGUID(ctx); err != nil {
+			return nil, fmt.Errorf("error retrieving replacement GUID for device: %w", err)
 		}
 	}
 
@@ -1092,7 +1138,7 @@ func (s *TO2Server) ownerServiceInfoReady(ctx context.Context, msg io.Reader) (*
 				if !yield("devmod", &devmod) {
 					return
 				}
-				ownerModules = s.OwnerModules(ctx, replacementGUID, info, deviceCertChain, devmod.Devmod, devmod.Modules)
+				ownerModules = s.OwnerModules(ctx, guid, info, deviceCertChain, devmod.Devmod, devmod.Modules)
 			}
 
 			ownerModules(func(moduleName string, mod serviceinfo.OwnerModule) bool {
@@ -1525,7 +1571,16 @@ func (s *TO2Server) to2Done2(ctx context.Context, msg io.Reader) (*done2Msg, err
 		return nil, fmt.Errorf("nonce from TO2.ProveDevice did not match TO2.Done")
 	}
 
-	// Get voucher and voucher replacement state
+	// If the Credential Reuse Protocol is being used (replacement HMAC is not
+	// found), then immediately complete TO2 without replacing the voucher.
+	replacementHmac, err := s.Session.ReplacementHmac(ctx)
+	if errors.Is(err, ErrNotFound) {
+		return &done2Msg{NonceTO2SetupDv: setupDeviceNonce}, nil
+	} else if err != nil {
+		return nil, fmt.Errorf("error retrieving replacement Hmac for device: %w", err)
+	}
+
+	// Get current and replacement voucher values
 	currentGUID, err := s.Session.GUID(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving associated device GUID of proof session: %w", err)
@@ -1534,7 +1589,6 @@ func (s *TO2Server) to2Done2(ctx context.Context, msg io.Reader) (*done2Msg, err
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving voucher for device %x: %w", currentGUID, err)
 	}
-
 	rvInfo, err := s.Session.RvInfo(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving rendezvous info for device: %w", err)
@@ -1542,10 +1596,6 @@ func (s *TO2Server) to2Done2(ctx context.Context, msg io.Reader) (*done2Msg, err
 	replacementGUID, err := s.Session.ReplacementGUID(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving replacement GUID for device: %w", err)
-	}
-	replacementHmac, err := s.Session.ReplacementHmac(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("error retrieving replacement Hmac for device: %w", err)
 	}
 
 	// Create and store a new voucher
@@ -1574,7 +1624,5 @@ func (s *TO2Server) to2Done2(ctx context.Context, msg io.Reader) (*done2Msg, err
 	}
 
 	// Respond with nonce
-	return &done2Msg{
-		NonceTO2SetupDv: setupDeviceNonce,
-	}, nil
+	return &done2Msg{NonceTO2SetupDv: setupDeviceNonce}, nil
 }

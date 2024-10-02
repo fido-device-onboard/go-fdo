@@ -205,17 +205,20 @@ func client() error {
 			FileSep: ";",
 			Bin:     runtime.GOARCH,
 		},
-		KeyExchange: kex.Suite(kexSuite),
-		CipherSuite: kexCipherSuiteID,
+		KeyExchange:          kex.Suite(kexSuite),
+		CipherSuite:          kexCipherSuiteID,
+		AllowCredentialReuse: true,
 	})
 	if rvOnly {
 		return nil
 	}
 	if newDC == nil {
-		return fmt.Errorf("transfer of ownership not successful")
+		fmt.Println("Credential not updated (either due to failure of TO2 or the Credential Reuse Protocol")
+		return nil
 	}
 
 	// Store new credential
+	fmt.Println("Success")
 	return updateCred(*newDC)
 }
 

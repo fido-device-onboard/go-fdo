@@ -59,65 +59,68 @@ func TestClientWithDataModules(t *testing.T) {
 	errc := make(chan error)
 	go func() { errc <- srv.Serve(lis) }()
 
-	fdotest.RunClientTestSuite(t, nil, nil, map[string]serviceinfo.DeviceModule{
-		"fdo.download": &fsim.Download{
-			CreateTemp: func() (*os.File, error) {
-				return os.CreateTemp("testdata", "fdo.download_*")
-			},
-			NameToPath: func(name string) string {
-				return filepath.Join("testdata", "downloads", name)
-			},
-			ErrorLog: fdotest.TestingLog(t),
-		},
-		"fdo.upload": &fsim.Upload{FS: fstest.MapFS{
-			"bigfile.test": &fstest.MapFile{
-				Data: data,
-				Mode: 0777,
-			},
-		}},
-		"fdo.wget": &fsim.Wget{
-			CreateTemp: func() (*os.File, error) {
-				return os.CreateTemp("testdata", "fdo.wget_*")
-			},
-			NameToPath: func(name string) string {
-				return filepath.Join("testdata", "downloads", name)
-			},
-			Timeout: 10 * time.Second,
-		},
-	}, func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
-		return func(yield func(string, serviceinfo.OwnerModule) bool) {
-			if !yield("fdo.download", &fsim.DownloadContents[*bytes.Reader]{
-				Name:         "bigfile.test",
-				Contents:     bytes.NewReader(data),
-				MustDownload: true,
-			}) {
-				return
-			}
-
-			if !yield("fdo.upload", &fsim.UploadRequest{
-				Dir:  "testdata/uploads",
-				Name: "bigfile.test",
+	fdotest.RunClientTestSuite(t, fdotest.Config{
+		DeviceModules: map[string]serviceinfo.DeviceModule{
+			"fdo.download": &fsim.Download{
 				CreateTemp: func() (*os.File, error) {
-					return os.CreateTemp("testdata", "fdo.upload_*")
+					return os.CreateTemp("testdata", "fdo.download_*")
 				},
-			}) {
-				return
-			}
+				NameToPath: func(name string) string {
+					return filepath.Join("testdata", "downloads", name)
+				},
+				ErrorLog: fdotest.TestingLog(t),
+			},
+			"fdo.upload": &fsim.Upload{FS: fstest.MapFS{
+				"bigfile.test": &fstest.MapFile{
+					Data: data,
+					Mode: 0777,
+				},
+			}},
+			"fdo.wget": &fsim.Wget{
+				CreateTemp: func() (*os.File, error) {
+					return os.CreateTemp("testdata", "fdo.wget_*")
+				},
+				NameToPath: func(name string) string {
+					return filepath.Join("testdata", "downloads", name)
+				},
+				Timeout: 10 * time.Second,
+			},
+		},
+		OwnerModules: func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
+			return func(yield func(string, serviceinfo.OwnerModule) bool) {
+				if !yield("fdo.download", &fsim.DownloadContents[*bytes.Reader]{
+					Name:         "bigfile.test",
+					Contents:     bytes.NewReader(data),
+					MustDownload: true,
+				}) {
+					return
+				}
 
-			if !yield("fdo.wget", &fsim.WgetCommand{
-				Name: "wget.test",
-				URL: &url.URL{
-					Scheme: "http",
-					Host:   lis.Addr().String(),
-					Path:   "/file",
-				},
-				Length:   int64(len(data)),
-				Checksum: sum[:],
-			}) {
-				return
+				if !yield("fdo.upload", &fsim.UploadRequest{
+					Dir:  "testdata/uploads",
+					Name: "bigfile.test",
+					CreateTemp: func() (*os.File, error) {
+						return os.CreateTemp("testdata", "fdo.upload_*")
+					},
+				}) {
+					return
+				}
+
+				if !yield("fdo.wget", &fsim.WgetCommand{
+					Name: "wget.test",
+					URL: &url.URL{
+						Scheme: "http",
+						Host:   lis.Addr().String(),
+						Path:   "/file",
+					},
+					Length:   int64(len(data)),
+					Checksum: sum[:],
+				}) {
+					return
+				}
 			}
-		}
-	}, nil)
+		},
+	})
 
 	/// Validate contents
 	downloadContents, err := os.ReadFile("testdata/downloads/bigfile.test")
@@ -221,21 +224,24 @@ func TestClientWithMockDownloadOwner(t *testing.T) {
 		},
 	}
 
-	fdotest.RunClientTestSuite(t, nil, nil, map[string]serviceinfo.DeviceModule{
-		"fdo.download": &fsim.Download{
-			CreateTemp: func() (*os.File, error) {
-				return os.CreateTemp("testdata", "fdo.download_*")
+	fdotest.RunClientTestSuite(t, fdotest.Config{
+		DeviceModules: map[string]serviceinfo.DeviceModule{
+			"fdo.download": &fsim.Download{
+				CreateTemp: func() (*os.File, error) {
+					return os.CreateTemp("testdata", "fdo.download_*")
+				},
+				NameToPath: func(name string) string {
+					return filepath.Join("testdata", "downloads", name)
+				},
+				ErrorLog: fdotest.TestingLog(t),
 			},
-			NameToPath: func(name string) string {
-				return filepath.Join("testdata", "downloads", name)
-			},
-			ErrorLog: fdotest.TestingLog(t),
 		},
-	}, func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
-		return func(yield func(string, serviceinfo.OwnerModule) bool) {
-			yield("fdo.download", ownerModule)
-		}
-	}, nil)
+		OwnerModules: func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
+			return func(yield func(string, serviceinfo.OwnerModule) bool) {
+				yield("fdo.download", ownerModule)
+			}
+		},
+	})
 }
 
 func TestClientWithCommandModule(t *testing.T) {
@@ -246,40 +252,43 @@ func TestClientWithCommandModule(t *testing.T) {
 	}
 	runs := make(chan runData, 1000)
 
-	fdotest.RunClientTestSuite(t, nil, nil, map[string]serviceinfo.DeviceModule{
-		"fdo.command": &fsim.Command{
-			Timeout: 10 * time.Second,
+	fdotest.RunClientTestSuite(t, fdotest.Config{
+		DeviceModules: map[string]serviceinfo.DeviceModule{
+			"fdo.command": &fsim.Command{
+				Timeout: 10 * time.Second,
+			},
 		},
-	}, func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
-		return func(yield func(string, serviceinfo.OwnerModule) bool) {
-			run := runData{exitChan: make(chan int, 1)}
+		OwnerModules: func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
+			return func(yield func(string, serviceinfo.OwnerModule) bool) {
+				run := runData{exitChan: make(chan int, 1)}
 
-			if !yield("fdo.command", &fsim.RunCommand{
-				Command: "date",
-				Args:    []string{"--utc"},
-				Stdout: struct {
-					io.Writer
-					io.Closer
-				}{
-					Writer: &run.outbuf,
-					Closer: io.NopCloser(nil),
-				},
-				Stderr: struct {
-					io.Writer
-					io.Closer
-				}{
-					Writer: &run.errbuf,
-					Closer: io.NopCloser(nil),
-				},
-				ExitChan: run.exitChan,
-			}) {
-				return
+				if !yield("fdo.command", &fsim.RunCommand{
+					Command: "date",
+					Args:    []string{"--utc"},
+					Stdout: struct {
+						io.Writer
+						io.Closer
+					}{
+						Writer: &run.outbuf,
+						Closer: io.NopCloser(nil),
+					},
+					Stderr: struct {
+						io.Writer
+						io.Closer
+					}{
+						Writer: &run.errbuf,
+						Closer: io.NopCloser(nil),
+					},
+					ExitChan: run.exitChan,
+				}) {
+					return
+				}
+				if slices.Contains(supportedMods, "fdo.command") {
+					runs <- run
+				}
 			}
-			if slices.Contains(supportedMods, "fdo.command") {
-				runs <- run
-			}
-		}
-	}, nil)
+		},
+	})
 	close(runs)
 
 	for run := range runs {

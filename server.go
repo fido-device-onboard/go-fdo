@@ -186,11 +186,18 @@ type TO2Server struct {
 	Vouchers  OwnerVoucherPersistentState
 	OwnerKeys OwnerKeyPersistentState
 
-	// Rendezvous directives
+	// Choose the replacement rendezvous directives based on the current
+	// voucher of the onboarding device.
 	RvInfo func(context.Context, Voucher) ([][]protocol.RvInstruction, error)
 
-	// Create an iterator of service info modules for a given device
+	// Create an iterator of service info modules for a given device. The
+	// iterator returns the name of the module and its implementation.
 	OwnerModules func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, modules []string) iter.Seq2[string, serviceinfo.OwnerModule]
+
+	// ReuseCredential, if not nil, will be called to determine whether to
+	// apply the Credential Reuse Protocol based on the current voucher of an
+	// onboarding device.
+	ReuseCredential func(context.Context, Voucher) bool
 
 	// VerifyVoucher, if not nil, will be called before creating and responding
 	// with a TO2.ProveOVHdr message. Any error will cause TO2 to fail with a
