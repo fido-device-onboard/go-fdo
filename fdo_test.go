@@ -25,7 +25,7 @@ import (
 const mockModuleName = "fdotest.mock"
 
 func TestClient(t *testing.T) {
-	fdotest.RunClientTestSuite(t, nil, nil, nil, nil, nil)
+	fdotest.RunClientTestSuite(t, fdotest.Config{})
 }
 
 func TestClientWithMockModule(t *testing.T) {
@@ -47,13 +47,16 @@ func TestClientWithMockModule(t *testing.T) {
 		},
 	}
 
-	fdotest.RunClientTestSuite(t, nil, nil, map[string]serviceinfo.DeviceModule{
-		mockModuleName: deviceModule,
-	}, func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
-		return func(yield func(string, serviceinfo.OwnerModule) bool) {
-			yield(mockModuleName, ownerModule)
-		}
-	}, nil)
+	fdotest.RunClientTestSuite(t, fdotest.Config{
+		DeviceModules: map[string]serviceinfo.DeviceModule{
+			mockModuleName: deviceModule,
+		},
+		OwnerModules: func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
+			return func(yield func(string, serviceinfo.OwnerModule) bool) {
+				yield(mockModuleName, ownerModule)
+			}
+		},
+	})
 
 	if !deviceModule.ActiveState {
 		t.Error("device module should be active")
@@ -82,19 +85,23 @@ func TestClientWithMockModuleAndAutoUnchunking(t *testing.T) {
 		},
 	}
 
-	fdotest.RunClientTestSuite(t, nil, nil, map[string]serviceinfo.DeviceModule{
-		mockModuleName: deviceModule,
-	}, func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
-		return func(yield func(string, serviceinfo.OwnerModule) bool) {
-			yield(mockModuleName, ownerModule)
-		}
-	}, func(t *testing.T, err error) {
-		if err == nil {
-			t.Error("expected err to occur when not handling all message chunks")
-		}
-		if !strings.Contains(err.Error(), "device module did not read full body") {
-			t.Error("expected err to refer to device module not reading full message body")
-		}
+	fdotest.RunClientTestSuite(t, fdotest.Config{
+		DeviceModules: map[string]serviceinfo.DeviceModule{
+			mockModuleName: deviceModule,
+		},
+		OwnerModules: func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
+			return func(yield func(string, serviceinfo.OwnerModule) bool) {
+				yield(mockModuleName, ownerModule)
+			}
+		},
+		CustomExpect: func(t *testing.T, err error) {
+			if err == nil {
+				t.Error("expected err to occur when not handling all message chunks")
+			}
+			if !strings.Contains(err.Error(), "device module did not read full body") {
+				t.Error("expected err to refer to device module not reading full message body")
+			}
+		},
 	})
 
 	if !deviceModule.ActiveState {
@@ -134,12 +141,15 @@ func TestClientWithCustomDevmod(t *testing.T) {
 			},
 		}
 
-		fdotest.RunClientTestSuite(t, nil, nil, map[string]serviceinfo.DeviceModule{
-			"devmod": customDevmod,
-		}, nil, func(t *testing.T, err error) {
-			if err == nil || !strings.Contains(err.Error(), "missing required devmod field: bin") {
-				t.Fatalf("expected invalid devmod error, got: %v", err)
-			}
+		fdotest.RunClientTestSuite(t, fdotest.Config{
+			DeviceModules: map[string]serviceinfo.DeviceModule{
+				"devmod": customDevmod,
+			},
+			CustomExpect: func(t *testing.T, err error) {
+				if err == nil || !strings.Contains(err.Error(), "missing required devmod field: bin") {
+					t.Fatalf("expected invalid devmod error, got: %v", err)
+				}
+			},
 		})
 	})
 
@@ -172,9 +182,11 @@ func TestClientWithCustomDevmod(t *testing.T) {
 			},
 		}
 
-		fdotest.RunClientTestSuite(t, nil, nil, map[string]serviceinfo.DeviceModule{
-			"devmod": customDevmod,
-		}, nil, nil)
+		fdotest.RunClientTestSuite(t, fdotest.Config{
+			DeviceModules: map[string]serviceinfo.DeviceModule{
+				"devmod": customDevmod,
+			},
+		})
 	})
 }
 
@@ -183,49 +195,52 @@ func TestClientWithPluginModule(t *testing.T) {
 	devicePlugin.Routines = fdotest.ModuleNameOnlyRoutines(mockModuleName)
 	ownerPlugins := make(chan *fdotest.MockPlugin, 1000)
 
-	fdotest.RunClientTestSuite(t, nil, nil, map[string]serviceinfo.DeviceModule{
-		mockModuleName: struct {
-			plugin.Module
-			serviceinfo.DeviceModule
-		}{
-			Module: devicePlugin,
-			DeviceModule: &fdotest.MockDeviceModule{
-				TransitionFunc: func(active bool) error {
-					if active {
-						_, _, err := devicePlugin.Start()
-						return err
-					}
-					return nil
+	fdotest.RunClientTestSuite(t, fdotest.Config{
+		DeviceModules: map[string]serviceinfo.DeviceModule{
+			mockModuleName: struct {
+				plugin.Module
+				serviceinfo.DeviceModule
+			}{
+				Module: devicePlugin,
+				DeviceModule: &fdotest.MockDeviceModule{
+					TransitionFunc: func(active bool) error {
+						if active {
+							_, _, err := devicePlugin.Start()
+							return err
+						}
+						return nil
+					},
 				},
 			},
 		},
-	}, func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
-		return func(yield func(string, serviceinfo.OwnerModule) bool) {
-			var once sync.Once
-			ownerPlugin := new(fdotest.MockPlugin)
-			ownerPlugin.Routines = fdotest.ModuleNameOnlyRoutines(mockModuleName)
-			if !yield(mockModuleName, struct {
-				plugin.Module
-				serviceinfo.OwnerModule
-			}{
-				Module: ownerPlugin,
-				OwnerModule: &fdotest.MockOwnerModule{
-					ProduceInfoFunc: func(ctx context.Context, producer *serviceinfo.Producer) (blockPeer, moduleDone bool, err error) {
-						once.Do(func() { _, _, err = ownerPlugin.Start() })
-						if err != nil {
-							return false, false, err
-						}
-						return false, true, producer.WriteChunk("active", []byte{0xf5})
+		OwnerModules: func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
+			return func(yield func(string, serviceinfo.OwnerModule) bool) {
+				var once sync.Once
+				ownerPlugin := new(fdotest.MockPlugin)
+				ownerPlugin.Routines = fdotest.ModuleNameOnlyRoutines(mockModuleName)
+				if !yield(mockModuleName, struct {
+					plugin.Module
+					serviceinfo.OwnerModule
+				}{
+					Module: ownerPlugin,
+					OwnerModule: &fdotest.MockOwnerModule{
+						ProduceInfoFunc: func(ctx context.Context, producer *serviceinfo.Producer) (blockPeer, moduleDone bool, err error) {
+							once.Do(func() { _, _, err = ownerPlugin.Start() })
+							if err != nil {
+								return false, false, err
+							}
+							return false, true, producer.WriteChunk("active", []byte{0xf5})
+						},
 					},
-				},
-			}) {
-				return
+				}) {
+					return
+				}
+				if slices.Contains(supportedMods, mockModuleName) {
+					ownerPlugins <- ownerPlugin
+				}
 			}
-			if slices.Contains(supportedMods, mockModuleName) {
-				ownerPlugins <- ownerPlugin
-			}
-		}
-	}, nil)
+		},
+	})
 	close(ownerPlugins)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)

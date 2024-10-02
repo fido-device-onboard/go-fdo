@@ -25,7 +25,9 @@ func TestClient(t *testing.T) {
 	state, cleanup := newDB(t)
 	defer func() { _ = cleanup() }()
 
-	fdotest.RunClientTestSuite(t, state, nil, nil, nil, nil)
+	fdotest.RunClientTestSuite(t, fdotest.Config{
+		State: state,
+	})
 }
 
 func TestServerState(t *testing.T) {

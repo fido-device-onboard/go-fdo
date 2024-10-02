@@ -88,6 +88,8 @@ Server options:
         Voucher guid to extend for resale
   -resale-key path
         The path to a PEM-encoded x.509 public key for the next owner
+  -reuse-cred
+        Perform the Credential Reuse Protocol in TO2
   -rv-bypass
         Skip TO1
   -rv-delay seconds
@@ -171,6 +173,10 @@ client error: transfer of ownership not successful
 exit status 2
 ```
 
+To test repeatedly without the device credential changing, run the server with the `-reuse-cred` flag to enable the [Credential Reuse Protocol][Credential Reuse Protocol].
+
+[Credential Reuse Protocol]: https://fidoalliance.org/specs/FDO/FIDO-Device-Onboard-PS-v1.1-20220419/FIDO-Device-Onboard-PS-v1.1-20220419.html#credreuse
+
 ### Testing RV Blob Registration
 
 First, start a server in a separate console.
@@ -230,7 +236,9 @@ $ go run ./examples/cmd server -http 127.0.0.1:9999 -db ./test.db
   external: 127.0.0.1:9999
 ```
 
-Then DI, followed by TO1 and TO2 may be run. To use ASYMKEX* key exchange, the device key must be RSA. To specify the device key type, use `-di-key` when running DI.
+Then DI, followed by TO1 and TO2 may be run.
+
+Because in the example the device key type and owner key type will always match and to use ASYMKEX\* key exchange the owner key must be RSA, the device key must also be RSA. To specify the device key type, use `-di-key` when running DI.
 
 ```console
 $ go run ./examples/cmd client -di http://127.0.0.1:9999 -di-key rsa2048
@@ -255,6 +263,7 @@ Next, initialize the device and perform transfer of ownership.
 ```console
 $ go run ./examples/cmd client -di http://127.0.0.1:9999
 $ go run ./examples/cmd client
+Success
 $ go run ./examples/cmd client -print
 blobcred[
   ...

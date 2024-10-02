@@ -39,23 +39,26 @@ func TestDownloadOwnerPlugin(t *testing.T) {
 	downloadOwnerCmd.Stderr = fdotest.TestingLog(t)
 	downloadOwnerPlugin := &plugin.OwnerModule{Module: plugin.NewCommandPluginModule(downloadOwnerCmd)}
 
-	fdotest.RunClientTestSuite(t, nil, nil, map[string]serviceinfo.DeviceModule{
-		"fdo.download": &fsim.Download{
-			CreateTemp: func() (*os.File, error) {
-				return os.CreateTemp(".", "fdo.download_*")
+	fdotest.RunClientTestSuite(t, fdotest.Config{
+		DeviceModules: map[string]serviceinfo.DeviceModule{
+			"fdo.download": &fsim.Download{
+				CreateTemp: func() (*os.File, error) {
+					return os.CreateTemp(".", "fdo.download_*")
+				},
+				NameToPath: func(name string) string {
+					return filepath.Join("testdata", "downloads", name)
+				},
+				ErrorLog: fdotest.TestingLog(t),
 			},
-			NameToPath: func(name string) string {
-				return filepath.Join("testdata", "downloads", name)
-			},
-			ErrorLog: fdotest.TestingLog(t),
 		},
-	}, func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
-		return func(yield func(string, serviceinfo.OwnerModule) bool) {
-			if !yield("fdo.download", downloadOwnerPlugin) {
-				return
+		OwnerModules: func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
+			return func(yield func(string, serviceinfo.OwnerModule) bool) {
+				if !yield("fdo.download", downloadOwnerPlugin) {
+					return
+				}
 			}
-		}
-	}, nil)
+		},
+	})
 
 	// Validate expected contents
 	downloadContents, err := os.ReadFile("testdata/downloads/bigfile.test")
@@ -83,19 +86,22 @@ func TestDownloadDevicePlugin(t *testing.T) {
 		Module: plugin.NewCommandPluginModule(downloadDeviceCmd),
 	}
 
-	fdotest.RunClientTestSuite(t, nil, nil, map[string]serviceinfo.DeviceModule{
-		"fdo.download": downloadDevicePlugin,
-	}, func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
-		return func(yield func(string, serviceinfo.OwnerModule) bool) {
-			if !yield("fdo.download", &fsim.DownloadContents[*bytes.Reader]{
-				Name:         "bigfile.test",
-				Contents:     bytes.NewReader(expected),
-				MustDownload: true,
-			}) {
-				return
+	fdotest.RunClientTestSuite(t, fdotest.Config{
+		DeviceModules: map[string]serviceinfo.DeviceModule{
+			"fdo.download": downloadDevicePlugin,
+		},
+		OwnerModules: func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
+			return func(yield func(string, serviceinfo.OwnerModule) bool) {
+				if !yield("fdo.download", &fsim.DownloadContents[*bytes.Reader]{
+					Name:         "bigfile.test",
+					Contents:     bytes.NewReader(expected),
+					MustDownload: true,
+				}) {
+					return
+				}
 			}
-		}
-	}, nil)
+		},
+	})
 
 	// Validate expected contents
 	downloadContents, err := os.ReadFile("testdata/downloads/bigfile.test")
@@ -146,12 +152,15 @@ func TestDevmodPlugin(t *testing.T) {
 
 	var got serviceinfo.Devmod
 
-	fdotest.RunClientTestSuite(t, nil, nil, map[string]serviceinfo.DeviceModule{
-		"devmod": devmodPlugin,
-	}, func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
-		got = devmod
-		return func(yield func(string, serviceinfo.OwnerModule) bool) {}
-	}, nil)
+	fdotest.RunClientTestSuite(t, fdotest.Config{
+		DeviceModules: map[string]serviceinfo.DeviceModule{
+			"devmod": devmodPlugin,
+		},
+		OwnerModules: func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
+			got = devmod
+			return func(yield func(string, serviceinfo.OwnerModule) bool) {}
+		},
+	})
 
 	if !reflect.DeepEqual(got, expected) {
 		t.Errorf("devmod did not match expected\nwant %+v\ngot  %+v", expected, got)

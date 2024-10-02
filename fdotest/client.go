@@ -18,6 +18,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"iter"
 	"log/slog"
@@ -37,7 +38,6 @@ import (
 	"github.com/fido-device-onboard/go-fdo/kex"
 	"github.com/fido-device-onboard/go-fdo/protocol"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
-	"github.com/fido-device-onboard/go-fdo/tpm"
 )
 
 const timeout = 10 * time.Second
@@ -46,17 +46,33 @@ const timeout = 10 * time.Second
 // device.
 type OwnerModulesFunc func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule]
 
+// Config provides options to
+type Config struct {
+	// If state is nil, then an in-memory implementation will be used. This is
+	// useful for only testing service info modules.
+	State AllServerState
+
+	// If NewCredential is non-nil, then it will be used to create and format
+	// the device credential. Otherwise the blob package will be used.
+	NewCredential func(protocol.KeyType) (hmacSha256, hmacSha384 hash.Hash, key crypto.Signer, toDeviceCred func(fdo.DeviceCredential) any)
+
+	// Use the Credential Reuse Protocol
+	Reuse bool
+
+	DeviceModules map[string]serviceinfo.DeviceModule
+	OwnerModules  OwnerModulesFunc
+
+	CustomExpect func(*testing.T, error)
+}
+
 // RunClientTestSuite is used to test different implementations of server state
 // methods at an almost end-to-end level (transport is mocked).
 //
-// If state is nil, then an in-memory implementation will be used. This is
-// useful for only testing service info modules.
-//
 //nolint:gocyclo
-func RunClientTestSuite(t *testing.T, state AllServerState, tpmc tpm.TPM, deviceModules map[string]serviceinfo.DeviceModule, ownerModules OwnerModulesFunc, customExpect func(*testing.T, error)) {
+func RunClientTestSuite(t *testing.T, conf Config) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(TestingLog(t), &slog.HandlerOptions{Level: slog.LevelDebug})))
 
-	if state == nil {
+	if conf.State == nil {
 		stateless, err := token.NewService()
 		if err != nil {
 			t.Fatal(err)
@@ -67,17 +83,17 @@ func RunClientTestSuite(t *testing.T, state AllServerState, tpmc tpm.TPM, device
 			t.Fatal(err)
 		}
 
-		state = struct {
+		conf.State = struct {
 			*token.Service
 			*memory.State
 		}{stateless, inMemory}
 	}
 
 	transport := &Transport{
-		Tokens: state,
+		Tokens: conf.State,
 		DIResponder: &fdo.DIServer[custom.DeviceMfgInfo]{
-			Session:  state,
-			Vouchers: state,
+			Session:  conf.State,
+			Vouchers: conf.State,
 			SignDeviceCertificate: func(info *custom.DeviceMfgInfo) ([]*x509.Certificate, error) {
 				// Validate device info
 				csr := x509.CertificateRequest(info.CertInfo)
@@ -86,7 +102,7 @@ func RunClientTestSuite(t *testing.T, state AllServerState, tpmc tpm.TPM, device
 				}
 
 				// Sign CSR
-				key, chain, err := state.ManufacturerKey(info.KeyType)
+				key, chain, err := conf.State.ManufacturerKey(info.KeyType)
 				if err != nil {
 					var unsupportedErr fdo.ErrUnsupportedKeyType
 					if errors.As(err, &unsupportedErr) {
@@ -118,32 +134,32 @@ func RunClientTestSuite(t *testing.T, state AllServerState, tpmc tpm.TPM, device
 				chain = append([]*x509.Certificate{cert}, chain...)
 				return chain, nil
 			},
-			AutoExtend: state,
+			AutoExtend: conf.State,
 			RvInfo: func(context.Context, *fdo.Voucher) ([][]protocol.RvInstruction, error) {
 				return [][]protocol.RvInstruction{}, nil
 			},
 		},
 		TO0Responder: &fdo.TO0Server{
-			Session: state,
-			RVBlobs: state,
+			Session: conf.State,
+			RVBlobs: conf.State,
 		},
 		TO1Responder: &fdo.TO1Server{
-			Session: state,
-			RVBlobs: state,
+			Session: conf.State,
+			RVBlobs: conf.State,
 		},
 		TO2Responder: &fdo.TO2Server{
-			Session:   state,
-			Vouchers:  state,
-			OwnerKeys: state,
+			Session:   conf.State,
+			Vouchers:  conf.State,
+			OwnerKeys: conf.State,
 			RvInfo: func(context.Context, fdo.Voucher) ([][]protocol.RvInstruction, error) {
 				return [][]protocol.RvInstruction{}, nil
 			},
 			OwnerModules: func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
-				if ownerModules == nil {
+				if conf.OwnerModules == nil {
 					return func(yield func(string, serviceinfo.OwnerModule) bool) {}
 				}
 
-				mods := ownerModules(ctx, replacementGUID, info, chain, devmod, supportedMods)
+				mods := conf.OwnerModules(ctx, replacementGUID, info, chain, devmod, supportedMods)
 				return func(yield func(string, serviceinfo.OwnerModule) bool) {
 					for modName, mod := range mods {
 						if slices.Contains(supportedMods, modName) {
@@ -154,14 +170,15 @@ func RunClientTestSuite(t *testing.T, state AllServerState, tpmc tpm.TPM, device
 					}
 				}
 			},
-			VerifyVoucher: func(context.Context, fdo.Voucher) error { return nil },
+			ReuseCredential: func(context.Context, fdo.Voucher) bool { return conf.Reuse },
+			VerifyVoucher:   func(context.Context, fdo.Voucher) error { return nil },
 		},
 		T: t,
 	}
 
 	to0 := &fdo.TO0Client{
-		Vouchers:  state,
-		OwnerKeys: state,
+		Vouchers:  conf.State,
+		OwnerKeys: conf.State,
 	}
 
 	for _, table := range []struct {
@@ -195,93 +212,53 @@ func RunClientTestSuite(t *testing.T, state AllServerState, tpmc tpm.TPM, device
 			cipherSuite: kex.A128GcmCipher,
 		},
 	} {
-		transport.DIResponder.DeviceInfo = func(context.Context, *custom.DeviceMfgInfo, []*x509.Certificate) (string, protocol.KeyType, protocol.KeyEncoding, error) {
-			return "test_device", table.keyType, table.keyEncoding, nil
-		}
-		secret := make([]byte, 32)
-		if _, err := rand.Read(secret); err != nil {
-			t.Fatalf("error generating device secret: %v", err)
-		}
-		hmacSha256 := hmac.New(sha256.New, secret)
-		hmacSha384 := hmac.New(sha512.New384, secret)
-		if tpmc != nil {
-			secret = []byte("TPM2")
-			var err error
-			hmacSha256, err = tpm.NewHmac(tpmc, crypto.SHA256)
-			if err != nil {
-				t.Fatal(err)
-			}
-			hmacSha384, err = tpm.NewHmac(tpmc, crypto.SHA384)
-			if err != nil {
-				t.Fatal(err)
-			}
-		}
-
-		var sigAlg x509.SignatureAlgorithm
-		var key crypto.Signer
-		switch table.keyType {
-		case protocol.Secp256r1KeyType:
-			var err error
-			if tpmc != nil {
-				key, err = tpm.GenerateECKey(tpmc, elliptic.P256())
-			} else {
-				key, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-			}
-			if err != nil {
-				t.Fatalf("error generating device key: %v", err)
+		t.Run(fmt.Sprintf("Key %q Encoding %q Exchange %q Cipher %q", table.keyType, table.keyEncoding, table.keyExchange, table.cipherSuite), func(t *testing.T) {
+			transport.DIResponder.DeviceInfo = func(context.Context, *custom.DeviceMfgInfo, []*x509.Certificate) (string, protocol.KeyType, protocol.KeyEncoding, error) {
+				return "test_device", table.keyType, table.keyEncoding, nil
 			}
 
-		case protocol.Secp384r1KeyType:
-			var err error
-			if tpmc != nil {
-				key, err = tpm.GenerateECKey(tpmc, elliptic.P384())
-			} else {
-				key, err = ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
-			}
-			if err != nil {
-				t.Fatalf("error generating device key: %v", err)
-			}
+			newCredential := func(keyType protocol.KeyType) (hmacSha256, hmacSha384 hash.Hash, key crypto.Signer, toDeviceCred func(fdo.DeviceCredential) any) {
+				secret := make([]byte, 32)
+				if _, err := rand.Read(secret); err != nil {
+					t.Fatalf("error generating device secret: %v", err)
+				}
+				hmacSha256 = hmac.New(sha256.New, secret)
+				hmacSha384 = hmac.New(sha512.New384, secret)
 
-		case protocol.Rsa2048RestrKeyType:
-			var err error
-			if tpmc != nil {
-				key, err = tpm.GenerateRSAKey(tpmc, 2048)
-			} else {
-				key, err = rsa.GenerateKey(rand.Reader, 2048)
-			}
-			if err != nil {
-				t.Fatalf("error generating device key: %v", err)
-			}
+				var err error
+				switch table.keyType {
+				case protocol.Secp256r1KeyType:
+					key, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+				case protocol.Secp384r1KeyType:
+					key, err = ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+				case protocol.Rsa2048RestrKeyType:
+					key, err = rsa.GenerateKey(rand.Reader, 2048)
+				case protocol.RsaPkcsKeyType:
+					key, err = rsa.GenerateKey(rand.Reader, 3072)
+				case protocol.RsaPssKeyType:
+					key, err = rsa.GenerateKey(rand.Reader, 3072)
+				default:
+					t.Fatalf("unsupported key type: %s", table.keyType)
+				}
+				if err != nil {
+					t.Fatalf("error generating device key: %v", err)
+				}
 
-		case protocol.RsaPkcsKeyType:
-			var err error
-			if tpmc != nil {
-				key, err = tpm.GenerateRSAKey(tpmc, 2048) // Simulator does not support RSA3072
-			} else {
-				key, err = rsa.GenerateKey(rand.Reader, 3072)
+				return hmacSha256, hmacSha384, key, func(dc fdo.DeviceCredential) any {
+					return blob.DeviceCredential{
+						Active:           true,
+						DeviceCredential: dc,
+						HmacSecret:       secret,
+						PrivateKey:       blob.Pkcs8Key{Signer: key},
+					}
+				}
 			}
-			if err != nil {
-				t.Fatalf("error generating device key: %v", err)
+			if conf.NewCredential != nil {
+				newCredential = conf.NewCredential
 			}
+			hmacSha256, hmacSha384, key, toDeviceCred := newCredential(table.keyType)
 
-		case protocol.RsaPssKeyType:
-			var err error
-			if tpmc != nil {
-				sigAlg = x509.SHA256WithRSAPSS
-				key, err = tpm.GenerateRSAPSSKey(tpmc, 2048) // Simulator does not support RSA3072
-			} else {
-				key, err = rsa.GenerateKey(rand.Reader, 3072)
-			}
-			if err != nil {
-				t.Fatalf("error generating device key: %v", err)
-			}
-
-		default:
-			panic("unsupported key type " + table.keyType.String())
-		}
-
-		t.Run("Key "+table.keyType.String()+" "+table.keyEncoding.String(), func(t *testing.T) {
-			var cred *fdo.DeviceCredential
+			// Keys and Hmacs may have a close method for resource management
 			if closer, ok := hmacSha256.(io.Closer); ok {
 				defer func() { _ = closer.Close() }()
 			}
@@ -291,6 +268,15 @@ func RunClientTestSuite(t *testing.T, state AllServerState, tpmc tpm.TPM, device
 			if closer, ok := key.(io.Closer); ok {
 				defer func() { _ = closer.Close() }()
 			}
+
+			// Keys may only sign in the FDO-expected way, ignoring the signing
+			// options
+			var sigAlg x509.SignatureAlgorithm
+			if table.keyType == protocol.RsaPssKeyType {
+				sigAlg = x509.SHA256WithRSAPSS
+			}
+
+			var cred *fdo.DeviceCredential
 
 			t.Run("Device Initialization", func(t *testing.T) {
 				// Generate Java implementation-compatible mfg string
@@ -326,20 +312,7 @@ func RunClientTestSuite(t *testing.T, state AllServerState, tpmc tpm.TPM, device
 				if err != nil {
 					t.Fatal(err)
 				}
-
-				if tpmc != nil {
-					t.Logf("Credential: %s", tpm.DeviceCredential{
-						DeviceCredential: *cred,
-						DeviceKey:        tpm.FdoDeviceKey,
-					})
-				} else {
-					t.Logf("Credential: %s", blob.DeviceCredential{
-						Active:           true,
-						DeviceCredential: *cred,
-						HmacSecret:       secret,
-						PrivateKey:       blob.Pkcs8Key{Signer: key},
-					})
-				}
+				t.Logf("Credential: %s", toDeviceCred(*cred))
 			})
 
 			t.Run("Transfer Ownership 0", func(t *testing.T) {
@@ -397,25 +370,14 @@ func RunClientTestSuite(t *testing.T, state AllServerState, tpmc tpm.TPM, device
 						FileSep: ";",
 						Bin:     runtime.GOARCH,
 					},
-					KeyExchange: table.keyExchange,
-					CipherSuite: table.cipherSuite,
+					KeyExchange:          table.keyExchange,
+					CipherSuite:          table.cipherSuite,
+					AllowCredentialReuse: conf.Reuse,
 				})
 				if err != nil {
 					t.Fatal(err)
 				}
-				if tpmc != nil {
-					t.Logf("New credential: %s", tpm.DeviceCredential{
-						DeviceCredential: *cred,
-						DeviceKey:        tpm.FdoDeviceKey,
-					})
-				} else {
-					t.Logf("New credential: %s", blob.DeviceCredential{
-						Active:           true,
-						DeviceCredential: *cred,
-						HmacSecret:       secret,
-						PrivateKey:       blob.Pkcs8Key{Signer: key},
-					})
-				}
+				t.Logf("New credential: %s", toDeviceCred(*cred))
 			})
 
 			t.Run("Transfer Ownership 2 Only", func(t *testing.T) {
@@ -440,25 +402,14 @@ func RunClientTestSuite(t *testing.T, state AllServerState, tpmc tpm.TPM, device
 						FileSep: ";",
 						Bin:     runtime.GOARCH,
 					},
-					KeyExchange: table.keyExchange,
-					CipherSuite: table.cipherSuite,
+					KeyExchange:          table.keyExchange,
+					CipherSuite:          table.cipherSuite,
+					AllowCredentialReuse: conf.Reuse,
 				})
 				if err != nil {
 					t.Fatal(err)
 				}
-				if tpmc != nil {
-					t.Logf("New credential: %s", tpm.DeviceCredential{
-						DeviceCredential: *cred,
-						DeviceKey:        tpm.FdoDeviceKey,
-					})
-				} else {
-					t.Logf("New credential: %s", blob.DeviceCredential{
-						Active:           true,
-						DeviceCredential: *cred,
-						HmacSecret:       secret,
-						PrivateKey:       blob.Pkcs8Key{Signer: key},
-					})
-				}
+				t.Logf("New credential: %s", toDeviceCred(*cred))
 			})
 
 			t.Run("Transfer Ownership 2 w/ Modules", func(t *testing.T) {
@@ -482,31 +433,20 @@ func RunClientTestSuite(t *testing.T, state AllServerState, tpmc tpm.TPM, device
 						FileSep: ";",
 						Bin:     runtime.GOARCH,
 					},
-					DeviceModules: deviceModules,
-					KeyExchange:   table.keyExchange,
-					CipherSuite:   table.cipherSuite,
+					DeviceModules:        conf.DeviceModules,
+					KeyExchange:          table.keyExchange,
+					CipherSuite:          table.cipherSuite,
+					AllowCredentialReuse: conf.Reuse,
 				})
-				if customExpect != nil {
-					customExpect(t, err)
+				if conf.CustomExpect != nil {
+					conf.CustomExpect(t, err)
 					if err != nil {
 						return
 					}
 				} else if err != nil {
 					t.Fatal(err)
 				}
-				if tpmc != nil {
-					t.Logf("New credential: %s", tpm.DeviceCredential{
-						DeviceCredential: *cred,
-						DeviceKey:        tpm.FdoDeviceKey,
-					})
-				} else {
-					t.Logf("New credential: %s", blob.DeviceCredential{
-						Active:           true,
-						DeviceCredential: *newCred,
-						HmacSecret:       secret,
-						PrivateKey:       blob.Pkcs8Key{Signer: key},
-					})
-				}
+				t.Logf("New credential: %s", toDeviceCred(*cred))
 				cred = newCred
 			})
 		})

@@ -56,6 +56,7 @@ var (
 	to0GUID          string
 	resaleGUID       string
 	resaleKey        string
+	reuseCred        bool
 	rvBypass         bool
 	rvDelay          int
 	printOwnerPubKey string
@@ -87,6 +88,7 @@ func init() {
 	serverFlags.StringVar(&addr, "http", "localhost:8080", "The `addr`ess to listen on")
 	serverFlags.StringVar(&resaleGUID, "resale-guid", "", "Voucher `guid` to extend for resale")
 	serverFlags.StringVar(&resaleKey, "resale-key", "", "The `path` to a PEM-encoded x.509 public key for the next owner")
+	serverFlags.BoolVar(&reuseCred, "reuse-cred", false, "Perform the Credential Reuse Protocol in TO2")
 	serverFlags.BoolVar(&insecureTLS, "insecure-tls", false, "Listen with a self-signed TLS certificate")
 	serverFlags.BoolVar(&rvBypass, "rv-bypass", false, "Skip TO1")
 	serverFlags.IntVar(&rvDelay, "rv-delay", 0, "Delay TO1 by N `seconds`")
@@ -512,11 +514,12 @@ func newHandler(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) (*transport
 			RVBlobs: state,
 		},
 		TO2Responder: &fdo.TO2Server{
-			Session:      state,
-			Vouchers:     state,
-			OwnerKeys:    state,
-			RvInfo:       func(context.Context, fdo.Voucher) ([][]protocol.RvInstruction, error) { return rvInfo, nil },
-			OwnerModules: ownerModules,
+			Session:         state,
+			Vouchers:        state,
+			OwnerKeys:       state,
+			RvInfo:          func(context.Context, fdo.Voucher) ([][]protocol.RvInstruction, error) { return rvInfo, nil },
+			OwnerModules:    ownerModules,
+			ReuseCredential: func(context.Context, fdo.Voucher) bool { return reuseCred },
 		},
 	}, nil
 }
