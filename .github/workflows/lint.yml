@@ -9,8 +9,8 @@ on:
 
 jobs:
   golangci-lint:
-    runs-on: ["innersource.prod.amr.dind"]
     name: Lint Go Source
+    runs-on: ubuntu-latest
     container:
       image: golangci/golangci-lint:latest-alpine
     steps:
@@ -28,8 +28,8 @@ jobs:
           golangci-lint run ./tpm/...
 
   shellcheck:
-    runs-on: ["innersource.prod.amr.dind"]
     name: Lint Shell Scripts
+    runs-on: ubuntu-latest
     container:
       image: koalaman/shellcheck-alpine
     steps:
@@ -39,8 +39,8 @@ jobs:
         run: find . \( -name "*.sh" -o -name "*.bash" \) -exec shellcheck '{}' +
 
   markdownlint:
-    runs-on: ["innersource.prod.amr.dind"]
     name: Lint Documentation Markdown
+    runs-on: ubuntu-latest
     container:
       image: node:20-alpine
     steps:

@@ -9,8 +9,8 @@ on:
 
 jobs:
   go:
-    runs-on: ["innersource.prod.amr.dind"]
     name: Test Go packages
+    runs-on: ubuntu-latest
     container:
       image: golang:alpine
     steps:
