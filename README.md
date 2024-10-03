@@ -375,6 +375,6 @@ COPY --from=build /build/fdo .
 ENTRYPOINT [ "./fdo" ]
 ```
 
-Note that for FIPS certification, the NIST 800-108 key derivation function in `kex/kdf.go` would still need to be inspected.
+Note that for FIPS certification, the NIST 800-108 key derivation function in `internal/nistkdf/kdf.go` would still need to be inspected.
 
 [Microsoft Go]: https://github.com/microsoft/go/blob/microsoft/main/eng/doc/fips/README.md
