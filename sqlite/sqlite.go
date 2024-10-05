@@ -1108,8 +1108,7 @@ func (db *DB) SetSetupDeviceNonce(ctx context.Context, nonce protocol.Nonce) err
 	)
 }
 
-// SetupDeviceNonce returns the Nonce used in TO2.SetupDevice and
-// TO2.Done2.
+// SetupDeviceNonce returns the Nonce used in TO2.SetupDevice and TO2.Done2.
 func (db *DB) SetupDeviceNonce(ctx context.Context) (protocol.Nonce, error) {
 	sessID, ok := db.sessionID(ctx)
 	if !ok {
@@ -1134,8 +1133,8 @@ func (db *DB) SetupDeviceNonce(ctx context.Context) (protocol.Nonce, error) {
 	return nonce, nil
 }
 
-// AddOwnerKey to retrieve with [DB.Signer]. chain may be nil, in which
-// case X509 public key encoding will be used instead of X5Chain.
+// AddOwnerKey to retrieve with [DB.OwnerKey]. chain may be nil, in which case
+// X509 public key encoding will be used instead of X5Chain.
 func (db *DB) AddOwnerKey(keyType protocol.KeyType, key crypto.PrivateKey, chain []*x509.Certificate) error {
 	der, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {

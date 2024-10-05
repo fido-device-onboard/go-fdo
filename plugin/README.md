@@ -4,13 +4,13 @@ Service info modules can either be implemented using the "internal" Go interface
 
 ## Using Plugin Device Modules
 
-FDO clients use plugin device service info modules the same way as statically compiled ones. `(*fdo.Client).TransferOwnership2(...)` takes a `map[string]serviceinfo.DeviceModule` argument.
+FDO clients use plugin device service info modules the same way as statically compiled ones. `(fdo.TO2Config).DeviceModules` is a `map[string]serviceinfo.DeviceModule` and can contain plugin and non-plugin modules simultaneously, since they both satisfy the `serviceinfo.DeviceModule` interface.
 
-If a `devmod` module is provided, then the value of `(*Client).Devmod` will be ignored. However, any `devmod` plugin module must NOT write serviceinfo for the `devmod:nummodules` and `devmod:modules` keys as these are handled by the library.
+If a `devmod` module is provided, then the value of `(fdo.TO2Config).Devmod` will be ignored. However, any `devmod` plugin module must NOT write serviceinfo for the `devmod:nummodules` and `devmod:modules` keys as these are handled by the library.
 
 ## Using Plugin Owner Modules
 
-FDO owner services use plugin owner service info modules the same way as statically compiled ones. `(*fdo.Server).StartFSIMs` is a required field that must be set to a function returning a `serviceinfo.OwnerModuleList`. However this interface is satisfied - it is just an iterator - plugin modules may be included side by side with compiled modules.
+FDO owner services use plugin owner service info modules the same way as statically compiled ones. `(fdo.TO2Server).OwnerModules` is a required field that must be set to an `iter.Seq2` yielding a module name and `serviceinfo.OwnerModule`. As with device modules, plugin owner modules may be included side by side with compiled modules.
 
 ## Plugin Format
 
