@@ -3,7 +3,7 @@
 
 // Package plugin defines a line-based protocol and implements service info
 // device and owner module adapters to plugins communicating over a reader-
-// writer pair (i.e. pipe).
+// writer pair.
 package plugin
 
 import (
