@@ -1,0 +1,29 @@
+name = "rv"
+main = "./build/worker.mjs"
+compatibility_date = "2024-10-22"
+
+[build]
+command = """
+go run github.com/syumai/workers/cmd/workers-assets-gen@v0.26.3 -mode tinygo &&
+tinygo build -o ./build/app.wasm -target wasm -gc=leaking -no-debug -opt=2 ./main.go
+"""
+
+# For testing locally, you can use Go instead of TinyGo for better debug support, such as
+# backtraces for panics.
+#
+# [build]
+# command = """
+# go run github.com/syumai/workers/cmd/workers-assets-gen@v0.26.3 -mode go &&
+# GOOS=js GOARCH=wasm go build -ldflags '-s -w' -o ./build/app.wasm ./main.go
+# """
+
+[triggers]
+crons = [ "0 3 * * *"] # 3AM daily
+
+[observability]
+enabled = true
+
+[[ d1_databases ]]
+binding = "RendezvousDB"
+database_name = "rv"
+database_id = "COPY_YOUR_UUID_HERE"

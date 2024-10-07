@@ -713,7 +713,7 @@ func sendNextOVEntry(ctx context.Context, transport Transport, i int) (*cose.Sig
 	// Make request
 	typ, resp, err := transport.Send(ctx, protocol.TO2GetOVNextEntryMsgType, msg, nil)
 	if err != nil {
-		return nil, fmt.Errorf("error sending TO2.GetOVNextEntry: %w", err)
+		return nil, fmt.Errorf("TO2.GetOVNextEntry: %w", err)
 	}
 	defer func() { _ = resp.Close() }()
 
@@ -818,7 +818,7 @@ func proveDevice(ctx context.Context, transport Transport, proveDeviceNonce prot
 	// Make request
 	typ, resp, err := transport.Send(ctx, protocol.TO2ProveDeviceMsgType, msg, kex.DecryptOnly{Session: sess})
 	if err != nil {
-		return protocol.Nonce{}, nil, fmt.Errorf("error sending TO2.ProveDevice: %w", err)
+		return protocol.Nonce{}, nil, fmt.Errorf("TO2.ProveDevice: %w", err)
 	}
 	defer func() { _ = resp.Close() }()
 
@@ -1053,7 +1053,7 @@ func sendReadyServiceInfo(ctx context.Context, transport Transport, alg protocol
 	// Make request
 	typ, resp, err := transport.Send(ctx, protocol.TO2DeviceServiceInfoReadyMsgType, msg, sess)
 	if err != nil {
-		return 0, fmt.Errorf("error sending TO2.DeviceServiceInfoReady: %w", err)
+		return 0, fmt.Errorf("TO2.DeviceServiceInfoReady: %w", err)
 	}
 	defer func() { _ = resp.Close() }()
 
@@ -1315,7 +1315,7 @@ func sendDone(ctx context.Context, transport Transport, proveDvNonce, setupDvNon
 	// Make request
 	typ, resp, err := transport.Send(ctx, protocol.TO2DoneMsgType, msg, sess)
 	if err != nil {
-		return fmt.Errorf("error sending TO2.Done: %w", err)
+		return fmt.Errorf("TO2.Done: %w", err)
 	}
 	defer func() { _ = resp.Close() }()
 
@@ -1426,7 +1426,7 @@ func sendDeviceServiceInfo(ctx context.Context, transport Transport, msg deviceS
 	// Make request
 	typ, resp, err := transport.Send(ctx, protocol.TO2DeviceServiceInfoMsgType, msg, sess)
 	if err != nil {
-		return nil, fmt.Errorf("error sending TO2.DeviceServiceInfo: %w", err)
+		return nil, fmt.Errorf("TO2.DeviceServiceInfo: %w", err)
 	}
 	defer func() { _ = resp.Close() }()
 

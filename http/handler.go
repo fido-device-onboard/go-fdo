@@ -12,8 +12,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/http/httptest"
-	"net/http/httputil"
 	"strconv"
 	"strings"
 	"time"
@@ -41,13 +39,15 @@ type Handler struct {
 }
 
 func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if h.Tokens == nil {
+		panic("token service not set")
+	}
+
 	// Parse message type from request URL
-	typ, err := strconv.ParseUint(r.PathValue("msg"), 10, 8)
-	if err != nil {
-		writeErr(w, 0, fmt.Errorf("invalid message type"))
+	msgType, ok := msgTypeFromPath(w, r)
+	if !ok {
 		return
 	}
-	msgType := uint8(typ)
 	proto := protocol.Of(msgType)
 
 	// Parse request headers
@@ -107,38 +107,9 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ctx = h.Tokens.TokenContext(ctx, initToken)
 	}
 
-	if debugEnabled() {
-		h.debugRequest(ctx, w, r, msgType, resp)
-		return
-	}
-	h.handleRequest(ctx, w, r, msgType, resp)
-}
-
-func (h Handler) debugRequest(ctx context.Context, w http.ResponseWriter, r *http.Request, msgType uint8, resp protocol.Responder) {
-	// Dump request
-	debugReq, _ := httputil.DumpRequest(r, false)
-	var saveBody bytes.Buffer
-	if _, err := saveBody.ReadFrom(r.Body); err == nil {
-		r.Body = io.NopCloser(&saveBody)
-	}
-	slog.Debug("request", "dump", string(bytes.TrimSpace(debugReq)),
-		"body", tryDebugNotation(saveBody.Bytes()))
-
-	// Dump response
-	rr := httptest.NewRecorder()
-	h.handleRequest(ctx, rr, r, msgType, resp)
-	debugResp, _ := httputil.DumpResponse(rr.Result(), false)
-	slog.Debug("response", "dump", string(bytes.TrimSpace(debugResp)),
-		"body", tryDebugNotation(rr.Body.Bytes()))
-
-	// Copy recorded response into response writer
-	for key, values := range rr.Header() {
-		for _, value := range values {
-			w.Header().Add(key, value)
-		}
-	}
-	w.WriteHeader(rr.Code)
-	_, _ = w.Write(rr.Body.Bytes())
+	debugRequest(w, r, func(w http.ResponseWriter, r *http.Request) {
+		h.handleRequest(ctx, w, r, msgType, resp)
+	})
 }
 
 func (h Handler) handleRequest(ctx context.Context, w http.ResponseWriter, r *http.Request, msgType uint8, resp protocol.Responder) {

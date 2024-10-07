@@ -56,8 +56,14 @@ type Config struct {
 	// the device credential. Otherwise the blob package will be used.
 	NewCredential func(protocol.KeyType) (hmacSha256, hmacSha384 hash.Hash, key crypto.Signer, toDeviceCred func(fdo.DeviceCredential) any)
 
+	// If NewTransport is non-nil, then it will be used in place of
+	// fdo.Transport.
+	NewTransport func(t *testing.T, tokens protocol.TokenService, di, to0, to1, to2 protocol.Responder) fdo.Transport
+
 	// Use the Credential Reuse Protocol
 	Reuse bool
+
+	NoDebug bool
 
 	DeviceModules map[string]serviceinfo.DeviceModule
 	OwnerModules  OwnerModulesFunc
@@ -70,7 +76,11 @@ type Config struct {
 //
 //nolint:gocyclo
 func RunClientTestSuite(t *testing.T, conf Config) {
-	slog.SetDefault(slog.New(slog.NewTextHandler(TestingLog(t), &slog.HandlerOptions{Level: slog.LevelDebug})))
+	level := slog.LevelDebug
+	if conf.NoDebug {
+		level = slog.LevelInfo
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(TestingLog(t), &slog.HandlerOptions{Level: level})))
 
 	if conf.State == nil {
 		stateless, err := token.NewService()
@@ -89,91 +99,99 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 		}{stateless, inMemory}
 	}
 
-	transport := &Transport{
-		Tokens: conf.State,
-		DIResponder: &fdo.DIServer[custom.DeviceMfgInfo]{
-			Session:  conf.State,
-			Vouchers: conf.State,
-			SignDeviceCertificate: func(info *custom.DeviceMfgInfo) ([]*x509.Certificate, error) {
-				// Validate device info
-				csr := x509.CertificateRequest(info.CertInfo)
-				if err := csr.CheckSignature(); err != nil {
-					return nil, fmt.Errorf("invalid CSR: %w", err)
-				}
+	diResponder := &fdo.DIServer[custom.DeviceMfgInfo]{
+		Session:  conf.State,
+		Vouchers: conf.State,
+		SignDeviceCertificate: func(info *custom.DeviceMfgInfo) ([]*x509.Certificate, error) {
+			// Validate device info
+			csr := x509.CertificateRequest(info.CertInfo)
+			if err := csr.CheckSignature(); err != nil {
+				return nil, fmt.Errorf("invalid CSR: %w", err)
+			}
 
-				// Sign CSR
-				key, chain, err := conf.State.ManufacturerKey(info.KeyType)
-				if err != nil {
-					var unsupportedErr fdo.ErrUnsupportedKeyType
-					if errors.As(err, &unsupportedErr) {
-						return nil, unsupportedErr
-					}
-					return nil, fmt.Errorf("error retrieving manufacturer key [type=%s]: %w", info.KeyType, err)
+			// Sign CSR
+			key, chain, err := conf.State.ManufacturerKey(info.KeyType)
+			if err != nil {
+				var unsupportedErr fdo.ErrUnsupportedKeyType
+				if errors.As(err, &unsupportedErr) {
+					return nil, unsupportedErr
 				}
-				serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
-				serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
-				if err != nil {
-					return nil, fmt.Errorf("error generating certificate serial number: %w", err)
-				}
-				template := &x509.Certificate{
-					SerialNumber: serialNumber,
-					Issuer:       chain[0].Subject,
-					Subject:      csr.Subject,
-					NotBefore:    time.Now(),
-					NotAfter:     time.Now().Add(30 * 360 * 24 * time.Hour), // Matches Java impl
-					KeyUsage:     x509.KeyUsageDigitalSignature,
-				}
-				der, err := x509.CreateCertificate(rand.Reader, template, chain[0], csr.PublicKey, key)
-				if err != nil {
-					return nil, fmt.Errorf("error signing CSR: %w", err)
-				}
-				cert, err := x509.ParseCertificate(der)
-				if err != nil {
-					return nil, fmt.Errorf("error parsing signed device cert: %w", err)
-				}
-				chain = append([]*x509.Certificate{cert}, chain...)
-				return chain, nil
-			},
-			AutoExtend: conf.State,
-			RvInfo: func(context.Context, *fdo.Voucher) ([][]protocol.RvInstruction, error) {
-				return [][]protocol.RvInstruction{}, nil
-			},
+				return nil, fmt.Errorf("error retrieving manufacturer key [type=%s]: %w", info.KeyType, err)
+			}
+			serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+			serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
+			if err != nil {
+				return nil, fmt.Errorf("error generating certificate serial number: %w", err)
+			}
+			template := &x509.Certificate{
+				SerialNumber: serialNumber,
+				Issuer:       chain[0].Subject,
+				Subject:      csr.Subject,
+				NotBefore:    time.Now(),
+				NotAfter:     time.Now().Add(30 * 360 * 24 * time.Hour), // Matches Java impl
+				KeyUsage:     x509.KeyUsageDigitalSignature,
+			}
+			der, err := x509.CreateCertificate(rand.Reader, template, chain[0], csr.PublicKey, key)
+			if err != nil {
+				return nil, fmt.Errorf("error signing CSR: %w", err)
+			}
+			cert, err := x509.ParseCertificate(der)
+			if err != nil {
+				return nil, fmt.Errorf("error parsing signed device cert: %w", err)
+			}
+			chain = append([]*x509.Certificate{cert}, chain...)
+			return chain, nil
 		},
-		TO0Responder: &fdo.TO0Server{
-			Session: conf.State,
-			RVBlobs: conf.State,
+		AutoExtend: conf.State,
+		RvInfo: func(context.Context, *fdo.Voucher) ([][]protocol.RvInstruction, error) {
+			return [][]protocol.RvInstruction{}, nil
 		},
-		TO1Responder: &fdo.TO1Server{
-			Session: conf.State,
-			RVBlobs: conf.State,
+	}
+	to0Responder := &fdo.TO0Server{
+		Session: conf.State,
+		RVBlobs: conf.State,
+	}
+	to1Responder := &fdo.TO1Server{
+		Session: conf.State,
+		RVBlobs: conf.State,
+	}
+	to2Responder := &fdo.TO2Server{
+		Session:   conf.State,
+		Vouchers:  conf.State,
+		OwnerKeys: conf.State,
+		RvInfo: func(context.Context, fdo.Voucher) ([][]protocol.RvInstruction, error) {
+			return [][]protocol.RvInstruction{}, nil
 		},
-		TO2Responder: &fdo.TO2Server{
-			Session:   conf.State,
-			Vouchers:  conf.State,
-			OwnerKeys: conf.State,
-			RvInfo: func(context.Context, fdo.Voucher) ([][]protocol.RvInstruction, error) {
-				return [][]protocol.RvInstruction{}, nil
-			},
-			OwnerModules: func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
-				if conf.OwnerModules == nil {
-					return func(yield func(string, serviceinfo.OwnerModule) bool) {}
-				}
+		OwnerModules: func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
+			if conf.OwnerModules == nil {
+				return func(yield func(string, serviceinfo.OwnerModule) bool) {}
+			}
 
-				mods := conf.OwnerModules(ctx, replacementGUID, info, chain, devmod, supportedMods)
-				return func(yield func(string, serviceinfo.OwnerModule) bool) {
-					for modName, mod := range mods {
-						if slices.Contains(supportedMods, modName) {
-							if !yield(modName, mod) {
-								return
-							}
+			mods := conf.OwnerModules(ctx, replacementGUID, info, chain, devmod, supportedMods)
+			return func(yield func(string, serviceinfo.OwnerModule) bool) {
+				for modName, mod := range mods {
+					if slices.Contains(supportedMods, modName) {
+						if !yield(modName, mod) {
+							return
 						}
 					}
 				}
-			},
-			ReuseCredential: func(context.Context, fdo.Voucher) bool { return conf.Reuse },
-			VerifyVoucher:   func(context.Context, fdo.Voucher) error { return nil },
+			}
 		},
-		T: t,
+		ReuseCredential: func(context.Context, fdo.Voucher) bool { return conf.Reuse },
+		VerifyVoucher:   func(context.Context, fdo.Voucher) error { return nil },
+	}
+
+	var transport fdo.Transport = &Transport{
+		Tokens:       conf.State,
+		DIResponder:  diResponder,
+		TO0Responder: to0Responder,
+		TO1Responder: to1Responder,
+		TO2Responder: to2Responder,
+		T:            t,
+	}
+	if conf.NewTransport != nil {
+		transport = conf.NewTransport(t, conf.State, diResponder, to0Responder, to1Responder, to2Responder)
 	}
 
 	to0 := &fdo.TO0Client{
@@ -213,7 +231,7 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 		},
 	} {
 		t.Run(fmt.Sprintf("Key %q Encoding %q Exchange %q Cipher %q", table.keyType, table.keyEncoding, table.keyExchange, table.cipherSuite), func(t *testing.T) {
-			transport.DIResponder.DeviceInfo = func(context.Context, *custom.DeviceMfgInfo, []*x509.Certificate) (string, protocol.KeyType, protocol.KeyEncoding, error) {
+			diResponder.DeviceInfo = func(context.Context, *custom.DeviceMfgInfo, []*x509.Certificate) (string, protocol.KeyType, protocol.KeyEncoding, error) {
 				return "test_device", table.keyType, table.keyEncoding, nil
 			}
 

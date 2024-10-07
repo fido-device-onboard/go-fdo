@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"log/slog"
 
+	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cbor/cdn"
 )
 
@@ -21,4 +22,19 @@ func tryDebugNotation(b []byte) string {
 		return hex.EncodeToString(b)
 	}
 	return d
+}
+
+func debugUnencryptedMessage(msgType uint8, msg any) {
+	if debugEnabled() {
+		return
+	}
+	body, _ := cbor.Marshal(msg)
+	slog.Debug("unencrypted request", "msg", msgType, "body", tryDebugNotation(body))
+}
+
+func debugDecryptedMessage(msgType uint8, decrypted []byte) {
+	if debugEnabled() {
+		return
+	}
+	slog.Debug("decrypted response", "msg", msgType, "body", tryDebugNotation(decrypted))
 }
