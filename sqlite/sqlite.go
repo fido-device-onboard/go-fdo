@@ -48,8 +48,7 @@ type DB struct {
 // connection. If a password is specified, then the xts VFS will be used
 // with a text key.
 func New(filename, password string) (*DB, error) {
-	// Open a new or existing DB
-	query := "?_pragma=foreign_keys(ON)"
+	var query string
 	if password != "" {
 		query += fmt.Sprintf("&vfs=xts&_pragma=textkey(%q)", password)
 	}
@@ -58,9 +57,18 @@ func New(filename, password string) (*DB, error) {
 		return nil, fmt.Errorf("error creating sqlite connector: %w", err)
 	}
 	db := sql.OpenDB(connector)
+	return Init(db)
+}
 
-	// Ensure tables are created
+// Init ensures all tables are created and pragma are set. It does not
+// recognize if tables have been created with invalid schemas.
+//
+// In most cases, New should be used, which implicitly calls Init. However,
+// Init can be useful for alternative SQLite connections that do not use a
+// local file, such as Cloudflare D1.
+func Init(db *sql.DB) (*DB, error) {
 	stmts := []string{
+		`PRAGMA foreign_keys = ON`,
 		`CREATE TABLE IF NOT EXISTS secrets
 			( type TEXT NOT NULL
 			, secret BLOB NOT NULL
@@ -126,10 +134,8 @@ func New(filename, password string) (*DB, error) {
 			)`,
 		`CREATE TABLE IF NOT EXISTS owner_vouchers
 			( guid BLOB PRIMARY KEY
-			-- , serial_number TEXT NOT NULL
 			, cbor BLOB NOT NULL
 			)`,
-		// `CREATE INDEX idx_owner_voucher_serial_number ON owner_vouchers(serial_number)`,
 		`CREATE TABLE IF NOT EXISTS replacement_vouchers
 			( session BLOB UNIQUE NOT NULL
 			, guid BLOB
@@ -146,8 +152,8 @@ func New(filename, password string) (*DB, error) {
 	for _, sql := range stmts {
 		if _, err := db.Exec(sql); err != nil {
 			_ = db.Close()
-			if password != "" && strings.Contains(err.Error(), "file is not a database") {
-				return nil, fmt.Errorf("incorrect or missing database password")
+			if strings.Contains(err.Error(), "file is not a database") {
+				return nil, fmt.Errorf("file is not a database: likely due to incorrect or missing database password")
 			}
 			return nil, fmt.Errorf("error creating tables: %w", err)
 		}
