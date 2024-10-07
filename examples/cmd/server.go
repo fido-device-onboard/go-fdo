@@ -10,15 +10,14 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"database/sql"
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"iter"
 	"log"
 	"log/slog"
@@ -110,9 +109,17 @@ func server() error { //nolint:gocyclo
 	if dbPath == "" {
 		return errors.New("db flag is required")
 	}
+	_, dbStatErr := os.Stat(dbPath)
 	state, err := sqlite.Open(dbPath, dbPass)
 	if err != nil {
 		return err
+	}
+
+	// Generate keys only if the db wasn't already created
+	if errors.Is(dbStatErr, fs.ErrNotExist) {
+		if err := generateKeys(state); err != nil {
+			return err
+		}
 	}
 
 	// If printing owner public key, do so and exit
@@ -125,36 +132,21 @@ func server() error { //nolint:gocyclo
 		return doImportVoucher(state)
 	}
 
+	// Normalize address flags
 	useTLS = insecureTLS
-
-	// RV Info
-	prot := protocol.RVProtHTTP
-	if useTLS {
-		prot = protocol.RVProtHTTPS
-	}
-	rvInfo := [][]protocol.RvInstruction{{{Variable: protocol.RVProtocol, Value: mustMarshal(prot)}}}
 	if extAddr == "" {
 		extAddr = addr
 	}
-	host, portStr, err := net.SplitHostPort(extAddr)
-	if err != nil {
-		return fmt.Errorf("invalid external addr: %w", err)
-	}
-	if host == "" {
-		rvInfo[0] = append(rvInfo[0], protocol.RvInstruction{Variable: protocol.RVIPAddress, Value: mustMarshal(net.IP{127, 0, 0, 1})})
-	} else if hostIP := net.ParseIP(host); hostIP.To4() != nil || hostIP.To16() != nil {
-		rvInfo[0] = append(rvInfo[0], protocol.RvInstruction{Variable: protocol.RVIPAddress, Value: mustMarshal(hostIP)})
+
+	// RV Info
+	var rvInfo [][]protocol.RvInstruction
+	if to0Addr != "" {
+		rvInfo, err = to0AddrToRvInfo()
 	} else {
-		rvInfo[0] = append(rvInfo[0], protocol.RvInstruction{Variable: protocol.RVDns, Value: mustMarshal(host)})
+		rvInfo, err = extAddrToRvInfo()
 	}
-	portNum, err := strconv.ParseUint(portStr, 10, 16)
 	if err != nil {
-		return fmt.Errorf("invalid external port: %w", err)
-	}
-	port := uint16(portNum)
-	rvInfo[0] = append(rvInfo[0], protocol.RvInstruction{Variable: protocol.RVDevPort, Value: mustMarshal(port)})
-	if rvBypass {
-		rvInfo[0] = append(rvInfo[0], protocol.RvInstruction{Variable: protocol.RVBypass})
+		return err
 	}
 
 	// Test RVDelay by introducing a delay before TO1
@@ -162,7 +154,7 @@ func server() error { //nolint:gocyclo
 
 	// Invoke TO0 client if a GUID is specified
 	if to0GUID != "" {
-		return registerRvBlob(host, port, state)
+		return registerRvBlob(state)
 	}
 
 	// Invoke resale protocol if a GUID is specified
@@ -171,6 +163,110 @@ func server() error { //nolint:gocyclo
 	}
 
 	return serveHTTP(rvInfo, state)
+}
+
+func generateKeys(state *sqlite.DB) error { //nolint:gocyclo
+	// Generate manufacturing component keys
+	rsa2048MfgKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return err
+	}
+	rsa3072MfgKey, err := rsa.GenerateKey(rand.Reader, 3072)
+	if err != nil {
+		return err
+	}
+	ec256MfgKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return err
+	}
+	ec384MfgKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		return err
+	}
+	generateCA := func(key crypto.Signer) ([]*x509.Certificate, error) {
+		template := &x509.Certificate{
+			SerialNumber:          big.NewInt(1),
+			Subject:               pkix.Name{CommonName: "Test CA"},
+			NotBefore:             time.Now(),
+			NotAfter:              time.Now().Add(30 * 365 * 24 * time.Hour),
+			BasicConstraintsValid: true,
+			IsCA:                  true,
+		}
+		der, err := x509.CreateCertificate(rand.Reader, template, template, key.Public(), key)
+		if err != nil {
+			return nil, err
+		}
+		cert, err := x509.ParseCertificate(der)
+		if err != nil {
+			return nil, err
+		}
+		return []*x509.Certificate{cert}, nil
+	}
+	rsa2048Chain, err := generateCA(rsa2048MfgKey)
+	if err != nil {
+		return err
+	}
+	rsa3072Chain, err := generateCA(rsa3072MfgKey)
+	if err != nil {
+		return err
+	}
+	ec256Chain, err := generateCA(ec256MfgKey)
+	if err != nil {
+		return err
+	}
+	ec384Chain, err := generateCA(ec384MfgKey)
+	if err != nil {
+		return err
+	}
+	if err := state.AddManufacturerKey(protocol.Rsa2048RestrKeyType, rsa2048MfgKey, rsa2048Chain); err != nil {
+		return err
+	}
+	if err := state.AddManufacturerKey(protocol.RsaPkcsKeyType, rsa3072MfgKey, rsa3072Chain); err != nil {
+		return err
+	}
+	if err := state.AddManufacturerKey(protocol.RsaPssKeyType, rsa3072MfgKey, rsa3072Chain); err != nil {
+		return err
+	}
+	if err := state.AddManufacturerKey(protocol.Secp256r1KeyType, ec256MfgKey, ec256Chain); err != nil {
+		return err
+	}
+	if err := state.AddManufacturerKey(protocol.Secp384r1KeyType, ec384MfgKey, ec384Chain); err != nil {
+		return err
+	}
+
+	// Generate owner keys
+	rsa2048OwnerKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return err
+	}
+	rsa3072OwnerKey, err := rsa.GenerateKey(rand.Reader, 3072)
+	if err != nil {
+		return err
+	}
+	ec256OwnerKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return err
+	}
+	ec384OwnerKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		return err
+	}
+	if err := state.AddOwnerKey(protocol.Rsa2048RestrKeyType, rsa2048OwnerKey, nil); err != nil {
+		return err
+	}
+	if err := state.AddOwnerKey(protocol.RsaPkcsKeyType, rsa3072OwnerKey, nil); err != nil {
+		return err
+	}
+	if err := state.AddOwnerKey(protocol.RsaPssKeyType, rsa3072OwnerKey, nil); err != nil {
+		return err
+	}
+	if err := state.AddOwnerKey(protocol.Secp256r1KeyType, ec256OwnerKey, nil); err != nil {
+		return err
+	}
+	if err := state.AddOwnerKey(protocol.Secp384r1KeyType, ec384OwnerKey, nil); err != nil {
+		return err
+	}
+	return nil
 }
 
 func serveHTTP(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) error {
@@ -197,15 +293,7 @@ func serveHTTP(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) error {
 	slog.Info("Listening", "local", lis.Addr().String(), "external", extAddr)
 
 	if useTLS {
-		cert, err := tlsCert(state.DB())
-		if err != nil {
-			return err
-		}
-		srv.TLSConfig = &tls.Config{
-			MinVersion:   tls.VersionTLS12,
-			Certificates: []tls.Certificate{*cert},
-		}
-		return srv.ServeTLS(lis, "", "")
+		return serveTLS(lis, srv, state.DB())
 	}
 	return srv.Serve(lis)
 }
@@ -264,7 +352,75 @@ func doImportVoucher(state *sqlite.DB) error {
 	return state.AddVoucher(context.Background(), &ov)
 }
 
-func registerRvBlob(host string, port uint16, state *sqlite.DB) error {
+func to0AddrToRvInfo() ([][]protocol.RvInstruction, error) {
+	url, err := url.Parse(to0Addr)
+	if err != nil {
+		return nil, fmt.Errorf("cannot parse TO0 addr: %w", err)
+	}
+	prot := protocol.RVProtHTTP
+	if url.Scheme == "https" {
+		prot = protocol.RVProtHTTPS
+	}
+	rvInfo := [][]protocol.RvInstruction{{{Variable: protocol.RVProtocol, Value: mustMarshal(prot)}}}
+	host, portStr, err := net.SplitHostPort(url.Host)
+	if err != nil {
+		host = url.Host
+	}
+	if portStr == "" {
+		portStr = "80"
+		if url.Scheme == "https" {
+			portStr = "443"
+		}
+	}
+	if host == "" {
+		rvInfo[0] = append(rvInfo[0], protocol.RvInstruction{Variable: protocol.RVIPAddress, Value: mustMarshal(net.IP{127, 0, 0, 1})})
+	} else if hostIP := net.ParseIP(host); hostIP.To4() != nil || hostIP.To16() != nil {
+		rvInfo[0] = append(rvInfo[0], protocol.RvInstruction{Variable: protocol.RVIPAddress, Value: mustMarshal(hostIP)})
+	} else {
+		rvInfo[0] = append(rvInfo[0], protocol.RvInstruction{Variable: protocol.RVDns, Value: mustMarshal(host)})
+	}
+	portNum, err := strconv.ParseUint(portStr, 10, 16)
+	if err != nil {
+		return nil, fmt.Errorf("invalid TO0 port: %w", err)
+	}
+	port := uint16(portNum)
+	rvInfo[0] = append(rvInfo[0], protocol.RvInstruction{Variable: protocol.RVDevPort, Value: mustMarshal(port)})
+	if rvBypass {
+		rvInfo[0] = append(rvInfo[0], protocol.RvInstruction{Variable: protocol.RVBypass})
+	}
+	return rvInfo, nil
+}
+
+func extAddrToRvInfo() ([][]protocol.RvInstruction, error) {
+	prot := protocol.RVProtHTTP
+	if useTLS {
+		prot = protocol.RVProtHTTPS
+	}
+	rvInfo := [][]protocol.RvInstruction{{{Variable: protocol.RVProtocol, Value: mustMarshal(prot)}}}
+	host, portStr, err := net.SplitHostPort(extAddr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid external addr: %w", err)
+	}
+	if host == "" {
+		rvInfo[0] = append(rvInfo[0], protocol.RvInstruction{Variable: protocol.RVIPAddress, Value: mustMarshal(net.IP{127, 0, 0, 1})})
+	} else if hostIP := net.ParseIP(host); hostIP.To4() != nil || hostIP.To16() != nil {
+		rvInfo[0] = append(rvInfo[0], protocol.RvInstruction{Variable: protocol.RVIPAddress, Value: mustMarshal(hostIP)})
+	} else {
+		rvInfo[0] = append(rvInfo[0], protocol.RvInstruction{Variable: protocol.RVDns, Value: mustMarshal(host)})
+	}
+	portNum, err := strconv.ParseUint(portStr, 10, 16)
+	if err != nil {
+		return nil, fmt.Errorf("invalid external port: %w", err)
+	}
+	port := uint16(portNum)
+	rvInfo[0] = append(rvInfo[0], protocol.RvInstruction{Variable: protocol.RVDevPort, Value: mustMarshal(port)})
+	if rvBypass {
+		rvInfo[0] = append(rvInfo[0], protocol.RvInstruction{Variable: protocol.RVBypass})
+	}
+	return rvInfo, nil
+}
+
+func registerRvBlob(state *sqlite.DB) error {
 	if to0Addr == "" {
 		return fmt.Errorf("to0-guid depends on to0 flag being set")
 	}
@@ -280,11 +436,23 @@ func registerRvBlob(host string, port uint16, state *sqlite.DB) error {
 	var guid protocol.GUID
 	copy(guid[:], guidBytes)
 
+	// Construct TO2 addr
 	proto := protocol.HTTPTransport
 	if useTLS {
 		proto = protocol.HTTPSTransport
 	}
-
+	host, portStr, err := net.SplitHostPort(extAddr)
+	if err != nil {
+		return fmt.Errorf("invalid external addr: %w", err)
+	}
+	if host == "" {
+		host = "localhost"
+	}
+	portNum, err := strconv.ParseUint(portStr, 10, 16)
+	if err != nil {
+		return fmt.Errorf("invalid external port: %w", err)
+	}
+	port := uint16(portNum)
 	to2Addrs := []protocol.RvTO2Addr{
 		{
 			DNSAddress:        &host,
@@ -292,6 +460,8 @@ func registerRvBlob(host string, port uint16, state *sqlite.DB) error {
 			TransportProtocol: proto,
 		},
 	}
+
+	// Register RV blob with RV server
 	refresh, err := (&fdo.TO0Client{
 		Vouchers:  state,
 		OwnerKeys: state,
@@ -359,109 +529,7 @@ func mustMarshal(v any) []byte {
 	return data
 }
 
-//nolint:gocyclo
 func newHandler(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) (*transport.Handler, error) {
-	// Generate manufacturing component keys
-	rsa2048MfgKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		return nil, err
-	}
-	rsa3072MfgKey, err := rsa.GenerateKey(rand.Reader, 3072)
-	if err != nil {
-		return nil, err
-	}
-	ec256MfgKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return nil, err
-	}
-	ec384MfgKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
-	if err != nil {
-		return nil, err
-	}
-	generateCA := func(key crypto.Signer) ([]*x509.Certificate, error) {
-		template := &x509.Certificate{
-			SerialNumber:          big.NewInt(1),
-			Subject:               pkix.Name{CommonName: "Test CA"},
-			NotBefore:             time.Now(),
-			NotAfter:              time.Now().Add(30 * 365 * 24 * time.Hour),
-			BasicConstraintsValid: true,
-			IsCA:                  true,
-		}
-		der, err := x509.CreateCertificate(rand.Reader, template, template, key.Public(), key)
-		if err != nil {
-			return nil, err
-		}
-		cert, err := x509.ParseCertificate(der)
-		if err != nil {
-			return nil, err
-		}
-		return []*x509.Certificate{cert}, nil
-	}
-	rsa2048Chain, err := generateCA(rsa2048MfgKey)
-	if err != nil {
-		return nil, err
-	}
-	rsa3072Chain, err := generateCA(rsa3072MfgKey)
-	if err != nil {
-		return nil, err
-	}
-	ec256Chain, err := generateCA(ec256MfgKey)
-	if err != nil {
-		return nil, err
-	}
-	ec384Chain, err := generateCA(ec384MfgKey)
-	if err != nil {
-		return nil, err
-	}
-	if err := state.AddManufacturerKey(protocol.Rsa2048RestrKeyType, rsa2048MfgKey, rsa2048Chain); err != nil {
-		return nil, err
-	}
-	if err := state.AddManufacturerKey(protocol.RsaPkcsKeyType, rsa3072MfgKey, rsa3072Chain); err != nil {
-		return nil, err
-	}
-	if err := state.AddManufacturerKey(protocol.RsaPssKeyType, rsa3072MfgKey, rsa3072Chain); err != nil {
-		return nil, err
-	}
-	if err := state.AddManufacturerKey(protocol.Secp256r1KeyType, ec256MfgKey, ec256Chain); err != nil {
-		return nil, err
-	}
-	if err := state.AddManufacturerKey(protocol.Secp384r1KeyType, ec384MfgKey, ec384Chain); err != nil {
-		return nil, err
-	}
-
-	// Generate owner keys
-	rsa2048OwnerKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		return nil, err
-	}
-	rsa3072OwnerKey, err := rsa.GenerateKey(rand.Reader, 3072)
-	if err != nil {
-		return nil, err
-	}
-	ec256OwnerKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return nil, err
-	}
-	ec384OwnerKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
-	if err != nil {
-		return nil, err
-	}
-	if err := state.AddOwnerKey(protocol.Rsa2048RestrKeyType, rsa2048OwnerKey, nil); err != nil {
-		return nil, err
-	}
-	if err := state.AddOwnerKey(protocol.RsaPkcsKeyType, rsa3072OwnerKey, nil); err != nil {
-		return nil, err
-	}
-	if err := state.AddOwnerKey(protocol.RsaPssKeyType, rsa3072OwnerKey, nil); err != nil {
-		return nil, err
-	}
-	if err := state.AddOwnerKey(protocol.Secp256r1KeyType, ec256OwnerKey, nil); err != nil {
-		return nil, err
-	}
-	if err := state.AddOwnerKey(protocol.Secp384r1KeyType, ec384OwnerKey, nil); err != nil {
-		return nil, err
-	}
-
 	// Auto-register RV blob so that TO1 can be tested unless a TO0 address is
 	// given or RV bypass is set
 	var autoTO0 fdo.AutoTO0
@@ -526,6 +594,7 @@ func newHandler(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) (*transport
 	}, nil
 }
 
+//nolint:gocyclo
 func ownerModules(ctx context.Context, guid protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, modules []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 	return func(yield func(string, serviceinfo.OwnerModule) bool) {
 		if slices.Contains(modules, "fdo.download") {
@@ -583,68 +652,4 @@ func ownerModules(ctx context.Context, guid protocol.GUID, info string, chain []
 			}
 		}
 	}
-}
-
-func tlsCert(db *sql.DB) (*tls.Certificate, error) {
-	// Ensure that the https table exists
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS https
-		( cert BLOB NOT NULL
-		, key BLOB NOT NULL
-		)`); err != nil {
-		return nil, err
-	}
-
-	// Load a TLS cert and key from the database
-	row := db.QueryRow("SELECT cert, key FROM https LIMIT 1")
-	var certDer, keyDer []byte
-	if err := row.Scan(&certDer, &keyDer); err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return nil, err
-	}
-	if len(keyDer) > 0 {
-		key, err := x509.ParsePKCS8PrivateKey(keyDer)
-		if err != nil {
-			return nil, fmt.Errorf("bad HTTPS key stored: %w", err)
-		}
-		return &tls.Certificate{
-			Certificate: [][]byte{certDer},
-			PrivateKey:  key,
-		}, nil
-	}
-
-	// Generate a new self-signed TLS CA
-	tlsKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
-	if err != nil {
-		return nil, err
-	}
-	caTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "Test CA"},
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(30 * 365 * 24 * time.Hour),
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-	}
-	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, tlsKey.Public(), tlsKey)
-	if err != nil {
-		return nil, err
-	}
-	tlsCA, err := x509.ParseCertificate(caDER)
-	if err != nil {
-		return nil, err
-	}
-
-	// Store TLS cert and key to the database
-	keyDER, err := x509.MarshalPKCS8PrivateKey(tlsKey)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := db.Exec("INSERT INTO https (cert, key) VALUES (?, ?)", caDER, keyDER); err != nil {
-		return nil, err
-	}
-
-	// Use CA to serve TLS
-	return &tls.Certificate{
-		Certificate: [][]byte{tlsCA.Raw},
-		PrivateKey:  tlsKey,
-	}, nil
 }

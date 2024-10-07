@@ -1249,15 +1249,10 @@ func (e *Encoder) encodeTextOrBinary(rv reflect.Value) error {
 
 		// Unaddressable arrays cannot be made into slices, so we must create a
 		// slice and copy contents into it
-		slice := reflect.MakeSlice(
-			reflect.SliceOf(rv.Type().Elem()),
-			rv.Len(),
-			rv.Len(),
-		)
-		if n := reflect.Copy(slice, rv); n != rv.Len() {
+		b = make([]byte, rv.Len())
+		if n := reflect.Copy(reflect.ValueOf(b), rv); n != rv.Len() {
 			panic("array contents were not fully copied into a slice for encoding")
 		}
-		b = slice.Bytes()
 	}
 
 	info := u64Bytes(uint64(len(b)))

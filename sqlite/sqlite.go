@@ -19,14 +19,9 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
-
-	"github.com/ncruces/go-sqlite3/driver"    // Load database/sql driver
-	_ "github.com/ncruces/go-sqlite3/embed"   // Load sqlite WASM binary
-	_ "github.com/ncruces/go-sqlite3/vfs/xts" // Encryption VFS
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
@@ -44,27 +39,8 @@ type DB struct {
 	db *sql.DB
 }
 
-// Open creates or opens a SQLite database file using a single non-pooled
-// connection. If a password is specified, then the xts VFS will be used
-// with a text key.
-func Open(filename, password string) (*DB, error) {
-	var query string
-	if password != "" {
-		query += fmt.Sprintf("?vfs=xts&_pragma=textkey(%q)&_pragma=temp_store(memory)", password)
-	}
-	connector, err := (&driver.SQLite{}).OpenConnector("file:" + filepath.Clean(filename) + query)
-	if err != nil {
-		return nil, fmt.Errorf("error creating sqlite connector: %w", err)
-	}
-	db := sql.OpenDB(connector)
-	if err := Init(db); err != nil {
-		return nil, err
-	}
-	return New(db), nil
-}
-
-// New creates a DB. The expected tables must already be created and pragmas
-// must already be set, including foreign_keys=ON.
+// New creates a DB. The expected tables must be created and FOREIGN_KEYS must
+// be enabled before the database is used for FDO server state.
 func New(db *sql.DB) *DB { return &DB{db: db} }
 
 // Init ensures all tables are created and pragma are set. It does not
@@ -75,7 +51,6 @@ func New(db *sql.DB) *DB { return &DB{db: db} }
 // local file, such as Cloudflare D1.
 func Init(db *sql.DB) error {
 	stmts := []string{
-		`PRAGMA foreign_keys = ON`,
 		`CREATE TABLE IF NOT EXISTS secrets
 			( type TEXT NOT NULL
 			, secret BLOB NOT NULL
@@ -96,6 +71,8 @@ func Init(db *sql.DB) error {
 			, voucher BLOB NOT NULL
 			, exp INTEGER NOT NULL
 			)`,
+		`CREATE INDEX IF NOT EXISTS rv_blob_exp
+			ON rv_blobs(exp ASC)`,
 		`CREATE TABLE IF NOT EXISTS sessions
 			( id BLOB PRIMARY KEY
 			, protocol INTEGER NOT NULL
@@ -155,6 +132,7 @@ func Init(db *sql.DB) error {
 			, cbor BLOB NOT NULL
 			, FOREIGN KEY(session) REFERENCES sessions(id) ON DELETE CASCADE
 			)`,
+		`PRAGMA foreign_keys = ON`,
 	}
 	for _, sql := range stmts {
 		if _, err := db.Exec(sql); err != nil {
