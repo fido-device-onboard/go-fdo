@@ -159,7 +159,13 @@ func Init(db *sql.DB) (*DB, error) {
 		}
 	}
 
-	return &DB{db: db}, nil
+	return NewDB(db), nil
+}
+
+// NewDB creates a new database from a standard connection. It is expected that
+// all tables, pragma, and VFS have already been initialized.
+func NewDB(db *sql.DB) *DB {
+	return &DB{db: db}
 }
 
 // Close closes the database connection.
