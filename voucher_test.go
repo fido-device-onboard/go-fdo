@@ -148,7 +148,7 @@ func TestVerifyUnextendedVoucher(t *testing.T) {
 		t.Errorf("error verifying voucher cert chain hash: %v", err)
 	}
 
-	if err := ov.VerifyManufacturerKey(cred.PublicKeyHash); err != nil {
+	if err := ov.VerifyManufacturerKey(cred.DeviceCredential.PublicKeyHash); err != nil {
 		t.Errorf("error verifying voucher created by manufacturer key: %v", err)
 	}
 
