@@ -50,7 +50,7 @@ type DB struct {
 func New(filename, password string) (*DB, error) {
 	var query string
 	if password != "" {
-		query += fmt.Sprintf("&vfs=xts&_pragma=textkey(%q)", password)
+		query += fmt.Sprintf("?vfs=xts&_pragma=textkey(%q)", password)
 	}
 	connector, err := (&driver.SQLite{}).OpenConnector("file:" + filepath.Clean(filename) + query)
 	if err != nil {
