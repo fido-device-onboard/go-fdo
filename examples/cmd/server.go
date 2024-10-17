@@ -61,6 +61,7 @@ var (
 	rvDelay          int
 	printOwnerPubKey string
 	importVoucher    string
+	cmdDate          bool
 	downloads        stringList
 	uploadDir        string
 	uploadReqs       stringList
@@ -94,6 +95,7 @@ func init() {
 	serverFlags.IntVar(&rvDelay, "rv-delay", 0, "Delay TO1 by N `seconds`")
 	serverFlags.StringVar(&printOwnerPubKey, "print-owner-public", "", "Print owner public key of `type` and exit")
 	serverFlags.StringVar(&importVoucher, "import-voucher", "", "Import a PEM encoded voucher file at `path`")
+	serverFlags.BoolVar(&cmdDate, "command-date", false, "Use fdo.command FSIM to have device run \"date --utc\"")
 	serverFlags.Var(&downloads, "download", "Use fdo.download FSIM for each `file` (flag may be used multiple times)")
 	serverFlags.StringVar(&uploadDir, "upload-dir", "uploads", "The directory `path` to put file uploads")
 	serverFlags.Var(&uploadReqs, "upload", "Use fdo.upload FSIM for each `file` (flag may be used multiple times)")
@@ -567,6 +569,17 @@ func ownerModules(ctx context.Context, guid protocol.GUID, info string, chain []
 				}) {
 					return
 				}
+			}
+		}
+
+		if cmdDate && slices.Contains(modules, "fdo.command") {
+			if !yield("fdo.command", &fsim.RunCommand{
+				Command: "date",
+				Args:    []string{"--utc"},
+				Stdout:  os.Stdout,
+				Stderr:  os.Stderr,
+			}) {
+				return
 			}
 		}
 	}

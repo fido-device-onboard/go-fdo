@@ -66,6 +66,8 @@ Client options:
         A dir to wget files into (FSIM disabled if empty)
 
 Server options:
+  -command-date
+        Use fdo.command FSIM to have device run "date --utc"
   -db string
         SQLite database file path
   -db-pass string
