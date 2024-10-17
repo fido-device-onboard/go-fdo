@@ -41,7 +41,7 @@ func newDB(t *testing.T) (_ *sqlite.DB, cleanup func() error) {
 	cleanup = func() error { return os.Remove("db.test") }
 	_ = cleanup()
 
-	state, err := sqlite.New("db.test", "test_password")
+	state, err := sqlite.Open("db.test", "test_password")
 	if err != nil {
 		t.Fatal(err)
 	}
