@@ -433,7 +433,7 @@ func transferOwnership2(transport fdo.Transport, to1d *cose.Sign1[protocol.To1d,
 			Timeout: time.Second,
 			Transform: func(cmd string, args []string) (string, []string) {
 				return "sh", []string{"-c",
-					fmt.Sprintf("echo %q", strings.Join(args, " "))}
+					fmt.Sprintf("echo %q", strings.Join(append([]string{cmd}, args...), " "))}
 			},
 		}
 	}
