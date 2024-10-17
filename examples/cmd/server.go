@@ -110,7 +110,7 @@ func server() error { //nolint:gocyclo
 	if dbPath == "" {
 		return errors.New("db flag is required")
 	}
-	state, err := sqlite.New(dbPath, dbPass)
+	state, err := sqlite.Open(dbPath, dbPass)
 	if err != nil {
 		return err
 	}
