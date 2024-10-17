@@ -109,9 +109,9 @@ func readCredential(t *testing.T) *blob.DeviceCredential {
 	}
 
 	var rustCred struct {
-		Active bool
-		fdo.DeviceCredential
-		Secrets map[string]map[string][]byte
+		Active           bool
+		DeviceCredential fdo.DeviceCredential
+		Secrets          map[string]map[string][]byte
 	}
 	if err := cbor.Unmarshal(b, &rustCred); err != nil {
 		t.Fatalf("error loading device credential blob: %v", err)
@@ -148,7 +148,7 @@ func TestVerifyUnextendedVoucher(t *testing.T) {
 		t.Errorf("error verifying voucher cert chain hash: %v", err)
 	}
 
-	if err := ov.VerifyManufacturerKey(cred.PublicKeyHash); err != nil {
+	if err := ov.VerifyManufacturerKey(cred.DeviceCredential.PublicKeyHash); err != nil {
 		t.Errorf("error verifying voucher created by manufacturer key: %v", err)
 	}
 
