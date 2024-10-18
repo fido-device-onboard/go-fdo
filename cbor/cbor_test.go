@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"reflect"
 	"testing"
@@ -2102,4 +2103,52 @@ func FuzzUnmarshal(f *testing.F) {
 		var v any
 		_ = cbor.Unmarshal(data, &v)
 	})
+}
+
+func TestSaveCredential(t *testing.T) {
+
+	// Test Setup
+	type E struct {
+		B string
+		C []byte
+		D int
+	}
+	type st struct {
+		A int
+		E
+	}
+	c := make([]byte, 0, 4)
+	c = append(c, 12, 13, 14, 15)
+	input := st{A: 1, E: E{B: "test", C: c, D: 15}}
+
+	//Perform marshalling and unmarshalling of data
+	byteData, err := cbor.Marshal(input)
+	if err != nil {
+		fmt.Errorf("error in Marshalling data:%w", err)
+	}
+
+	var v st
+	if err = cbor.Unmarshal(byteData, &v); err != nil {
+		fmt.Errorf("error in unmarshalling data:%w", err)
+	}
+
+	//verify correctness of data
+	if v.A != input.A {
+		t.Errorf("Unexpected A Value. Expected: %d, Received:%d\n",
+			input.A, v.A)
+	}
+
+	if v.E.B != input.E.B {
+		t.Errorf("Unexpected B value in embedded struct. Expected: %s, Received:%s\n",
+			v.E.B, input.B)
+	}
+
+	if string(v.E.C) != string(input.E.C) {
+		t.Errorf("Unexpected B value in embedded struct. Expected: %v, Received:%v\n",
+			v.E.C, input.C)
+	}
+	if v.E.D != input.E.D {
+		t.Errorf("Unexpected D Value in embedded struct. Expected: %d, Received:%d\n",
+			input.E.D, v.E.D)
+	}
 }
