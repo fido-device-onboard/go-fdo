@@ -8,7 +8,6 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"io"
 	"reflect"
 	"testing"
@@ -2105,7 +2104,7 @@ func FuzzUnmarshal(f *testing.F) {
 	})
 }
 
-func TestEmbeddedStruct(t *testing.T) {
+func TestEmbeddedStructEncode(t *testing.T) {
 
 	// Test Setup
 	type E struct {
@@ -2120,35 +2119,16 @@ func TestEmbeddedStruct(t *testing.T) {
 	c := make([]byte, 0, 4)
 	c = append(c, 12, 13, 14, 15)
 	input := st{A: 1, E: E{B: "test", C: c, D: 15}}
-
+	expected := []byte{0x84, 0x01, 0x64, 0x74, 0x65, 0x73, 0x74, 0x44, 0x0c, 0x0d, 0x0e, 0x0f, 0x0f}
 	//Perform marshalling and unmarshalling of data
-	byteData, err := cbor.Marshal(input)
-	if err != nil {
-		fmt.Errorf("error in Marshalling data:%w", err)
+	var buf bytes.Buffer
+	encoder := cbor.NewEncoder(&buf)
+	if err := encoder.Encode(input); err != nil {
+		t.Fatal(err)
 	}
-
-	var v st
-	if err = cbor.Unmarshal(byteData, &v); err != nil {
-		fmt.Errorf("error in unmarshalling data:%w", err)
-	}
-
+	t.Logf("Encoded data: %x\n", buf.Bytes())
 	//verify correctness of data
-	if v.A != input.A {
-		t.Errorf("Unexpected A Value. Expected: %d, Received:%d\n",
-			input.A, v.A)
-	}
-
-	if v.E.B != input.E.B {
-		t.Errorf("Unexpected B value in embedded struct. Expected: %s, Received:%s\n",
-			v.E.B, input.B)
-	}
-
-	if string(v.E.C) != string(input.E.C) {
-		t.Errorf("Unexpected C value in embedded struct. Expected: %v, Received:%v\n",
-			v.E.C, input.C)
-	}
-	if v.E.D != input.E.D {
-		t.Errorf("Unexpected D Value in embedded struct. Expected: %d, Received:%d\n",
-			input.E.D, v.E.D)
+	if !reflect.DeepEqual(expected, buf.Bytes()) {
+		t.Errorf("expected %+v, got %+v", expected, string(buf.Bytes()))
 	}
 }
