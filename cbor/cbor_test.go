@@ -2104,22 +2104,21 @@ func FuzzUnmarshal(f *testing.F) {
 	})
 }
 
-func TestEmbeddedStructEncode(t *testing.T) {
+func TestEmbeddedStructEncodeDecode(t *testing.T) {
 
 	// Test Setup
 	type E struct {
 		B string
 		C []byte
-		D int
+		D [4]int
 	}
 	type st struct {
 		A int
 		E
 	}
-	c := make([]byte, 0, 4)
+	c := make([]byte, 0)
 	c = append(c, 12, 13, 14, 15)
-	input := st{A: 1, E: E{B: "test", C: c, D: 15}}
-	expected := []byte{0x84, 0x01, 0x64, 0x74, 0x65, 0x73, 0x74, 0x44, 0x0c, 0x0d, 0x0e, 0x0f, 0x0f}
+	input := st{A: 1, E: E{B: "test", C: c, D: [4]int{16, 17, 18, 20}}}
 
 	//Execute Test
 	var buf bytes.Buffer
@@ -2128,8 +2127,14 @@ func TestEmbeddedStructEncode(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	var got st
+	decoder := cbor.NewDecoder(&buf)
+	if err := decoder.Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+
 	//Validate
-	if !reflect.DeepEqual(expected, buf.Bytes()) {
-		t.Errorf("expected %+v, got %+v", expected, string(buf.Bytes()))
+	if !reflect.DeepEqual(input, got) {
+		t.Errorf("expected %+v, got %+v", input, got)
 	}
 }
