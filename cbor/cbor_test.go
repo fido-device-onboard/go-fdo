@@ -318,8 +318,10 @@ func TestEncodeArray(t *testing.T) {
 
 	t.Run("tuples", func(t *testing.T) {
 		type Embed struct {
-			A int
-			B int `cbor:"-"`
+			A int    `cbor:"1"`
+			B []int  `cbor:"-"`
+			C string `cbor:"3"`
+			D []byte `cbor:"4"`
 		}
 		for _, test := range []struct {
 			input  any
@@ -349,10 +351,26 @@ func TestEncodeArray(t *testing.T) {
 				A int    `cbor:"2"`
 				B string `cbor:"1"`
 			}{A: 1, B: "IETF"}, expect: []byte{0x82, 0x64, 0x49, 0x45, 0x54, 0x46, 0x01}},
-			{input: struct {
-				Embed
-				B string
-			}{Embed: Embed{A: 1, B: 3}, B: "IETF"}, expect: []byte{0x82, 0x01, 0x64, 0x49, 0x45, 0x54, 0x46}},
+			{
+				input: struct {
+					Embed
+					B []int `cbor:"2"`
+				}{
+					Embed: Embed{
+						A: 1,
+						B: []int{2, 3},
+						C: "IETF",
+						D: []byte("Hello"),
+					},
+					B: []int{3, 4},
+				},
+				expect: []byte{0x84,
+					0x01,
+					0x82, 0x03, 0x04,
+					0x64, 0x49, 0x45, 0x54, 0x46,
+					0x45, 0x48, 0x65, 0x6c, 0x6c, 0x6f,
+				},
+			},
 		} {
 			if got, err := cbor.Marshal(test.input); err != nil {
 				t.Errorf("error marshaling % x: %v", test.input, err)
@@ -1111,6 +1129,12 @@ func TestDecodeArray(t *testing.T) {
 	})
 
 	t.Run("tuples", func(t *testing.T) {
+		type Embed struct {
+			A int    `cbor:"1"`
+			B []int  `cbor:"-"`
+			C string `cbor:"3"`
+			D []byte `cbor:"4"`
+		}
 		for _, test := range []struct {
 			input  []byte
 			expect any
@@ -1125,6 +1149,25 @@ func TestDecodeArray(t *testing.T) {
 				A int
 				B string
 			}{A: 1, B: "IETF"}, input: []byte{0x82, 0x01, 0x64, 0x49, 0x45, 0x54, 0x46}},
+			{
+				expect: struct {
+					Embed
+					B []int `cbor:"2"`
+				}{
+					Embed: Embed{
+						A: 1,
+						C: "IETF",
+						D: []byte("Hello"),
+					},
+					B: []int{3, 4},
+				},
+				input: []byte{0x84,
+					0x01,
+					0x82, 0x03, 0x04,
+					0x64, 0x49, 0x45, 0x54, 0x46,
+					0x45, 0x48, 0x65, 0x6c, 0x6c, 0x6f,
+				},
+			},
 		} {
 			gotAddr := reflect.New(reflect.TypeOf(test.expect)).Interface()
 			if err := cbor.Unmarshal(test.input, gotAddr); err != nil {
