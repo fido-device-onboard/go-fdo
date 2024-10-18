@@ -2120,14 +2120,15 @@ func TestEmbeddedStructEncode(t *testing.T) {
 	c = append(c, 12, 13, 14, 15)
 	input := st{A: 1, E: E{B: "test", C: c, D: 15}}
 	expected := []byte{0x84, 0x01, 0x64, 0x74, 0x65, 0x73, 0x74, 0x44, 0x0c, 0x0d, 0x0e, 0x0f, 0x0f}
-	//Perform marshalling and unmarshalling of data
+
+	//Execute Test
 	var buf bytes.Buffer
 	encoder := cbor.NewEncoder(&buf)
 	if err := encoder.Encode(input); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("Encoded data: %x\n", buf.Bytes())
-	//verify correctness of data
+
+	//Validate
 	if !reflect.DeepEqual(expected, buf.Bytes()) {
 		t.Errorf("expected %+v, got %+v", expected, string(buf.Bytes()))
 	}
