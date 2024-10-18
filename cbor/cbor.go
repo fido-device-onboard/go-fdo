@@ -1488,7 +1488,10 @@ func collectFieldWeights(parents []int, i, upper int, field func(int) reflect.St
 		}
 	}
 
-	// Return duplicates indices if flat (un)marshaling
+	// Duplicate parents slice, because it might be appended to
+	parents = slices.Clone(parents)
+
+	// Return duplicate indices if flat (un)marshaling
 	if n, ok := flatN(f); ok {
 		for j := 0; j < n; j++ {
 			fields = append(fields, weightedField{
