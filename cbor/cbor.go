@@ -1515,7 +1515,7 @@ func collectFieldWeights(parents []int, i, upper int, field func(int) reflect.St
 
 	// Append to field list
 	return collectFieldWeights(parents, i+1, upper, field, append(fields, weightedField{
-		index:     append(parents, i),
+		index:     append(append([]int(nil), parents...), i),
 		weight:    weight,
 		omittable: omittable,
 	}))

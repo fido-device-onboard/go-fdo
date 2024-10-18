@@ -26,9 +26,9 @@ const (
 // DeviceCredential marshals to the structure defined in the
 // [TPM Draft Spec](https://fidoalliance.org/specs/FDO/securing-fdo-in-tpm-v1.0-rd-20231010/securing-fdo-in-tpm-v1.0-rd-20231010.html).
 type DeviceCredential struct {
-	DeviceCredential fdo.DeviceCredential
-	DeviceKey        DeviceKeyType
-	DeviceKeyHandle  uint32
+	fdo.DeviceCredential
+	DeviceKey       DeviceKeyType
+	DeviceKeyHandle uint32
 }
 
 func (dc DeviceCredential) String() string {
@@ -42,8 +42,8 @@ func (dc DeviceCredential) String() string {
   DeviceKey        %d
   DeviceKeyHandle  %d
   RvInfo
-`, dc.DeviceCredential.Version, dc.DeviceCredential.DeviceInfo, dc.DeviceCredential.GUID, dc.DeviceCredential.PublicKeyHash.Algorithm, dc.DeviceCredential.PublicKeyHash.Value, dc.DeviceKey, dc.DeviceKeyHandle)
-	for _, directive := range dc.DeviceCredential.RvInfo {
+`, dc.Version, dc.DeviceInfo, dc.GUID, dc.PublicKeyHash.Algorithm, dc.PublicKeyHash.Value, dc.DeviceKey, dc.DeviceKeyHandle)
+	for _, directive := range dc.RvInfo {
 		s += "    >\n"
 		for _, instruction := range directive {
 			s += fmt.Sprintf("      %d = %x\n", instruction.Variable, instruction.Value)

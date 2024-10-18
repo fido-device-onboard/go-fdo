@@ -20,8 +20,8 @@ import (
 // DeviceCredential contains all device state, including both public and private
 // parts of keys and secrets.
 type DeviceCredential struct {
-	Active           bool
-	DeviceCredential fdo.DeviceCredential
+	Active bool
+	fdo.DeviceCredential
 
 	// Secrets that would otherwise be stored inside a TPM or other enclave.
 	HmacSecret []byte
@@ -45,8 +45,8 @@ func (dc DeviceCredential) String() string {
   PrivateKey    %T
     %+v
   RvInfo
-`, dc.Active, dc.DeviceCredential.Version, dc.DeviceCredential.DeviceInfo, dc.DeviceCredential.GUID, dc.DeviceCredential.PublicKeyHash.Algorithm, dc.DeviceCredential.PublicKeyHash.Value, dc.HmacSecret, key, key)
-	for _, directive := range dc.DeviceCredential.RvInfo {
+`, dc.Active, dc.Version, dc.DeviceInfo, dc.GUID, dc.PublicKeyHash.Algorithm, dc.PublicKeyHash.Value, dc.HmacSecret, key, key)
+	for _, directive := range dc.RvInfo {
 		s += "    >\n"
 		for _, instruction := range directive {
 			s += fmt.Sprintf("      %d = %x\n", instruction.Variable, instruction.Value)
