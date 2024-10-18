@@ -2144,7 +2144,7 @@ func TestEmbeddedStruct(t *testing.T) {
 	}
 
 	if string(v.E.C) != string(input.E.C) {
-		t.Errorf("Unexpected B value in embedded struct. Expected: %v, Received:%v\n",
+		t.Errorf("Unexpected C value in embedded struct. Expected: %v, Received:%v\n",
 			v.E.C, input.C)
 	}
 	if v.E.D != input.E.D {
