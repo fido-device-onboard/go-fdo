@@ -2105,7 +2105,7 @@ func FuzzUnmarshal(f *testing.F) {
 	})
 }
 
-func TestSaveCredential(t *testing.T) {
+func TestEmbeddedStruct(t *testing.T) {
 
 	// Test Setup
 	type E struct {
