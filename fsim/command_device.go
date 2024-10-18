@@ -163,7 +163,17 @@ func (c *Command) Yield(ctx context.Context, respond func(message string) io.Wri
 	// Check exited before writing any output to avoid race conditions where
 	// output is lost if process exits between writing stdout/stderr and the
 	// exited check
-	exited := c.cmd.ProcessState != nil
+	var exited bool
+	select {
+	case err := <-c.errc:
+		defer c.reset()
+		exited = true
+
+		if err != nil {
+			return fmt.Errorf("command failed to execute: %w", err)
+		}
+	default:
+	}
 
 	// Send any data on the stdout/stderr pipes
 	if c.stdout {
@@ -183,11 +193,6 @@ func (c *Command) Yield(ctx context.Context, respond func(message string) io.Wri
 	}
 
 	// Handle process exit
-	defer c.reset()
-
-	if err := <-c.errc; err != nil {
-		return fmt.Errorf("command failed to execute: %w", err)
-	}
 	code := c.cmd.ProcessState.ExitCode()
 	if code != 0 && !c.mayFail {
 		return fmt.Errorf("command failed with exit code: %d", code)
