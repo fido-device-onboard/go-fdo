@@ -918,7 +918,7 @@ func (d *Decoder) decodeMap(rv reflect.Value, additional []byte) error {
 
 	// Clear map
 	rmap := rv
-	rmap.Clear()
+	mapClear(rmap)
 
 	// Get key-value types
 	keyType := rmap.Type().Key()
