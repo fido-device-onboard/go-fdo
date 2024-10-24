@@ -1281,13 +1281,21 @@ func (e *Encoder) encodeArray(size int, get func(int) reflect.Value) error {
 	return nil
 }
 
+func isEmpty(v reflect.Value) bool {
+	return v.IsZero() ||
+		(v.Kind() == reflect.Slice && v.Len() == 0) ||
+		(v.Kind() == reflect.Map && v.Len() == 0) ||
+		(v.Kind() == reflect.Array && v.Len() == 0) ||
+		(v.Kind() == reflect.Pointer && v.Elem().Kind() == reflect.Array && v.Len() == 0)
+}
+
 func (e *Encoder) encodeStruct(size int, get func([]int) reflect.Value, field func([]int) reflect.StructField) error {
 	// Get encoding order of fields
 	indices, omittable := fieldOrder(size, func(i int) reflect.StructField { return field([]int{i}) })
 
 	// Filter omittable fields which are the zero value for the associated type
 	for i, idx := range indices {
-		if omittable(idx) && get(idx).IsZero() {
+		if omittable(idx) && isEmpty(get(idx)) {
 			indices = append(indices[:i], indices[i+1:]...)
 		}
 	}
