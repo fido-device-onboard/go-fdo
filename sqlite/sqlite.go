@@ -19,14 +19,9 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
-
-	"github.com/ncruces/go-sqlite3/driver"    // Load database/sql driver
-	_ "github.com/ncruces/go-sqlite3/embed"   // Load sqlite WASM binary
-	_ "github.com/ncruces/go-sqlite3/vfs/xts" // Encryption VFS
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
@@ -42,25 +37,6 @@ type DB struct {
 	DebugLog io.Writer
 
 	db *sql.DB
-}
-
-// Open creates or opens a SQLite database file using a single non-pooled
-// connection. If a password is specified, then the xts VFS will be used
-// with a text key.
-func Open(filename, password string) (*DB, error) {
-	var query string
-	if password != "" {
-		query += fmt.Sprintf("?vfs=xts&_pragma=textkey(%q)&_pragma=temp_store(memory)", password)
-	}
-	connector, err := (&driver.SQLite{}).OpenConnector("file:" + filepath.Clean(filename) + query)
-	if err != nil {
-		return nil, fmt.Errorf("error creating sqlite connector: %w", err)
-	}
-	db := sql.OpenDB(connector)
-	if err := Init(db); err != nil {
-		return nil, err
-	}
-	return New(db), nil
 }
 
 // New creates a DB. The expected tables must already be created and pragmas
