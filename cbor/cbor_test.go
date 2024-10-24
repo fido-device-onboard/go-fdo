@@ -2118,6 +2118,56 @@ func TestMarshalEmbeddedPointer(t *testing.T) {
 	})
 }
 
+func TestEmbeddedOmitEmptyTag(t *testing.T) {
+	type Embed struct {
+		Two   []byte
+		Three []string `cbor:",omitempty"`
+	}
+	type Data struct {
+		One string
+		Embed
+		Four int
+	}
+	expectData := Data{
+		One: "hello",
+		Embed: Embed{
+			Two: []byte("world"),
+		},
+		Four: 42,
+	}
+	expectCBOR := []byte{0x83,
+		0x65, 0x68, 0x65, 0x6C, 0x6C, 0x6F,
+		0x45, 0x77, 0x6F, 0x72, 0x6C, 0x64,
+		0x18, 0x2A}
+
+	t.Run("marshal", func(t *testing.T) {
+		b, err := cbor.Marshal(Data{
+			One: "hello",
+			Embed: Embed{
+				Two:   []byte("world"),
+				Three: []string{}, // Ensure that empty slices with omitempty are not omitted
+			},
+			Four: 42,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(b, expectCBOR) {
+			t.Fatalf("expected % x, got % x", expectCBOR, b)
+		}
+	})
+
+	t.Run("unmarshal", func(t *testing.T) {
+		var d Data
+		if err := cbor.Unmarshal(expectCBOR, &d); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(d, expectData) {
+			t.Fatalf("expected %+v, got %+v", expectData, d)
+		}
+	})
+}
+
 func TestOmitEmptyType(t *testing.T) {
 	t.Run("Marshal", func(t *testing.T) {
 		v := cbor.OmitEmpty[int]{Val: 0}
