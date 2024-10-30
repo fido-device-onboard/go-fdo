@@ -204,7 +204,7 @@ func (db *DB) NewToken(ctx context.Context, protocol protocol.Protocol) (string,
 	}
 
 	// Store session ID
-	if err := insert(ctx, db.db, "sessions", map[string]any{
+	if err := db.insert(ctx, "sessions", map[string]any{
 		"id":       id,
 		"protocol": int(protocol),
 	}, nil); err != nil {
@@ -218,32 +218,20 @@ func (db *DB) NewToken(ctx context.Context, protocol protocol.Protocol) (string,
 }
 
 func (db *DB) loadOrStoreSecret(ctx context.Context) ([]byte, error) {
-	tx, err := db.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("error starting transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	var readSecret []byte
-	if err := query(db.debugCtx(ctx), tx, "secrets", []string{"secret"}, map[string]any{"type": "hmac"}, &readSecret); err != nil && !errors.Is(err, fdo.ErrNotFound) {
-		return nil, fmt.Errorf("error reading hmac secret: %w", err)
-	}
-	if len(readSecret) > 0 {
-		return readSecret, nil
-	}
-
-	// Insert new secret
-	var secret [64]byte
-	if _, err := rand.Read(secret[:]); err != nil {
+	// Insert (or ignore) a new HMAC secret
+	secret := make([]byte, 64)
+	if _, err := rand.Read(secret); err != nil {
 		return nil, err
 	}
-	if err := insert(db.debugCtx(ctx), tx, "secrets", map[string]any{"type": "hmac", "secret": secret[:]}, nil); err != nil {
+	if err := db.insertOrIgnore(ctx, "secrets", map[string]any{"type": "hmac", "secret": secret}); err != nil {
 		return nil, fmt.Errorf("error writing hmac secret: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
+
+	// Read secret
+	if err := db.query(ctx, "secrets", []string{"secret"}, map[string]any{"type": "hmac"}, &secret); err != nil {
+		return nil, fmt.Errorf("error reading hmac secret: %w", err)
 	}
-	return secret[:], nil
+	return secret, nil
 }
 
 type contextKey struct{}
@@ -307,25 +295,12 @@ func (db *DB) sessionID(ctx context.Context) ([]byte, bool) {
 	return id, true
 }
 
-func (db *DB) insert(ctx context.Context, table string, kvs, upsertWhere map[string]any) error {
-	if len(upsertWhere) == 0 {
-		return insert(ctx, db.db, table, kvs, upsertWhere)
-	}
-
-	tx, err := db.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("error starting transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	if err := insert(ctx, tx, table, kvs, upsertWhere); err != nil {
-		return err
-	}
-	return tx.Commit()
+func (db *DB) insert(ctx context.Context, table string, kvs map[string]any, upsertOnConflict []string) error {
+	return insert(db.debugCtx(ctx), db.db, table, kvs, upsertOnConflict)
 }
 
 func (db *DB) insertOrIgnore(ctx context.Context, table string, kvs map[string]any) error {
-	return insert(db.debugCtx(ctx), db.db, table, kvs, map[string]any{})
+	return insert(db.debugCtx(ctx), db.db, table, kvs, []string{})
 }
 
 func (db *DB) update(ctx context.Context, table string, kvs, where map[string]any) error {
@@ -336,17 +311,26 @@ func (db *DB) query(ctx context.Context, table string, columns []string, where m
 	return query(db.debugCtx(ctx), db.db, table, columns, where, into...)
 }
 
+// Allows using *sql.DB or *sql.Tx
 type execer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
+// Allows using *sql.DB or *sql.Tx
 type querier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-func insert(ctx context.Context, db execer, table string, kvs, upsertWhere map[string]any) error {
+// Allows using *sql.DB or *sql.Tx
+type queryexecer interface {
+	querier
+	execer
+}
+
+// If upsertOnConflict is an empty slice (non-nil), then do an INSERT OR IGNORE
+func insert(ctx context.Context, db execer, table string, kvs map[string]any, upsertOnConflict []string) error {
 	var orIgnore string
-	if upsertWhere != nil {
+	if upsertOnConflict != nil && len(upsertOnConflict) == 0 {
 		orIgnore = "OR IGNORE "
 	}
 
@@ -357,22 +341,35 @@ func insert(ctx context.Context, db execer, table string, kvs, upsertWhere map[s
 	}
 	markers := slices.Repeat([]string{"?"}, len(columns))
 
+	var upsert string
+	if len(upsertOnConflict) > 0 {
+		var updates, whereClauses []string
+		for _, key := range columns {
+			excluded := fmt.Sprintf("`%s` = excluded.`%s`", key, key)
+			if slices.Contains(upsertOnConflict, key) {
+				whereClauses = append(whereClauses, excluded)
+			} else {
+				updates = append(updates, excluded)
+			}
+		}
+
+		upsert = fmt.Sprintf(" ON CONFLICT(`%s`) DO UPDATE SET ", strings.Join(upsertOnConflict, "`, `"))
+		upsert += strings.Join(updates, ", ")
+		upsert += " WHERE "
+		upsert += strings.Join(whereClauses, " AND ")
+	}
+
 	query := fmt.Sprintf(
-		"INSERT %sINTO %s (%s) VALUES (%s)",
+		"INSERT %sINTO %s (%s) VALUES (%s)%s",
 		orIgnore,
 		table,
 		"`"+strings.Join(columns, "`, `")+"`",
 		strings.Join(markers, ", "),
+		upsert,
 	)
-	debug(ctx, "sqlite: %s\n%+v", query, kvs)
-	if _, err := db.ExecContext(ctx, query, args...); err != nil {
-		return err
-	}
-
-	if len(upsertWhere) > 0 {
-		return update(ctx, db, table, kvs, upsertWhere)
-	}
-	return nil
+	debug(ctx, "sqlite: %s\n%+v", query, args)
+	_, err := db.ExecContext(ctx, query, args...)
+	return err
 }
 
 func update(ctx context.Context, db execer, table string, kvs, where map[string]any) error {
@@ -440,7 +437,7 @@ func query(ctx context.Context, db querier, table string, columns []string, wher
 	return nil
 }
 
-func remove(ctx context.Context, db execer, table string, where map[string]any) error {
+func remove(ctx context.Context, db queryexecer, table string, where map[string]any, returning map[string]any) error {
 	whereKeys := slices.Collect(maps.Keys(where))
 	clauses := make([]string, len(whereKeys))
 	for i, key := range whereKeys {
@@ -451,12 +448,33 @@ func remove(ctx context.Context, db execer, table string, where map[string]any) 
 		whereVals[i] = where[key]
 	}
 
+	var returningQuery string
+	returningArgs := make([]any, len(returning))
+	if len(returning) > 0 {
+		returningKeys := slices.Collect(maps.Keys(returning))
+		returningQuery = " RETURNING `" + strings.Join(returningKeys, "`, `") + "`"
+		for i, key := range returningKeys {
+			returningArgs[i] = returning[key]
+		}
+	}
+
 	query := fmt.Sprintf(
-		`DELETE FROM %s WHERE %s`,
+		`DELETE FROM %s WHERE %s%s`,
 		table,
 		strings.Join(clauses, " AND "),
+		returningQuery,
 	)
-	debug(ctx, "sqlite: %s\n%+v", query, where)
+	debug(ctx, "sqlite: %s\n%+v", query, whereVals)
+
+	if returningQuery != "" {
+		row := db.QueryRowContext(ctx, query, whereVals...)
+		if err := row.Scan(returningArgs...); errors.Is(err, sql.ErrNoRows) {
+			return fdo.ErrNotFound
+		} else if err != nil {
+			return err
+		}
+		return nil
+	}
 
 	result, err := db.ExecContext(ctx, query, whereVals...)
 	if err != nil {
@@ -624,14 +642,10 @@ func (db *DB) SetTO0SignNonce(ctx context.Context, nonce protocol.Nonce) error {
 	if !ok {
 		return fdo.ErrInvalidSession
 	}
-	return db.insert(ctx, "to0_sessions",
-		map[string]any{
-			"session": sessID,
-			"nonce":   nonce[:],
-		},
-		map[string]any{
-			"session": sessID,
-		})
+	return db.insert(ctx, "to0_sessions", map[string]any{
+		"session": sessID,
+		"nonce":   nonce[:],
+	}, []string{"session"})
 }
 
 // TO0SignNonce returns the Nonce expected in TO0.OwnerSign.
@@ -662,14 +676,10 @@ func (db *DB) SetTO1ProofNonce(ctx context.Context, nonce protocol.Nonce) error 
 	if !ok {
 		return fdo.ErrInvalidSession
 	}
-	return db.insert(ctx, "to1_sessions",
-		map[string]any{
-			"session": sessID,
-			"nonce":   nonce[:],
-		},
-		map[string]any{
-			"session": sessID,
-		})
+	return db.insert(ctx, "to1_sessions", map[string]any{
+		"session": sessID,
+		"nonce":   nonce[:],
+	}, []string{"session"})
 }
 
 // TO1ProofNonce returns the Nonce expected in TO1.ProveToRV.
@@ -700,14 +710,10 @@ func (db *DB) SetGUID(ctx context.Context, guid protocol.GUID) error {
 	if !ok {
 		return fdo.ErrInvalidSession
 	}
-	return db.insert(ctx, "to2_sessions",
-		map[string]any{
-			"session": sessID,
-			"guid":    guid[:],
-		},
-		map[string]any{
-			"session": sessID,
-		})
+	return db.insert(ctx, "to2_sessions", map[string]any{
+		"session": sessID,
+		"guid":    guid[:],
+	}, []string{"session"})
 }
 
 // GUID retrieves the GUID of the voucher associated with the session.
@@ -746,14 +752,10 @@ func (db *DB) SetRvInfo(ctx context.Context, rvInfo [][]protocol.RvInstruction) 
 	if err != nil {
 		return fmt.Errorf("error marshaling RV info: %w", err)
 	}
-	return db.insert(ctx, "to2_sessions",
-		map[string]any{
-			"session": sessID,
-			"rv_info": blob,
-		},
-		map[string]any{
-			"session": sessID,
-		})
+	return db.insert(ctx, "to2_sessions", map[string]any{
+		"session": sessID,
+		"rv_info": blob,
+	}, []string{"session"})
 }
 
 // RvInfo retrieves the rendezvous instructions to store at the end of TO2.
@@ -829,19 +831,9 @@ func (db *DB) ReplaceVoucher(ctx context.Context, guid protocol.GUID, ov *fdo.Vo
 
 // RemoveVoucher untracks a voucher, deleting it, and returns it for extension.
 func (db *DB) RemoveVoucher(ctx context.Context, guid protocol.GUID) (*fdo.Voucher, error) {
-	ctx = db.debugCtx(ctx)
-
-	tx, err := db.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("error starting transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
 	var data []byte
-	if err := query(ctx, tx, "owner_vouchers", []string{"cbor"},
-		map[string]any{"guid": guid[:]},
-		&data,
-	); err != nil {
+	if err := remove(db.debugCtx(ctx), db.db, "owner_vouchers",
+		map[string]any{"guid": guid[:]}, map[string]any{"cbor": &data}); err != nil {
 		return nil, err
 	}
 	if data == nil {
@@ -852,15 +844,6 @@ func (db *DB) RemoveVoucher(ctx context.Context, guid protocol.GUID) (*fdo.Vouch
 	if err := cbor.Unmarshal(data, &ov); err != nil {
 		return nil, fmt.Errorf("error unmarshaling ownership voucher: %w", err)
 	}
-
-	if err := remove(ctx, tx, "owner_vouchers", map[string]any{"guid": guid[:]}); err != nil {
-		return nil, err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-
 	return &ov, nil
 }
 
@@ -890,15 +873,10 @@ func (db *DB) SetReplacementGUID(ctx context.Context, guid protocol.GUID) error 
 	if !ok {
 		return fdo.ErrInvalidSession
 	}
-	return db.insert(ctx, "replacement_vouchers",
-		map[string]any{
-			"session": sessID,
-			"guid":    guid[:],
-		},
-		map[string]any{
-			"session": sessID,
-		},
-	)
+	return db.insert(ctx, "replacement_vouchers", map[string]any{
+		"session": sessID,
+		"guid":    guid[:],
+	}, []string{"session"})
 }
 
 // ReplacementGUID retrieves the device GUID to persist at the end of TO2.
@@ -933,15 +911,10 @@ func (db *DB) SetReplacementHmac(ctx context.Context, hmac protocol.Hmac) error 
 	if !ok {
 		return fdo.ErrInvalidSession
 	}
-	return db.insert(ctx, "replacement_vouchers",
-		map[string]any{
-			"session": sessID,
-			"hmac":    hmac.Value,
-		},
-		map[string]any{
-			"session": sessID,
-		},
-	)
+	return db.insert(ctx, "replacement_vouchers", map[string]any{
+		"session": sessID,
+		"hmac":    hmac.Value,
+	}, []string{"session"})
 }
 
 // ReplacementHmac retrieves the voucher HMAC to persist at the end of TO2.
@@ -994,16 +967,11 @@ func (db *DB) SetXSession(ctx context.Context, suite kex.Suite, sess kex.Session
 		return fmt.Errorf("error marshaling key exchange key exchange state: %w", err)
 	}
 
-	return db.insert(ctx, "key_exchanges",
-		map[string]any{
-			"session": sessID,
-			"suite":   string(suite),
-			"cbor":    state,
-		},
-		map[string]any{
-			"session": sessID,
-		},
-	)
+	return db.insert(ctx, "key_exchanges", map[string]any{
+		"session": sessID,
+		"suite":   string(suite),
+		"cbor":    state,
+	}, []string{"session"})
 }
 
 // XSession returns the current key exchange/encryption session based on an
@@ -1044,15 +1012,10 @@ func (db *DB) SetProveDeviceNonce(ctx context.Context, nonce protocol.Nonce) err
 	if !ok {
 		return fdo.ErrInvalidSession
 	}
-	return db.insert(ctx, "to2_sessions",
-		map[string]any{
-			"session":      sessID,
-			"prove_device": nonce[:],
-		},
-		map[string]any{
-			"session": sessID,
-		},
-	)
+	return db.insert(ctx, "to2_sessions", map[string]any{
+		"session":      sessID,
+		"prove_device": nonce[:],
+	}, []string{"session"})
 }
 
 // ProveDeviceNonce returns the Nonce used in TO2.ProveDevice and TO2.Done.
@@ -1087,15 +1050,10 @@ func (db *DB) SetSetupDeviceNonce(ctx context.Context, nonce protocol.Nonce) err
 	if !ok {
 		return fdo.ErrInvalidSession
 	}
-	return db.insert(ctx, "to2_sessions",
-		map[string]any{
-			"session":      sessID,
-			"setup_device": nonce[:],
-		},
-		map[string]any{
-			"session": sessID,
-		},
-	)
+	return db.insert(ctx, "to2_sessions", map[string]any{
+		"session":      sessID,
+		"setup_device": nonce[:],
+	}, []string{"session"})
 }
 
 // SetupDeviceNonce returns the Nonce used in TO2.SetupDevice and TO2.Done2.
@@ -1175,14 +1133,10 @@ func (db *DB) SetMTU(ctx context.Context, mtu uint16) error {
 	if !ok {
 		return fdo.ErrInvalidSession
 	}
-	return db.insert(ctx, "to2_sessions",
-		map[string]any{
-			"session": sessID,
-			"mtu":     int(mtu),
-		},
-		map[string]any{
-			"session": sessID,
-		})
+	return db.insert(ctx, "to2_sessions", map[string]any{
+		"session": sessID,
+		"mtu":     int(mtu),
+	}, []string{"session"})
 }
 
 // MTU returns the max service info size the device may receive.
@@ -1218,16 +1172,12 @@ func (db *DB) SetRVBlob(ctx context.Context, ov *fdo.Voucher, to1d *cose.Sign1[p
 	}
 
 	guid := ov.Header.Val.GUID[:]
-	return db.insert(ctx, "rv_blobs",
-		map[string]any{
-			"guid":    guid,
-			"rv":      blob,
-			"voucher": voucher,
-			"exp":     exp.Unix(),
-		},
-		map[string]any{
-			"guid": guid,
-		})
+	return db.insert(ctx, "rv_blobs", map[string]any{
+		"guid":    guid,
+		"rv":      blob,
+		"voucher": voucher,
+		"exp":     exp.Unix(),
+	}, []string{"guid"})
 }
 
 // RVBlob returns the owner rendezvous blob for a device.
