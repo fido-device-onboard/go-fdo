@@ -442,6 +442,7 @@ func transferOwnership2(transport fdo.Transport, to1d *cose.Sign1[protocol.To1d,
 			FS: uploads,
 		}
 	}
+
 	if wgetDir != "" {
 		fsims["fdo.wget"] = &fsim.Wget{
 			CreateTemp: func() (*os.File, error) {

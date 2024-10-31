@@ -16,7 +16,9 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/pem"
+	"encoding/asn1"
 	"errors"
+	"bytes"
 	"flag"
 	"fmt"
 	"iter"
@@ -57,9 +59,15 @@ var (
 	resaleGUID       string
 	resaleKey        string
 	reuseCred        bool
+	useDelegate      bool
 	rvBypass         bool
 	rvDelay          int
 	printOwnerPubKey string
+	printOwnerPrivKey string
+	printOwnerChain string
+	printDelegateChain    string
+	printDelegatePrivKey string
+	ownerCert	 bool
 	importVoucher    string
 	downloads        stringList
 	uploadDir        string
@@ -82,6 +90,7 @@ func init() {
 	serverFlags.StringVar(&dbPath, "db", "", "SQLite database file path")
 	serverFlags.StringVar(&dbPass, "db-pass", "", "SQLite database encryption-at-rest passphrase")
 	serverFlags.BoolVar(&debug, "debug", debug, "Print HTTP contents")
+	serverFlags.BoolVar(&useDelegate, "delegate", debug, "Generate and Onboard to Delegate")
 	serverFlags.StringVar(&to0Addr, "to0", "", "Rendezvous server `addr`ess to register RV blobs (disables self-registration)")
 	serverFlags.StringVar(&to0GUID, "to0-guid", "", "Device `guid` to immediately register an RV blob (requires to0 flag)")
 	serverFlags.StringVar(&extAddr, "ext-http", "", "External `addr`ess devices should connect to (default \"127.0.0.1:${LISTEN_PORT}\")")
@@ -90,9 +99,14 @@ func init() {
 	serverFlags.StringVar(&resaleKey, "resale-key", "", "The `path` to a PEM-encoded x.509 public key for the next owner")
 	serverFlags.BoolVar(&reuseCred, "reuse-cred", false, "Perform the Credential Reuse Protocol in TO2")
 	serverFlags.BoolVar(&insecureTLS, "insecure-tls", false, "Listen with a self-signed TLS certificate")
+	serverFlags.BoolVar(&ownerCert, "owner-certs", false, "Generate Owner Certificatats (in addition to keys)")
 	serverFlags.BoolVar(&rvBypass, "rv-bypass", false, "Skip TO1")
 	serverFlags.IntVar(&rvDelay, "rv-delay", 0, "Delay TO1 by N `seconds`")
 	serverFlags.StringVar(&printOwnerPubKey, "print-owner-public", "", "Print owner public key of `type` and exit")
+	serverFlags.StringVar(&printOwnerPrivKey, "print-owner-private", "", "Print owner private key of `type` and exit")
+	serverFlags.StringVar(&printOwnerChain, "print-owner-chain", "", "Print owner chain of `type` and exit")
+	serverFlags.StringVar(&printDelegateChain, "print-delegate-chain", "", "Print delegate chain of `type` and exit")
+	serverFlags.StringVar(&printDelegatePrivKey, "print-delegate-private", "", "Print delegate private key of `type` and exit")
 	serverFlags.StringVar(&importVoucher, "import-voucher", "", "Import a PEM encoded voucher file at `path`")
 	serverFlags.Var(&downloads, "download", "Use fdo.download FSIM for each `file` (flag may be used multiple times)")
 	serverFlags.StringVar(&uploadDir, "upload-dir", "uploads", "The directory `path` to put file uploads")
@@ -116,6 +130,22 @@ func server() error { //nolint:gocyclo
 	// If printing owner public key, do so and exit
 	if printOwnerPubKey != "" {
 		return doPrintOwnerPubKey(state)
+	}
+
+	if printOwnerPrivKey != "" {
+		return doPrintOwnerPrivKey(state)
+	}
+
+	if printOwnerChain != "" {
+		return doPrintOwnerChain(state)
+	}
+
+	if printDelegateChain != "" {
+		return doPrintDelegateChain(state)
+	}
+
+	if printDelegatePrivKey != "" {
+		return doPrintDelegatePrivKey(state)
 	}
 
 	// If importing a voucher, do so and exit
@@ -180,7 +210,7 @@ func serveHTTP(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) error {
 
 	// Handle messages
 	mux := http.NewServeMux()
-	mux.Handle("POST /fdo/{ver}/msg/{msg}", handler)
+	mux.Handle("POST /fdo/101/msg/{msg}", handler)
 	srv := &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 3 * time.Second,
@@ -208,6 +238,104 @@ func serveHTTP(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) error {
 	return srv.Serve(lis)
 }
 
+func printCert(cert *x509.Certificate) {
+	var pemData bytes.Buffer
+	pemBlock := &pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: cert.Raw,
+	}
+	if err := pem.Encode(&pemData, pemBlock); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to encode certificate: %v\n", err)
+		return 
+	}
+
+	fmt.Println(pemData.String())
+}
+func doPrintOwnerChain(state *sqlite.DB) error {
+	keyType, err := protocol.ParseKeyType(printOwnerChain)
+	if err != nil {
+		return fmt.Errorf("%w: see usage", err)
+	}
+	_, chain, err := state.OwnerKey(keyType)
+	if err != nil {
+		return err
+	}
+	var pemData bytes.Buffer
+	for _, cert := range chain {
+		pemBlock := &pem.Block{
+			Type:  "CERTIFICATE",
+			Bytes: cert.Raw,
+		}
+	        if err := pem.Encode(&pemData, pemBlock); err != nil {
+            		fmt.Fprintf(os.Stderr, "Failed to encode certificate: %v\n", err)
+			return err
+		}
+	}
+	fmt.Println(pemData.String())
+	return nil
+}
+func doPrintDelegateChain(state *sqlite.DB) error {
+	keyType, err := protocol.ParseKeyType(printDelegateChain)
+	if err != nil {
+		return fmt.Errorf("%w: see usage", err)
+	}
+	_, chain, err := state.Delegate(keyType)
+	if err != nil {
+		return err
+	}
+	var pemData bytes.Buffer
+	for _, cert := range chain {
+		pemBlock := &pem.Block{
+			Type:  "CERTIFICATE",
+			Bytes: cert.Raw,
+		}
+	        if err := pem.Encode(&pemData, pemBlock); err != nil {
+            		fmt.Fprintf(os.Stderr, "Failed to encode certificate: %v\n", err)
+			return err
+		}
+	}
+
+	fmt.Println(pemData.String())
+	return nil
+}
+
+func doPrintDelegatePrivKey(state *sqlite.DB) error {
+	var pemBlock *pem.Block
+	keyType, err := protocol.ParseKeyType(printDelegatePrivKey)
+	if err != nil {
+		return fmt.Errorf("%w: see usage", err)
+	}
+	key, _, err := state.Delegate(keyType)
+	if err != nil {
+		return err
+	}
+	// Private Key
+	switch key.(type) {
+		case *rsa.PrivateKey:
+			der := x509.MarshalPKCS1PrivateKey(key.(*rsa.PrivateKey))
+			pemBlock = &pem.Block{
+				Type:  "PRIVATE KEY",
+				Bytes: der,
+			}
+		case *ecdsa.PrivateKey:
+			der, err := x509.MarshalECPrivateKey(key.(*ecdsa.PrivateKey))
+			if err != nil {
+				return err
+			}
+			pemBlock = &pem.Block{
+				Type:  "EC PRIVATE KEY",
+				Bytes: der,
+			}
+
+		default:
+			err =  fmt.Errorf("Unknown Owner key type %T", key)
+			return err
+	}
+
+	return pem.Encode(os.Stdout, pemBlock)
+	return nil
+}
+
 func doPrintOwnerPubKey(state *sqlite.DB) error {
 	keyType, err := protocol.ParseKeyType(printOwnerPubKey)
 	if err != nil {
@@ -225,6 +353,44 @@ func doPrintOwnerPubKey(state *sqlite.DB) error {
 		Type:  "PUBLIC KEY",
 		Bytes: der,
 	})
+}
+
+func doPrintOwnerPrivKey(state *sqlite.DB) error {
+	var pemBlock *pem.Block
+	keyType, err := protocol.ParseKeyType(printOwnerPrivKey)
+	if err != nil {
+		return fmt.Errorf("%w: see usage", err)
+	}
+	key, _, err := state.OwnerKey(keyType)
+	fmt.Printf("Key is %T %V\n",key,key)
+	if err != nil {
+		return err
+	}
+
+	switch key.(type) {
+		case *rsa.PrivateKey:
+			der := x509.MarshalPKCS1PrivateKey(key.(*rsa.PrivateKey))
+			pemBlock = &pem.Block{
+				Type:  "PRIVATE KEY",
+				Bytes: der,
+			}
+		case *ecdsa.PrivateKey:
+			der, err := x509.MarshalECPrivateKey(key.(*ecdsa.PrivateKey))
+			if err != nil {
+				return err
+			}
+			pemBlock = &pem.Block{
+				Type:  "EC PRIVATE KEY",
+				Bytes: der,
+			}
+
+		default:
+			err =  fmt.Errorf("Unknown Owner key type %T", key)
+			return err
+	}
+
+	print( pem.Encode(os.Stdout, pemBlock))
+	return nil
 }
 
 func doImportVoucher(state *sqlite.DB) error {
@@ -359,6 +525,11 @@ func mustMarshal(v any) []byte {
 
 //nolint:gocyclo
 func newHandler(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) (*transport.Handler, error) {
+	var ec384OwnerCert []*x509.Certificate = nil
+	var ec256OwnerCert []*x509.Certificate = nil
+	var rsa3072OwnerCert []*x509.Certificate = nil
+	var rsa2048OwnerCert []*x509.Certificate = nil
+
 	// Generate manufacturing component keys
 	rsa2048MfgKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -395,6 +566,28 @@ func newHandler(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) (*transport
 		}
 		return []*x509.Certificate{cert}, nil
 	}
+	generateDelegate := func(key crypto.Signer, delegateKey crypto.Signer) ([]*x509.Certificate, error) {
+		template := &x509.Certificate{
+			SerialNumber:          big.NewInt(1),
+			Subject:               pkix.Name{CommonName: "Test Delegate"},
+			NotBefore:             time.Now(),
+			NotAfter:              time.Now().Add(30 * 365 * 24 * time.Hour),
+			BasicConstraintsValid: true,
+			ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+			UnknownExtKeyUsage:    []asn1.ObjectIdentifier{fdo.OID_delegateOnboard,fdo.OID_delegateUpload,fdo.OID_delegateRedirect},
+		}
+		der, err := x509.CreateCertificate(rand.Reader, template, template, delegateKey.Public(), key)
+		if err != nil {
+			return nil, err
+		}
+		cert, err := x509.ParseCertificate(der)
+		if err != nil {
+			return nil, err
+		}
+		printCert(cert)
+		return []*x509.Certificate{cert}, nil
+	}
+
 	rsa2048Chain, err := generateCA(rsa2048MfgKey)
 	if err != nil {
 		return nil, err
@@ -444,21 +637,66 @@ func newHandler(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) (*transport
 	if err != nil {
 		return nil, err
 	}
-	if err := state.AddOwnerKey(protocol.Rsa2048RestrKeyType, rsa2048OwnerKey, nil); err != nil {
+
+	// Generate full owner Certificates, if requested
+
+	if (ownerCert) {
+		ec384OwnerCert, err = generateCA(ec384OwnerKey)
+		if err != nil {
+			return nil, err
+		}
+
+		ec256OwnerCert, err = generateCA(ec256OwnerKey)
+		if err != nil {
+			return nil, err
+		}
+
+		rsa3072OwnerCert, err = generateCA(rsa3072OwnerKey)
+		if err != nil {
+			return nil, err
+		}
+
+		rsa2048OwnerCert, err = generateCA(rsa2048OwnerKey)
+		if err != nil {
+			return nil, err
+		}
+
+		if (useDelegate) {
+			ec384DelegateKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+			if err != nil {
+				return nil, err
+			}
+
+			ec384DelegateCert, err := generateDelegate(ec384OwnerKey,ec384DelegateKey)
+			if err != nil {
+				return nil, err
+			}
+
+			if err := state.AddDelegateKey(protocol.Secp384r1KeyType, ec384DelegateKey, ec384DelegateCert); err != nil {
+				return nil, err
+			}
+
+			fmt.Printf("%T Delegate Cert Created BKG",ec384DelegateCert)
+		}
+	}
+
+
+	if err := state.AddOwnerKey(protocol.Rsa2048RestrKeyType, rsa2048OwnerKey, rsa2048OwnerCert); err != nil {
 		return nil, err
 	}
-	if err := state.AddOwnerKey(protocol.RsaPkcsKeyType, rsa3072OwnerKey, nil); err != nil {
+	if err := state.AddOwnerKey(protocol.RsaPkcsKeyType, rsa3072OwnerKey, rsa3072OwnerCert); err != nil {
 		return nil, err
 	}
-	if err := state.AddOwnerKey(protocol.RsaPssKeyType, rsa3072OwnerKey, nil); err != nil {
+	if err := state.AddOwnerKey(protocol.RsaPssKeyType, rsa3072OwnerKey, rsa3072OwnerCert); err != nil {
 		return nil, err
 	}
-	if err := state.AddOwnerKey(protocol.Secp256r1KeyType, ec256OwnerKey, nil); err != nil {
+	if err := state.AddOwnerKey(protocol.Secp256r1KeyType, ec256OwnerKey, ec256OwnerCert); err != nil {
 		return nil, err
 	}
-	if err := state.AddOwnerKey(protocol.Secp384r1KeyType, ec384OwnerKey, nil); err != nil {
+	if err := state.AddOwnerKey(protocol.Secp384r1KeyType, ec384OwnerKey, ec384OwnerCert); err != nil {
 		return nil, err
 	}
+
 
 	// Auto-register RV blob so that TO1 can be tested unless a TO0 address is
 	// given or RV bypass is set
