@@ -25,3 +25,5 @@ go.work.sum
 
 # VS Code
 .vscode/
+
+test.db

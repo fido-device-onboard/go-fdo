@@ -47,7 +47,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 0, fmt.Errorf("invalid message type"))
 		return
 	}
-	fdoVer, err := strconv.ParseUint(r.PathValue("ver"), 10, 8)
+	fdoVer, err := strconv.ParseUint(r.PathValue("fdoVer"), 10, 8)
 	if err != nil {
 		writeErr(w, 0, fmt.Errorf("invalid fdo protocol version"))
 		return

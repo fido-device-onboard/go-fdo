@@ -177,6 +177,7 @@ func (s *DIServer[T]) setCredentials(ctx context.Context, msg io.Reader) (*setCr
 	// Decode proprietary device mfg info from app start
 	var appStart struct {
 		Info *cbor.Bstr[T]
+		CapabilityFlags
 	}
 	if err := cbor.NewDecoder(msg).Decode(&appStart); err != nil {
 		return nil, fmt.Errorf("error decoding device manufacturing info: %w", err)
