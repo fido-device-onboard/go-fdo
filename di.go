@@ -139,7 +139,6 @@ func appStart(ctx context.Context, transport Transport, info any) (*VoucherHeade
 
 	// Make request
 	typ, resp, err := transport.Send(ctx, protocol.DIAppStartMsgType, msg, nil)
-	panic("STOPPED")
 	if err != nil {
 		return nil, fmt.Errorf("error sending DI.AppStart: %w", err)
 	}
