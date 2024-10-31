@@ -180,7 +180,7 @@ func serveHTTP(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) error {
 
 	// Handle messages
 	mux := http.NewServeMux()
-	mux.Handle("POST /fdo/101/msg/{msg}", handler)
+	mux.Handle("POST /fdo/{ver}/msg/{msg}", handler)
 	srv := &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 3 * time.Second,

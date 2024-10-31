@@ -373,6 +373,7 @@ type helloDeviceMsg struct {
 	KexSuiteName         kex.Suite
 	CipherSuite          kex.CipherSuiteID
 	SigInfoA             sigInfo
+	CapabilityFlags
 }
 
 type ovhValidationContext struct {
@@ -520,6 +521,7 @@ type ovhProof struct {
 	KeyExchangeA        []byte
 	HelloDeviceHash     protocol.Hash
 	MaxOwnerMessageSize uint16
+	CapabilityFlags
 }
 
 // HelloDevice(60) -> ProveOVHdr(61)

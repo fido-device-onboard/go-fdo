@@ -129,13 +129,17 @@ func appStart(ctx context.Context, transport Transport, info any) (*VoucherHeade
 	// Define request structure
 	var msg struct {
 		DeviceMfgInfo *cbor.Bstr[any]
+		CapabilityFlags
 	}
 	if info != nil {
 		msg.DeviceMfgInfo = cbor.NewBstr(info)
 	}
+	msg.CapabilityFlags = GlobalCapabilityFlags
+
 
 	// Make request
 	typ, resp, err := transport.Send(ctx, protocol.DIAppStartMsgType, msg, nil)
+	panic("STOPPED")
 	if err != nil {
 		return nil, fmt.Errorf("error sending DI.AppStart: %w", err)
 	}

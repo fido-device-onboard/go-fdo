@@ -57,10 +57,11 @@ func (c *TO0Client) RegisterBlob(ctx context.Context, transport Transport, guid 
 	return c.ownerSign(ctx, transport, guid, ttl, nonce, addrs)
 }
 
+
 // Hello(20) -> HelloAck(21)
 func (c *TO0Client) hello(ctx context.Context, transport Transport) (protocol.Nonce, error) {
 	// Define request structure
-	msg := struct{}{}
+	msg := GlobalCapabilityFlags
 
 	// Make request
 	typ, resp, err := transport.Send(ctx, protocol.TO0HelloMsgType, msg, nil)
@@ -99,7 +100,7 @@ type to0Ack struct {
 
 // Hello(20) -> HelloAck(21)
 func (s *TO0Server) helloAck(ctx context.Context, msg io.Reader) (*to0Ack, error) {
-	var hello struct{}
+	var hello CapabilityFlags
 	if err := cbor.NewDecoder(msg).Decode(&hello); err != nil {
 		return nil, fmt.Errorf("error decoding TO0.Hello request: %w", err)
 	}
