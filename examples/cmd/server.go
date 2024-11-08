@@ -190,7 +190,7 @@ func server() error { //nolint:gocyclo
 
 	// Invoke TO0 client if a GUID is specified
 	if to0GUID != "" {
-		return registerRvBlob(host, port, state)
+		return registerRvBlob(host, port, state, useDelegate)
 	}
 
 	// Invoke resale protocol if a GUID is specified
@@ -260,18 +260,7 @@ func doPrintOwnerChain(state *sqlite.DB) error {
 	if err != nil {
 		return err
 	}
-	var pemData bytes.Buffer
-	for _, cert := range chain {
-		pemBlock := &pem.Block{
-			Type:  "CERTIFICATE",
-			Bytes: cert.Raw,
-		}
-	        if err := pem.Encode(&pemData, pemBlock); err != nil {
-            		fmt.Fprintf(os.Stderr, "Failed to encode certificate: %v\n", err)
-			return err
-		}
-	}
-	fmt.Println(pemData.String())
+	fmt.Println(fdo.CertChainToString("CERTIFICATE",chain))
 	return nil
 }
 func doPrintDelegateChain(state *sqlite.DB) error {
@@ -279,23 +268,11 @@ func doPrintDelegateChain(state *sqlite.DB) error {
 	if err != nil {
 		return fmt.Errorf("%w: see usage", err)
 	}
-	_, chain, err := state.Delegate(keyType)
+	_, chain, err := state.DelegateKey(keyType)
 	if err != nil {
 		return err
 	}
-	var pemData bytes.Buffer
-	for _, cert := range chain {
-		pemBlock := &pem.Block{
-			Type:  "CERTIFICATE",
-			Bytes: cert.Raw,
-		}
-	        if err := pem.Encode(&pemData, pemBlock); err != nil {
-            		fmt.Fprintf(os.Stderr, "Failed to encode certificate: %v\n", err)
-			return err
-		}
-	}
-
-	fmt.Println(pemData.String())
+	fmt.Println(fdo.CertChainToString("CERTIFICATE",chain))
 	return nil
 }
 
@@ -305,7 +282,7 @@ func doPrintDelegatePrivKey(state *sqlite.DB) error {
 	if err != nil {
 		return fmt.Errorf("%w: see usage", err)
 	}
-	key, _, err := state.Delegate(keyType)
+	key, _, err := state.DelegateKey(keyType)
 	if err != nil {
 		return err
 	}
@@ -333,7 +310,6 @@ func doPrintDelegatePrivKey(state *sqlite.DB) error {
 	}
 
 	return pem.Encode(os.Stdout, pemBlock)
-	return nil
 }
 
 func doPrintOwnerPubKey(state *sqlite.DB) error {
@@ -345,6 +321,7 @@ func doPrintOwnerPubKey(state *sqlite.DB) error {
 	if err != nil {
 		return err
 	}
+        fmt.Printf("** OWNER %T %v PUBLIC %v\n",key,key,key.Public())
 	der, err := x509.MarshalPKIXPublicKey(key.Public())
 	if err != nil {
 		return err
@@ -428,7 +405,7 @@ func doImportVoucher(state *sqlite.DB) error {
 	return state.AddVoucher(context.Background(), &ov)
 }
 
-func registerRvBlob(host string, port uint16, state *sqlite.DB) error {
+func registerRvBlob(host string, port uint16, state *sqlite.DB, useDelegate bool) error {
 	if to0Addr == "" {
 		return fmt.Errorf("to0-guid depends on to0 flag being set")
 	}
@@ -459,7 +436,8 @@ func registerRvBlob(host string, port uint16, state *sqlite.DB) error {
 	refresh, err := (&fdo.TO0Client{
 		Vouchers:  state,
 		OwnerKeys: state,
-	}).RegisterBlob(context.Background(), tlsTransport(to0Addr, nil), guid, to2Addrs)
+		DelegateKeys: state,
+	}).RegisterBlob(context.Background(), tlsTransport(to0Addr, nil), guid, to2Addrs,useDelegate)
 	if err != nil {
 		return fmt.Errorf("error performing to0: %w", err)
 	}
@@ -501,6 +479,8 @@ func resell(state *sqlite.DB) error {
 	extended, err := (&fdo.TO2Server{
 		Vouchers:  state,
 		OwnerKeys: state,
+		DelegateKeys: state,
+		UseDelegate: useDelegate,
 	}).Resell(context.TODO(), guid, nextOwner, nil)
 	if err != nil {
 		return fmt.Errorf("resale protocol: %w", err)
@@ -584,7 +564,7 @@ func newHandler(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) (*transport
 		if err != nil {
 			return nil, err
 		}
-		printCert(cert)
+		fmt.Printf(fdo.CertToString(cert,"CERTIFICATE"))
 		return []*x509.Certificate{cert}, nil
 	}
 
@@ -755,9 +735,11 @@ func newHandler(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) (*transport
 			Session:         state,
 			Vouchers:        state,
 			OwnerKeys:       state,
+			DelegateKeys:	 state,
 			RvInfo:          func(context.Context, fdo.Voucher) ([][]protocol.RvInstruction, error) { return rvInfo, nil },
 			OwnerModules:    ownerModules,
 			ReuseCredential: func(context.Context, fdo.Voucher) bool { return reuseCred },
+			UseDelegate: useDelegate,
 		},
 	}, nil
 }

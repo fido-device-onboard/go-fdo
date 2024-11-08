@@ -203,6 +203,7 @@ var _ interface {
 	fdo.ManufacturerVoucherPersistentState
 	fdo.OwnerVoucherPersistentState
 	fdo.OwnerKeyPersistentState
+	fdo.DelegateKeyPersistentState
 	fdo.AutoExtend
 	fdo.AutoTO0
 } = (*DB)(nil)
@@ -1205,7 +1206,7 @@ func (db *DB) OwnerKey(keyType protocol.KeyType) (crypto.Signer, []*x509.Certifi
 
 // Delegate returns the private key matching a given key type and 
 // its certificate chain.
-func (db *DB) Delegate(keyType protocol.KeyType) (crypto.Signer, []*x509.Certificate, error) {
+func (db *DB) DelegateKey(keyType protocol.KeyType) (crypto.Signer, []*x509.Certificate, error) {
 	var keyDer, certChainDer []byte
 	if err := db.query(context.Background(), "delegate_keys", []string{"pkcs8", "x509_chain"}, map[string]any{
 		"type": int(keyType),

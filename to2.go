@@ -38,6 +38,7 @@ import (
 var (
 	to2NonceClaim       = cose.Label{Int64: 256}
 	to2OwnerPubKeyClaim = cose.Label{Int64: 257}
+	to2DelegateClaim = cose.Label{Int64: 258}
 )
 
 // TO2Config contains the device credential, including secrets and keys,
@@ -458,12 +459,32 @@ func sendHelloDevice(ctx context.Context, transport Transport, c *TO2Config) (pr
 		return protocol.Nonce{}, nil, nil, fmt.Errorf("owner pubkey unprotected header from TO2.ProveOVHdr could not be unmarshaled: %w", err)
 	}
 
+	// Parse delegate public key (if presented)
+	var delegatePubKey protocol.PublicKey
+	var delegateFound bool
+
+	if delegateFound, err = proveOVHdr.Unprotected.Parse(to2DelegateClaim, &delegatePubKey); err != nil {
+		captureErr(ctx, protocol.InvalidMessageErrCode, "")
+		return protocol.Nonce{}, nil, nil, fmt.Errorf("delegate pubkey unprotected header missing from TO2.ProveOVHdr response message")
+	} else if !delegateFound {
+		fmt.Printf("*** DELEGATE proveOVHdr NO CERT\n")
+	}
+
+	fmt.Printf("*** CLIENT HASH OK\n")
+	fmt.Printf("*** DELEGATE Key proveOVHdr%v\n",delegatePubKey)
 	// Validate response signature and nonce. While the payload signature
 	// verification is performed using the untrusted owner public key from the
 	// headers, this is acceptable, because the owner public key will be
 	// subsequently verified when the voucher entry chain is built and
 	// verified.
-	key, err := ownerPubKey.Public()
+
+	var key crypto.PublicKey
+	if (delegateFound) {
+		key, err = delegatePubKey.Public()
+		fmt.Printf("*** USING DELEGATE KEY for proveOVHdr %T %v\n",key,key)
+	} else {
+		key, err = ownerPubKey.Public()
+	}
 	if err != nil {
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
 		return protocol.Nonce{}, nil, nil, fmt.Errorf("error parsing owner public key to verify TO2.ProveOVHdr payload signature: %w", err)
@@ -565,6 +586,19 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 	if err != nil {
 		return nil, err
 	}
+
+	var delegateKey crypto.Signer
+	var delegatePublicKey *protocol.PublicKey = nil
+
+	if (s.UseDelegate) {
+		delegateKey, delegatePublicKey, err = s.delegateKey(keyType, ov.Header.Val.ManufacturerKey.Encoding)
+		if err != nil {
+			return nil, fmt.Errorf("Delegate Cert Unavailable: %w", err)
+		}
+		fmt.Printf("*** USE DELEGATE to sign proveOVHdr %T %v \n",delegateKey,delegateKey)
+		ownerKey = delegateKey
+	}
+
 	expectedCUPHOwnerKey, err := ov.OwnerPublicKey()
 	if err != nil {
 		return nil, fmt.Errorf("error parsing owner public key from voucher: %w", err)
@@ -625,13 +659,26 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 		clear(xA)
 		return nil, fmt.Errorf("device sig info has key type %q, must be %q to match manufacturer key", keyType, mfgKeyType)
 	}
-	s1 := cose.Sign1[ovhProof, []byte]{
-		Header: cose.Header{
+	fmt.Printf("** DelegateKey is  %T %v PUBLIC %v\n",delegateKey,delegateKey)
+	if (delegateKey != nil) {
+		pubtest := delegateKey.Public()
+		fmt.Printf("** Delegate %T %v PUBLIC %v\n",delegatePublicKey,delegatePublicKey,pubtest)
+	} else {
+		fmt.Printf("** NO Delegate Key\n")
+	}
+	var header = cose.Header{
 			Unprotected: map[cose.Label]any{
 				to2NonceClaim:       proveDeviceNonce,
 				to2OwnerPubKeyClaim: ownerPublicKey,
 			},
-		},
+		}
+	if (delegateKey != nil) {
+		fmt.Printf("*** HEADER WAS %v\n",header)
+		header.Unprotected[to2DelegateClaim] = delegatePublicKey
+		fmt.Printf("*** HEADER NOW %v\n",header)
+	}
+	s1 := cose.Sign1[ovhProof, []byte]{
+		Header: header,
 		Payload: cbor.NewByteWrap(ovhProof{
 			OVH:                 ov.Header,
 			NumOVEntries:        uint8(numEntries),
@@ -691,6 +738,45 @@ func (s *TO2Server) ownerKey(keyType protocol.KeyType, keyEncoding protocol.KeyE
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("error with owner public key: %w", err)
+	}
+
+	return key, pubkey, nil
+}
+
+func (s *TO2Server) delegateKey(keyType protocol.KeyType, keyEncoding protocol.KeyEncoding) (crypto.Signer, *protocol.PublicKey, error) {
+	key, chain, err := s.DelegateKeys.DelegateKey(keyType)
+	if errors.Is(err, ErrNotFound) {
+		return nil, nil, fmt.Errorf("delegate key type %s not supported", keyType)
+	} else if err != nil {
+		return nil, nil, fmt.Errorf("error getting delegate key [type=%s]: %w", keyType, err)
+	}
+
+	// Default to X509 key encoding if owner key does not have a certificate
+	// chain
+	if keyEncoding == protocol.X5ChainKeyEnc && len(chain) == 0 {
+		keyEncoding = protocol.X509KeyEnc
+	}
+
+	var pubkey *protocol.PublicKey
+	switch keyEncoding {
+	case protocol.X509KeyEnc, protocol.CoseKeyEnc:
+		switch keyType {
+		case protocol.Secp256r1KeyType, protocol.Secp384r1KeyType:
+			pubkey, err = protocol.NewPublicKey(keyType, key.Public().(*ecdsa.PublicKey), keyEncoding == protocol.CoseKeyEnc)
+		case protocol.Rsa2048RestrKeyType, protocol.RsaPkcsKeyType, protocol.RsaPssKeyType:
+			pubkey, err = protocol.NewPublicKey(keyType, key.Public().(*rsa.PublicKey), keyEncoding == protocol.CoseKeyEnc)
+		default:
+			return nil, nil, fmt.Errorf("unsupported key type: %s", keyType)
+		}
+
+	case protocol.X5ChainKeyEnc:
+		pubkey, err = protocol.NewPublicKey(keyType, chain, false)
+
+	default:
+		return nil, nil, fmt.Errorf("unsupported delegate key encoding: %s", keyEncoding)
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("error with delegate public key: %w", err)
 	}
 
 	return key, pubkey, nil

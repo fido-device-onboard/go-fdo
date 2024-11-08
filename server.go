@@ -185,6 +185,7 @@ type TO2Server struct {
 	Session   TO2SessionState
 	Vouchers  OwnerVoucherPersistentState
 	OwnerKeys OwnerKeyPersistentState
+	DelegateKeys DelegateKeyPersistentState
 
 	// Choose the replacement rendezvous directives based on the current
 	// voucher of the onboarding device.
@@ -214,6 +215,9 @@ type TO2Server struct {
 
 	// Optional configuration
 	MaxDeviceServiceInfoSize uint16
+
+	// Use delegate protocol
+	UseDelegate bool
 }
 
 // Resell implements the FDO Resale Protocol by removing a voucher from

@@ -11,6 +11,9 @@ import (
 	"fmt"
 	"io"
 	"time"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/rsa"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
@@ -31,6 +34,9 @@ type TO0Client struct {
 	// OwnerKeys are used for signing the rendezvous blob.
 	OwnerKeys OwnerKeyPersistentState
 
+	// DelegateKeys may be used for signing the rendezvous blob.
+	DelegateKeys DelegateKeyPersistentState
+
 	// TTL is the amount of time to recommend that the Rendezvous Server allows
 	// the rendezvous blob mapping to remain active.
 	//
@@ -41,7 +47,7 @@ type TO0Client struct {
 // RegisterBlob tells a Rendezvous Server where to direct a given device to its
 // owner service for onboarding. The returned uint32 is the number of seconds
 // before the rendezvous blob must be refreshed by calling [RegisterBlob] again.
-func (c *TO0Client) RegisterBlob(ctx context.Context, transport Transport, guid protocol.GUID, addrs []protocol.RvTO2Addr) (uint32, error) {
+func (c *TO0Client) RegisterBlob(ctx context.Context, transport Transport, guid protocol.GUID, addrs []protocol.RvTO2Addr, useDelegate bool) (uint32, error) {
 	ctx = contextWithErrMsg(ctx)
 
 	nonce, err := c.hello(ctx, transport)
@@ -54,7 +60,7 @@ func (c *TO0Client) RegisterBlob(ctx context.Context, transport Transport, guid 
 		ttl = DefaultRVBlobTTL
 	}
 
-	return c.ownerSign(ctx, transport, guid, ttl, nonce, addrs)
+	return c.ownerSign(ctx, transport, guid, ttl, nonce, addrs, useDelegate)
 }
 
 
@@ -128,10 +134,49 @@ type to0d struct {
 type ownerSign struct {
 	To0d cbor.Bstr[to0d]
 	To1d cose.Sign1Tag[protocol.To1d, []byte]
+	DelegateChain *[]*cbor.X509Certificate `cbor:",omitempty"`
 }
 
+func (c *TO0Client) delegateKey(keyType protocol.KeyType, keyEncoding protocol.KeyEncoding) (crypto.Signer, *protocol.PublicKey, error) {
+	key, chain, err := c.DelegateKeys.DelegateKey(keyType)
+	if errors.Is(err, ErrNotFound) {
+		return nil, nil, fmt.Errorf("delegate key type %s not supported", keyType)
+	} else if err != nil {
+		return nil, nil, fmt.Errorf("error getting delegate key [type=%s]: %w", keyType, err)
+	}
+
+	// Default to X509 key encoding if owner key does not have a certificate
+	// chain
+	if keyEncoding == protocol.X5ChainKeyEnc && len(chain) == 0 {
+		keyEncoding = protocol.X509KeyEnc
+	}
+
+	var pubkey *protocol.PublicKey
+	switch keyEncoding {
+	case protocol.X509KeyEnc, protocol.CoseKeyEnc:
+		switch keyType {
+		case protocol.Secp256r1KeyType, protocol.Secp384r1KeyType:
+			pubkey, err = protocol.NewPublicKey(keyType, key.Public().(*ecdsa.PublicKey), keyEncoding == protocol.CoseKeyEnc)
+		case protocol.Rsa2048RestrKeyType, protocol.RsaPkcsKeyType, protocol.RsaPssKeyType:
+			pubkey, err = protocol.NewPublicKey(keyType, key.Public().(*rsa.PublicKey), keyEncoding == protocol.CoseKeyEnc)
+		default:
+			return nil, nil, fmt.Errorf("unsupported key type: %s", keyType)
+		}
+
+	case protocol.X5ChainKeyEnc:
+		pubkey, err = protocol.NewPublicKey(keyType, chain, false)
+
+	default:
+		return nil, nil, fmt.Errorf("unsupported delegate key encoding: %s", keyEncoding)
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("error with delegate public key: %w", err)
+	}
+
+	return key, pubkey, nil
+}
 // OwnerSign(22) -> AcceptOwner(23)
-func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid protocol.GUID, ttl uint32, nonce protocol.Nonce, addrs []protocol.RvTO2Addr) (negotiatedTTL uint32, _ error) {
+func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid protocol.GUID, ttl uint32, nonce protocol.Nonce, addrs []protocol.RvTO2Addr, useDelegate bool) (negotiatedTTL uint32, _ error) {
 	// Create and hash to0d
 	ov, err := c.Vouchers.Voucher(ctx, guid)
 	if err != nil {
@@ -145,6 +190,7 @@ func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid pro
 		WaitSeconds:  ttl,
 		NonceTO0Sign: nonce,
 	}
+
 	alg := ov.Entries[0].Payload.Val.PreviousHash.Algorithm
 	to0dHash := alg.HashFunc().New()
 	if err := cbor.NewEncoder(to0dHash).Encode(to0d); err != nil {
@@ -153,6 +199,7 @@ func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid pro
 
 	// Sign to1d rendezvous blob
 	keyType := ov.Header.Val.ManufacturerKey.Type
+	// Sign with Delegate or Owner Key?
 	ownerKey, _, err := c.OwnerKeys.OwnerKey(keyType)
 	if errors.Is(err, ErrNotFound) {
 		return 0, fmt.Errorf("no available owner key for TO0.OwnerSign [type=%s]", keyType)
@@ -163,22 +210,48 @@ func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid pro
 	if err != nil {
 		return 0, fmt.Errorf("error determining signing options for TO0.OwnerSign: %w", err)
 	}
-	to1d := cose.Sign1[protocol.To1d, []byte]{Payload: cbor.NewByteWrap(protocol.To1d{
+
+	var header = cose.Header{
+			Unprotected: map[cose.Label]any{
+			},
+		}
+
+
+	to1d := cose.Sign1[protocol.To1d, []byte]{
+		Header: header,
+		Payload: cbor.NewByteWrap(protocol.To1d{
 		RV: addrs,
 		To0dHash: protocol.Hash{
 			Algorithm: alg,
 			Value:     to0dHash.Sum(nil),
 		},
 	})}
-	if err := to1d.Sign(ownerKey, nil, nil, opts); err != nil {
-		return 0, fmt.Errorf("error signing To1d payload for TO0.OwnerSign: %w", err)
-	}
 
+	// Sign blob with OwnerKey - or Delegate, if requested
+	if (useDelegate) {
+		// TODO This imples that Delegate Key type will always be the same as manufacture - which may not be true
+		//delegateKey, delegatePub, err := c.DelegateKeys.DelegateKey(keyType)
+		delegateKey, delegatePub, err := c.delegateKey(keyType,protocol.X509KeyEnc)
+		if err != nil {
+			return 0, fmt.Errorf("error getting delegate key [type=%s]: %w", keyType, err)
+		}
+		header.Unprotected[to2DelegateClaim] = delegatePub
+		if err := to1d.Sign(delegateKey, nil, nil, opts); err != nil {
+			return 0, fmt.Errorf("error signing To1d payload for w/ Delegate TO0.OwnerSign: %w", err)
+		}
+		fmt.Printf("*** BLOB SIGNED WITH DELEGATE %T %v\n",delegateKey,delegateKey)
+		fmt.Printf("*** BLOB SIGNED WITH DELEGATE pub %T %v\n",delegatePub,delegatePub)
+	} else {
+		if err := to1d.Sign(ownerKey, nil, nil, opts); err != nil {
+			return 0, fmt.Errorf("error signing To1d payload for TO0.OwnerSign: %w", err)
+		}
+	}
 	// Define request structure
 	msg := ownerSign{
 		To0d: *cbor.NewBstr(to0d),
 		To1d: *to1d.Tag(),
 	}
+
 
 	// Make request
 	typ, resp, err := transport.Send(ctx, protocol.TO0OwnerSignMsgType, msg, nil)

@@ -11,3 +11,24 @@ openssl pkey  -text -noout -in /tmp/mypriv.key
 go run ./examples/cmd server -debug -db test.db -delegate -owner-certs
 
 openssl x509   -text
+
+
+# Run TO0 on a specifc GUID:
+sqlite3 test.db 'select hex(guid) from owner_vouchers;'
+go run ./examples/cmd server -debug --reuse-cred -db test.db -to0 http://127.0.0.1:8080 -to0-guid 32F7F3CE7F029EE2C10074F4C1DCF565
+
+
+
+
+Figure 7 is wrong? TO0.OwnerSign is not signed by Ownerkey (to1d is, though)
+
+
+# Manual Step Flow test:
+
+rm test.db
+go run ./examples/cmd server -debug -owner-certs  -db test.db 
+go run ./examples/cmd/ client -debug -di http://127.0.0.1:8080
+sqlite3 test.db 'select hex(guid) from owner_vouchers;'
+go run ./examples/cmd server -debug --reuse-cred -db test.db -to0 http://127.0.0.1:8080 -to0-guid  <From Previous Line>
+go run ./examples/cmd client  -rv-only -debug
+go run ./examples/cmd client  -debug
