@@ -239,6 +239,8 @@ func (pub *PublicKey) parse() error {
 	}
 }
 
+// TODO if X5chain parsing will return the first key in the chain,
+// I assume this does the same? Do we ever validate the (rest of the) chain?
 func (pub *PublicKey) parseX509() error {
 	var der []byte
 	if err := cbor.Unmarshal([]byte(pub.Body), &der); err != nil {

@@ -587,24 +587,46 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 		return nil, err
 	}
 
-	var delegateKey crypto.Signer
-	var delegatePublicKey *protocol.PublicKey = nil
-
-	if (s.UseDelegate) {
-		delegateKey, delegatePublicKey, err = s.delegateKey(keyType, ov.Header.Val.ManufacturerKey.Encoding)
-		if err != nil {
-			return nil, fmt.Errorf("Delegate Cert Unavailable: %w", err)
-		}
-		fmt.Printf("*** USE DELEGATE to sign proveOVHdr %T %v \n",delegateKey,delegateKey)
-		ownerKey = delegateKey
-	}
-
 	expectedCUPHOwnerKey, err := ov.OwnerPublicKey()
 	if err != nil {
 		return nil, fmt.Errorf("error parsing owner public key from voucher: %w", err)
 	}
-	if !ownerKey.Public().(interface{ Equal(crypto.PublicKey) bool }).Equal(expectedCUPHOwnerKey) {
-		return nil, fmt.Errorf("owner key to be used for CUPHOwnerKey does not match voucher")
+	var delegateKey crypto.Signer
+	var delegatePublicKey *protocol.PublicKey = nil
+
+	if (s.UseDelegate) {
+		// TODO how should we select keyType??
+		delegateKey, delegatePublicKey, err = s.delegateKey(keyType, ov.Header.Val.ManufacturerKey.Encoding)
+		if err != nil {
+			return nil, fmt.Errorf("Delegate Cert Unavailable: %w", err)
+		}
+		_, chain, err := s.DelegateKeys.DelegateKey(keyType)
+		if err != nil {
+			return nil, fmt.Errorf("Delegate Chain Unavailable: %w", err)
+		}
+		fmt.Printf("*** USE DELEGATE to sign proveOVHdr %T %v \n",delegateKey,delegateKey)
+		fmt.Printf("*** DELEGATE public is %T %v \n",delegatePublicKey,delegatePublicKey)
+		//chain,err1 := delegatePublicKey.Chain()
+		pub,err2 := delegatePublicKey.Public()
+		fmt.Printf("*** DELEGATE CHAIN= %T %v  PUB=%T %v \n",chain,err,pub,err2)
+		fmt.Printf("*** OV public is %T %v \n",expectedCUPHOwnerKey,expectedCUPHOwnerKey)
+
+		err = VerifyCertChain(expectedCUPHOwnerKey,chain)
+		if (err != nil) {
+			return nil, fmt.Errorf("Cert Chain Verification Failed: %w", err)
+		}
+		// Verify that the key in the voucher signed the server's delegate cert
+		if !delegateKey.Public().(interface{ Equal(crypto.PublicKey) bool }).Equal(expectedCUPHOwnerKey) {
+			//return nil, fmt.Errorf("delegate key to be used for CUPHOwnerKey does not match voucher")
+		}
+
+		// Sign with delegate key instead of owner key (below)
+		ownerKey = delegateKey
+	} else {
+		// Make sure the server's ("owner") key matches the one in the voucher
+		if !ownerKey.Public().(interface{ Equal(crypto.PublicKey) bool }).Equal(expectedCUPHOwnerKey) {
+			return nil, fmt.Errorf("owner key to be used for CUPHOwnerKey does not match voucher")
+		}
 	}
 
 	// Verify voucher using custom configuration option.
