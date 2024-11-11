@@ -1227,6 +1227,7 @@ func (db *DB) DelegateKey(keyType protocol.KeyType) (crypto.Signer, []*x509.Cert
 		return nil, nil, fmt.Errorf("error parsing owner certificate chain: %w", err)
 	}
 
+	fmt.Printf("** SQLITE x509Parse RETURNING CHAIN %V err %w\n",chain,err)
 	return key.(crypto.Signer), chain, nil
 }
 

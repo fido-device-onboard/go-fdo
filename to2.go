@@ -339,9 +339,23 @@ func verifyVoucher(ctx context.Context, transport Transport, to1d *cose.Sign1[pr
 		ownerPub = ov.Entries[len(ov.Entries)-1].Payload.Val.PublicKey
 	}
 	expectedOwnerPub, err := ownerPub.Public()
+
+	// expectedOwnerPub is expected owner as found at end of OV chain
+	// this means it will not be the one from the server if delegate is used
+	// In this case, we will need to get this fro the server-provided
+	// delegate cert, meaning we must validate that the delegate cert was
+	// signed by expectedOwnerPub
+
+	fmt.Printf("COMPARE ownerPub %T %v\nTo--- (delgate?) %T %v\n",
+		expectedOwnerPub,
+		expectedOwnerPub,
+		info.PublicKeyToValidate,
+		info.PublicKeyToValidate)
 	if err != nil {
 		return fmt.Errorf("error parsing last public key of ownership voucher: %w", err)
 	}
+
+	// PublicKeyToValidate will be onwer, or delegate (if used)
 	if !info.PublicKeyToValidate.(interface{ Equal(crypto.PublicKey) bool }).Equal(expectedOwnerPub) {
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
 		return fmt.Errorf("owner public key did not match last entry in ownership voucher")
@@ -465,7 +479,7 @@ func sendHelloDevice(ctx context.Context, transport Transport, c *TO2Config) (pr
 
 	if delegateFound, err = proveOVHdr.Unprotected.Parse(to2DelegateClaim, &delegatePubKey); err != nil {
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
-		return protocol.Nonce{}, nil, nil, fmt.Errorf("delegate pubkey unprotected header missing from TO2.ProveOVHdr response message")
+		return protocol.Nonce{}, nil, nil, fmt.Errorf("delegate pubkey unprotected header missing from TO2.ProveOVHdr response message: %w",err)
 	} else if !delegateFound {
 		fmt.Printf("*** DELEGATE proveOVHdr NO CERT\n")
 	}
@@ -592,36 +606,33 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 		return nil, fmt.Errorf("error parsing owner public key from voucher: %w", err)
 	}
 	var delegateKey crypto.Signer
-	var delegatePublicKey *protocol.PublicKey = nil
+	var delegateChain *[]*x509.Certificate = nil
 
 	if (s.UseDelegate) {
 		// TODO how should we select keyType??
-		delegateKey, delegatePublicKey, err = s.delegateKey(keyType, ov.Header.Val.ManufacturerKey.Encoding)
-		if err != nil {
-			return nil, fmt.Errorf("Delegate Cert Unavailable: %w", err)
-		}
-		_, chain, err := s.DelegateKeys.DelegateKey(keyType)
+		//delegateKey, delegatePublicKey, err = s.delegateKey(keyType, ov.Header.Val.ManufacturerKey.Encoding)
+		//if err != nil {
+		//	return nil, fmt.Errorf("Delegate Cert Unavailable: %w", err)
+		//}
+		dk, chain, err := s.DelegateKeys.DelegateKey(keyType)
+		fmt.Printf("*** DELEGATE CHAIN= %T %V: %w\n",chain,chain,err)
 		if err != nil {
 			return nil, fmt.Errorf("Delegate Chain Unavailable: %w", err)
 		}
+		delegateChain = &chain
 		fmt.Printf("*** USE DELEGATE to sign proveOVHdr %T %v \n",delegateKey,delegateKey)
-		fmt.Printf("*** DELEGATE public is %T %v \n",delegatePublicKey,delegatePublicKey)
 		//chain,err1 := delegatePublicKey.Chain()
-		pub,err2 := delegatePublicKey.Public()
-		fmt.Printf("*** DELEGATE CHAIN= %T %v  PUB=%T %v \n",chain,err,pub,err2)
 		fmt.Printf("*** OV public is %T %v \n",expectedCUPHOwnerKey,expectedCUPHOwnerKey)
 
 		err = VerifyCertChain(expectedCUPHOwnerKey,chain)
 		if (err != nil) {
 			return nil, fmt.Errorf("Cert Chain Verification Failed: %w", err)
 		}
-		// Verify that the key in the voucher signed the server's delegate cert
-		if !delegateKey.Public().(interface{ Equal(crypto.PublicKey) bool }).Equal(expectedCUPHOwnerKey) {
-			//return nil, fmt.Errorf("delegate key to be used for CUPHOwnerKey does not match voucher")
-		}
 
 		// Sign with delegate key instead of owner key (below)
-		ownerKey = delegateKey
+		ownerKey = dk
+		delegateKey = dk
+		fmt.Printf("OwnerKey %v DelegateKey %v\n",ownerKey,delegateKey)
 	} else {
 		// Make sure the server's ("owner") key matches the one in the voucher
 		if !ownerKey.Public().(interface{ Equal(crypto.PublicKey) bool }).Equal(expectedCUPHOwnerKey) {
@@ -681,10 +692,8 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 		clear(xA)
 		return nil, fmt.Errorf("device sig info has key type %q, must be %q to match manufacturer key", keyType, mfgKeyType)
 	}
-	fmt.Printf("** DelegateKey is  %T %v PUBLIC %v\n",delegateKey,delegateKey)
+	fmt.Printf("** DelegateKey is  %T %v\n",delegateKey,delegateKey)
 	if (delegateKey != nil) {
-		pubtest := delegateKey.Public()
-		fmt.Printf("** Delegate %T %v PUBLIC %v\n",delegatePublicKey,delegatePublicKey,pubtest)
 	} else {
 		fmt.Printf("** NO Delegate Key\n")
 	}
@@ -696,7 +705,7 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 		}
 	if (delegateKey != nil) {
 		fmt.Printf("*** HEADER WAS %v\n",header)
-		header.Unprotected[to2DelegateClaim] = delegatePublicKey
+		header.Unprotected[to2DelegateClaim] = delegateChain //delegatePublicKey
 		fmt.Printf("*** HEADER NOW %v\n",header)
 	}
 	s1 := cose.Sign1[ovhProof, []byte]{

@@ -26,9 +26,15 @@ Figure 7 is wrong? TO0.OwnerSign is not signed by Ownerkey (to1d is, though)
 # Manual Step Flow test:
 
 rm test.db
-go run ./examples/cmd server -debug -owner-certs  -db test.db 
+go run ./examples/cmd server -debug -owner-certs  -db test.db [-delegate]
 go run ./examples/cmd/ client -debug -di http://127.0.0.1:8080
 sqlite3 test.db 'select hex(guid) from owner_vouchers;'
-go run ./examples/cmd server -debug --reuse-cred -db test.db -to0 http://127.0.0.1:8080 -to0-guid  <From Previous Line>
+go run ./examples/cmd server -debug --reuse-cred -db test.db -to0 http://127.0.0.1:8080 -to0-guid  <From Previous Line> [-delegate]
 go run ./examples/cmd client  -rv-only -debug
 go run ./examples/cmd client  -debug
+
+# NOTE: if you don't manually register blob by manually running to0 above with -delegate flag - you will get no 
+# delegate in RV blob
+
+Convert hex bytestream to SSL cert:
+/home/bkg/bytestocert/bytestocert | openssl x509 -text

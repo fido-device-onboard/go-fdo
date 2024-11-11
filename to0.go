@@ -230,17 +230,17 @@ func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid pro
 	// Sign blob with OwnerKey - or Delegate, if requested
 	if (useDelegate) {
 		// TODO This imples that Delegate Key type will always be the same as manufacture - which may not be true
-		//delegateKey, delegatePub, err := c.DelegateKeys.DelegateKey(keyType)
-		delegateKey, delegatePub, err := c.delegateKey(keyType,protocol.X509KeyEnc)
+		// Delegate must be X509 or X5CHAIN so it can prove that Owner signed it
+		delegateKey, chain, err := c.DelegateKeys.DelegateKey(keyType)
 		if err != nil {
 			return 0, fmt.Errorf("error getting delegate key [type=%s]: %w", keyType, err)
 		}
-		header.Unprotected[to2DelegateClaim] = delegatePub
+		header.Unprotected[to2DelegateClaim] = chain
 		if err := to1d.Sign(delegateKey, nil, nil, opts); err != nil {
 			return 0, fmt.Errorf("error signing To1d payload for w/ Delegate TO0.OwnerSign: %w", err)
 		}
 		fmt.Printf("*** BLOB SIGNED WITH DELEGATE %T %v\n",delegateKey,delegateKey)
-		fmt.Printf("*** BLOB SIGNED WITH DELEGATE pub %T %v\n",delegatePub,delegatePub)
+		fmt.Printf("*** BLOB SIGNED WITH DELEGATE chain %T %v\n",chain,chain)
 	} else {
 		if err := to1d.Sign(ownerKey, nil, nil, opts); err != nil {
 			return 0, fmt.Errorf("error signing To1d payload for TO0.OwnerSign: %w", err)

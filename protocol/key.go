@@ -145,7 +145,7 @@ type PublicKey struct {
 }
 
 func (pub PublicKey) String() string {
-	s := fmt.Sprintf("Type      %s\n", pub.Type)
+	s := fmt.Sprintf("protocol.PublicKey:\nType      %s\n", pub.Type)
 	s += fmt.Sprintf("Encoding  %s\n", pub.Encoding)
 	s += fmt.Sprintf("Body      %x\n", pub.Body)
 	return s
