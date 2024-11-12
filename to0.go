@@ -231,16 +231,25 @@ func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid pro
 	if (useDelegate) {
 		// TODO This imples that Delegate Key type will always be the same as manufacture - which may not be true
 		// Delegate must be X509 or X5CHAIN so it can prove that Owner signed it
-		delegateKey, chain, err := c.DelegateKeys.DelegateKey(keyType)
+		delegateKey, ch, err := c.DelegateKeys.DelegateKey(keyType)
 		if err != nil {
 			return 0, fmt.Errorf("error getting delegate key [type=%s]: %w", keyType, err)
 		}
+		chain, err := protocol.NewPublicKey(keyType,ch,false)
 		header.Unprotected[to2DelegateClaim] = chain
 		if err := to1d.Sign(delegateKey, nil, nil, opts); err != nil {
 			return 0, fmt.Errorf("error signing To1d payload for w/ Delegate TO0.OwnerSign: %w", err)
 		}
 		fmt.Printf("*** BLOB SIGNED WITH DELEGATE %T %v\n",delegateKey,delegateKey)
 		fmt.Printf("*** BLOB SIGNED WITH DELEGATE chain %T %v\n",chain,chain)
+
+		//ok,err := to1d.Verify(delegateKey.Public(),nil,nil)
+		p, _ := chain.Public()
+		ok,err := to1d.Verify(p,nil,nil)
+		 fmt.Printf("TO1D was : %T %+v\n",to1d,to1d)
+		 fmt.Printf("TO1D was : %+v\n",to1d.Payload)
+		fmt.Printf("To1d Re-Verify returned ok=%v err=%v\n",ok,err)
+		fmt.Printf("Public Key was: %T %+v\n",delegateKey.Public(),delegateKey.Public())
 	} else {
 		if err := to1d.Sign(ownerKey, nil, nil, opts); err != nil {
 			return 0, fmt.Errorf("error signing To1d payload for TO0.OwnerSign: %w", err)

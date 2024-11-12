@@ -14,6 +14,7 @@ import (
 	"crypto/x509"
 	"crypto/ecdsa"
 	"crypto/rand"
+	"crypto/x509/pkix"
 	"crypto/elliptic"
 	"math/big"
 	"time"
@@ -544,6 +545,7 @@ func TestEncodeUntypedNull(t *testing.T) {
 func TestEncodeX5Chain(t *testing.T) {
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
+		Subject: pkix.Name{CommonName: "TestSubject"},
 		NotBefore:    time.Now(),
 		NotAfter:     time.Now().Add(30 * 360 * 24 * time.Hour), // Matches Java impl
 		KeyUsage:     x509.KeyUsageDigitalSignature,
@@ -571,37 +573,29 @@ func TestEncodeX5Chain(t *testing.T) {
 	pk,err := protocol.NewPublicKey(protocol.Secp256r1KeyType,chain,false)
 	t.Logf("KeyEncoding as %v\n",pk)
 
-	expect := []byte{0xf6}
-	//var cert protocol.PublicKey
 	var got []byte
 	if got, err = cbor.Marshal(&pk); err != nil {
 		t.Errorf("error marshaling x5chain: %v", err)
 		return
-	} else if !bytes.Equal(got, expect) {
-		t.Errorf("marshaling x5chain; expected % x, got % x", expect, got)
-	}
+	} 
 
 	// Now let's see if we can decode....
 	var decoded protocol.PublicKey
 	if err := cbor.Unmarshal(got, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	//expectedCert, err := hex.DecodeString("81590136308201323081d9a003020102020101300a06082a8648ce3d04030230003020170d3234313131313138313631345a180f32303534303630373138313631345a30003059301306072a8648ce3d020106082a8648ce3d030107034200048db0ec64ec4f0b8fa46346d2abd6af102b5da533f667c2a056d0734e13e54bc9966b9d4dac574b7bcbe1faeda0b13f22864f6b894ad3369b2935d89d9e9eaeb2a3423040300e0603551d0f0101ff040403020780300f0603551d130101ff040530030101ff301d0603551d0e04160414fdd618e4df6faea214943422cff2fc86b3c0fbf8300a06082a8648ce3d04030203480030450221009742828d1ef0b0644a07a6d54cd3de688e8b3a49841624f08ff24e6af1ec11ef02201cdec35479cf61877e7b89f7849accd7fec74197bd29f2108ac5958c2b1a5453")
-	//t.Logf("X5Chain Decoded: %T is %+v", decoded,decoded)
 
-	t.Logf("X5Chain Body:  %+v", hex.EncodeToString(decoded.Body))
+	//t.Logf("X5Chain Body:  %+v", hex.EncodeToString(decoded.Body))
 	decodedChain, err := decoded.Chain()
 	if (err != nil) {
 		t.Fatal(err)
 	}
 	for i, c := range decodedChain {
-		t.Logf("X5Chain %d Chain:  %+v", i,c)
+		t.Logf("X5Chain %d Chain:  %+v", i,c.Subject)
+		if (c.Subject.CommonName != "TestSubject") {
+			t.Fatalf("Bad subject in decoded cert: \"%s\"",c.Subject.CommonName)
+		}
 	}
-	parsedCert,err := x509.ParseCertificate(decoded.Body)
-	if (err != nil) {
-		t.Fatal(err)
-	}
-	t.Logf("New Cert is %v\n",parsedCert)
 
 
 }
