@@ -28,7 +28,7 @@ function b64() {
 	data="${2:-}"
 
 	echo -n "$command"
-	echo -n "$data" | base64 -w 0
+	echo -n "$data" | openssl base64 -A
 	echo
 }
 
@@ -39,7 +39,7 @@ function b64x() {
 	data="${2:-}"
 
 	echo -n "$command"
-	xxd -r -p <<<"$data" | base64 -w 0
+	xxd -r -p <<<"$data" | openssl base64 -A
 	echo
 }
 
