@@ -67,7 +67,7 @@ Client options:
 
 Server options:
   -command-date
-        Use fdo.command FSIM to have device run "date --utc"
+        Use fdo.command FSIM to have device run "date +%s"
   -db string
         SQLite database file path
   -db-pass string
