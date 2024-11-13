@@ -21,7 +21,7 @@ function b64() {
 	data="${2:-}"
 
 	echo -n "$command"
-	echo -n "$data" | base64 -w 0
+	echo -n "$data" | openssl base64 -A
 	echo
 }
 
@@ -32,7 +32,7 @@ function b64x() {
 	data="${2:-}"
 
 	echo -n "$command"
-	xxd -r -p <<<"$data" | base64 -w 0
+	xxd -r -p <<<"$data" | openssl base64 -A
 	echo
 }
 
@@ -55,28 +55,26 @@ function produce() {
 		b64 "3" "$filename"
 
 		b64 "K" "length"
-		echo "1$(wc -c <"$file")"
+		echo "1$(wc -c <"$file"|tr -d '[:space:]')"
 
 		b64 "K" "sha-384"
-		b64x "2" "$(sha384sum "$file" | cut -d' ' -f1)"
+		b64x "2" "$(openssl dgst -sha384 -r "$file" | cut -d' ' -f1)"
 
 		started=true
 	fi
 
-	local byte chunk startindex
-	chunk=""
-	startindex="$index"
-	while read -r -N 1 byte; do
-		((index += 1))
-		chunk+="$byte"
-		if [ "$((index - startindex))" -eq "$CHUNKSIZE" ]; then
-			break
-		fi
-	done < <(tail -c +"$((index + 1))" "$file")
+	local chunk
+	chunk="$(dd if="$file" skip="$index" bs=1 count="$CHUNKSIZE" 2>/dev/null|openssl base64 -A)"
+	((index += $(echo -n "$chunk"|openssl base64 -A -d|wc -c)))
 
 	if [ "$chunk" ]; then
 		b64 "K" "data"
-		b64 "2" "$chunk"
+
+		# Command
+		echo -n "2"
+		# Base64 encoded data
+		echo -n "$chunk"
+		echo
 	fi
 
 	echo "Y"
@@ -107,7 +105,7 @@ function handle() {
 
 		local got expected
 		got="${next:1}"
-		expected="$(wc -c <"$file")"
+		expected="$(wc -c <"$file"|tr -d '[:space:]')"
 		if [ "$got" -ne "$expected" ]; then
 			error "expected device to read $expected bytes, got $got"
 		fi

@@ -28,7 +28,7 @@ function b64() {
 	data="${2:-}"
 
 	echo -n "$command"
-	echo -n "$data" | base64 -w 0
+	echo -n "$data" | openssl base64 -A
 	echo
 }
 
@@ -44,7 +44,7 @@ function yield() {
 	fi
 
 	local bytecount
-	bytecount="$(wc -c <"$file")"
+	bytecount="$(wc -c <"$file"|tr -d '[:space:]')"
 	if [ "$bytecount" -lt "$length" ]; then
 		# continue to wait for data
 		return
@@ -59,8 +59,8 @@ function yield() {
 
 	if [ "$checksum" ]; then
 		local gotsum
-		gotsum="$(sha384sum "$file" | cut -d' ' -f1)"
-		if [ "$gotsum" -ne "$checksum" ]; then
+		gotsum="$(openssl dgst -sha384 -r "$file" | cut -d' ' -f1)"
+		if [ "$gotsum" != "$checksum" ]; then
 			>&2 echo "mismatched checksums for file $name"
 			>&2 echo "expected $checksum"
 			>&2 echo "     got $gotsum"
@@ -81,7 +81,7 @@ function yield() {
 
 function handle() {
 	local key
-	key="$(base64 -d <<<"$1")"
+	key="$(openssl base64 -A -d <<<"$1")"
 
 	case "$key" in
 	"name")
@@ -90,7 +90,7 @@ function handle() {
 		if [[ "${next::1}" != "3" ]]; then
 			error "expected string value after key $key"
 		fi
-		name="$(base64 -d <<<"${next:1}")"
+		name="$(openssl base64 -A -d <<<"${next:1}")"
 		file="$(mktemp -p "$dir")"
 		;;
 
@@ -109,7 +109,7 @@ function handle() {
 		if [[ "${next::1}" != "2" ]]; then
 			error "expected byte array value after key $key"
 		fi
-		checksum="$(base64 -d <<<"${next:1}" | xxd -p -c 0)"
+		checksum="$(openssl base64 -d <<<"${next:1}"| xxd -p -c 0|tr -d '\n')"
 		;;
 
 	"data")
