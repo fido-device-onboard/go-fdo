@@ -79,7 +79,7 @@ func Init(db *sql.DB) (*DB, error) {
 			, x509_chain BLOB NOT NULL
 			)`,
 		`CREATE TABLE IF NOT EXISTS delegate_keys
-			( type INTEGER UNIQUE NOT NULL
+			( name TEXT UNIQUE NOT NULL
 			, pkcs8 BLOB NOT NULL
 			, x509_chain BLOB 
 			)`,
@@ -1166,16 +1166,21 @@ func (db *DB) AddOwnerKey(keyType protocol.KeyType, key crypto.PrivateKey, chain
 }
 
 // AddDelegateKey to retrieve with [DB.DelegateKey]. 
-func (db *DB) AddDelegateKey(keyType protocol.KeyType, key crypto.PrivateKey, chain []*x509.Certificate) error {
+func (db *DB) AddDelegateKey(name string, key crypto.PrivateKey, chain []*x509.Certificate) error {
 	der, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
 		return err
 	}
-	return db.insertOrIgnore(context.Background(), "delegate_keys", map[string]any{
-		"type":       int(keyType),
+	//return db.insertOrIgnore(context.Background(), "delegate_keys", map[string]any{
+	return db.insert(context.Background(), "delegate_keys", map[string]any{
 		"pkcs8":      der,
 		"x509_chain": derEncode(chain),
-	})
+		"name": name,
+	},
+		map[string]any {
+		"name": name,
+		},
+	)
 }
 
 // OwnerKey returns the private key matching a given key type and optionally
@@ -1204,30 +1209,33 @@ func (db *DB) OwnerKey(keyType protocol.KeyType) (crypto.Signer, []*x509.Certifi
 	return key.(crypto.Signer), chain, nil
 }
 
-// Delegate returns the private key matching a given key type and 
-// its certificate chain.
-func (db *DB) DelegateKey(keyType protocol.KeyType) (crypto.Signer, []*x509.Certificate, error) {
+
+// Get a delegate cert by name
+func (db *DB) DelegateKey(keyName string) (crypto.Signer, []*x509.Certificate, error) {
 	var keyDer, certChainDer []byte
 	if err := db.query(context.Background(), "delegate_keys", []string{"pkcs8", "x509_chain"}, map[string]any{
-		"type": int(keyType),
+		"name": keyName,
 	}, &keyDer, &certChainDer); err != nil {
-		return nil, nil, fmt.Errorf("error querying owner key [type=%s]: %w", keyType, err)
+		return nil, nil, fmt.Errorf("error querying delegate key [name=%s]: %w", keyName, err)
 	}
 	if keyDer == nil { // x509_chain may be NULL
 		return nil, nil, fdo.ErrNotFound
 	}
+	return returnDelegate(keyDer,certChainDer)
+}
 
+// Worker function for two functions above
+func returnDelegate(keyDer []byte, certChainDer []byte) (crypto.Signer, []*x509.Certificate, error){ 
 	key, err := x509.ParsePKCS8PrivateKey(keyDer)
 	if err != nil {
-		return nil, nil, fmt.Errorf("error parsing owner key: %w", err)
+		return nil, nil, fmt.Errorf("error parsing delegate key: %w", err)
 	}
 
 	chain, err := x509.ParseCertificates(certChainDer)
 	if err != nil {
-		return nil, nil, fmt.Errorf("error parsing owner certificate chain: %w", err)
+		return nil, nil, fmt.Errorf("error parsing delegate certificate chain: %w", err)
 	}
 
-	fmt.Printf("** SQLITE x509Parse RETURNING CHAIN %V err %w\n",chain,err)
 	return key.(crypto.Signer), chain, nil
 }
 

@@ -217,7 +217,7 @@ type TO2Server struct {
 	MaxDeviceServiceInfoSize uint16
 
 	// Use delegate protocol
-	UseDelegate bool
+	UseDelegate string
 }
 
 // Resell implements the FDO Resale Protocol by removing a voucher from

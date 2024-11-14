@@ -677,13 +677,13 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 	var delegateKey crypto.Signer
 	var delegateChain *protocol.PublicKey = nil
 
-	if (s.UseDelegate) {
+	if (s.UseDelegate != "") {
 		// TODO how should we select keyType??
 		//delegateKey, delegatePublicKey, err = s.delegateKey(keyType, ov.Header.Val.ManufacturerKey.Encoding)
 		//if err != nil {
 		//	return nil, fmt.Errorf("Delegate Cert Unavailable: %w", err)
 		//}
-		dk, chain, err := s.DelegateKeys.DelegateKey(keyType)
+		dk, chain, err := s.DelegateKeys.DelegateKey(s.UseDelegate)
 		fmt.Printf("*** DELEGATE CHAIN= %T %V: %w\n",chain,chain,err)
 		if err != nil {
 			return nil, fmt.Errorf("Delegate Chain Unavailable: %w", err)
@@ -842,45 +842,6 @@ func (s *TO2Server) ownerKey(keyType protocol.KeyType, keyEncoding protocol.KeyE
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("error with owner public key: %w", err)
-	}
-
-	return key, pubkey, nil
-}
-
-func (s *TO2Server) delegateKey(keyType protocol.KeyType, keyEncoding protocol.KeyEncoding) (crypto.Signer, *protocol.PublicKey, error) {
-	key, chain, err := s.DelegateKeys.DelegateKey(keyType)
-	if errors.Is(err, ErrNotFound) {
-		return nil, nil, fmt.Errorf("delegate key type %s not supported", keyType)
-	} else if err != nil {
-		return nil, nil, fmt.Errorf("error getting delegate key [type=%s]: %w", keyType, err)
-	}
-
-	// Default to X509 key encoding if owner key does not have a certificate
-	// chain
-	if keyEncoding == protocol.X5ChainKeyEnc && len(chain) == 0 {
-		keyEncoding = protocol.X509KeyEnc
-	}
-
-	var pubkey *protocol.PublicKey
-	switch keyEncoding {
-	case protocol.X509KeyEnc, protocol.CoseKeyEnc:
-		switch keyType {
-		case protocol.Secp256r1KeyType, protocol.Secp384r1KeyType:
-			pubkey, err = protocol.NewPublicKey(keyType, key.Public().(*ecdsa.PublicKey), keyEncoding == protocol.CoseKeyEnc)
-		case protocol.Rsa2048RestrKeyType, protocol.RsaPkcsKeyType, protocol.RsaPssKeyType:
-			pubkey, err = protocol.NewPublicKey(keyType, key.Public().(*rsa.PublicKey), keyEncoding == protocol.CoseKeyEnc)
-		default:
-			return nil, nil, fmt.Errorf("unsupported key type: %s", keyType)
-		}
-
-	case protocol.X5ChainKeyEnc:
-		pubkey, err = protocol.NewPublicKey(keyType, chain, false)
-
-	default:
-		return nil, nil, fmt.Errorf("unsupported delegate key encoding: %s", keyEncoding)
-	}
-	if err != nil {
-		return nil, nil, fmt.Errorf("error with delegate public key: %w", err)
 	}
 
 	return key, pubkey, nil

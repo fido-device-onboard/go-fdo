@@ -12,8 +12,8 @@ import (
 	"io"
 	"time"
 	"crypto"
-	"crypto/ecdsa"
 	"crypto/rsa"
+	"crypto/ecdsa"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
@@ -47,7 +47,7 @@ type TO0Client struct {
 // RegisterBlob tells a Rendezvous Server where to direct a given device to its
 // owner service for onboarding. The returned uint32 is the number of seconds
 // before the rendezvous blob must be refreshed by calling [RegisterBlob] again.
-func (c *TO0Client) RegisterBlob(ctx context.Context, transport Transport, guid protocol.GUID, addrs []protocol.RvTO2Addr, useDelegate bool) (uint32, error) {
+func (c *TO0Client) RegisterBlob(ctx context.Context, transport Transport, guid protocol.GUID, addrs []protocol.RvTO2Addr, delegateName string) (uint32, error) {
 	ctx = contextWithErrMsg(ctx)
 
 	nonce, err := c.hello(ctx, transport)
@@ -60,7 +60,7 @@ func (c *TO0Client) RegisterBlob(ctx context.Context, transport Transport, guid 
 		ttl = DefaultRVBlobTTL
 	}
 
-	return c.ownerSign(ctx, transport, guid, ttl, nonce, addrs, useDelegate)
+	return c.ownerSign(ctx, transport, guid, ttl, nonce, addrs, delegateName)
 }
 
 
@@ -138,7 +138,7 @@ type ownerSign struct {
 }
 
 func (c *TO0Client) delegateKey(keyType protocol.KeyType, keyEncoding protocol.KeyEncoding) (crypto.Signer, *protocol.PublicKey, error) {
-	key, chain, err := c.DelegateKeys.DelegateKey(keyType)
+	key, chain, err := c.DelegateKeys.DelegateKey("TEST") //keyType)
 	if errors.Is(err, ErrNotFound) {
 		return nil, nil, fmt.Errorf("delegate key type %s not supported", keyType)
 	} else if err != nil {
@@ -176,7 +176,7 @@ func (c *TO0Client) delegateKey(keyType protocol.KeyType, keyEncoding protocol.K
 	return key, pubkey, nil
 }
 // OwnerSign(22) -> AcceptOwner(23)
-func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid protocol.GUID, ttl uint32, nonce protocol.Nonce, addrs []protocol.RvTO2Addr, useDelegate bool) (negotiatedTTL uint32, _ error) {
+func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid protocol.GUID, ttl uint32, nonce protocol.Nonce, addrs []protocol.RvTO2Addr, delegateName string) (negotiatedTTL uint32, _ error) {
 	// Create and hash to0d
 	ov, err := c.Vouchers.Voucher(ctx, guid)
 	if err != nil {
@@ -228,10 +228,10 @@ func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid pro
 	})}
 
 	// Sign blob with OwnerKey - or Delegate, if requested
-	if (useDelegate) {
+	if (delegateName != "") {
 		// TODO This imples that Delegate Key type will always be the same as manufacture - which may not be true
 		// Delegate must be X509 or X5CHAIN so it can prove that Owner signed it
-		delegateKey, ch, err := c.DelegateKeys.DelegateKey(keyType)
+		delegateKey, ch, err := c.DelegateKeys.DelegateKey(delegateName)
 		if err != nil {
 			return 0, fmt.Errorf("error getting delegate key [type=%s]: %w", keyType, err)
 		}

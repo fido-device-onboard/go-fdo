@@ -146,3 +146,6 @@ func VerifyCertChain(pubKey any, chain []*x509.Certificate) error {
 	fmt.Println("Certificate signature verified successfully")
 	return nil
 }
+
+type stringOrNull interface {
+}

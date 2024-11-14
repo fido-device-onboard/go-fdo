@@ -157,7 +157,7 @@ type OwnerKeyPersistentState interface {
 type DelegateKeyPersistentState interface {
 	// DelegateKey returns the private delegate key matching a given key type and 
 	// its certificate chain.
-	DelegateKey(protocol.KeyType) (crypto.Signer, []*x509.Certificate, error)
+	DelegateKey(string) (crypto.Signer, []*x509.Certificate, error)
 }
 
 // ManufacturerVoucherPersistentState maintains vouchers created during DI
