@@ -15,8 +15,11 @@ import (
 	"crypto/rand"
 	"math/big"
 	"time"
+	"strings"
 	"crypto"
 	"encoding/asn1"
+	"encoding/hex"
+    	"crypto/sha256"
 	"crypto/x509/pkix"
 )
 
@@ -190,18 +193,28 @@ func VerifyDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey, 
 		issuer := chain[0].Issuer.CommonName
 		public := ownerKey
 		rootPriv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		fmt.Printf("Ephemeral Root Key: %s\n",KeyToString(rootPriv.Public()))
 		if (err != nil) { return fmt.Errorf("VerifyDelegate Error making ephemeral root CA key: %v",err) }
-		rootOwner, err := GenerateDelegate(rootPriv, DelegateFlagRoot , *public,issuer,issuer)
+		rootOwner, err := GenerateDelegate(rootPriv, DelegateFlagRoot , *public,issuer,issuer, 
+			[]asn1.ObjectIdentifier{*oid},
+			)
 		if (err != nil) {
 			return fmt.Errorf("VerifyDelegate Error createing ephemerial Owner Root Cert: %v",err)
 		}
 		chain = append([]*x509.Certificate{rootOwner},chain...)
 	}
 
+	permstr := ""
 	for i,c := range chain {
+		var permstrs []string
+		for _, oid := range c.UnknownExtKeyUsage {
+			s,_ := DelegateOIDtoString(oid)
+			permstrs =  append(permstrs,s)
+		}
+		permstr = strings.Join(permstrs," | ")
+
+		fmt.Printf("%d: Subject=%s Issuer=%s IsCA=%v KeyUsage=%s Perms=[%s]\n",i,c.Subject,c.Issuer,c.IsCA,KeyUsageToString(c.KeyUsage),permstr)
 		if (i!= 0) {
-			fmt.Printf("%d: Subject=%s Issuer=%s IsCA=%v KeyUsage=%s CheckFrom %s\n",i,c.Subject,c.Issuer,c.IsCA,KeyUsageToString(c.KeyUsage),chain[i-1].Subject)
-			//fmt.Printf("%d: ExtKey=%+v\n",i,c.UnknownExtKeyUsage)
 			err := chain[i].CheckSignatureFrom(chain[i-1])
 			if (err != nil) {
 				return fmt.Errorf("VerifyDelegate Chain Validation error - %d not signed by %d: %v\n",i,i-1,err)
@@ -209,19 +222,30 @@ func VerifyDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey, 
 			if (chain[i].Issuer.CommonName != chain[i-1].Subject.CommonName) {
 				return fmt.Errorf("Subject %s Issued by Issuer=%s, expected %s",c.Subject,c.Issuer,chain[i-1].Issuer)
 			}
-			if ((oid != nil) && (certMissingOID(c,*oid))) {
-				return fmt.Errorf("VerifyDelegate Chain Validation error - %s no oid %s\n",c,oid)
-			}
-		} else {
-			fmt.Printf("%d: Subject=%s Issuer=%s IsCA=%v KeyUsage=%s NOCHECK\n",i,c.Subject,c.Issuer,c.IsCA,KeyUsageToString(c.KeyUsage))
+		} 
+
+		// TODO we do NOT check expiration or revocation
+		if ((oid != nil) && (certMissingOID(c,*oid))) { return fmt.Errorf("VerifyDelegate Chain Validation error - %s no oid %s\n",c,oid) }
+		if ((c.KeyUsage & x509.KeyUsageDigitalSignature) == 0) { return fmt.Errorf("VerifyDelegate cert %s: No Digital Signature Usage",c.Subject) }
+		if (c.BasicConstraintsValid == false)  { return fmt.Errorf("VerifyDelegate cert %s: Basic Constraints not valid",c.Subject) }
+
+		if (i != len(chain)-1) {
+			if (c.IsCA == false)  { return fmt.Errorf("VerifyDelegate cert %s: Not a CA",c.Subject) }
+			if ((c.KeyUsage & x509.KeyUsageCertSign) == 0)  { return fmt.Errorf("VerifyDelegate cert %s: No CerSign Usage",c.Subject) }
 		}
 	}
 
 	return nil
 }
 
+func DelegateChainSummary(chain []*x509.Certificate) (s string) {
+	for _,c := range chain {
+		s += c.Subject.CommonName+"->"
+	}
+	return
+}
 // This is a helper function, but also used in the verification process
-func GenerateDelegate(key crypto.Signer, flags uint8, delegateKey crypto.PublicKey,subject string,issuer string) (*x509.Certificate, error) {
+func GenerateDelegate(key crypto.Signer, flags uint8, delegateKey crypto.PublicKey,subject string,issuer string, permissions []asn1.ObjectIdentifier) (*x509.Certificate, error) {
 		parent := &x509.Certificate{
 			SerialNumber:          big.NewInt(2),
 			Subject:               pkix.Name{CommonName: issuer},
@@ -230,8 +254,8 @@ func GenerateDelegate(key crypto.Signer, flags uint8, delegateKey crypto.PublicK
 			BasicConstraintsValid: true,
 			KeyUsage:		x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
 			IsCA:			true,
-			//ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-			UnknownExtKeyUsage:    []asn1.ObjectIdentifier{OID_delegateOnboard,OID_delegateUpload,OID_delegateRedirect},
+			//UnknownExtKeyUsage:    []asn1.ObjectIdentifier{OID_delegateOnboard,OID_delegateUpload,OID_delegateRedirect},
+			UnknownExtKeyUsage:    permissions,
 		}
 		template := &x509.Certificate{
 			SerialNumber:          big.NewInt(1),
@@ -242,17 +266,17 @@ func GenerateDelegate(key crypto.Signer, flags uint8, delegateKey crypto.PublicK
 			IsCA:			false,
 			KeyUsage:		x509.KeyUsageDigitalSignature,
 			//ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-			UnknownExtKeyUsage:    []asn1.ObjectIdentifier{OID_delegateOnboard,OID_delegateUpload,OID_delegateRedirect},
+			//UnknownExtKeyUsage:    []asn1.ObjectIdentifier{OID_delegateOnboard,OID_delegateUpload,OID_delegateRedirect},
+			UnknownExtKeyUsage:    permissions,
 		}
 		if (flags & (DelegateFlagIntermediate | DelegateFlagRoot))!= 0 {
 			template.KeyUsage |= x509.KeyUsageCertSign 
 			template.IsCA = true
 		}
 		
-		if (flags & (DelegateFlagLeaf)) != 0 {
-			template.KeyUsage |= x509.KeyUsageKeyEncipherment
-		}
 
+		fmt.Printf("Cert Private Key: %s\n",KeyToString(key.Public()))
+		fmt.Printf("Cert Public  Key: %s\n",KeyToString(delegateKey))
 		der, err := x509.CreateCertificate(rand.Reader, template, parent, delegateKey, key)
 		if err != nil {
 			return nil, fmt.Errorf("CreateCertificate returned %v",err)
@@ -271,4 +295,61 @@ func GenerateDelegate(key crypto.Signer, flags uint8, delegateKey crypto.PublicK
 		if (err != nil) { fmt.Printf("Verify error is: %w\n",err)}
 
 		return cert, nil
+}
+
+func hashkey() {
+    // Example ECDSA public key
+    pubKey := &ecdsa.PublicKey{
+        Curve: elliptic.P256(),
+        X:     big.NewInt(0),
+        Y:     big.NewInt(0),
+    }
+
+    // Serialize the public key to DER format
+    derBytes, err := x509.MarshalPKIXPublicKey(pubKey)
+    if err != nil {
+        fmt.Println("Error marshaling public key:", err)
+        return
+    }
+
+    // Compute the SHA-256 hash of the serialized public key
+    hash := sha256.Sum256(derBytes)
+
+    // Convert the hash to a hexadecimal string
+    fingerprint := hex.EncodeToString(hash[:])
+
+    fmt.Println("Public key fingerprint:", fingerprint)
+}
+func KeyToString(key crypto.PublicKey) string {
+    derBytes, err := x509.MarshalPKIXPublicKey(key)
+    var fingerprint string
+    if (err != nil) {
+	    fingerprint = fmt.Sprintf("Err: %v",err)
+	} else {
+	    hash := sha256.Sum256(derBytes)
+    fingerprint = hex.EncodeToString(hash[:])
+    }
+
+    switch key.(type) {
+		case *ecdsa.PublicKey:
+			ec := key.(*ecdsa.PublicKey)
+			curve := ""
+			switch ec.Curve {
+				case elliptic.P256():
+					curve="NIST P-256 / secp256r1"
+				case elliptic.P384():
+					curve="NIST P-384 / secp384r1"
+				case elliptic.P521():
+					curve="NIST P-521 / secp521r1"
+				default:
+					curve = "Unknown"
+
+			}
+			return fmt.Sprintf("ECDSA %s Fingerprint: %s",curve,fingerprint)
+		case *rsa.PublicKey:
+			// TODO size
+		 	return "RSA"
+		default:
+		 	return fmt.Sprintf("%T",key)
+	}
 }

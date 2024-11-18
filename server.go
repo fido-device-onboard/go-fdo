@@ -216,8 +216,12 @@ type TO2Server struct {
 	// Optional configuration
 	MaxDeviceServiceInfoSize uint16
 
-	// Use delegate protocol
-	UseDelegate string
+	// Use this delegate cert for onboarding (or empty string)
+	OnboardDelegate string
+
+
+	// Use this delegate cert for rendezvous (or empty string)
+	RvDelegate string
 }
 
 // Resell implements the FDO Resale Protocol by removing a voucher from

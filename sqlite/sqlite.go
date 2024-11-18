@@ -1183,6 +1183,23 @@ func (db *DB) AddDelegateKey(name string, key crypto.PrivateKey, chain []*x509.C
 	)
 }
 
+func (db *DB) ListDelegateKeys() (names []string, err error) {
+	rows,err := db.db.Query("SELECT name from delegate_keys;")
+        if (err != nil) {
+                return 
+        }
+        defer rows.Close()
+
+	for rows.Next() {
+		var name string
+		if err = rows.Scan(&name); err != nil {
+			return
+		}
+		names = append(names, name)
+	}
+	return
+}
+
 // OwnerKey returns the private key matching a given key type and optionally
 // its certificate chain.
 func (db *DB) OwnerKey(keyType protocol.KeyType) (crypto.Signer, []*x509.Certificate, error) {

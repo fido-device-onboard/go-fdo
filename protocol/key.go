@@ -166,7 +166,7 @@ func NewPublicKey[T PublicKeyOrChain](typ KeyType, pub T, asCOSE bool) (*PublicK
 		}
 
 		// Determing key type from leaf (first) entry of chain
-		fmt.Printf("First Leaf if %v\n",chain[0])
+		fmt.Printf("First Leaf is %s (Signed by %s)\n",chain[0].Subject,chain[0].Issuer)
 		return &PublicKey{
 			Type:     typ,
 			Encoding: X5ChainKeyEnc,

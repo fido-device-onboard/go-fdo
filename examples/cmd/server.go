@@ -48,30 +48,31 @@ import (
 var serverFlags = flag.NewFlagSet("server", flag.ContinueOnError)
 
 var (
-	useTLS           bool
-	addr             string
-	dbPath           string
-	dbPass           string
-	extAddr          string
-	to0Addr          string
-	to0GUID          string
-	resaleGUID       string
-	resaleKey        string
-	reuseCred        bool
-	useDelegate      string
-	rvBypass         bool
-	rvDelay          int
-	printOwnerPubKey string
-	printOwnerPrivKey string
-	printOwnerChain string
+	useTLS                bool
+	addr                  string
+	dbPath                string
+	dbPass                string
+	extAddr               string
+	to0Addr               string
+	to0GUID               string
+	resaleGUID            string
+	resaleKey             string
+	reuseCred             bool
+	rvDelegate            string
+	onboardDelegate       string
+	rvBypass              bool
+	rvDelay               int
+	printOwnerPubKey      string
+	printOwnerPrivKey     string
+	printOwnerChain       string
 	printDelegateChain    string
-	printDelegatePrivKey string
-	ownerCert	 bool
-	importVoucher    string
-	downloads        stringList
-	uploadDir        string
-	uploadReqs       stringList
-	wgets            stringList
+	printDelegatePrivKey  string
+	ownerCert             bool
+	importVoucher         string
+	downloads             stringList
+	uploadDir             string
+	uploadReqs            stringList
+	wgets                 stringList
 )
 
 type stringList []string
@@ -89,7 +90,8 @@ func init() {
 	serverFlags.StringVar(&dbPath, "db", "", "SQLite database file path")
 	serverFlags.StringVar(&dbPass, "db-pass", "", "SQLite database encryption-at-rest passphrase")
 	serverFlags.BoolVar(&debug, "debug", debug, "Print HTTP contents")
-	serverFlags.StringVar(&useDelegate, "delegate", "", "Use delegate cert (name)")
+	serverFlags.StringVar(&rvDelegate, "rvDelegate", "", "Use delegate cert (name) for RV blob signing")
+	serverFlags.StringVar(&onboardDelegate, "onboardDelegate", "", "Use delegate cert (name) for TO2")
 	serverFlags.StringVar(&to0Addr, "to0", "", "Rendezvous server `addr`ess to register RV blobs (disables self-registration)")
 	serverFlags.StringVar(&to0GUID, "to0-guid", "", "Device `guid` to immediately register an RV blob (requires to0 flag)")
 	serverFlags.StringVar(&extAddr, "ext-http", "", "External `addr`ess devices should connect to (default \"127.0.0.1:${LISTEN_PORT}\")")
@@ -179,7 +181,7 @@ func server() error { //nolint:gocyclo
 
 	// Invoke TO0 client if a GUID is specified
 	if to0GUID != "" {
-		return registerRvBlob(host, port, state, useDelegate)
+		return registerRvBlob(host, port, state, rvDelegate)
 	}
 
 	// Invoke resale protocol if a GUID is specified
@@ -346,7 +348,7 @@ func doImportVoucher(state *sqlite.DB) error {
 	return state.AddVoucher(context.Background(), &ov)
 }
 
-func registerRvBlob(host string, port uint16, state *sqlite.DB, useDelegate string) error {
+func registerRvBlob(host string, port uint16, state *sqlite.DB, delegate string) error {
 	if to0Addr == "" {
 		return fmt.Errorf("to0-guid depends on to0 flag being set")
 	}
@@ -378,7 +380,7 @@ func registerRvBlob(host string, port uint16, state *sqlite.DB, useDelegate stri
 		Vouchers:  state,
 		OwnerKeys: state,
 		DelegateKeys: state,
-	}).RegisterBlob(context.Background(), tlsTransport(to0Addr, nil), guid, to2Addrs,useDelegate)
+	}).RegisterBlob(context.Background(), tlsTransport(to0Addr, nil), guid, to2Addrs,rvDelegate)
 	if err != nil {
 		return fmt.Errorf("error performing to0: %w", err)
 	}
@@ -421,7 +423,8 @@ func resell(state *sqlite.DB) error {
 		Vouchers:  state,
 		OwnerKeys: state,
 		DelegateKeys: state,
-		UseDelegate: useDelegate,
+		OnboardDelegate: onboardDelegate,
+		RvDelegate: rvDelegate,
 	}).Resell(context.TODO(), guid, nextOwner, nil)
 	if err != nil {
 		return fmt.Errorf("resale protocol: %w", err)
@@ -642,7 +645,8 @@ func newHandler(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) (*transport
 			RvInfo:          func(context.Context, fdo.Voucher) ([][]protocol.RvInstruction, error) { return rvInfo, nil },
 			OwnerModules:    ownerModules,
 			ReuseCredential: func(context.Context, fdo.Voucher) bool { return reuseCred },
-			UseDelegate: useDelegate,
+			OnboardDelegate: onboardDelegate,
+			RvDelegate: rvDelegate,
 		},
 	}, nil
 }

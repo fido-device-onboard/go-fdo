@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"crypto/elliptic"
 	"crypto/x509"
+	"encoding/asn1"
 	"encoding/pem"
 	"errors"
 	"flag"
@@ -77,16 +78,19 @@ func init() {
 
 
 
+// Create delegage chains. Each chane has a name and a persmission (e.g. Onboard or RV)
+// Each cert in the chain has type - but the first ("leaf") one needs to be
+// signed by (a specific) Owner (of a given key type)
 func createDelegateCertificate(state *sqlite.DB,args []string) error {
-	if (len(args) < 2) {
-		return fmt.Errorf("Requires name and ownerKeyType")
+	if (len(args) < 3) {
+		return fmt.Errorf("Usage: delegate create <chainName> <Permission[,Permission...]> ownerKeyType [keyType...]")
 	}
 	name := args[0]
 
 	// First one in chain is the "Owner" key in a voucher
 	// Last one needs to be the one held by Onboarding Service/Server
 
-	ownerKeyType := args[1]
+	ownerKeyType := args[2]
 	keyType, err := protocol.ParseKeyType(ownerKeyType)
 	if (err != nil) {
 		return fmt.Errorf("Invalid key type: %s",ownerKeyType)
@@ -96,9 +100,20 @@ func createDelegateCertificate(state *sqlite.DB,args []string) error {
 		return fmt.Errorf("Owner Key of type %s does not exist",ownerKeyType)
 	}
 
+	var permissions []asn1.ObjectIdentifier
+	permStrs := strings.Split(args[1],",")
+	for _, permStr := range permStrs {
+		oid, err := fdo.DelegateStringToOID(permStr)
+		if (err != nil) {
+			return fmt.Errorf("Bad Permission \"%s\": %v",permStr,err)
+		}
+		permissions = append(permissions,oid)
+	}
+
 	var chain []*x509.Certificate 
 	issuer := fmt.Sprintf("%s_%s_Owner",name,ownerKeyType)
-	for i,kt := range args[1:] {
+	keyTypes := args[2:]
+	for i,kt := range keyTypes {
 		keyType, err = protocol.ParseKeyType(kt)
 		if (err != nil) {
 			return fmt.Errorf("Invalid key type: %s",ownerKeyType)
@@ -129,12 +144,12 @@ func createDelegateCertificate(state *sqlite.DB,args []string) error {
 		switch  {
 			case i == 0:
 				flags = fdo.DelegateFlagRoot
-			case i == (len(args)-2):
+			case i == (len(keyTypes)-1):
 				flags = fdo.DelegateFlagLeaf
 			default:
 				flags = fdo.DelegateFlagIntermediate
 		}
-		cert, err := fdo.GenerateDelegate(lastPriv,flags,priv.Public(),subject,issuer)
+		cert, err := fdo.GenerateDelegate(lastPriv,flags,priv.Public(),subject,issuer,permissions)
 		fmt.Printf("%d: Subject=%s Issuer=%s IsCA=%v KeyUsage=%v\n",i,cert.Subject,cert.Issuer,cert.IsCA,cert.KeyUsage)
 		if err != nil {
 			return fmt.Errorf("Failed to generate Delegate: %v\n",err)
@@ -210,6 +225,17 @@ func verifyDelegateChain(chain []*x509.Certificate) error {
 	return nil
 }
 
+func doListDelegateChains(state *sqlite.DB,args []string) error {
+	chains, err := state.ListDelegateKeys()
+	if err != nil {
+		return err
+	}
+	for _,c := range chains {
+		fmt.Println(c)
+	}
+	return nil
+}
+
 func doPrintDelegatePrivKey(state *sqlite.DB,args []string) error {
 	if (len(args) < 1) {
 		return fmt.Errorf("No delegate chain name specified")
@@ -268,7 +294,7 @@ func delegate(args []string) error {
 
 	switch args[0] {
 		case "list" :
-			fmt.Println("Listing")
+			return doListDelegateChains(state,args[1:])
 		case "print":
 			return doPrintDelegateChain(state,args[1:])
 		case "key":

@@ -364,9 +364,10 @@ func verifyVoucher(ctx context.Context, transport Transport, to1d *cose.Sign1[pr
 			captureErr(ctx, protocol.InvalidMessageErrCode, "")
 			return fmt.Errorf("Failed to get Delegate Chain: %v",err)
 		}
-		if err = VerifyCertChain(expectedOwnerPub,chain) ; err != nil {
+		err = VerifyDelegateChain(chain,&expectedOwnerPub,&OID_delegateOnboard)
+		if (err != nil) {
 			captureErr(ctx, protocol.InvalidMessageErrCode, "")
-			return fmt.Errorf("Rightful owner did not sign Delgate Certificate: %v",err)
+			return fmt.Errorf("Delgate Chain Verify Failed: %v",err)
 		} 
 
 		// Then make sure the owner key in OVH matches Delegate
@@ -553,7 +554,7 @@ func sendHelloDevice(ctx context.Context, transport Transport, c *TO2Config) (pr
 	}
 
 	fmt.Printf("*** CLIENT HASH OK\n")
-	fmt.Printf("*** DELEGATE Key proveOVHdr%v\n",delegatePubKey)
+	fmt.Printf("*** DELEGATE Key proveOVHdr %v\n",delegatePubKey)
 	// Validate response signature and nonce. While the payload signature
 	// verification is performed using the untrusted owner public key from the
 	// headers, this is acceptable, because the owner public key will be
@@ -563,7 +564,8 @@ func sendHelloDevice(ctx context.Context, transport Transport, c *TO2Config) (pr
 	var key crypto.PublicKey
 	if (delegateFound) {
 		key, err = delegatePubKey.Public()
-		fmt.Printf("*** USING DELEGATE KEY for proveOVHdr %T %v\n",key,key)
+		fmt.Printf("*** USING DELEGATE KEY type %s for proveOVHdr\n",KeyToString(key),key,key)
+
 	} else {
 		key, err = ownerPubKey.Public()
 	}
@@ -576,7 +578,7 @@ func sendHelloDevice(ctx context.Context, transport Transport, c *TO2Config) (pr
 		return protocol.Nonce{}, nil, nil, fmt.Errorf("error verifying TO2.ProveOVHdr payload signature: %w", err)
 	} else if !ok {
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
-		return protocol.Nonce{}, nil, nil, fmt.Errorf("%w: TO2.ProveOVHdr payload signature verification failed", ErrCryptoVerifyFailed)
+		return protocol.Nonce{}, nil, nil, fmt.Errorf("TO2.ProveOVHdr payload signature verification failed: %w", ErrCryptoVerifyFailed)
 	}
 	if proveOVHdr.Payload.Val.NonceTO2ProveOV != proveOVNonce {
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
@@ -677,14 +679,10 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 	var delegateKey crypto.Signer
 	var delegateChain *protocol.PublicKey = nil
 
-	if (s.UseDelegate != "") {
-		// TODO how should we select keyType??
-		//delegateKey, delegatePublicKey, err = s.delegateKey(keyType, ov.Header.Val.ManufacturerKey.Encoding)
-		//if err != nil {
-		//	return nil, fmt.Errorf("Delegate Cert Unavailable: %w", err)
-		//}
-		dk, chain, err := s.DelegateKeys.DelegateKey(s.UseDelegate)
-		fmt.Printf("*** DELEGATE CHAIN= %T %V: %w\n",chain,chain,err)
+	if (s.OnboardDelegate != "") {
+		fmt.Printf("*** OV Owner Key: %+v\n",ownerKey.Public())
+		dk, chain, err := s.DelegateKeys.DelegateKey(s.OnboardDelegate)
+		fmt.Printf("*** DELEGATE CHAIN= %s\n",DelegateChainSummary(chain))
 		if err != nil {
 			return nil, fmt.Errorf("Delegate Chain Unavailable: %w", err)
 		}
@@ -697,7 +695,8 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 		//chain,err1 := delegatePublicKey.Chain()
 		fmt.Printf("*** OV public is %T %v \n",expectedCUPHOwnerKey,expectedCUPHOwnerKey)
 
-		err = VerifyCertChain(expectedCUPHOwnerKey,chain)
+		//err = VerifyCertChain(expectedCUPHOwnerKey,chain)
+		err = VerifyDelegateChain(chain,&expectedCUPHOwnerKey,&OID_delegateOnboard)
 		if (err != nil) {
 			return nil, fmt.Errorf("Cert Chain Verification Failed: %w", err)
 		}

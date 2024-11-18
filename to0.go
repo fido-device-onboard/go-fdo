@@ -11,9 +11,6 @@ import (
 	"fmt"
 	"io"
 	"time"
-	"crypto"
-	"crypto/rsa"
-	"crypto/ecdsa"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
@@ -137,6 +134,7 @@ type ownerSign struct {
 	DelegateChain *[]*cbor.X509Certificate `cbor:",omitempty"`
 }
 
+/*
 func (c *TO0Client) delegateKey(keyType protocol.KeyType, keyEncoding protocol.KeyEncoding) (crypto.Signer, *protocol.PublicKey, error) {
 	key, chain, err := c.DelegateKeys.DelegateKey("TEST") //keyType)
 	if errors.Is(err, ErrNotFound) {
@@ -175,6 +173,8 @@ func (c *TO0Client) delegateKey(keyType protocol.KeyType, keyEncoding protocol.K
 
 	return key, pubkey, nil
 }
+*/
+
 // OwnerSign(22) -> AcceptOwner(23)
 func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid protocol.GUID, ttl uint32, nonce protocol.Nonce, addrs []protocol.RvTO2Addr, delegateName string) (negotiatedTTL uint32, _ error) {
 	// Create and hash to0d
@@ -243,7 +243,10 @@ func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid pro
 		fmt.Printf("*** BLOB SIGNED WITH DELEGATE %T %v\n",delegateKey,delegateKey)
 		fmt.Printf("*** BLOB SIGNED WITH DELEGATE chain %T %v\n",chain,chain)
 
+		// TODO Do a veryify just to check if this is okay
 		//ok,err := to1d.Verify(delegateKey.Public(),nil,nil)
+
+		// TODO THis is test/debug - remove
 		p, _ := chain.Public()
 		ok,err := to1d.Verify(p,nil,nil)
 		 fmt.Printf("TO1D was : %T %+v\n",to1d,to1d)
