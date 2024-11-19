@@ -55,7 +55,7 @@ function produce() {
 		b64 "3" "$filename"
 
 		b64 "K" "length"
-		echo "1$(wc -c <"$file"|tr -d '[:space:]')"
+		echo "1$(wc -c <"$file" | tr -d '[:space:]')"
 
 		b64 "K" "sha-384"
 		b64x "2" "$(openssl dgst -sha384 -r "$file" | cut -d' ' -f1)"
@@ -64,8 +64,8 @@ function produce() {
 	fi
 
 	local chunk
-	chunk="$(dd if="$file" skip="$index" bs=1 count="$CHUNKSIZE" 2>/dev/null|openssl base64 -A)"
-	((index += $(echo -n "$chunk"|openssl base64 -A -d|wc -c)))
+	chunk="$(dd if="$file" skip="$index" bs=1 count="$CHUNKSIZE" 2>/dev/null | openssl base64 -A)"
+	((index += $(echo -n "$chunk" | openssl base64 -A -d | wc -c)))
 
 	if [ "$chunk" ]; then
 		b64 "K" "data"
@@ -105,7 +105,7 @@ function handle() {
 
 		local got expected
 		got="${next:1}"
-		expected="$(wc -c <"$file"|tr -d '[:space:]')"
+		expected="$(wc -c <"$file" | tr -d '[:space:]')"
 		if [ "$got" -ne "$expected" ]; then
 			error "expected device to read $expected bytes, got $got"
 		fi
