@@ -11,20 +11,26 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: golangci/golangci-lint:latest-alpine
+    env:
+      GOFLAGS: -buildvcs=false
     steps:
       - name: Check out repository code
         uses: actions/checkout@v4
       - name: Lint Go source files
         run: |
           apk add --no-cache gcc g++ openssl-dev
-          export GOFLAGS=-buildvcs=false
           go work init
           go work use -r .
-          golangci-lint run ./...
-          golangci-lint run ./examples/...
-          golangci-lint run ./fsim/...
-          golangci-lint run ./sqlite/...
-          golangci-lint run ./tpm/...
+      - name: Lint base library
+        run: golangci-lint run ./...
+      - name: Lint FSIM
+        run: golangci-lint run ./fsim/...
+      - name: Lint sqlite
+        run: golangci-lint run ./sqlite/...
+      - name: Lint TPM
+        run: golangci-lint run ./tpm/...
+      - name: Lint examples
+        run: golangci-lint run ./examples/...
 
   shellcheck:
     name: Lint Shell Scripts
@@ -35,7 +41,18 @@ jobs:
       - name: Check out repository code
         uses: actions/checkout@v4
       - name: Run ShellCheck
-        run: find . \( -name "*.sh" -o -name "*.bash" \) -exec shellcheck '{}' +
+        run: find . -name '*.sh' -o -name '*.bash' | xargs shellcheck
+
+  shfmt:
+    name: Check Shell Script Formatting
+    runs-on: ubuntu-latest
+    container:
+      image: mvdan/shfmt:v3-alpine
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v4
+      - name: Check shfmt diff
+        run: find . -name '*.sh' -o -name '*.bash' | FORCE_COLOR=1 xargs shfmt -d
 
   markdownlint:
     name: Lint Documentation Markdown
