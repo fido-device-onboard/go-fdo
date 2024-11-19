@@ -156,12 +156,11 @@ func createDelegateCertificate(state *sqlite.DB,args []string) error {
 		}
 		lastPriv=priv
 		issuer = subject
-		//chain = append([]*x509.Certificate{cert},chain...)
 		chain = append(chain,cert)
 	}
 
-	// The last key would need to be "owner" key
-	// used by the server, so save it's private
+	// The last cert is the actual "delegate" cert
+	// used by the server, so save it's private key
 	if err := state.AddDelegateKey(name, lastPriv, chain); err != nil {
 		return fmt.Errorf("Failed to add Delegate: %v\n",err)
 	}
@@ -188,12 +187,14 @@ func doPrintDelegateChain(state *sqlite.DB,args []string) error {
 		ownerPub = &op
 
 	}
-	_, chain, err := state.DelegateKey(args[0])
+	key, chain, err := state.DelegateKey(args[0])
 	if err != nil {
 		return err
 	}
+
 	fmt.Println(fdo.CertChainToString("CERTIFICATE",chain))
 
+	fmt.Printf("Delegate Key: %s\n",fdo.KeyToString(key.Public()))
 	return fdo.VerifyDelegateChain(chain,ownerPub,nil)
 
 	return nil

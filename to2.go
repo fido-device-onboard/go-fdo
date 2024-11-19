@@ -569,7 +569,6 @@ func sendHelloDevice(ctx context.Context, transport Transport, c *TO2Config) (pr
 	var key crypto.PublicKey
 	if (delegateFound) {
 		key, err = delegatePubKey.Public()
-		fmt.Printf("*** USING DELEGATE KEY type %s for proveOVHdr\n",KeyToString(key),key,key)
 
 	} else {
 		key, err = ownerPubKey.Public()
@@ -578,6 +577,8 @@ func sendHelloDevice(ctx context.Context, transport Transport, c *TO2Config) (pr
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
 		return protocol.Nonce{}, nil, nil, fmt.Errorf("error parsing owner public key to verify TO2.ProveOVHdr payload signature: %w", err)
 	}
+
+	fmt.Printf("*** VERIFY OVHPROOF with key %s\n",KeyToString(key))
 	if ok, err := proveOVHdr.Verify(key, nil, nil); err != nil {
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
 		return protocol.Nonce{}, nil, nil, fmt.Errorf("error verifying TO2.ProveOVHdr payload signature: %w", err)

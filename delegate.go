@@ -123,82 +123,24 @@ func PrivKeyToString(key any) string {
 	return pemData.String()
 }
 
-
-//TODO DEPRICATE
-/*
-func VerifyCertChain(pubKey any, chain []*x509.Certificate) error {
-	cert := chain[0]
-	var parentPriv any
-	var parentPub any
-	var err error
-
-	// Generate a new private key for the parent
-	switch pubKey := pubKey.(type) {
-	case *ecdsa.PublicKey:
-		parentPriv, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-		if err != nil {
-			return fmt.Errorf("Error creating ephemeral ECDSA key: %w", err)
-		}
-		parentPub = pubKey
-	case *rsa.PublicKey:
-		parentPriv, err = rsa.GenerateKey(rand.Reader, 2048)
-		if err != nil {
-			return fmt.Errorf("Error creating ephemeral RSA key: %w", err)
-		}
-		parentPub = pubKey
-	default:
-		return fmt.Errorf("Invalid key type %T", pubKey)
-	}
-
-	// Create a template for the parent certificate
-	parentTemplate := x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		//Subject: pkix.Name{ Organization: []string{"Parent Organization"}, },
-		NotBefore:			 time.Now(),
-		NotAfter:			  time.Now().Add(time.Minute), 
-		KeyUsage:			  x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
-		ExtKeyUsage:		   []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		BasicConstraintsValid: true,
-		IsCA:				  true,
-	}
-
-	// Create the parent certificate with the provided public key
-	parentCertDER, err := x509.CreateCertificate(rand.Reader, &parentTemplate, &parentTemplate, parentPub, parentPriv)
-	if err != nil {
-		return fmt.Errorf("Failed to create parent certificate: %w", err)
-	}
-
-	// Parse the parent certificate
-	parentCert, err := x509.ParseCertificate(parentCertDER)
-	if err != nil {
-		return fmt.Errorf("Failed to parse parent certificate: %w", err)
-	}
-
-	// Verify the given certificate using the parent certificate's public key
-	err = cert.CheckSignatureFrom(parentCert)
-	if err != nil {
-		return fmt.Errorf("Failed to verify certificate signature: %w", err)
-	}
-
-	fmt.Println("Certificate signature verified successfully")
-	return nil
-}
-*/
-
 // Verify a delegate chain against an optional owner key, 
 // optionall for a given function
 func VerifyDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey, oid *asn1.ObjectIdentifier) error {
 
+	oidArray := []asn1.ObjectIdentifier{}
+	if (oid != nil) {
+		oidArray = append(oidArray,*oid)
+	}
 	// If requested, verify that chain was rooted by Owner Key since we will often not have a cert for the Owner Key,
 	// we will have to make one (with Owner's Public Key) - and put it as the root of the chain
 	if (ownerKey != nil) {
 		issuer := chain[0].Issuer.CommonName
 		public := ownerKey
 		rootPriv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-		fmt.Printf("Ephemeral Root Key: %s\n",KeyToString(rootPriv.Public()))
 		if (err != nil) { return fmt.Errorf("VerifyDelegate Error making ephemeral root CA key: %v",err) }
+		fmt.Printf("Ephemeral Root Key: %s\n",KeyToString(rootPriv.Public()))
 		rootOwner, err := GenerateDelegate(rootPriv, DelegateFlagRoot , *public,issuer,issuer, 
-			[]asn1.ObjectIdentifier{*oid},
+			oidArray,
 			)
 		if (err != nil) {
 			return fmt.Errorf("VerifyDelegate Error createing ephemerial Owner Root Cert: %v",err)
@@ -209,8 +151,8 @@ func VerifyDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey, 
 	permstr := ""
 	for i,c := range chain {
 		var permstrs []string
-		for _, oid := range c.UnknownExtKeyUsage {
-			s,_ := DelegateOIDtoString(oid)
+		for _, o := range c.UnknownExtKeyUsage {
+			s,_ := DelegateOIDtoString(o)
 			permstrs =  append(permstrs,s)
 		}
 		permstr = strings.Join(permstrs," | ")
@@ -289,7 +231,6 @@ func GenerateDelegate(key crypto.Signer, flags uint8, delegateKey crypto.PublicK
 			return nil, err
 		}
 		fmt.Printf(CertToString(cert,"CERTIFICATE"))
-
 
 		// Let's Verify...
 		derParent, err := x509.CreateCertificate(rand.Reader, parent, parent, key.Public(), key)

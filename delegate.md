@@ -92,18 +92,18 @@ Convert hex bytestream to SSL cert:
 `/home/bkg/bytestocert/bytestocert | openssl x509 -text`
 
 # Full Delegate test
-## Client Side
+## Server Side
 ```
 rm test.db
 go run ./examples/cmd server -debug -owner-certs  -db test.db -onboardDelegate test2 -rvDelegate test2 -reuse-cred
 ```
 
-## Server Side
+## Client Side
 ```
-go run ./examples/cmd delegate -db test.db create test2 onboard,redirect SECP384R1 SECP384R1 SECP384R1
+go run ./examples/cmd delegate -db test.db create test2 onboard,redirect SECP384R1 SECP384R1
 go run ./examples/cmd/ client -debug -di http://127.0.0.1:8080
 GUID=`sqlite3 test.db 'select hex(guid) from owner_vouchers;'`
-go run ./examples/cmd server -debug --reuse-cred -db test.db -to0 http://127.0.0.1:8080 -rvDelegate test2 -to0-guid $GUID 
+go run ./examples/cmd server -debug -reuse-cred -db test.db -to0 http://127.0.0.1:8080 -rvDelegate test2 -to0-guid $GUID 
 go run ./examples/cmd client  -rv-only -debug
 go run ./examples/cmd client  -debug
 ```
