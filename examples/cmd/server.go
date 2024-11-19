@@ -265,6 +265,7 @@ func doPrintOwnerPubKey(state *sqlite.DB) error {
 		return err
 	}
         fmt.Printf("** OWNER %T %v PUBLIC %v\n",key,key,key.Public())
+        fmt.Printf("%s\n",fdo.KeyToString(key.Public()))
 	der, err := x509.MarshalPKIXPublicKey(key.Public())
 	if err != nil {
 		return err

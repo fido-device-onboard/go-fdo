@@ -151,17 +151,20 @@ func TO2(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1
 	//
 	// Results: Replacement ownership voucher, nonces to be retransmitted in
 	// Done/Done2 messages
-	proveDeviceNonce, ownerPublicKey, originalOVH, sess, err := verifyOwner(ctx, transport, to1d, &c)
+	proveDeviceNonce, ownerPublicKey, originalOwnerKey, originalOVH, sess, err := verifyOwner(ctx, transport, to1d, &c)
 	if err != nil {
 		errorMsg(ctx, transport, err)
 		return nil, err
 	}
+	fmt.Printf("** VERIFY OWNER returned ownerKey: %s\n",KeyToString(ownerPublicKey))
 	defer sess.Destroy()
-	setupDeviceNonce, partialOVH, err := proveDevice(ctx, transport, proveDeviceNonce, ownerPublicKey, sess, &c)
+	setupDeviceNonce, partialOVH, err := proveDevice(ctx, transport, proveDeviceNonce, ownerPublicKey, originalOwnerKey, sess, &c)
 	if err != nil {
 		errorMsg(ctx, transport, err)
 		return nil, err
 	}
+	fmt.Printf("*** SETUPDEVICENONCE %+v\n",setupDeviceNonce)
+	fmt.Printf("*** PARTIALOVH %+v\n",partialOVH)
 
 	// Select the appropriate hash algorithm for HMAC and public key hash
 	alg := c.Cred.PublicKeyHash.Algorithm
@@ -185,6 +188,7 @@ func TO2(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1
 		}
 	}
 
+	fmt.Printf("** SEND READYSERVICEINFO voucher header %+v\n",replacementOVH)
 	// Prepare to send and receive service info, determining the transmit MTU
 	sendMTU, err := sendReadyServiceInfo(ctx, transport, alg, replacementOVH, sess, &c)
 	if err != nil {
@@ -267,27 +271,27 @@ func stopPlugins(modules *deviceModuleMap) {
 // Verify owner by sending HelloDevice and validating the response, as well as
 // all ownership voucher entries, which are retrieved iteratively with
 // subsequence requests.
-func verifyOwner(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1d, []byte], c *TO2Config) (protocol.Nonce, crypto.PublicKey, *VoucherHeader, kex.Session, error) {
+func verifyOwner(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1d, []byte], c *TO2Config) (protocol.Nonce, crypto.PublicKey, crypto.PublicKey, *VoucherHeader, kex.Session, error) {
 	proveDeviceNonce, info, sess, err := sendHelloDevice(ctx, transport, c)
 	if err != nil {
-		return protocol.Nonce{}, nil, nil, nil, err
+		return protocol.Nonce{}, nil, nil, nil, nil, err
 	}
 	if !c.KeyExchange.Valid(c.Key.Public(), info.PublicKeyToValidate) {
 		sess.Destroy()
-		return protocol.Nonce{}, nil, nil, nil, fmt.Errorf(
+		return protocol.Nonce{}, nil, nil, nil, nil, fmt.Errorf(
 			"key exchange %s is invalid for the device and owner attestation types",
 			c.KeyExchange,
 		)
 	}
 	if !kex.Available(c.KeyExchange, c.CipherSuite) {
 		sess.Destroy()
-		return protocol.Nonce{}, nil, nil, nil, fmt.Errorf("unsupported key exchange/cipher suite")
+		return protocol.Nonce{}, nil, nil, nil, nil, fmt.Errorf("unsupported key exchange/cipher suite")
 	}
 	if err := verifyVoucher(ctx, transport, to1d, info, c); err != nil {
 		sess.Destroy()
-		return protocol.Nonce{}, nil, nil, nil, err
+		return protocol.Nonce{}, nil, nil, nil, nil, err
 	}
-	return proveDeviceNonce, info.PublicKeyToValidate, &info.OVH, sess, nil
+	return proveDeviceNonce, info.PublicKeyToValidate, info.OriginalOwnerKey, &info.OVH, sess, nil
 }
 
 func verifyVoucher(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1d, []byte], info *ovhValidationContext, c *TO2Config) error {
@@ -346,7 +350,7 @@ func verifyVoucher(ctx context.Context, transport Transport, to1d *cose.Sign1[pr
 	// delegate cert, meaning we must validate that the delegate cert was
 	// signed by expectedOwnerPub
 
-	fmt.Printf("COMPARE ownerPub %T %v\nTo--- (delgate?) %T %v\n",
+	fmt.Printf("*** COMPARE ownerPub %T %v\nTo--- (delgate?) %T %v\n",
 		expectedOwnerPub,
 		expectedOwnerPub,
 		info.PublicKeyToValidate,
@@ -464,6 +468,7 @@ type ovhValidationContext struct {
 	OVHHmac             protocol.Hmac
 	NumVoucherEntries   int
 	PublicKeyToValidate crypto.PublicKey
+	OriginalOwnerKey     crypto.PublicKey
 	DelegateChain	    *protocol.PublicKey
 }
 
@@ -605,13 +610,26 @@ func sendHelloDevice(ctx context.Context, transport Transport, c *TO2Config) (pr
 		return protocol.Nonce{}, nil, nil, fmt.Errorf("nonce unprotected header from TO2.ProveOVHdr could not be unmarshaled: %w", err)
 	}
 
+	var DelegateChain *protocol.PublicKey
+	originalOwnerKey, err :=    ownerPubKey.Public()
+	if err != nil {
+		captureErr(ctx, protocol.InvalidMessageErrCode, "")
+		return protocol.Nonce{}, nil, nil, fmt.Errorf("error re-parsing owner public key to verify TO2.ProveOVHdr payload signature: %w", err)
+	}
+
+	if (delegateFound) { 
+		//PublicKeyToValidate needs to be real "owner", not delegate
+		DelegateChain = &delegatePubKey
+	}
+
 	return cuphNonce,
 		&ovhValidationContext{
 			OVH:                 proveOVHdr.Payload.Val.OVH.Val,
 			OVHHmac:             proveOVHdr.Payload.Val.OVHHmac,
 			NumVoucherEntries:   int(proveOVHdr.Payload.Val.NumOVEntries),
 			PublicKeyToValidate: key,
-			DelegateChain:   &delegatePubKey,
+			OriginalOwnerKey:    originalOwnerKey,
+			DelegateChain:       DelegateChain,
 		},
 		c.KeyExchange.New(proveOVHdr.Payload.Val.KeyExchangeA, c.CipherSuite),
 		nil
@@ -679,9 +697,11 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 	var delegateKey crypto.Signer
 	var delegateChain *protocol.PublicKey = nil
 
+	fmt.Printf("Onboard Delegate to use \"%s\"\n",s.OnboardDelegate)
 	if (s.OnboardDelegate != "") {
-		fmt.Printf("*** OV Owner Key: %+v\n",ownerKey.Public())
+		fmt.Printf("*** OV Owner Key: %s\n",KeyToString(ownerKey.Public()))
 		dk, chain, err := s.DelegateKeys.DelegateKey(s.OnboardDelegate)
+		fmt.Printf("*** Delegate Key: %s\n",KeyToString(dk.Public()))
 		fmt.Printf("*** DELEGATE CHAIN= %s\n",DelegateChainSummary(chain))
 		if err != nil {
 			return nil, fmt.Errorf("Delegate Chain Unavailable: %w", err)
@@ -764,8 +784,8 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 		clear(xA)
 		return nil, fmt.Errorf("device sig info has key type %q, must be %q to match manufacturer key", keyType, mfgKeyType)
 	}
-	fmt.Printf("** DelegateKey is  %T %v\n",delegateKey,delegateKey)
 	if (delegateKey != nil) {
+	fmt.Printf("** DelegateKey is %s\n",KeyToString(delegateKey.Public()))
 	} else {
 		fmt.Printf("** NO Delegate Key\n")
 	}
@@ -793,6 +813,7 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 			MaxOwnerMessageSize: 65535, // TODO: Make this configurable and match handler config
 		}),
 	}
+	fmt.Printf("*** SIGN OVHPROOF with key %s\n",KeyToString(ownerKey.Public()))
 	if err := s1.Sign(ownerKey, nil, nil, opts); err != nil {
 		clear(xA)
 		return nil, fmt.Errorf("error signing TO2.ProveOVHdr payload: %w", err)
@@ -925,7 +946,7 @@ func (s *TO2Server) ovNextEntry(ctx context.Context, msg io.Reader) (*ovEntry, e
 }
 
 // ProveDevice(64) -> SetupDevice(65)
-func proveDevice(ctx context.Context, transport Transport, proveDeviceNonce protocol.Nonce, ownerPublicKey crypto.PublicKey, sess kex.Session, c *TO2Config) (protocol.Nonce, *VoucherHeader, error) {
+func proveDevice(ctx context.Context, transport Transport, proveDeviceNonce protocol.Nonce, ownerPublicKey crypto.PublicKey, originalOwnerKey crypto.PublicKey, sess kex.Session, c *TO2Config) (protocol.Nonce, *VoucherHeader, error) {
 	// Generate a new nonce
 	var setupDeviceNonce protocol.Nonce
 	if _, err := rand.Read(setupDeviceNonce[:]); err != nil {
@@ -985,9 +1006,15 @@ func proveDevice(ctx context.Context, transport Transport, proveDeviceNonce prot
 			RvInfo:          setupDevice.Payload.Val.RendezvousInfo,
 			ManufacturerKey: setupDevice.Payload.Val.Owner2Key,
 		}
-		if credReuse, err := reuseCredentials(ctx, replacementOVH, ownerPublicKey, c); err != nil || credReuse {
+
+
+		// If we are using Delgate, sinve ownerPublicKey is now the Delegate key, 
+		// we need to reset it back to what was in the OV.
+		if credReuse, err := reuseCredentials(ctx, replacementOVH, originalOwnerKey, c); err != nil || credReuse {
+			fmt.Printf("** RETURNING NO REUSUE credReuse %v Err %v\n",credReuse,err)
 			return setupDeviceNonce, nil, err
 		}
+		fmt.Printf("** RETURNING REPLACMENT OVH credReusue\n")
 		return setupDeviceNonce, replacementOVH, nil
 
 	case protocol.ErrorMsgType:
@@ -1007,17 +1034,27 @@ func reuseCredentials(ctx context.Context, replacementOVH *VoucherHeader, ownerP
 	replacementOwnerPublicKey, err := replacementOVH.ManufacturerKey.Public()
 	if err != nil {
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
+		fmt.Printf("** REUSUE CASE A\n")
 		return false, fmt.Errorf("owner key in TO2.SetupDevice could not be parsed: %w", err)
 	}
+
+	fmt.Printf("** OWNERPUBLICKEY IS %s\n",KeyToString(ownerPublicKey))
+	fmt.Printf("** REPLACEMENTKEY IS %s\n",KeyToString(replacementOwnerPublicKey))
+	if (replacementOVH.GUID != c.Cred.GUID ) { fmt.Printf("** REUSE CASE F\n") }
+	if (!reflect.DeepEqual(replacementOVH.RvInfo, c.Cred.RvInfo)) { fmt.Printf("** REUSE CASE G\n") }
+	if (!replacementOwnerPublicKey.(interface{ Equal(crypto.PublicKey) bool }).Equal(ownerPublicKey)) { fmt.Printf("** REUSE CASE E\n") }
 	if replacementOVH.GUID != c.Cred.GUID ||
 		!reflect.DeepEqual(replacementOVH.RvInfo, c.Cred.RvInfo) ||
 		!replacementOwnerPublicKey.(interface{ Equal(crypto.PublicKey) bool }).Equal(ownerPublicKey) {
+		fmt.Printf("** REUSUE CASE B\n")
 		return false, nil
 	}
 	if !c.AllowCredentialReuse {
 		captureErr(ctx, protocol.CredReuseErrCode, "")
+		fmt.Printf("** REUSUE CASE C\n")
 		return false, fmt.Errorf("credential reuse is not enabled")
 	}
+	fmt.Printf("** REUSUE CASE D\n")
 	return true, nil
 }
 
@@ -1144,6 +1181,8 @@ func (s *TO2Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1
 		}
 	}
 
+	opk,_ := ownerPublicKey.Public()
+	fmt.Printf("*** ASSIGN OWNER2 Key %s\n",KeyToString(opk))
 	// Respond with device setup
 	s1 := cose.Sign1[deviceSetup, []byte]{
 		Payload: cbor.NewByteWrap(deviceSetup{
@@ -1241,6 +1280,8 @@ func (s *TO2Server) ownerServiceInfoReady(ctx context.Context, msg io.Reader) (*
 		return nil, fmt.Errorf("error decoding TO2.DeviceServiceInfoReady request: %w", err)
 	}
 
+	fmt.Printf("** DEVICEREADY returned HMAC %v\n",deviceReady.Hmac)
+
 	// Set send MTU
 	mtu := uint16(serviceinfo.DefaultMTU)
 	if deviceReady.MaxOwnerServiceInfoSize != nil {
@@ -1260,6 +1301,7 @@ func (s *TO2Server) ownerServiceInfoReady(ctx context.Context, msg io.Reader) (*
 		return nil, fmt.Errorf("error retrieving voucher for device %x: %w", guid, err)
 	}
 	info := ov.Header.Val.DeviceInfo
+
 	var deviceCertChain []*x509.Certificate
 	if ov.CertChain != nil {
 		deviceCertChain = make([]*x509.Certificate, len(*ov.CertChain))
@@ -1275,7 +1317,7 @@ func (s *TO2Server) ownerServiceInfoReady(ctx context.Context, msg io.Reader) (*
 			return nil, fmt.Errorf("error storing replacement voucher HMAC for device: %w", err)
 		}
 		if guid, err = s.Session.ReplacementGUID(ctx); err != nil {
-			return nil, fmt.Errorf("error retrieving replacement GUID for device: %w", err)
+			return nil, fmt.Errorf("error retrieving replacement (2) GUID for device: %w", err)
 		}
 	}
 

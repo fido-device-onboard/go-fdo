@@ -125,6 +125,7 @@ func PrivKeyToString(key any) string {
 
 
 //TODO DEPRICATE
+/*
 func VerifyCertChain(pubKey any, chain []*x509.Certificate) error {
 	cert := chain[0]
 	var parentPriv any
@@ -182,6 +183,7 @@ func VerifyCertChain(pubKey any, chain []*x509.Certificate) error {
 	fmt.Println("Certificate signature verified successfully")
 	return nil
 }
+*/
 
 // Verify a delegate chain against an optional owner key, 
 // optionall for a given function
@@ -214,6 +216,7 @@ func VerifyDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey, 
 		permstr = strings.Join(permstrs," | ")
 
 		fmt.Printf("%d: Subject=%s Issuer=%s IsCA=%v KeyUsage=%s Perms=[%s]\n",i,c.Subject,c.Issuer,c.IsCA,KeyUsageToString(c.KeyUsage),permstr)
+		fmt.Printf("    Public Key: %s\n",KeyToString(c.PublicKey))
 		if (i!= 0) {
 			err := chain[i].CheckSignatureFrom(chain[i-1])
 			if (err != nil) {
