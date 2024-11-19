@@ -170,7 +170,7 @@ func VerifyDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey, 
 		} 
 
 		// TODO we do NOT check expiration or revocation
-		if ((oid != nil) && (certMissingOID(c,*oid))) { return fmt.Errorf("VerifyDelegate Chain Validation error - %s no oid %s\n",c,oid) }
+		if ((oid != nil) && (certMissingOID(c,*oid))) { return fmt.Errorf("VerifyDelegate Chain Validation error - %s no oid %v\n",c.Subject,oid) }
 		if ((c.KeyUsage & x509.KeyUsageDigitalSignature) == 0) { return fmt.Errorf("VerifyDelegate cert %s: No Digital Signature Usage",c.Subject) }
 		if (c.BasicConstraintsValid == false)  { return fmt.Errorf("VerifyDelegate cert %s: Basic Constraints not valid",c.Subject) }
 

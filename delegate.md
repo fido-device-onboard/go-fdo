@@ -95,7 +95,7 @@ Convert hex bytestream to SSL cert:
 ## Server Side
 ```
 rm test.db
-go run ./examples/cmd server -debug -owner-certs  -db test.db -onboardDelegate test2 -rvDelegate test2 -reuse-cred
+go run ./examples/cmd server -debug -owner-certs  -db test.db -onboardDelegate test2 -rvDelegate invalid -reuse-cred
 ```
 
 ## Client Side

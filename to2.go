@@ -368,7 +368,9 @@ func verifyVoucher(ctx context.Context, transport Transport, to1d *cose.Sign1[pr
 			captureErr(ctx, protocol.InvalidMessageErrCode, "")
 			return fmt.Errorf("Failed to get Delegate Chain: %v",err)
 		}
+		fmt.Printf("=== BeginDelegate Chain Verify ===\n")
 		err = VerifyDelegateChain(chain,&expectedOwnerPub,&OID_delegateOnboard)
+		fmt.Printf("=== EndDelegate Chain Verify ===\n")
 		if (err != nil) {
 			captureErr(ctx, protocol.InvalidMessageErrCode, "")
 			return fmt.Errorf("Delgate Chain Verify Failed: %v",err)
@@ -420,15 +422,28 @@ func verifyVoucher(ctx context.Context, transport Transport, to1d *cose.Sign1[pr
 			captureErr(ctx, protocol.InvalidMessageErrCode, "")
 			return fmt.Errorf("empty to1d delegate cerificate: %w", err)
 		}
-		fmt.Printf("VERIFY to1d blob with %T\n",delegatePubKey)
+
+		fmt.Printf("=== Begin RVBLob Chain Verify ===\n")
+		chain, err := delegatePubKey.Chain()
+		if (err != nil) {
+			captureErr(ctx, protocol.InvalidMessageErrCode, "")
+			return fmt.Errorf("Failed to unfurl Blob Delegate Chain: %w", err)
+		}
+		err = VerifyDelegateChain(chain,&expectedOwnerPub,&OID_delegateRedirect)
+		if (err != nil) {
+			captureErr(ctx, protocol.InvalidMessageErrCode, "")
+			return fmt.Errorf("Failed to validate RV Blob Delegate Chain: %w", err)
+		}
+		fmt.Printf("=== End RVBLob Chain Verify ===\n")
 		 // to1d was signed by a delegate
 		 p,err := delegatePubKey.Public()
-		 ok, err = to1d.Verify(p, nil, nil)
 		if  err != nil {
 			captureErr(ctx, protocol.InvalidMessageErrCode, "")
 			return fmt.Errorf("Delegate Verify Failed: %w", err)
 		}
 
+		fmt.Printf("*** VERIFY to1d blob with %s\n",KeyToString(p))
+		 ok, err = to1d.Verify(p, nil, nil)
 		 fmt.Printf("TO1D was : %T %+v\n",to1d,to1d)
 		 fmt.Printf("TO1D was : %+v\n",to1d.Payload)
 		 fmt.Printf("Public Key was: %T %+v\n",p,p)
@@ -702,6 +717,9 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 	if (s.OnboardDelegate != "") {
 		fmt.Printf("*** OV Owner Key: %s\n",KeyToString(ownerKey.Public()))
 		dk, chain, err := s.DelegateKeys.DelegateKey(s.OnboardDelegate)
+		if (err != nil) {
+			return nil, fmt.Errorf("Delegate chain \"%s\" not found: %w", s.OnboardDelegate,err)
+		}
 		fmt.Printf("*** Delegate Key: %s\n",KeyToString(dk.Public()))
 		fmt.Printf("*** DELEGATE CHAIN= %s\n",DelegateChainSummary(chain))
 		if err != nil {
