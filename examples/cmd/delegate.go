@@ -156,7 +156,7 @@ func createDelegateCertificate(state *sqlite.DB,args []string) error {
 		}
 		lastPriv=priv
 		issuer = subject
-		chain = append(chain,cert)
+		chain = append([]*x509.Certificate{cert},chain...)
 	}
 
 	// The last cert is the actual "delegate" cert
@@ -197,32 +197,6 @@ func doPrintDelegateChain(state *sqlite.DB,args []string) error {
 	fmt.Printf("Delegate Key: %s\n",fdo.KeyToString(key.Public()))
 	return fdo.VerifyDelegateChain(chain,ownerPub,nil)
 
-	return nil
-}
-
-// Won't work with standard golang libraries
-func verifyDelegateChain(chain []*x509.Certificate) error {
-	root := x509.NewCertPool()
-	root.AddCert(chain[0])
-	intermediates := x509.NewCertPool()
-	fmt.Printf("VFY w/ Root        : %s %s\n",chain[0].Subject,fdo.KeyUsageToString(chain[0].KeyUsage))
-	for _,c := range chain[1:len(chain)-1] {
-		intermediates.AddCert(c)
-		fmt.Printf("VFY w/ Intermediate: %s %s\n",c.Subject,fdo.KeyUsageToString(chain[0].KeyUsage))
-	}
-
-
-	opts := x509.VerifyOptions{
-		Roots: root,
-		Intermediates: intermediates,
-
-	}
-
-	fmt.Printf("VFY w/ Leaf        : %s %s\n",chain[len(chain)-1].Subject,fdo.KeyUsageToString(chain[0].KeyUsage))
-	_,err := chain[len(chain)-1].Verify(opts)
-	if (err != nil) {
-		return fmt.Errorf("Chain Verify returned: %v\n",err)
-	}
 	return nil
 }
 

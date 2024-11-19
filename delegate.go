@@ -134,7 +134,7 @@ func VerifyDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey, 
 	// If requested, verify that chain was rooted by Owner Key since we will often not have a cert for the Owner Key,
 	// we will have to make one (with Owner's Public Key) - and put it as the root of the chain
 	if (ownerKey != nil) {
-		issuer := chain[0].Issuer.CommonName
+		issuer := chain[len(chain)-1].Issuer.CommonName
 		public := ownerKey
 		rootPriv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if (err != nil) { return fmt.Errorf("VerifyDelegate Error making ephemeral root CA key: %v",err) }
@@ -145,7 +145,7 @@ func VerifyDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey, 
 		if (err != nil) {
 			return fmt.Errorf("VerifyDelegate Error createing ephemerial Owner Root Cert: %v",err)
 		}
-		chain = append([]*x509.Certificate{rootOwner},chain...)
+		chain = append(chain,rootOwner)
 	}
 
 	permstr := ""
@@ -159,13 +159,13 @@ func VerifyDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey, 
 
 		fmt.Printf("%d: Subject=%s Issuer=%s IsCA=%v KeyUsage=%s Perms=[%s]\n",i,c.Subject,c.Issuer,c.IsCA,KeyUsageToString(c.KeyUsage),permstr)
 		fmt.Printf("    Public Key: %s\n",KeyToString(c.PublicKey))
-		if (i!= 0) {
-			err := chain[i].CheckSignatureFrom(chain[i-1])
+		if (i!= len(chain)-1) {
+			err := chain[i].CheckSignatureFrom(chain[i+1])
 			if (err != nil) {
-				return fmt.Errorf("VerifyDelegate Chain Validation error - %d not signed by %d: %v\n",i,i-1,err)
+				return fmt.Errorf("VerifyDelegate Chain Validation error - %d not signed by %d: %v\n",i,i+1,err)
 			}
-			if (chain[i].Issuer.CommonName != chain[i-1].Subject.CommonName) {
-				return fmt.Errorf("Subject %s Issued by Issuer=%s, expected %s",c.Subject,c.Issuer,chain[i-1].Issuer)
+			if (chain[i].Issuer.CommonName != chain[i+1].Subject.CommonName) {
+				return fmt.Errorf("Subject %s Issued by Issuer=%s, expected %s",c.Subject,c.Issuer,chain[i+1].Issuer)
 			}
 		} 
 
@@ -174,7 +174,7 @@ func VerifyDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey, 
 		if ((c.KeyUsage & x509.KeyUsageDigitalSignature) == 0) { return fmt.Errorf("VerifyDelegate cert %s: No Digital Signature Usage",c.Subject) }
 		if (c.BasicConstraintsValid == false)  { return fmt.Errorf("VerifyDelegate cert %s: Basic Constraints not valid",c.Subject) }
 
-		if (i != len(chain)-1) {
+		if (i != 0) {
 			if (c.IsCA == false)  { return fmt.Errorf("VerifyDelegate cert %s: Not a CA",c.Subject) }
 			if ((c.KeyUsage & x509.KeyUsageCertSign) == 0)  { return fmt.Errorf("VerifyDelegate cert %s: No CerSign Usage",c.Subject) }
 		}
@@ -189,6 +189,7 @@ func DelegateChainSummary(chain []*x509.Certificate) (s string) {
 	}
 	return
 }
+
 // This is a helper function, but also used in the verification process
 func GenerateDelegate(key crypto.Signer, flags uint8, delegateKey crypto.PublicKey,subject string,issuer string, permissions []asn1.ObjectIdentifier) (*x509.Certificate, error) {
 		parent := &x509.Certificate{
@@ -199,7 +200,6 @@ func GenerateDelegate(key crypto.Signer, flags uint8, delegateKey crypto.PublicK
 			BasicConstraintsValid: true,
 			KeyUsage:		x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
 			IsCA:			true,
-			//UnknownExtKeyUsage:    []asn1.ObjectIdentifier{OID_delegateOnboard,OID_delegateUpload,OID_delegateRedirect},
 			UnknownExtKeyUsage:    permissions,
 		}
 		template := &x509.Certificate{
@@ -210,8 +210,6 @@ func GenerateDelegate(key crypto.Signer, flags uint8, delegateKey crypto.PublicK
 			BasicConstraintsValid: true,
 			IsCA:			false,
 			KeyUsage:		x509.KeyUsageDigitalSignature,
-			//ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-			//UnknownExtKeyUsage:    []asn1.ObjectIdentifier{OID_delegateOnboard,OID_delegateUpload,OID_delegateRedirect},
 			UnknownExtKeyUsage:    permissions,
 		}
 		if (flags & (DelegateFlagIntermediate | DelegateFlagRoot))!= 0 {
