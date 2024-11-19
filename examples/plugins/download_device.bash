@@ -44,7 +44,7 @@ function yield() {
 	fi
 
 	local bytecount
-	bytecount="$(wc -c <"$file"|tr -d '[:space:]')"
+	bytecount="$(wc -c <"$file" | tr -d '[:space:]')"
 	if [ "$bytecount" -lt "$length" ]; then
 		# continue to wait for data
 		return
@@ -109,7 +109,7 @@ function handle() {
 		if [[ "${next::1}" != "2" ]]; then
 			error "expected byte array value after key $key"
 		fi
-		checksum="$(openssl base64 -d <<<"${next:1}"| xxd -p -c 0|tr -d '\n')"
+		checksum="$(openssl base64 -d <<<"${next:1}" | xxd -p -c 0 | tr -d '\n')"
 		;;
 
 	"data")
