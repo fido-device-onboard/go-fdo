@@ -53,6 +53,23 @@ func (typ KeyType) String() string {
 	}
 }
 
+func (typ KeyType) KeyString() string {
+	switch typ {
+	case Rsa2048RestrKeyType:
+		return "RSA2048RESTR"
+	case RsaPkcsKeyType:
+		return "RSAPKCS"
+	case RsaPssKeyType:
+		return "RSAPSS"
+	case Secp256r1KeyType:
+		return "SECP256R1"
+	case Secp384r1KeyType:
+		return "SECP384R1"
+	default:
+		return fmt.Sprintf("Unknown:%T",typ)
+	}
+}
+
 // ParseKeyType parses names following the below convention:
 //
 //	RSA2048RESTR: 1, ;; RSA 2048 with restricted key/exponent (PKCS1 1.5 encoding)
@@ -258,14 +275,14 @@ func (pub *PublicKey) parseX509() error {
 	case Secp256r1KeyType, Secp384r1KeyType:
 		eckey, ok := key.(*ecdsa.PublicKey)
 		if !ok {
-			return errors.New("public key must be an ECDSA public key")
+			return errors.New(fmt.Sprintf("x509 public key must be an ECDSA public key (got %T)",key))
 		}
 		pub.key = eckey
 		return nil
 	case RsaPssKeyType, RsaPkcsKeyType, Rsa2048RestrKeyType:
 		rsakey, ok := key.(*rsa.PublicKey)
 		if !ok {
-			return errors.New("public key must be an RSA public key")
+			return errors.New(fmt.Sprintf("x509 public key must be an RSA public key (got %T)",key))
 		}
 		pub.key = rsakey
 		return nil
@@ -292,14 +309,14 @@ func (pub *PublicKey) parseX5Chain() error {
 	case Secp256r1KeyType, Secp384r1KeyType:
 		eckey, ok := certs[0].PublicKey.(*ecdsa.PublicKey)
 		if !ok {
-			return errors.New("public key must be an ECDSA public key")
+			return errors.New(fmt.Sprintf("X5Chain public key must be an ECDSA public key (got %T)",certs[0].PublicKey))
 		}
 		pub.key = eckey
 		return nil
 	case RsaPssKeyType, RsaPkcsKeyType, Rsa2048RestrKeyType:
 		rsakey, ok := certs[0].PublicKey.(*rsa.PublicKey)
 		if !ok {
-			return errors.New("public key must be an RSA public key")
+			return errors.New(fmt.Sprintf("X5Chain public key must be an RSA public key (got %T)",certs[0].PublicKey))
 		}
 		pub.key = rsakey
 		return nil

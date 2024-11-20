@@ -25,13 +25,13 @@ var oidMap  = map[int]string {
 	5: "provision",
 }
 
-func DelegateOIDtoString(oid asn1.ObjectIdentifier)(string, error) {
-	if (oid.Equal(OID_delegateOnboard)) { return "onboard", nil }
-	if (oid.Equal(OID_delegateUpload)) { return "upload", nil }
-	if (oid.Equal(OID_delegateRedirect)) { return "redirect", nil }
-	if (oid.Equal(OID_delegateClaim)) { return "claim", nil }
-	if (oid.Equal(OID_delegateProvision)) { return "provision", nil }
-	return oid.String(), fmt.Errorf("Invalid Delegate OID")
+func DelegateOIDtoString(oid asn1.ObjectIdentifier)string {
+	if (oid.Equal(OID_delegateOnboard)) { return "onboard" }
+	if (oid.Equal(OID_delegateUpload)) { return "upload" }
+	if (oid.Equal(OID_delegateRedirect)) { return "redirect" }
+	if (oid.Equal(OID_delegateClaim)) { return "claim" }
+	if (oid.Equal(OID_delegateProvision)) { return "provision" }
+	return fmt.Sprintf("Unknown: %s\n",oid.String())
 }
 
 func DelegateStringToOID(str string) (asn1.ObjectIdentifier, error) {

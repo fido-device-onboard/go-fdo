@@ -138,7 +138,6 @@ func (s1 Sign1[P, A]) Verify(key crypto.PublicKey, payload *P, additionalData A)
 	}); err != nil {
 		return false, err
 	}
-	fmt.Printf("SIGN-VERIFY HASH: %v\n",h)
 
 	// Verify signature
 	switch pub := key.(type) {
@@ -154,6 +153,7 @@ func (s1 Sign1[P, A]) Verify(key crypto.PublicKey, payload *P, additionalData A)
 		return verifyRSA(pub, hash, digest, s1.Signature, alg)
 
 	default:
+		panic("TOTOTO") // TODO REMOVE
 		return false, fmt.Errorf("Invalid Key Type %T in VERIFY",key)
 	}
 }

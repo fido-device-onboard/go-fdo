@@ -132,11 +132,20 @@ func VerifyDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey, 
 		oidArray = append(oidArray,*oid)
 	}
 	// If requested, verify that chain was rooted by Owner Key since we will often not have a cert for the Owner Key,
-	// we will have to make one (with Owner's Public Key) - and put it as the root of the chain
+	// we will have to add a self-signed owner cert at the root of the chain
 	if (ownerKey != nil) {
 		issuer := chain[len(chain)-1].Issuer.CommonName
 		public := ownerKey
-		rootPriv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		var rootPriv crypto.Signer
+		var err error
+		switch (*ownerKey).(type) {
+			case *ecdsa.PublicKey:
+				rootPriv, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			case *rsa.PublicKey:
+				rootPriv, err = rsa.GenerateKey(rand.Reader, 2048)
+			default:
+				return fmt.Errorf("Unknown key type %T",ownerKey)
+		}
 		if (err != nil) { return fmt.Errorf("VerifyDelegate Error making ephemeral root CA key: %v",err) }
 		fmt.Printf("Ephemeral Root Key: %s\n",KeyToString(rootPriv.Public()))
 		rootOwner, err := GenerateDelegate(rootPriv, DelegateFlagRoot , *public,issuer,issuer, 
@@ -145,6 +154,7 @@ func VerifyDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey, 
 		if (err != nil) {
 			return fmt.Errorf("VerifyDelegate Error createing ephemerial Owner Root Cert: %v",err)
 		}
+		//fmt.Printf("Ephemeral Root Cert:\n%s\n",CertToString(rootOwner,"CERTIFICATE"))
 		chain = append(chain,rootOwner)
 	}
 
@@ -152,13 +162,15 @@ func VerifyDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey, 
 	for i,c := range chain {
 		var permstrs []string
 		for _, o := range c.UnknownExtKeyUsage {
-			s,_ := DelegateOIDtoString(o)
+			s := DelegateOIDtoString(o)
 			permstrs =  append(permstrs,s)
 		}
-		permstr = strings.Join(permstrs," | ")
+		permstr = strings.Join(permstrs,"|")
 
-		fmt.Printf("%d: Subject=%s Issuer=%s IsCA=%v KeyUsage=%s Perms=[%s]\n",i,c.Subject,c.Issuer,c.IsCA,KeyUsageToString(c.KeyUsage),permstr)
-		fmt.Printf("    Public Key: %s\n",KeyToString(c.PublicKey))
+		fmt.Printf("%d: Subject=%s Issuer=%s  Algo=%s IsCA=%v KeyUsage=%s Perms=[%s] KeyType=%s\n",i,c.Subject,c.Issuer,
+			c.SignatureAlgorithm.String(),c.IsCA,KeyUsageToString(c.KeyUsage),permstr, KeyToString(c.PublicKey))
+
+		// Cheeck Signatures on each
 		if (i!= len(chain)-1) {
 			err := chain[i].CheckSignatureFrom(chain[i+1])
 			if (err != nil) {
@@ -170,10 +182,12 @@ func VerifyDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey, 
 		} 
 
 		// TODO we do NOT check expiration or revocation
-		if ((oid != nil) && (certMissingOID(c,*oid))) { return fmt.Errorf("VerifyDelegate Chain Validation error - %s no oid %v\n",c.Subject,oid) }
+
+		if ((oid != nil) && (certMissingOID(c,*oid))) { return fmt.Errorf("VerifyDelegate error - %s has no permission %v\n",c.Subject,DelegateOIDtoString(*oid)) }
 		if ((c.KeyUsage & x509.KeyUsageDigitalSignature) == 0) { return fmt.Errorf("VerifyDelegate cert %s: No Digital Signature Usage",c.Subject) }
 		if (c.BasicConstraintsValid == false)  { return fmt.Errorf("VerifyDelegate cert %s: Basic Constraints not valid",c.Subject) }
 
+		// Leaf cert does not need to be a CA, but others do
 		if (i != 0) {
 			if (c.IsCA == false)  { return fmt.Errorf("VerifyDelegate cert %s: Not a CA",c.Subject) }
 			if ((c.KeyUsage & x509.KeyUsageCertSign) == 0)  { return fmt.Errorf("VerifyDelegate cert %s: No CerSign Usage",c.Subject) }
@@ -217,7 +231,6 @@ func GenerateDelegate(key crypto.Signer, flags uint8, delegateKey crypto.PublicK
 			template.IsCA = true
 		}
 		
-
 		fmt.Printf("Cert Private Key: %s\n",KeyToString(key.Public()))
 		fmt.Printf("Cert Public  Key: %s\n",KeyToString(delegateKey))
 		der, err := x509.CreateCertificate(rand.Reader, template, parent, delegateKey, key)
@@ -262,6 +275,7 @@ func hashkey() {
 
     fmt.Println("Public key fingerprint:", fingerprint)
 }
+
 func KeyToString(key crypto.PublicKey) string {
     derBytes, err := x509.MarshalPKIXPublicKey(key)
     var fingerprint string
@@ -289,9 +303,9 @@ func KeyToString(key crypto.PublicKey) string {
 			}
 			return fmt.Sprintf("ECDSA %s Fingerprint: %s",curve,fingerprint)
 		case *rsa.PublicKey:
-			// TODO size
-		 	return "RSA"
+			rsa := key.(*rsa.PublicKey)
+			return fmt.Sprintf("RSA%d Fingerprint: %s",rsa.Size()*8,fingerprint)
 		default:
-		 	return fmt.Sprintf("%T",key)
+			return fmt.Sprintf("%T Fingerprint: %s",key,fingerprint)
 	}
 }

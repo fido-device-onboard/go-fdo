@@ -37,6 +37,9 @@ Server options:
 %s
 Delegate options:
 %s
+
+"delegate help" for more delegate commands
+
 Key types:
   - RSA2048RESTR
   - RSAPKCS

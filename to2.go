@@ -715,13 +715,17 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 
 	fmt.Printf("Onboard Delegate to use \"%s\"\n",s.OnboardDelegate)
 	if (s.OnboardDelegate != "") {
-		fmt.Printf("*** OV Owner Key: %s\n",KeyToString(ownerKey.Public()))
+		fmt.Printf("*** OV Owner Key: %s\n",(*ownerPublicKey).Type.KeyString())
+		if (s.OnboardDelegate == "=") {
+			s.OnboardDelegate = (*ownerPublicKey).Type.KeyString()
+		}
 		dk, chain, err := s.DelegateKeys.DelegateKey(s.OnboardDelegate)
 		if (err != nil) {
 			return nil, fmt.Errorf("Delegate chain \"%s\" not found: %w", s.OnboardDelegate,err)
 		}
 		fmt.Printf("*** Delegate Key: %s\n",KeyToString(dk.Public()))
 		fmt.Printf("*** DELEGATE CHAIN= %s\n",DelegateChainSummary(chain))
+		fmt.Printf("*** expectedCUPHOwnerKey= %s\n",KeyToString(expectedCUPHOwnerKey))
 		if err != nil {
 			return nil, fmt.Errorf("Delegate Chain Unavailable: %w", err)
 		}
@@ -734,7 +738,6 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 		//chain,err1 := delegatePublicKey.Chain()
 		fmt.Printf("*** OV public is %T %v \n",expectedCUPHOwnerKey,expectedCUPHOwnerKey)
 
-		//err = VerifyCertChain(expectedCUPHOwnerKey,chain)
 		err = VerifyDelegateChain(chain,&expectedCUPHOwnerKey,&OID_delegateOnboard)
 		if (err != nil) {
 			return nil, fmt.Errorf("Cert Chain Verification Failed: %w", err)

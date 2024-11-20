@@ -17,6 +17,16 @@ eASignInfo during TO2.HelloDevice, and Onboarding Server then provides and owner
 There is no guarentee that an X5Chain will have all the same keys of a certian-type only, especially when
 onboarding devices of different types. 
 
+This means that - unlike in most cases where the implementation will automagically keep key types 
+consistent from di through to0, to1, to2 - under delegate, the caller has the flexibility and the
+*respnosibility* to use any cert chain, even if it is mis-alisgned (or mis-rooted) with the 
+proper owner key, as will be determined by DI (defaults to ec384)
+
+A delegate name `=` is a special identifer used to equate to a Delegate chain whose name is that 
+of the key type for the device, as indicated in the Ownership Voucher. i.e. It will resolve to
+a chain by one of the names: `RSA2048RESTR`, `RSAPKCS`, `RSAPSS`, `SECP256R1` or `SECP384R1`.
+
+
 # Theory
 
 ## Chain Keys and Types
@@ -33,6 +43,7 @@ Thus in the commands below, the first key type (`ownerKeyType`) must be a valid,
 But the last cert in the chain, we will retain the Private Key, as anything signed with this chain is actually signed by this last (delegate) cert.
 
 Also note, that unlike other systems (like TLS) where when a private (Root CA) is created, a well-known Root CA Certificate is 	also created and subsqeuently referenced - in FDO - when we create an initial "Owner" key, we don't necessarily create or retain any such certificate. Therefore, when we create a Delegate chain (with this tool), we will create an "Owner CA"  cert at the root of each chain, signing it with the Private Key of the applicable `ownerKeyType` type.
+
 
 ## Permissions
 Delegate certs can be scoped to only be allowed to do specific things, such as:
@@ -107,3 +118,9 @@ go run ./examples/cmd server -debug -reuse-cred -db test.db -to0 http://127.0.0.
 go run ./examples/cmd client  -rv-only -debug
 go run ./examples/cmd client  -debug
 ```
+
+# Common Issues (Debug)
+
+TO2 fails with: `Delegate Chain Validation error - 0 not signed by 1: x509: signature algorithm specifies an RSA public key, but have public key of type *ecdsa.PublicKey`
+
+This generally means you ran DI for a key type (e.g. ec384 is the default), then presented a delegate cert that was rooted with a different key, (eg RSA). If the delegate chain was rooted with an owner key different that that being used for onboarding, you'll get a cert chain validation error. the `0 not signed by 1` part means that the mismatch is at the root, i.e. Delegate Chain build against a different owner.

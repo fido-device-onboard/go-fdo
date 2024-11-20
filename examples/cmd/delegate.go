@@ -83,7 +83,7 @@ func init() {
 // signed by (a specific) Owner (of a given key type)
 func createDelegateCertificate(state *sqlite.DB,args []string) error {
 	if (len(args) < 3) {
-		return fmt.Errorf("Usage: delegate create <chainName> <Permission[,Permission...]> ownerKeyType [keyType...]")
+		return fmt.Errorf("Usage: delegate create {chainName} {Permission[,Permission...]} {ownerKeyType} {keyType...}")
 	}
 	name := args[0]
 
@@ -93,7 +93,7 @@ func createDelegateCertificate(state *sqlite.DB,args []string) error {
 	ownerKeyType := args[2]
 	keyType, err := protocol.ParseKeyType(ownerKeyType)
 	if (err != nil) {
-		return fmt.Errorf("Invalid key type: %s",ownerKeyType)
+		return fmt.Errorf("Invalid owner key type: \"%s\"",ownerKeyType)
 	}
 	lastPriv, lastPub, err := state.OwnerKey(keyType)
 	if (err != nil) {
@@ -112,35 +112,35 @@ func createDelegateCertificate(state *sqlite.DB,args []string) error {
 
 	var chain []*x509.Certificate 
 	issuer := fmt.Sprintf("%s_%s_Owner",name,ownerKeyType)
-	keyTypes := args[2:]
-	for i,kt := range keyTypes {
-		keyType, err = protocol.ParseKeyType(kt)
-		if (err != nil) {
-			return fmt.Errorf("Invalid key type: %s",ownerKeyType)
+	keyTypes := args[3:]
+	var sigAlg x509.SignatureAlgorithm
+	var priv crypto.Signer
+	for i,keyType := range keyTypes {
+		switch keyType {
+		case "ec256":
+			priv, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		case "ec384":
+			priv, err = ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+		case "rsa2048":
+			priv, err = rsa.GenerateKey(rand.Reader, 2048)
+		case "rsa3072":
+			sigAlg = x509.SHA384WithRSA
+			priv, err = rsa.GenerateKey(rand.Reader, 3072)
+		default:
+			return fmt.Errorf("unknown key type: %s", keyType)
 		}
 
-		var priv crypto.Signer 
-		switch keyType {
-			case protocol.Secp256r1KeyType:
-				priv, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-			case protocol.Secp384r1KeyType:
-				priv, err = ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
-			case protocol.Rsa2048RestrKeyType:
-				priv, err = rsa.GenerateKey(rand.Reader, 2048)
-			case protocol.RsaPssKeyType:
-			case protocol.RsaPkcsKeyType:
-				priv, err = rsa.GenerateKey(rand.Reader, 3072)
-			default:
-				return fmt.Errorf("unsupported key type: %v", keyType)
-		}
 		if err != nil {
-			return fmt.Errorf("Failed to generate %s key: %v\n",kt,err)
+			return fmt.Errorf("Failed to generate %s key: %v\n",keyType,err)
 		}
+		// TODO Do we need to pass sigAlg to cert generator??
+		_ = sigAlg
+	
 
 		_= lastPub
 
 		var flags uint8
-		subject := fmt.Sprintf("%s_%s_%d",name,kt,i)
+		subject := fmt.Sprintf("%s_%s_%d",name,keyType,i)
 		switch  {
 			case i == 0:
 				flags = fdo.DelegateFlagRoot
@@ -149,11 +149,12 @@ func createDelegateCertificate(state *sqlite.DB,args []string) error {
 			default:
 				flags = fdo.DelegateFlagIntermediate
 		}
+		fmt.Printf("Generate Key Type %s\n",keyType)
 		cert, err := fdo.GenerateDelegate(lastPriv,flags,priv.Public(),subject,issuer,permissions)
-		fmt.Printf("%d: Subject=%s Issuer=%s IsCA=%v KeyUsage=%v\n",i,cert.Subject,cert.Issuer,cert.IsCA,cert.KeyUsage)
 		if err != nil {
 			return fmt.Errorf("Failed to generate Delegate: %v\n",err)
 		}
+		fmt.Printf("%d: Subject=%s Issuer=%s IsCA=%v KeyUsage=%v\n",i,cert.Subject,cert.Issuer,cert.IsCA,cert.KeyUsage)
 		lastPriv=priv
 		issuer = subject
 		chain = append([]*x509.Certificate{cert},chain...)
@@ -248,6 +249,23 @@ func doPrintDelegatePrivKey(state *sqlite.DB,args []string) error {
 	return pem.Encode(os.Stdout, pemBlock)
 }
 
+func doDelegateHelp(state *sqlite.DB,args []string) error {
+	fmt.Printf (`
+Delegate commands:
+
+delegate print {chainname} [ownerKeyType]
+delegate list
+delegate key {chainname} 
+delegate create {chainName} {Permission[,Permission...]} {ownerKeyType} {keyType} [keyType...]
+
+Permissions: onboard upload redirect claim provision
+KeyTypes: ec256, ec384, rsa2048, rsa3072
+ownerKeyTypes - See "Key types"
+
+
+`)
+	return nil
+}
 //nolint:gocyclo
 func delegate(args []string) error { 
 	if debug {
@@ -276,6 +294,8 @@ func delegate(args []string) error {
 			return doPrintDelegatePrivKey(state,args[1:])
 		case "create":
 			return createDelegateCertificate(state,args[1:])
+		case "help":
+			return doDelegateHelp(state,args[1:])
 		default:
 			return fmt.Errorf("Invalid command \"%s\"",args[0])
 		
