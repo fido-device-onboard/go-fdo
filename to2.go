@@ -718,7 +718,9 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 		fmt.Printf("*** OV Owner Key: %s\n",(*ownerPublicKey).Type.KeyString())
 		if (s.OnboardDelegate == "=") {
 			s.OnboardDelegate = (*ownerPublicKey).Type.KeyString()
+			fmt.Printf("OnboardDelegate is %+v\n",s.OnboardDelegate)
 		}
+		fmt.Printf("Keys %+v\n",s.DelegateKeys)
 		dk, chain, err := s.DelegateKeys.DelegateKey(s.OnboardDelegate)
 		if (err != nil) {
 			return nil, fmt.Errorf("Delegate chain \"%s\" not found: %w", s.OnboardDelegate,err)

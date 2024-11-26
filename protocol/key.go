@@ -8,9 +8,12 @@ import (
 	"crypto/ecdsa"
 	"crypto/rsa"
 	"crypto/x509"
+	"crypto/elliptic"
 	"errors"
 	"fmt"
 	"strings"
+        "crypto/sha256"
+	"encoding/hex"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
@@ -162,8 +165,46 @@ type PublicKey struct {
 }
 
 func (pub PublicKey) String() string {
-	s := fmt.Sprintf("protocol.PublicKey:\nType      %s\n", pub.Type)
-	s += fmt.Sprintf("Encoding  %s\n", pub.Encoding)
+    key,err := pub.Public()
+    if (err != nil) {
+	    return fmt.Sprintf("Err: %w",err)
+    }
+    derBytes, err := x509.MarshalPKIXPublicKey(key)
+    var fingerprint string
+    if (err != nil) {
+            fingerprint = fmt.Sprintf("Err: %v",err)
+        } else {
+            hash := sha256.Sum256(derBytes)
+    fingerprint = hex.EncodeToString(hash[:])
+    }
+
+    switch key.(type) {
+                case *ecdsa.PublicKey:
+                        ec := key.(*ecdsa.PublicKey)
+                        curve := ""
+                        switch ec.Curve {
+                                case elliptic.P256():
+                                        curve="NIST P-256 / secp256r1"
+                                case elliptic.P384():
+                                        curve="NIST P-384 / secp384r1"
+                                case elliptic.P521():
+                                        curve="NIST P-521 / secp521r1"
+                                default:
+                                        curve = "Unknown"
+
+                        }
+                        return fmt.Sprintf("ECDSA %s Fingerprint: %s",curve,fingerprint)
+                case *rsa.PublicKey:
+                        rsa := key.(*rsa.PublicKey)
+                        return fmt.Sprintf("RSA%d Fingerprint: %s",rsa.Size()*8,fingerprint)
+                default:
+                        return fmt.Sprintf("%T Fingerprint: %s",key,fingerprint)
+        }
+}
+
+func (pub PublicKey) LongString() string {
+	s := fmt.Sprintf("protocol.PublicKey:\nType      (%d) %s\n",pub.Type, pub.Type)
+	s += fmt.Sprintf("Encoding  (%d) %s\n", pub.Encoding,pub.Encoding)
 	s += fmt.Sprintf("Body      %x\n", pub.Body)
 	return s
 }

@@ -134,47 +134,6 @@ type ownerSign struct {
 	DelegateChain *[]*cbor.X509Certificate `cbor:",omitempty"`
 }
 
-/*
-func (c *TO0Client) delegateKey(keyType protocol.KeyType, keyEncoding protocol.KeyEncoding) (crypto.Signer, *protocol.PublicKey, error) {
-	key, chain, err := c.DelegateKeys.DelegateKey("TEST") //keyType)
-	if errors.Is(err, ErrNotFound) {
-		return nil, nil, fmt.Errorf("delegate key type %s not supported", keyType)
-	} else if err != nil {
-		return nil, nil, fmt.Errorf("error getting delegate key [type=%s]: %w", keyType, err)
-	}
-
-	// Default to X509 key encoding if owner key does not have a certificate
-	// chain
-	if keyEncoding == protocol.X5ChainKeyEnc && len(chain) == 0 {
-		keyEncoding = protocol.X509KeyEnc
-	}
-
-	var pubkey *protocol.PublicKey
-	switch keyEncoding {
-	case protocol.X509KeyEnc, protocol.CoseKeyEnc:
-		switch keyType {
-		case protocol.Secp256r1KeyType, protocol.Secp384r1KeyType:
-			pubkey, err = protocol.NewPublicKey(keyType, key.Public().(*ecdsa.PublicKey), keyEncoding == protocol.CoseKeyEnc)
-		case protocol.Rsa2048RestrKeyType, protocol.RsaPkcsKeyType, protocol.RsaPssKeyType:
-			pubkey, err = protocol.NewPublicKey(keyType, key.Public().(*rsa.PublicKey), keyEncoding == protocol.CoseKeyEnc)
-		default:
-			return nil, nil, fmt.Errorf("unsupported key type: %s", keyType)
-		}
-
-	case protocol.X5ChainKeyEnc:
-		pubkey, err = protocol.NewPublicKey(keyType, chain, false)
-
-	default:
-		return nil, nil, fmt.Errorf("unsupported delegate key encoding: %s", keyEncoding)
-	}
-	if err != nil {
-		return nil, nil, fmt.Errorf("error with delegate public key: %w", err)
-	}
-
-	return key, pubkey, nil
-}
-*/
-
 // OwnerSign(22) -> AcceptOwner(23)
 func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid protocol.GUID, ttl uint32, nonce protocol.Nonce, addrs []protocol.RvTO2Addr, delegateName string) (negotiatedTTL uint32, _ error) {
 	// Create and hash to0d

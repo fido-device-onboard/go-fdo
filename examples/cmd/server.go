@@ -73,6 +73,7 @@ var (
 	uploadDir             string
 	uploadReqs            stringList
 	wgets                 stringList
+	initOnly              bool
 )
 
 type stringList []string
@@ -111,6 +112,7 @@ func init() {
 	serverFlags.StringVar(&uploadDir, "upload-dir", "uploads", "The directory `path` to put file uploads")
 	serverFlags.Var(&uploadReqs, "upload", "Use fdo.upload FSIM for each `file` (flag may be used multiple times)")
 	serverFlags.Var(&wgets, "wget", "Use fdo.wget FSIM for each `url` (flag may be used multiple times)")
+	serverFlags.BoolVar(&initOnly, "initOnly", false, "Initialize initialization (db/key/voucher creation)")
 }
 
 func server() error { //nolint:gocyclo
@@ -194,6 +196,15 @@ func server() error { //nolint:gocyclo
 
 func serveHTTP(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) error {
 	// Create FDO responder
+	err := initState(state)
+	if err != nil {
+		return fmt.Errorf("Init error: %v",err)
+	}
+
+	if (initOnly) {
+		return nil
+	}
+
 	handler, err := newHandler(rvInfo, state)
 	if err != nil {
 		return err
@@ -448,8 +459,7 @@ func mustMarshal(v any) []byte {
 	return data
 }
 
-//nolint:gocyclo
-func newHandler(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) (*transport.Handler, error) {
+func initState(state *sqlite.DB) error {
 	var ec384OwnerCert []*x509.Certificate = nil
 	var ec256OwnerCert []*x509.Certificate = nil
 	var rsa3072OwnerCert []*x509.Certificate = nil
@@ -458,19 +468,19 @@ func newHandler(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) (*transport
 	// Generate manufacturing component keys
 	rsa2048MfgKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	rsa3072MfgKey, err := rsa.GenerateKey(rand.Reader, 3072)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	ec256MfgKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	ec384MfgKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	generateCA := func(key crypto.Signer) ([]*x509.Certificate, error) {
 		template := &x509.Certificate{
@@ -494,52 +504,52 @@ func newHandler(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) (*transport
 
 	rsa2048Chain, err := generateCA(rsa2048MfgKey)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	rsa3072Chain, err := generateCA(rsa3072MfgKey)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	ec256Chain, err := generateCA(ec256MfgKey)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	ec384Chain, err := generateCA(ec384MfgKey)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if err := state.AddManufacturerKey(protocol.Rsa2048RestrKeyType, rsa2048MfgKey, rsa2048Chain); err != nil {
-		return nil, err
+		return err
 	}
 	if err := state.AddManufacturerKey(protocol.RsaPkcsKeyType, rsa3072MfgKey, rsa3072Chain); err != nil {
-		return nil, err
+		return err
 	}
 	if err := state.AddManufacturerKey(protocol.RsaPssKeyType, rsa3072MfgKey, rsa3072Chain); err != nil {
-		return nil, err
+		return err
 	}
 	if err := state.AddManufacturerKey(protocol.Secp256r1KeyType, ec256MfgKey, ec256Chain); err != nil {
-		return nil, err
+		return err
 	}
 	if err := state.AddManufacturerKey(protocol.Secp384r1KeyType, ec384MfgKey, ec384Chain); err != nil {
-		return nil, err
+		return err
 	}
 
 	// Generate owner keys
 	rsa2048OwnerKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	rsa3072OwnerKey, err := rsa.GenerateKey(rand.Reader, 3072)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	ec256OwnerKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	ec384OwnerKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	// Generate full owner Certificates, if requested
@@ -547,44 +557,49 @@ func newHandler(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) (*transport
 	if (ownerCert) {
 		ec384OwnerCert, err = generateCA(ec384OwnerKey)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		ec256OwnerCert, err = generateCA(ec256OwnerKey)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		rsa3072OwnerCert, err = generateCA(rsa3072OwnerKey)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		rsa2048OwnerCert, err = generateCA(rsa2048OwnerKey)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 	}
 
 
 	if err := state.AddOwnerKey(protocol.Rsa2048RestrKeyType, rsa2048OwnerKey, rsa2048OwnerCert); err != nil {
-		return nil, err
+		return err
 	}
 	if err := state.AddOwnerKey(protocol.RsaPkcsKeyType, rsa3072OwnerKey, rsa3072OwnerCert); err != nil {
-		return nil, err
+		return err
 	}
 	if err := state.AddOwnerKey(protocol.RsaPssKeyType, rsa3072OwnerKey, rsa3072OwnerCert); err != nil {
-		return nil, err
+		return err
 	}
 	if err := state.AddOwnerKey(protocol.Secp256r1KeyType, ec256OwnerKey, ec256OwnerCert); err != nil {
-		return nil, err
+		return err
 	}
 	if err := state.AddOwnerKey(protocol.Secp384r1KeyType, ec384OwnerKey, ec384OwnerCert); err != nil {
-		return nil, err
+		return err
 	}
+	return nil
+}
 
 
+
+//nolint:gocyclo
+func newHandler(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) (*transport.Handler, error) {
 	// Auto-register RV blob so that TO1 can be tested unless a TO0 address is
 	// given or RV bypass is set
 	var autoTO0 fdo.AutoTO0
