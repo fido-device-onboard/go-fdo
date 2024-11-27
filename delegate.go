@@ -210,7 +210,11 @@ func VerifyDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey, 
                 if (i!= len(chain)-1) {
                         err := chain[i].CheckSignatureFrom(chain[i+1])
                         if (err != nil) {
-                                return fmt.Errorf("VerifyDelegate Chain Validation error - %s not signed by %s: %v\n",chain[i].Subject,chain[i+1].Subject,err)
+				fmt.Printf("THIS CERT:\n")
+				fmt.Printf(CertToString(chain[i],"CERTIFICATE"))
+				fmt.Printf("...WAS NOT SIGNED BY....\n")
+				fmt.Printf(CertToString(chain[i+1],"CERTIFICATE"))
+                                return fmt.Errorf("VerifyDelegate Chain Validation error - (#%d) %s not signed by (#%d) %s: %v\n",i,chain[i].Subject,i+1,chain[i+1].Subject,err)
                         }
                         if (chain[i].Issuer.CommonName != chain[i+1].Subject.CommonName) {
                                 return fmt.Errorf("Subject %s Issued by Issuer=%s, expected %s",c.Subject,c.Issuer,chain[i+1].Issuer)
@@ -268,8 +272,8 @@ func GenerateDelegate(key crypto.Signer, flags uint8, delegateKey crypto.PublicK
                         template.IsCA = true
                 }
                 
-                fmt.Printf("Cert Private Key: %s\n",KeyToString(key.Public()))
-                fmt.Printf("Cert Public  Key: %s\n",KeyToString(delegateKey))
+                fmt.Printf("Gen Cert Private Key: %s\n",KeyToString(key.Public()))
+                fmt.Printf("Gen Cert Public  Key: %s\n",KeyToString(delegateKey))
                 der, err := x509.CreateCertificate(rand.Reader, template, parent, delegateKey, key)
                 if err != nil {
                         return nil, fmt.Errorf("CreateCertificate returned %v",err)

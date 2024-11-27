@@ -164,11 +164,7 @@ type PublicKey struct {
 	err   error
 }
 
-func (pub PublicKey) String() string {
-    key,err := pub.Public()
-    if (err != nil) {
-	    return fmt.Sprintf("Err: %w",err)
-    }
+func Key2String(key any) string {
     derBytes, err := x509.MarshalPKIXPublicKey(key)
     var fingerprint string
     if (err != nil) {
@@ -200,6 +196,13 @@ func (pub PublicKey) String() string {
                 default:
                         return fmt.Sprintf("%T Fingerprint: %s",key,fingerprint)
         }
+}
+func (pub PublicKey) String() string {
+    key,err := pub.Public()
+    if (err != nil) {
+	    return fmt.Sprintf("Err: %w",err)
+    }
+    return Key2String(key)
 }
 
 func (pub PublicKey) LongString() string {
@@ -300,8 +303,6 @@ func (pub *PublicKey) parse() error {
 	}
 }
 
-// TODO if X5chain parsing will return the first key in the chain,
-// I assume this does the same? Do we ever validate the (rest of the) chain?
 func (pub *PublicKey) parseX509() error {
 	var der []byte
 	if err := cbor.Unmarshal([]byte(pub.Body), &der); err != nil {
@@ -311,6 +312,21 @@ func (pub *PublicKey) parseX509() error {
 	if err != nil {
 		return err
 	}
+	/*
+	var certs []*cbor.X509Certificate
+	if err := cbor.Unmarshal([]byte(pub.Body), &certs); err != nil {
+		return err
+	}
+	if len(certs) != 1 {
+		return errors.New("x509 cert must be singleton")
+	}
+	pub.chain = make([]*x509.Certificate, 1)
+	for i, cert := range certs {
+		cert := cert
+		pub.chain[i] = (*x509.Certificate)(cert)
+	}
+	key := pub.chain[0].PublicKey
+	*/
 
 	switch pub.Type {
 	case Secp256r1KeyType, Secp384r1KeyType:

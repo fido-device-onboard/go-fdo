@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"time"
+	"strings"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
@@ -192,7 +193,7 @@ func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid pro
 	if (delegateName != "") {
 		// TODO This imples that Delegate Key type will always be the same as manufacture - which may not be true
 		// Delegate must be X509 or X5CHAIN so it can prove that Owner signed it
-		if (delegateName == "=") { delegateName = keyType.KeyString() }
+		delegateName = strings.Replace(delegateName,"=",keyType.KeyString(),-1)
 		delegateKey, ch, err := c.DelegateKeys.DelegateKey(delegateName)
 		if err != nil {
 			return 0, fmt.Errorf("error getting delegate key [type=%s]: %w", keyType, err)

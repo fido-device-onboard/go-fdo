@@ -22,9 +22,11 @@ consistent from di through to0, to1, to2 - under delegate, the caller has the fl
 *respnosibility* to use any cert chain, even if it is mis-alisgned (or mis-rooted) with the 
 proper owner key, as will be determined by DI (defaults to ec384)
 
-A delegate name `=` is a special identifer used to equate to a Delegate chain whose name is that 
-of the key type for the device, as indicated in the Ownership Voucher. i.e. It will resolve to
+The equal-sign (`=`) character in Delegate Name  will be substituted with the 
+key type for the device, as indicated in the Ownership Voucher. i.e. It will resolve to
 a chain by one of the names: `RSA2048RESTR`, `RSAPKCS`, `RSAPSS`, `SECP256R1` or `SECP384R1`.
+This allows creation of chains like `rv_RSAPKCS` which would be automatically resolved by
+specifying a delegateName name `rv_=`.
 
 
 # Theory

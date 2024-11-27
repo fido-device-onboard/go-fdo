@@ -716,14 +716,12 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 	fmt.Printf("Onboard Delegate to use \"%s\"\n",s.OnboardDelegate)
 	if (s.OnboardDelegate != "") {
 		fmt.Printf("*** OV Owner Key: %s\n",(*ownerPublicKey).Type.KeyString())
-		if (s.OnboardDelegate == "=") {
-			s.OnboardDelegate = (*ownerPublicKey).Type.KeyString()
-			fmt.Printf("OnboardDelegate is %+v\n",s.OnboardDelegate)
-		}
+		OnboardDelegateName := strings.Replace(s.OnboardDelegate,"=",(*ownerPublicKey).Type.KeyString(),-1)
+		fmt.Printf("OnboardDelegate is %+v\n",OnboardDelegateName)
 		fmt.Printf("Keys %+v\n",s.DelegateKeys)
-		dk, chain, err := s.DelegateKeys.DelegateKey(s.OnboardDelegate)
+		dk, chain, err := s.DelegateKeys.DelegateKey(OnboardDelegateName)
 		if (err != nil) {
-			return nil, fmt.Errorf("Delegate chain \"%s\" not found: %w", s.OnboardDelegate,err)
+			return nil, fmt.Errorf("Delegate chain \"%s\" not found: %w", OnboardDelegateName,err)
 		}
 		fmt.Printf("*** Delegate Key: %s\n",KeyToString(dk.Public()))
 		fmt.Printf("*** DELEGATE CHAIN= %s\n",DelegateChainSummary(chain))
@@ -1173,10 +1171,21 @@ func (s *TO2Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1
 	defer sess.Destroy()
 	keyType := ov.Header.Val.ManufacturerKey.Type
 	ownerKey, ownerPublicKey, err := s.ownerKey(keyType, ov.Header.Val.ManufacturerKey.Encoding)
+	sessionOwnerKey := ownerKey
+	if (s.OnboardDelegate != "") {
+		OnboardDelegateName := strings.Replace(s.OnboardDelegate,"=",keyType.KeyString(),-1)
+		fmt.Printf("OnboardDelegate is %+v\n",OnboardDelegateName)
+		fmt.Printf("Keys %+v\n",s.DelegateKeys)
+		sessionOwnerKey, _, err = s.DelegateKeys.DelegateKey(OnboardDelegateName)
+	} 
+
 	if err != nil {
 		return nil, err
 	}
-	rsaOwnerPrivateKey, _ := ownerKey.(*rsa.PrivateKey)
+
+	// For the sake of Session Parameters, must use delegate key
+	// But for re-assignment below, must be owner in voucher
+	rsaOwnerPrivateKey, _ := sessionOwnerKey.(*rsa.PrivateKey)
 	if err := sess.SetParameter(xB, rsaOwnerPrivateKey); err != nil {
 		return nil, fmt.Errorf("error completing key exchange: %w", err)
 	}
