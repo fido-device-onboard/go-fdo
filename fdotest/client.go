@@ -94,12 +94,12 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 		onboardDelegate string
 	}{
 		{
-			rvDelegate:     "=",
-			onboardDelegate: "=",
-		},
-		{
 			rvDelegate:     "",
 			onboardDelegate: "",
+		},
+		{
+			rvDelegate:     "=",
+			onboardDelegate: "=",
 		},
 	} {
 
