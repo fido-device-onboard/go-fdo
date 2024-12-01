@@ -424,6 +424,7 @@ func sendHelloDevice(ctx context.Context, transport Transport, c *TO2Config) (pr
 			captureErr(ctx, protocol.MessageBodyErrCode, "")
 			return protocol.Nonce{}, nil, nil, fmt.Errorf("error parsing TO2.ProveOVHdr contents: %w", err)
 		}
+		defer clear(proveOVHdr.Payload.Val.KeyExchangeA)
 
 	case protocol.ErrorMsgType:
 		var errMsg protocol.ErrorMessage
@@ -506,7 +507,13 @@ func sendHelloDevice(ctx context.Context, transport Transport, c *TO2Config) (pr
 			NumVoucherEntries:   int(proveOVHdr.Payload.Val.NumOVEntries),
 			PublicKeyToValidate: key,
 		},
-		c.KeyExchange.New(proveOVHdr.Payload.Val.KeyExchangeA, c.CipherSuite),
+		// The key exchange parameter is zeroed and a copy used to initialize
+		// the key exchange session (which has its own Destroy method), because
+		// when using fdotest the transport does not actually marshal the
+		// server response. Therefore, after this function returns, proveOVHdr
+		// goes out of scope and its finalizer will run (at some point),
+		// zeroing the key exchange parameter and causing tests to be flaky.
+		c.KeyExchange.New(bytes.Clone(proveOVHdr.Payload.Val.KeyExchangeA), c.CipherSuite),
 		nil
 
 }
