@@ -573,7 +573,6 @@ func sendHelloDevice(ctx context.Context, transport Transport, c *TO2Config) (pr
 		fmt.Printf("*** DELEGATE proveOVHdr NO CERT\n")
 	}
 
-	fmt.Printf("*** CLIENT HASH OK\n")
 	fmt.Printf("*** DELEGATE Key proveOVHdr %v\n",delegatePubKey)
 	// Validate response signature and nonce. While the payload signature
 	// verification is performed using the untrusted owner public key from the
@@ -584,9 +583,11 @@ func sendHelloDevice(ctx context.Context, transport Transport, c *TO2Config) (pr
 	var key crypto.PublicKey
 	if (delegateFound) {
 		key, err = delegatePubKey.Public()
+		fmt.Printf("*** Use DELEGATE Key: %v\n",key)
 
 	} else {
 		key, err = ownerPubKey.Public()
+		fmt.Printf("*** Use OWNER Key: %v\n",key)
 	}
 	if err != nil {
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
@@ -594,6 +595,8 @@ func sendHelloDevice(ctx context.Context, transport Transport, c *TO2Config) (pr
 	}
 
 	fmt.Printf("*** VERIFY OVHPROOF with key %s\n",KeyToString(key))
+	fmt.Printf("*** KeyExchangeA Set to %v\n",proveOVHdr.Payload.Val.KeyExchangeA)
+	fmt.Printf("*** ProveOVH is %+v\n",proveOVHdr)
 	if ok, err := proveOVHdr.Verify(key, nil, nil); err != nil {
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
 		return protocol.Nonce{}, nil, nil, fmt.Errorf("error verifying TO2.ProveOVHdr payload signature: %w", err)
@@ -840,13 +843,16 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 		clear(xA)
 		return nil, fmt.Errorf("error signing TO2.ProveOVHdr payload: %w", err)
 	}
+	fmt.Printf("*** ProveOVH is %+v\n",s1)
 
 	// The lifetime of xA is until the transport has marshaled and sent the proof. Therefore, the
 	// best option for clearing the secret is to set a finalizer (unfortunately).
 	proof := s1.Tag()
 	runtime.SetFinalizer(proof, func(proof *cose.Sign1Tag[ovhProof, []byte]) {
+		fmt.Printf("*** FINALIZER CLEARING!!!!\n")
 		clear(proof.Payload.Val.KeyExchangeA)
 	})
+	fmt.Printf("*** KeyExchangeA Set to %v\n",proof.Payload.Val.KeyExchangeA)
 	return proof, nil
 }
 

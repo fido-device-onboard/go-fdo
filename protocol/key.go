@@ -312,21 +312,6 @@ func (pub *PublicKey) parseX509() error {
 	if err != nil {
 		return err
 	}
-	/*
-	var certs []*cbor.X509Certificate
-	if err := cbor.Unmarshal([]byte(pub.Body), &certs); err != nil {
-		return err
-	}
-	if len(certs) != 1 {
-		return errors.New("x509 cert must be singleton")
-	}
-	pub.chain = make([]*x509.Certificate, 1)
-	for i, cert := range certs {
-		cert := cert
-		pub.chain[i] = (*x509.Certificate)(cert)
-	}
-	key := pub.chain[0].PublicKey
-	*/
 
 	switch pub.Type {
 	case Secp256r1KeyType, Secp384r1KeyType:
