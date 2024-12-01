@@ -80,7 +80,7 @@ func helloRv(ctx context.Context, transport Transport, cred DeviceCredential, ke
 	// Make request
 	typ, resp, err := transport.Send(ctx, protocol.TO1HelloRVMsgType, msg, nil)
 	if err != nil {
-		return protocol.Nonce{}, fmt.Errorf("error sending TO1.HelloRV: %w", err)
+		return protocol.Nonce{}, fmt.Errorf("TO1.HelloRV: %w", err)
 	}
 	defer func() { _ = resp.Close() }()
 
@@ -157,7 +157,7 @@ func proveToRv(ctx context.Context, transport Transport, cred DeviceCredential, 
 	// Make request
 	typ, resp, err := transport.Send(ctx, protocol.TO1ProveToRVMsgType, msg, nil)
 	if err != nil {
-		return nil, fmt.Errorf("error sending TO1.ProveToRV: %w", err)
+		return nil, fmt.Errorf("TO1.ProveToRV: %w", err)
 	}
 	defer func() { _ = resp.Close() }()
 

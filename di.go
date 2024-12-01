@@ -137,7 +137,7 @@ func appStart(ctx context.Context, transport Transport, info any) (*VoucherHeade
 	// Make request
 	typ, resp, err := transport.Send(ctx, protocol.DIAppStartMsgType, msg, nil)
 	if err != nil {
-		return nil, fmt.Errorf("error sending DI.AppStart: %w", err)
+		return nil, fmt.Errorf("DI.AppStart: %w", err)
 	}
 	defer func() { _ = resp.Close() }()
 
@@ -296,7 +296,7 @@ func setHmac(ctx context.Context, transport Transport, hmac hash.Hash, ovh *Vouc
 	// Make request
 	typ, resp, err := transport.Send(ctx, protocol.DISetHmacMsgType, msg, nil)
 	if err != nil {
-		return fmt.Errorf("error sending DI.SetHMAC: %w", err)
+		return fmt.Errorf("DI.SetHMAC: %w", err)
 	}
 	defer func() { _ = resp.Close() }()
 

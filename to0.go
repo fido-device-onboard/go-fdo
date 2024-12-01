@@ -65,7 +65,7 @@ func (c *TO0Client) hello(ctx context.Context, transport Transport) (protocol.No
 	// Make request
 	typ, resp, err := transport.Send(ctx, protocol.TO0HelloMsgType, msg, nil)
 	if err != nil {
-		return protocol.Nonce{}, fmt.Errorf("error sending TO0.Hello: %w", err)
+		return protocol.Nonce{}, fmt.Errorf("TO0.Hello: %w", err)
 	}
 	defer func() { _ = resp.Close() }()
 
@@ -182,7 +182,7 @@ func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid pro
 	// Make request
 	typ, resp, err := transport.Send(ctx, protocol.TO0OwnerSignMsgType, msg, nil)
 	if err != nil {
-		return 0, fmt.Errorf("error sending TO0.OwnerSign: %w", err)
+		return 0, fmt.Errorf("TO0.OwnerSign: %w", err)
 	}
 	defer func() { _ = resp.Close() }()
 

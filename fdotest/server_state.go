@@ -493,10 +493,17 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 		if _, err := rand.Read(guid[:]); err != nil {
 			t.Fatal(err)
 		}
-		ov := &fdo.Voucher{Header: *cbor.NewBstr(fdo.VoucherHeader{GUID: guid})}
+		expectOV := &fdo.Voucher{Header: *cbor.NewBstr(fdo.VoucherHeader{
+			GUID: guid,
+			ManufacturerKey: protocol.PublicKey{
+				Type:     protocol.Rsa2048RestrKeyType,
+				Encoding: protocol.X509KeyEnc,
+				Body:     cbor.RawBytes{0x40},
+			},
+		})}
 		dnsAddr := "owner.fidoalliance.org"
 		fakeHash := sha256.Sum256([]byte("fake blob"))
-		expect := cose.Sign1[protocol.To1d, []byte]{
+		expectBlob := cose.Sign1[protocol.To1d, []byte]{
 			Payload: cbor.NewByteWrap(protocol.To1d{
 				RV: []protocol.RvTO2Addr{
 					{
@@ -515,27 +522,32 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := expect.Sign(testKey, nil, nil, nil); err != nil {
+		if err := expectBlob.Sign(testKey, nil, nil, nil); err != nil {
 			t.Fatal(err)
 		}
 
 		// Shadow state to limit testable functions
 		var state fdo.RendezvousBlobPersistentState = state
 
-		// Store and retrieve rendezvous blob
+		// Store and retrieve rendezvous blob 2 times to test upsert
 		if _, _, err := state.RVBlob(context.TODO(), guid); !errors.Is(err, fdo.ErrNotFound) {
 			t.Fatalf("expected ErrNotFound, got %v", err)
 		}
-		exp := time.Now().Add(time.Hour)
-		if err := state.SetRVBlob(context.TODO(), ov, &expect, exp); err != nil {
-			t.Fatal(err)
-		}
-		got, _, err := state.RVBlob(context.TODO(), guid)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !reflect.DeepEqual(*got, expect) {
-			t.Fatalf("expected %+v, got %+v", expect, got)
+		for range 2 {
+			exp := time.Now().Add(time.Hour)
+			if err := state.SetRVBlob(context.TODO(), expectOV, &expectBlob, exp); err != nil {
+				t.Fatal(err)
+			}
+			gotBlob, gotOV, err := state.RVBlob(context.TODO(), guid)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(*gotBlob, expectBlob) {
+				t.Fatalf("expected blob %+v, got %+v", expectBlob, gotBlob)
+			}
+			if !gotOV.Header.Val.Equal(&expectOV.Header.Val) {
+				t.Fatalf("expected blob %+v, got %+v", expectOV.Header.Val, gotOV.Header.Val)
+			}
 		}
 	})
 
@@ -587,6 +599,18 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 		}
 		if _, err := state.Voucher(context.TODO(), newGUID); err != nil {
 			t.Fatal(err)
+		}
+
+		// Remove voucher
+		removed, err := state.RemoveVoucher(context.TODO(), newGUID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(removed, ov) {
+			t.Errorf("removed voucher should match replaced %+v, got %+v", ov, removed)
+		}
+		if _, err := state.RemoveVoucher(context.TODO(), newGUID); !errors.Is(err, fdo.ErrNotFound) {
+			t.Fatalf("removed voucher GUID should return not found, got error %v", err)
 		}
 	})
 

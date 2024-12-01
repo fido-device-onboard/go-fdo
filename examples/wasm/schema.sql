@@ -1,0 +1,35 @@
+PRAGMA foreign_keys = ON;
+CREATE TABLE IF NOT EXISTS secrets
+	( type TEXT NOT NULL
+	, secret BLOB NOT NULL
+	);
+CREATE TABLE IF NOT EXISTS sessions
+	( id BLOB PRIMARY KEY
+	, protocol INTEGER NOT NULL
+	);
+CREATE TABLE IF NOT EXISTS to0_sessions
+	( session BLOB UNIQUE NOT NULL
+	, nonce BLOB
+	, FOREIGN KEY(session) REFERENCES sessions(id) ON DELETE CASCADE
+	);
+CREATE TABLE IF NOT EXISTS to1_sessions
+	( session BLOB UNIQUE NOT NULL
+	, nonce BLOB
+	, alg INTEGER
+	, FOREIGN KEY(session) REFERENCES sessions(id) ON DELETE CASCADE
+	);
+CREATE TABLE IF NOT EXISTS rv_blobs
+	( guid BLOB PRIMARY KEY
+	, rv BLOB NOT NULL
+	, voucher BLOB NOT NULL
+	, exp INTEGER NOT NULL
+	);
+CREATE INDEX IF NOT EXISTS rv_blob_exp ON rv_blobs(exp ASC);
+CREATE TABLE IF NOT EXISTS trusted_emails
+	( email TEXT PRIMARY KEY
+	);
+CREATE TABLE IF NOT EXISTS trusted_owners
+	( pkix BLOB PRIMARY KEY
+	, email TEXT NOT NULL
+	, FOREIGN KEY(email) REFERENCES trusted_emails(email) ON DELETE CASCADE
+	);
