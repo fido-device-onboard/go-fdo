@@ -17,6 +17,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"encoding/hex"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/kex"
@@ -48,6 +49,9 @@ type Transport struct {
 	// MaxContentLength defaults to 65535. Negative values disable content
 	// length checking.
 	MaxContentLength int64
+
+	// Version of FDO protocol - 101, 102, etc
+	FdoVersion int
 }
 
 // Send sends a single message and receives a single response message.
@@ -66,7 +70,7 @@ func (t *Transport) Send(ctx context.Context, msgType uint8, msg any, sess kex.S
 	if sess != nil {
 		if debugEnabled() {
 			body, _ := cbor.Marshal(msg)
-			slog.Debug("unencrypted request", "msg", msgType, "body", tryDebugNotation(body))
+			slog.Debug("unencrypted request", "msg", msgType, "cborBody", tryDebugNotation(body),"body",hex.EncodeToString(body))
 		}
 		var err error
 		msg, err = sess.Encrypt(rand.Reader, msg)
@@ -76,7 +80,7 @@ func (t *Transport) Send(ctx context.Context, msgType uint8, msg any, sess kex.S
 	}
 
 	// Create request with URL and body
-	uri, err := url.JoinPath(t.BaseURL, "fdo/101/msg", strconv.Itoa(int(msgType)))
+	uri, err := url.JoinPath(t.BaseURL, "fdo", strconv.Itoa(t.FdoVersion),"msg", strconv.Itoa(int(msgType)))
 	if err != nil {
 		return 0, nil, fmt.Errorf("error parsing base URL: %w", err)
 	}
@@ -108,7 +112,8 @@ func (t *Transport) Send(ctx context.Context, msgType uint8, msg any, sess kex.S
 	if debugEnabled() {
 		debugReq, _ := httputil.DumpRequestOut(req, false)
 		slog.Debug("request", "dump", string(bytes.TrimSpace(debugReq)),
-			"body", tryDebugNotation(body.Bytes()))
+			"cborBody", tryDebugNotation(body.Bytes()),
+			"body",hex.EncodeToString(body.Bytes()))
 	}
 	resp, err := t.Client.Do(req)
 	if err != nil {

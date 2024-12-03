@@ -752,9 +752,11 @@ func (d *Decoder) decodeArray(rv reflect.Value, additional []byte) error {
 		return d.decodeArrayToStruct(rv, additional)
 	case reflect.Slice, reflect.Array:
 		return d.decodeArrayToSlice(rv, additional)
+	case reflect.Map:
+		return d.decodeMap(rv, additional)
 	default:
-		return fmt.Errorf("%w: expected a slice, array, or struct type",
-			ErrUnsupportedType{typeName: rv.Type().String()})
+		return fmt.Errorf("%w: expected a slice, array, or struct type, got a %s",
+			ErrUnsupportedType{typeName: rv.Type().String()},kind)
 	}
 }
 

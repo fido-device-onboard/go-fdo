@@ -26,5 +26,7 @@ go.work.sum
 # VS Code
 .vscode/
 
+test.db
+
 # Test artifacts
 fdo.download_*

@@ -89,6 +89,21 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 		}{stateless, inMemory}
 	}
 
+	for _, delegateOpts := range []struct {
+		rvDelegate      string
+		onboardDelegate string
+	}{
+		{
+			rvDelegate:     "",
+			onboardDelegate: "",
+		},
+		{
+			rvDelegate:     "=",
+			onboardDelegate: "=",
+		},
+	} {
+
+
 	transport := &Transport{
 		Tokens: conf.State,
 		DIResponder: &fdo.DIServer[custom.DeviceMfgInfo]{
@@ -151,6 +166,9 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 			Session:   conf.State,
 			Vouchers:  conf.State,
 			OwnerKeys: conf.State,
+			DelegateKeys: conf.State,
+			OnboardDelegate: delegateOpts.onboardDelegate,
+			RvDelegate: delegateOpts.rvDelegate,
 			RvInfo: func(context.Context, fdo.Voucher) ([][]protocol.RvInstruction, error) {
 				return [][]protocol.RvInstruction{}, nil
 			},
@@ -212,7 +230,10 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 			cipherSuite: kex.A128GcmCipher,
 		},
 	} {
-		t.Run(fmt.Sprintf("Key %q Encoding %q Exchange %q Cipher %q", table.keyType, table.keyEncoding, table.keyExchange, table.cipherSuite), func(t *testing.T) {
+
+		withDelegate := ""
+		if ((delegateOpts.onboardDelegate != "") || (delegateOpts.rvDelegate != "")) { withDelegate = " w/Delegate" }
+		t.Run(fmt.Sprintf("Key %q Encoding %q Exchange %q Cipher %q%s", table.keyType, table.keyEncoding, table.keyExchange, table.cipherSuite, withDelegate), func(t *testing.T) {
 			transport.DIResponder.DeviceInfo = func(context.Context, *custom.DeviceMfgInfo, []*x509.Certificate) (string, protocol.KeyType, protocol.KeyEncoding, error) {
 				return "test_device", table.keyType, table.keyEncoding, nil
 			}
@@ -334,7 +355,7 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 						Port:              8080,
 						TransportProtocol: protocol.HTTPTransport,
 					},
-				})
+				},"")
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -451,4 +472,5 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 			})
 		})
 	}
+}
 }
