@@ -18,7 +18,6 @@ import (
 	"math/big"
 	"time"
 	"encoding/asn1"
-	"fmt"
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cose"
@@ -55,9 +54,7 @@ func NewState() (*State, error) {
 	if err != nil {
 		return nil, err
 	}
-	fmt.Printf("RSA2048 Owner KEY %s\n",protocol.Key2String(rsaKey.Public()))
 	rsaDelegateKey, rsaDelegate, err := newDelegateChain(rsaKey,func () (crypto.Signer) { s, _ := rsa.GenerateKey(rand.Reader,2048); return s })
-	fmt.Printf("RSA Delegate KEY %s\n",protocol.Key2String(rsaDelegateKey.Public()))
 	if err != nil {
 		return nil, err
 	}
@@ -65,18 +62,15 @@ func NewState() (*State, error) {
 	if err != nil {
 		return nil, err
 	}
-	fmt.Printf("EC256 Owner KEY %s\n",protocol.Key2String(ec256Key.Public()))
 	ec256Cert, err := newCA(ec256Key)
 	if err != nil {
 		return nil, err
 	}
 	ec256DelegateKey, ec256Delegate, err := newDelegateChain(ec256Key,func () (crypto.Signer) { s, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader); return s })
-	fmt.Printf("EC256 Delegate KEY %s\n",protocol.Key2String(ec256DelegateKey.Public()))
 	if err != nil {
 		return nil, err
 	}
 	ec384Key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
-	fmt.Printf("EC384 Owner KEY %s\n",protocol.Key2String(ec384Key.Public()))
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +79,6 @@ func NewState() (*State, error) {
 		return nil, err
 	}
 	ec384DelegateKey, ec384Delegate, err := newDelegateChain(ec384Key,func () (crypto.Signer) { s, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader); return s })
-	fmt.Printf("EC384 Delegate KEY %s\n",protocol.Key2String(ec384DelegateKey.Public()))
 	if err != nil {
 		return nil, err
 	}

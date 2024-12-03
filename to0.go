@@ -150,7 +150,6 @@ func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid pro
 		WaitSeconds:  ttl,
 		NonceTO0Sign: nonce,
 	}
-
 	alg := ov.Entries[0].Payload.Val.PreviousHash.Algorithm
 	to0dHash := alg.HashFunc().New()
 	if err := cbor.NewEncoder(to0dHash).Encode(to0d); err != nil {
@@ -159,7 +158,6 @@ func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid pro
 
 	// Sign to1d rendezvous blob
 	keyType := ov.Header.Val.ManufacturerKey.Type
-	// Sign with Delegate or Owner Key?
 	ownerKey, _, err := c.OwnerKeys.OwnerKey(keyType)
 	if errors.Is(err, ErrNotFound) {
 		return 0, fmt.Errorf("no available owner key for TO0.OwnerSign [type=%s]", keyType)
@@ -187,8 +185,6 @@ func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid pro
 		},
 	})}
 
-	fmt.Printf("*** OV KEY TYPE IS %T Name is \"%s\"\n",keyType,keyType)
-	fmt.Printf("*** OV KEY String is \"%s\"\n",keyType.KeyString())
 	// Sign blob with OwnerKey - or Delegate, if requested
 	if (delegateName != "") {
 		// TODO This imples that Delegate Key type will always be the same as manufacture - which may not be true
@@ -208,8 +204,6 @@ func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid pro
 		if err := to1d.Sign(delegateKey, nil, nil, delegateOpts); err != nil {
 			return 0, fmt.Errorf("error signing To1d payload for w/ Delegate TO0.OwnerSign: %w", err)
 		}
-		fmt.Printf("*** BLOB SIGNED WITH DELEGATE %T %v\n",delegateKey,delegateKey)
-		fmt.Printf("*** BLOB SIGNED WITH DELEGATE chain %T %v\n",chain,chain)
 
 		// TODO Do a veryify just to check if this is okay
 		//ok,err := to1d.Verify(delegateKey.Public(),nil,nil)
@@ -221,12 +215,11 @@ func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid pro
 			return 0, fmt.Errorf("Error getting public key from delegate chain: %v",err)
 		}
 		ok,err := to1d.Verify(p,nil,nil)
-		fmt.Printf("TO1D was : %T %+v\n",to1d,to1d)
-		fmt.Printf("TO1D was : %+v\n",to1d.Payload)
-		fmt.Printf("To1d Re-Verify returned ok=%v err=%v\n",ok,err)
-		fmt.Printf("Public Key was: %T %+v\n",delegateKey.Public(),delegateKey.Public())
 		if err != nil {
 			return 0, fmt.Errorf("To1d verify failed: %w", err)
+		}
+		if !ok {
+			return 0, fmt.Errorf("To1d verify failed")
 		}
 	} else {
 		if err := to1d.Sign(ownerKey, nil, nil, opts); err != nil {

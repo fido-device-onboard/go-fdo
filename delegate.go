@@ -166,7 +166,7 @@ func PrivKeyToString(key any) string {
 
 // Verify a delegate chain against an optional owner key, 
 // optionall for a given function
-func VerifyDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey, oid *asn1.ObjectIdentifier) error {
+func processDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey, oid *asn1.ObjectIdentifier, output bool) error {
 
         oidArray := []asn1.ObjectIdentifier{}
         if (oid != nil) {
@@ -188,12 +188,11 @@ func VerifyDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey, 
                                 return fmt.Errorf("Unknown key type %T",ownerKey)
                 }
                 if (err != nil) { return fmt.Errorf("VerifyDelegate Error making ephemeral root CA key: %v",err) }
-                fmt.Printf("Ephemeral Root Key: %s\n",KeyToString(rootPriv.Public()))
+                if (output) { fmt.Printf("Ephemeral Root Key: %s\n",KeyToString(rootPriv.Public()))}
                 rootOwner, err := GenerateDelegate(rootPriv, DelegateFlagRoot , *public,issuer,issuer, oidArray,0)
                 if (err != nil) {
                         return fmt.Errorf("VerifyDelegate Error createing ephemerial Owner Root Cert: %v",err)
                 }
-                //fmt.Printf("Ephemeral Root Cert:\n%s\n",CertToString(rootOwner,"CERTIFICATE"))
                 chain = append(chain,rootOwner)
         }
 
@@ -206,17 +205,19 @@ func VerifyDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey, 
                 }
                 permstr = strings.Join(permstrs,"|")
 
-                fmt.Printf("%d: Subject=%s Issuer=%s  Algo=%s IsCA=%v KeyUsage=%s Perms=[%s] KeyType=%s\n",i,c.Subject,c.Issuer,
-                        c.SignatureAlgorithm.String(),c.IsCA,KeyUsageToString(c.KeyUsage),permstr, KeyToString(c.PublicKey))
+                if output { fmt.Printf("%d: Subject=%s Issuer=%s  Algo=%s IsCA=%v KeyUsage=%s Perms=[%s] KeyType=%s\n",i,c.Subject,c.Issuer,
+                        c.SignatureAlgorithm.String(),c.IsCA,KeyUsageToString(c.KeyUsage),permstr, KeyToString(c.PublicKey)) }
 
                 // Cheeck Signatures on each
                 if (i!= len(chain)-1) {
                         err := chain[i].CheckSignatureFrom(chain[i+1])
                         if (err != nil) {
-				fmt.Printf("THIS CERT:\n")
-				fmt.Printf(CertToString(chain[i],"CERTIFICATE"))
-				fmt.Printf("...WAS NOT SIGNED BY....\n")
-				fmt.Printf(CertToString(chain[i+1],"CERTIFICATE"))
+				if (output) {
+					fmt.Printf("THIS CERT:\n")
+					fmt.Printf(CertToString(chain[i],"CERTIFICATE"))
+					fmt.Printf("...WAS NOT SIGNED BY....\n")
+					fmt.Printf(CertToString(chain[i+1],"CERTIFICATE"))
+				}
                                 return fmt.Errorf("VerifyDelegate Chain Validation error - (#%d) %s not signed by (#%d) %s: %v\n",i,chain[i].Subject,i+1,chain[i+1].Subject,err)
                         }
                         if (chain[i].Issuer.CommonName != chain[i+1].Subject.CommonName) {
@@ -238,6 +239,14 @@ func VerifyDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey, 
         }
 
         return nil
+}
+
+func VerifyDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey, oid *asn1.ObjectIdentifier) error {
+	return processDelegateChain(chain, ownerKey,oid, false )
+}
+
+func PrintDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey, oid *asn1.ObjectIdentifier) error {
+	return processDelegateChain(chain, ownerKey,oid, true )
 }
 
 func DelegateChainSummary(chain []*x509.Certificate) (s string) {
@@ -275,8 +284,6 @@ func GenerateDelegate(key crypto.Signer, flags uint8, delegateKey crypto.PublicK
                         template.IsCA = true
                 }
                 
-                fmt.Printf("Gen Cert Private Key: %s\n",KeyToString(key.Public()))
-                fmt.Printf("Gen Cert Public  Key: %s\n",KeyToString(delegateKey))
                 der, err := x509.CreateCertificate(rand.Reader, template, parent, delegateKey, key)
                 if err != nil {
                         return nil, fmt.Errorf("CreateCertificate returned %v",err)
@@ -285,7 +292,6 @@ func GenerateDelegate(key crypto.Signer, flags uint8, delegateKey crypto.PublicK
                 if err != nil {
                         return nil, err
                 }
-                fmt.Printf(CertToString(cert,"CERTIFICATE"))
 
                 // Let's Verify...
                 derParent, err := x509.CreateCertificate(rand.Reader, parent, parent, key.Public(), key)

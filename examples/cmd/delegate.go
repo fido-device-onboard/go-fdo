@@ -99,12 +99,10 @@ func createDelegateCertificate(state *sqlite.DB,args []string) error {
         if (err != nil) {
                 return fmt.Errorf("Invalid owner key type: \"%s\"",ownerKeyType)
         }
-        lastPriv, lastCert, err := state.OwnerKey(keyType)
+        lastPriv, _, err := state.OwnerKey(keyType)
         if (err != nil) {
                 return fmt.Errorf("Owner Key of type %s does not exist",ownerKeyType)
         }
-
-	fmt.Printf("** GOT OLD CERT %+v\n",lastCert[0])
 
         var permissions []asn1.ObjectIdentifier
         permStrs := strings.Split(args[1],",")
@@ -150,12 +148,10 @@ func createDelegateCertificate(state *sqlite.DB,args []string) error {
                         default:
                                 flags = fdo.DelegateFlagIntermediate
                 }
-                fmt.Printf("Generate Key Type %s\n",keyType)
                 cert, err := fdo.GenerateDelegate(lastPriv,flags,priv.Public(),subject,issuer,permissions, sigAlg)
                 if err != nil {
                         return fmt.Errorf("Failed to generate Delegate: %v\n",err)
                 }
-                fmt.Printf("%d: Subject=%s Issuer=%s IsCA=%v KeyUsage=%v\n",i,cert.Subject,cert.Issuer,cert.IsCA,cert.KeyUsage)
                 lastPriv=priv
                 issuer = subject
                 chain = append([]*x509.Certificate{cert},chain...)
@@ -197,7 +193,7 @@ func doPrintDelegateChain(state *sqlite.DB,args []string) error {
         fmt.Println(fdo.CertChainToString("CERTIFICATE",chain))
 
         fmt.Printf("Delegate Key: %s\n",fdo.KeyToString(key.Public()))
-        return fdo.VerifyDelegateChain(chain,ownerPub,nil)
+        return fdo.PrintDelegateChain(chain,ownerPub,nil)
 
         return nil
 }
@@ -370,7 +366,7 @@ func delegate(args []string) error {
                 return errors.New("command requried")
         }
 
-        state, err := sqlite.New(dbPath, dbPass)
+        state, err := sqlite.Open(dbPath, dbPass)
         if err != nil {
                 return err
         }

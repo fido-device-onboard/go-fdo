@@ -24,7 +24,7 @@ func tlsTransport(baseURL string, conf *tls.Config) fdo.Transport {
 
 	return &http.Transport{
 		BaseURL: baseURL,
-		FdoVersion: 101,
+		FdoVersion: 102,
 		Client: &net_http.Client{Transport: &net_http.Transport{
 			Proxy: net_http.ProxyFromEnvironment,
 			DialContext: (&net.Dialer{
