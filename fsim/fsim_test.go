@@ -13,12 +13,14 @@ import (
 	"io"
 	"iter"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -263,22 +265,10 @@ func TestClientWithCommandModule(t *testing.T) {
 				run := runData{exitChan: make(chan int, 1)}
 
 				if !yield("fdo.command", &fsim.RunCommand{
-					Command: "date",
-					Args:    []string{"--utc"},
-					Stdout: struct {
-						io.Writer
-						io.Closer
-					}{
-						Writer: &run.outbuf,
-						Closer: io.NopCloser(nil),
-					},
-					Stderr: struct {
-						io.Writer
-						io.Closer
-					}{
-						Writer: &run.errbuf,
-						Closer: io.NopCloser(nil),
-					},
+					Command:  "date",
+					Args:     []string{"+%s"},
+					Stdout:   &run.outbuf,
+					Stderr:   &run.errbuf,
 					ExitChan: run.exitChan,
 				}) {
 					return
@@ -300,9 +290,20 @@ func TestClientWithCommandModule(t *testing.T) {
 		default:
 			t.Error("expected exit code on channel")
 		}
-		if !strings.Contains(" UTC ", run.outbuf.String()) {
-			t.Errorf("expected stdout to include UTC, got\n%s", run.outbuf.String())
+
+		epoch, err := strconv.Atoi(strings.TrimSpace(run.outbuf.String()))
+		if err != nil {
+			t.Errorf("expected stdout to be integer epoch time, got \n%s (err %v)", run.outbuf.String(), err)
+			continue
 		}
+
+		// Sanity check: confirm that the reported time is within 10 seconds of current system time
+		diff := time.Since(time.Unix(int64(epoch), 0))
+		if math.Abs(diff.Seconds()) > 10 {
+			t.Errorf("expected reported time within 10 seconds, got \n%.0f", diff.Seconds())
+			continue
+		}
+
 		if run.errbuf.Len() > 0 {
 			t.Errorf("expected empty stderr, got\n%s", run.errbuf.String())
 		}

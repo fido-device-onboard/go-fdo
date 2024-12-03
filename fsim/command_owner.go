@@ -31,11 +31,11 @@ type RunCommand struct {
 
 	// If set, stdout will be requested from the device and written to this
 	// writer
-	Stdout io.WriteCloser
+	Stdout io.Writer
 
 	// If set, stderr will be requested from the device and written to this
 	// writer
-	Stderr io.WriteCloser
+	Stderr io.Writer
 
 	// If set, the exit code will be sent on this channel. It should be
 	// buffered with a size of 1.
@@ -57,6 +57,7 @@ var _ serviceinfo.OwnerModule = (*RunCommand)(nil)
 func (c *RunCommand) HandleInfo(ctx context.Context, messageName string, messageBody io.Reader) error {
 	if err := c.handleInfo(ctx, messageName, messageBody); err != nil {
 		c.cleanup()
+		return err
 	}
 	return nil
 }
@@ -74,27 +75,27 @@ func (c *RunCommand) handleInfo(ctx context.Context, messageName string, message
 		return nil
 
 	case "stdout":
-		var buf cbor.Bstr[[]byte]
+		var buf []byte
 		if err := cbor.NewDecoder(messageBody).Decode(&buf); err != nil {
 			return fmt.Errorf("error decoding message %q: %w", messageName, err)
 		}
 		if c.Stdout == nil {
 			return fmt.Errorf("stdout received but not requested")
 		}
-		if _, err := c.Stdout.Write(buf.Val); err != nil {
+		if _, err := c.Stdout.Write(buf); err != nil {
 			return fmt.Errorf("error writing stdout: %w", err)
 		}
 		return nil
 
 	case "stderr":
-		var buf cbor.Bstr[[]byte]
+		var buf []byte
 		if err := cbor.NewDecoder(messageBody).Decode(&buf); err != nil {
 			return fmt.Errorf("error decoding message %q: %w", messageName, err)
 		}
 		if c.Stderr == nil {
 			return fmt.Errorf("stderr received but not requested")
 		}
-		if _, err := c.Stderr.Write(buf.Val); err != nil {
+		if _, err := c.Stderr.Write(buf); err != nil {
 			return fmt.Errorf("error writing stderr: %w", err)
 		}
 		return nil
@@ -220,12 +221,6 @@ func (c *RunCommand) sendArgsAndExecute(producer *serviceinfo.Producer) (moreInf
 }
 
 func (c *RunCommand) cleanup() {
-	if c.Stdout != nil {
-		_ = c.Stdout.Close()
-	}
-	if c.Stderr != nil {
-		_ = c.Stderr.Close()
-	}
 	if c.ExitChan != nil {
 		close(c.ExitChan)
 	}

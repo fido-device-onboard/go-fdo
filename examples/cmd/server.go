@@ -55,11 +55,11 @@ var (
 	extAddr               string
 	to0Addr               string
 	to0GUID               string
+	rvDelegate            string
+	onboardDelegate       string
 	resaleGUID            string
 	resaleKey             string
 	reuseCred             bool
-	rvDelegate            string
-	onboardDelegate       string
 	rvBypass              bool
 	rvDelay               int
 	printOwnerPubKey      string
@@ -69,6 +69,7 @@ var (
 	printDelegatePrivKey  string
 	ownerCert             bool
 	importVoucher         string
+	cmdDate               bool
 	downloads             stringList
 	uploadDir             string
 	uploadReqs            stringList
@@ -108,6 +109,7 @@ func init() {
 	serverFlags.StringVar(&printOwnerPrivKey, "print-owner-private", "", "Print owner private key of `type` and exit")
 	serverFlags.StringVar(&printOwnerChain, "print-owner-chain", "", "Print owner chain of `type` and exit")
 	serverFlags.StringVar(&importVoucher, "import-voucher", "", "Import a PEM encoded voucher file at `path`")
+	serverFlags.BoolVar(&cmdDate, "command-date", false, "Use fdo.command FSIM to have device run \"date +%s\"")
 	serverFlags.Var(&downloads, "download", "Use fdo.download FSIM for each `file` (flag may be used multiple times)")
 	serverFlags.StringVar(&uploadDir, "upload-dir", "uploads", "The directory `path` to put file uploads")
 	serverFlags.Var(&uploadReqs, "upload", "Use fdo.upload FSIM for each `file` (flag may be used multiple times)")
@@ -123,7 +125,7 @@ func server() error { //nolint:gocyclo
 	if dbPath == "" {
 		return errors.New("db flag is required")
 	}
-	state, err := sqlite.New(dbPath, dbPass)
+	state, err := sqlite.Open(dbPath, dbPass)
 	if err != nil {
 		return err
 	}
@@ -710,6 +712,17 @@ func ownerModules(ctx context.Context, guid protocol.GUID, info string, chain []
 				}) {
 					return
 				}
+			}
+		}
+
+		if cmdDate && slices.Contains(modules, "fdo.command") {
+			if !yield("fdo.command", &fsim.RunCommand{
+				Command: "date",
+				Args:    []string{"+%s"},
+				Stdout:  os.Stdout,
+				Stderr:  os.Stderr,
+			}) {
+				return
 			}
 		}
 	}

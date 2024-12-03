@@ -4,7 +4,6 @@
 package fsim
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"fmt"
@@ -41,8 +40,8 @@ type Command struct {
 
 	// Internal state
 	cmd  *exec.Cmd
-	out  *bufio.Reader
-	err  *bufio.Reader
+	out  *bytes.Buffer
+	err  *bytes.Buffer
 	errc chan error
 }
 
@@ -68,6 +67,7 @@ func (c *Command) Receive(ctx context.Context, messageName string, messageBody i
 func (c *Command) receive(ctx context.Context, messageName string, messageBody io.Reader) error {
 	switch messageName {
 	case "command":
+		c.reset()
 		return cbor.NewDecoder(messageBody).Decode(&c.arg0)
 
 	case "args":
@@ -130,12 +130,12 @@ func (c *Command) execute(ctx context.Context) error {
 	if c.stdout {
 		var buf bytes.Buffer
 		c.cmd.Stdout = &buf
-		c.out = bufio.NewReader(&buf)
+		c.out = &buf
 	}
 	if c.stderr {
 		var buf bytes.Buffer
 		c.cmd.Stderr = &buf
-		c.err = bufio.NewReader(&buf)
+		c.err = &buf
 	}
 	if debugEnabled() {
 		slog.Debug("fdo.command", "args", c.cmd.Args)
@@ -160,6 +160,21 @@ func (c *Command) Yield(ctx context.Context, respond func(message string) io.Wri
 		return nil
 	}
 
+	// Check exited before writing any output to avoid race conditions where
+	// output is lost if process exits between writing stdout/stderr and the
+	// exited check
+	var exited bool
+	select {
+	case err := <-c.errc:
+		defer c.reset()
+		exited = true
+
+		if err != nil {
+			return fmt.Errorf("command failed to execute: %w", err)
+		}
+	default:
+	}
+
 	// Send any data on the stdout/stderr pipes
 	if c.stdout {
 		if err := cborEncodeBuffer(respond("stdout"), c.out); err != nil {
@@ -173,16 +188,11 @@ func (c *Command) Yield(ctx context.Context, respond func(message string) io.Wri
 	}
 
 	// Continue if process is still running
-	if c.cmd.ProcessState == nil {
+	if !exited {
 		return nil
 	}
 
 	// Handle process exit
-	defer c.reset()
-
-	if err := <-c.errc; err != nil {
-		return fmt.Errorf("command failed to execute: %w", err)
-	}
 	code := c.cmd.ProcessState.ExitCode()
 	if code != 0 && !c.mayFail {
 		return fmt.Errorf("command failed with exit code: %d", code)
@@ -191,23 +201,19 @@ func (c *Command) Yield(ctx context.Context, respond func(message string) io.Wri
 	return cbor.NewEncoder(respond("exitcode")).Encode(code)
 }
 
-func cborEncodeBuffer(w io.Writer, r *bufio.Reader) error {
-	n := r.Buffered()
+func cborEncodeBuffer(w io.Writer, r *bytes.Buffer) error {
+	n := r.Len()
 	if n == 0 {
 		return nil
 	}
 
-	buf, err := r.Peek(n)
-	if err != nil {
+	buf := make([]byte, n)
+	if _, err := r.Read(buf); err != nil {
 		return fmt.Errorf("error reading from buffer: %w", err)
 	}
 
 	if err := cbor.NewEncoder(w).Encode(buf); err != nil {
 		return fmt.Errorf("error sending buffer: %w", err)
-	}
-
-	if _, err := r.Discard(n); err != nil {
-		return fmt.Errorf("error reading from buffer: %w", err)
 	}
 
 	return nil
@@ -220,5 +226,8 @@ func (c *Command) reset() {
 		}
 		_ = c.cmd.Process.Kill()
 	}
-	*c = Command{Timeout: c.Timeout}
+	*c = Command{
+		Timeout:   c.Timeout,
+		Transform: c.Transform,
+	}
 }
