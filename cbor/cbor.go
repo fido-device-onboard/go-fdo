@@ -207,6 +207,7 @@ import (
 	"io"
 	"math"
 	"reflect"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -1084,6 +1085,11 @@ func (e *Encoder) write(b []byte) error {
 //
 //nolint:gocyclo // Dispatch will always have naturally high complexity.
 func (e *Encoder) Encode(v any) error {
+	// Reflection does not keep the underlying value in scope, so this is
+	// needed to keep finalizers from running and possibly modifying the value
+	// being encoded (such as zeroing secrets).
+	defer runtime.KeepAlive(v)
+
 	// Use reflection to dereference pointers, get concrete types out of
 	// interfaces, and unwrap named types
 	rv := reflect.ValueOf(v)
