@@ -3,7 +3,11 @@
 
 package protocol
 
-import "crypto"
+import (
+	"crypto"
+	"fmt"
+	"encoding/hex"
+)
 
 // Hash is a crypto hash, with length in bytes preceding. Hashes are computed
 // in accordance with FIPS-180-4. See COSE assigned numbers for hash types.
@@ -39,6 +43,10 @@ const (
 	HmacSha256Hash HashAlg = 5
 	HmacSha384Hash HashAlg = 6
 )
+
+func (h Hash) String() string {
+	return fmt.Sprintf("%s:%s",h.Algorithm,hex.EncodeToString(h.Value))
+}
 
 func (alg HashAlg) String() string {
 	switch alg {

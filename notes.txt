@@ -1,0 +1,54 @@
+go run ./examples/cmd server -debug -db test.db -print-owner-public SECP384R1 > /tmp/mykey.key
+go run ./examples/cmd server -debug -db test.db -print-owner-chain SECP384R1 > /tmp/mychain.cert
+figlet MyChain
+openssl x509   -text -noout -in /tmp/mychain.cert
+figlet MyKey
+openssl pkey  -pubin  -text -noout -in /tmp/mykey.key
+figlet MyPriv
+go run ./examples/cmd server -debug -db test.db -print-owner-private SECP384R1 > /tmp/mypriv.key
+openssl pkey  -text -noout -in /tmp/mypriv.key
+
+go run ./examples/cmd server -debug -db test.db -delegate -owner-certs
+
+openssl x509   -text
+
+
+# Run TO0 on a specifc GUID:
+sqlite3 test.db 'select hex(guid) from owner_vouchers;'
+go run ./examples/cmd server -debug --reuse-cred -db test.db -to0 http://127.0.0.1:8080 -to0-guid 32F7F3CE7F029EE2C10074F4C1DCF565
+
+
+
+
+Figure 7 is wrong? TO0.OwnerSign is not signed by Ownerkey (to1d is, though)
+
+
+# Manual Step Flow test:
+
+rm test.db
+go run ./examples/cmd server -debug -owner-certs  -db test.db [-delegate]
+go run ./examples/cmd/ client -debug -di http://127.0.0.1:8080
+sqlite3 test.db 'select hex(guid) from owner_vouchers;'
+go run ./examples/cmd server -debug --reuse-cred -db test.db -to0 http://127.0.0.1:8080 -to0-guid  <From Previous Line> [-delegate]
+go run ./examples/cmd client  -rv-only -debug
+go run ./examples/cmd client  -debug
+
+# NOTE: if you don't manually register blob by manually running to0 above with -delegate flag - you will get no 
+# delegate in RV blob
+
+Convert hex bytestream to SSL cert:
+/home/bkg/bytestocert/bytestocert | openssl x509 -text
+
+
+# Full Delegate test
+## Client Side
+rm test.db
+go run ./examples/cmd server -debug -owner-certs  -db test.db -onboardDelegate test2 -rvDelegate test2 -reuse-cred
+
+## Server Side
+go run ./examples/cmd delegate -db test.db create test2 onboard,redirect SECP384R1 SECP384R1 SECP384R1
+go run ./examples/cmd/ client -debug -di http://127.0.0.1:8080
+GUID=`sqlite3 test.db 'select hex(guid) from owner_vouchers;'`
+go run ./examples/cmd server -debug --reuse-cred -db test.db -to0 http://127.0.0.1:8080 -rvDelegate test2 -to0-guid $GUID 
+go run ./examples/cmd client  -rv-only -debug
+go run ./examples/cmd client  -debug
