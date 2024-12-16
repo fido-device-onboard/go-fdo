@@ -1,5 +1,6 @@
 # FIDO Device Onboard - Go Library
 
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/fido-device-onboard/go-fdo/badge)](https://scorecard.dev/viewer/?uri=github.com/fido-device-onboard/go-fdo)
 [![Lint](https://github.com/fido-device-onboard/go-fdo/actions/workflows/lint.yml/badge.svg)](https://github.com/fido-device-onboard/go-fdo/actions/workflows/lint.yml)
 [![Test](https://github.com/fido-device-onboard/go-fdo/actions/workflows/test.yml/badge.svg)](https://github.com/fido-device-onboard/go-fdo/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://raw.githubusercontent.com/fido-device-onboard/go-fdo/main/LICENSE)
