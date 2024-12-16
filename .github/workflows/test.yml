@@ -5,6 +5,9 @@ on:
       - main
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   go:
     name: Test Go packages
@@ -15,7 +18,7 @@ jobs:
       GOFLAGS: -buildvcs=false
     steps:
       - name: Check out repository code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Set up test environment
         run: |
           apk add --no-cache bash gcc g++ openssl-dev openssl
