@@ -15,7 +15,7 @@ require (
 	github.com/fido-device-onboard/go-fdo/fsim v0.0.0-00010101000000-000000000000
 	github.com/fido-device-onboard/go-fdo/sqlite v0.0.0-00010101000000-000000000000
 	github.com/fido-device-onboard/go-fdo/tpm v0.0.0-00010101000000-000000000000
-	github.com/google/go-tpm v0.9.2
+	github.com/google/go-tpm v0.9.3
 	github.com/google/go-tpm-tools v0.4.4
 	hermannm.dev/devlog v0.5.0
 )
