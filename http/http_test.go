@@ -5,7 +5,6 @@ package http_test
 
 import (
 	"net/http"
-	"path"
 	"testing"
 
 	"github.com/fido-device-onboard/go-fdo"
@@ -51,7 +50,6 @@ type transport struct {
 
 // Assume request is well-formed and ignore timeouts, retries, etc.
 func (tr *transport) RoundTrip(req *http.Request) (*http.Response, error) {
-	setPathValue(req, "msg", path.Base(req.URL.Path))
 	rr := new(httputil.ResponseRecorder)
 	tr.Handler.ServeHTTP(rr, req)
 	resp := rr.Result()
