@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-Download TinyGo from your OS package manager and Wrangler from npm.
+Download TinyGo (>= 0.35.0) from your OS package manager and Wrangler from npm.
 
 ## Deploy
 
