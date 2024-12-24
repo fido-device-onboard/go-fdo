@@ -24,7 +24,8 @@ import (
 const bearerPrefix = "Bearer "
 
 // Handler implements http.Handler and responds to all DI, TO1, and TO2 message
-// types.
+// types. It is expected that the request will use the POST method and the path
+// will be of the form "/fdo/$VER/msg/$MSG".
 type Handler struct {
 	Tokens protocol.TokenService
 
@@ -36,6 +37,24 @@ type Handler struct {
 	// MaxContentLength defaults to 65535. Negative values disable content
 	// length checking.
 	MaxContentLength int64
+}
+
+func msgTypeFromPath(w http.ResponseWriter, r *http.Request) (uint8, bool) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return 0, false
+	}
+	path := strings.TrimPrefix(r.URL.Path, "/fdo/101/msg/")
+	if strings.Contains(path, "/") {
+		w.WriteHeader(http.StatusNotFound)
+		return 0, false
+	}
+	typ, err := strconv.ParseUint(path, 10, 8)
+	if err != nil {
+		writeErr(w, 0, fmt.Errorf("invalid message type"))
+		return 0, false
+	}
+	return uint8(typ), true
 }
 
 func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {

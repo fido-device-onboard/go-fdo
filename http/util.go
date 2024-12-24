@@ -7,23 +7,12 @@ package http
 
 import (
 	"bytes"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
-	"strconv"
 )
-
-func msgTypeFromPath(w http.ResponseWriter, r *http.Request) (uint8, bool) {
-	typ, err := strconv.ParseUint(r.PathValue("msg"), 10, 8)
-	if err != nil {
-		writeErr(w, 0, fmt.Errorf("invalid message type"))
-		return 0, false
-	}
-	return uint8(typ), true
-}
 
 func debugRequest(w http.ResponseWriter, r *http.Request, handler http.HandlerFunc) {
 	if !debugEnabled() {

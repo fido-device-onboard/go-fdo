@@ -11,29 +11,10 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/fido-device-onboard/go-fdo/http/internal/httputil"
 )
-
-func msgTypeFromPath(w http.ResponseWriter, r *http.Request) (uint8, bool) {
-	if r.Method != http.MethodPost {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return 0, false
-	}
-	path := strings.TrimPrefix(r.URL.Path, "/fdo/101/msg/")
-	if strings.Contains(path, "/") {
-		w.WriteHeader(http.StatusNotFound)
-		return 0, false
-	}
-	typ, err := strconv.ParseUint(path, 10, 8)
-	if err != nil {
-		writeErr(w, 0, fmt.Errorf("invalid message type"))
-		return 0, false
-	}
-	return uint8(typ), true
-}
 
 func debugRequest(w http.ResponseWriter, r *http.Request, handler http.HandlerFunc) {
 	if !debugEnabled() {
