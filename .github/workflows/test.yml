@@ -34,3 +34,14 @@ jobs:
         run: go test -v ./tpm/...
       - name: Test examples
         run: go test -v ./examples/...
+  tinygo:
+    name: Test Go packages (TinyGo)
+    runs-on: ubuntu-latest
+    container:
+      image: tinygo/tinygo:0.35.0
+      options: --user root
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Test base library
+        run: tinygo test -v ./...

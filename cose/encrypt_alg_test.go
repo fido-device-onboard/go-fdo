@@ -8,6 +8,8 @@ import (
 	"crypto/rand"
 	"strconv"
 	"testing"
+
+	"github.com/fido-device-onboard/go-fdo/internal/build"
 )
 
 func TestEncryptDecrypt(t *testing.T) {
@@ -53,6 +55,9 @@ func TestEncryptDecrypt(t *testing.T) {
 }
 
 func TestCCM(t *testing.T) {
+	if build.TinyGo {
+		return
+	}
 	t.Skip("CCM not yet implemented")
 
 	var (
