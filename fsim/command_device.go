@@ -4,12 +4,15 @@
 package fsim
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os/exec"
+	"sync"
 	"syscall"
 	"time"
 
@@ -40,8 +43,8 @@ type Command struct {
 
 	// Internal state
 	cmd  *exec.Cmd
-	out  *bytes.Buffer
-	err  *bytes.Buffer
+	out  *bufio.Reader
+	err  *bufio.Reader
 	errc chan error
 }
 
@@ -128,14 +131,14 @@ func (c *Command) execute(ctx context.Context) error {
 	ctx, _ = context.WithTimeout(ctx, timeout)     //nolint:govet // This context is only used for the command
 	c.cmd = exec.CommandContext(ctx, name, arg...) //nolint:gosec // This is dangerous by intentional design as the owner service is meant to be privileged
 	if c.stdout {
-		var buf bytes.Buffer
+		var buf safeBuffer
 		c.cmd.Stdout = &buf
-		c.out = &buf
+		c.out = bufio.NewReader(&buf)
 	}
 	if c.stderr {
-		var buf bytes.Buffer
+		var buf safeBuffer
 		c.cmd.Stderr = &buf
-		c.err = &buf
+		c.err = bufio.NewReader(&buf)
 	}
 	if debugEnabled() {
 		slog.Debug("fdo.command", "args", c.cmd.Args)
@@ -178,7 +181,7 @@ func (c *Command) Yield(ctx context.Context, respond func(message string) io.Wri
 	// Send any data on the stdout/stderr pipes
 	if c.stdout {
 		if err := cborEncodeBuffer(respond("stdout"), c.out); err != nil {
-			return fmt.Errorf("stderr: %w", err)
+			return fmt.Errorf("stdout: %w", err)
 		}
 	}
 	if c.stderr {
@@ -201,22 +204,24 @@ func (c *Command) Yield(ctx context.Context, respond func(message string) io.Wri
 	return cbor.NewEncoder(respond("exitcode")).Encode(code)
 }
 
-func cborEncodeBuffer(w io.Writer, r *bytes.Buffer) error {
-	n := r.Len()
-	if n == 0 {
+// Encode stdin/stdout buffer, ensuring that partial lines are not written. EOF
+// is ignored, because it only indicates that the in-memory buffer is empty,
+// not that the process has exited.
+func cborEncodeBuffer(w io.Writer, br *bufio.Reader) error {
+	enc := cbor.NewEncoder(w)
+
+	b, err := br.ReadBytes('\n')
+	for err == nil {
+		line := append(b, '\n')
+		if err := enc.Encode(line); err != nil {
+			return fmt.Errorf("error sending buffer: %w", err)
+		}
+		b, err = br.ReadBytes('\n')
+	}
+	if errors.Is(err, io.EOF) {
 		return nil
 	}
-
-	buf := make([]byte, n)
-	if _, err := r.Read(buf); err != nil {
-		return fmt.Errorf("error reading from buffer: %w", err)
-	}
-
-	if err := cbor.NewEncoder(w).Encode(buf); err != nil {
-		return fmt.Errorf("error sending buffer: %w", err)
-	}
-
-	return nil
+	return err
 }
 
 func (c *Command) reset() {
@@ -230,4 +235,23 @@ func (c *Command) reset() {
 		Timeout:   c.Timeout,
 		Transform: c.Transform,
 	}
+}
+
+type safeBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+var _ io.ReadWriter = (*safeBuffer)(nil)
+
+func (s *safeBuffer) Write(p []byte) (n int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *safeBuffer) Read(p []byte) (n int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Read(p)
 }
