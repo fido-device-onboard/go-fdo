@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -35,9 +37,9 @@ type Closer interface {
 // when using the kernel resource manager.
 func Open(path string) (Closer, error) {
 	switch {
-	case IsDevNode(path, "tpmrm"):
+	case IsDevNode(path, DevNodeManaged):
 		return linuxtpm.Open(path)
-	case IsDevNode(path, "tpm"):
+	case IsDevNode(path, DevNodeUnmanaged):
 		slog.Warn("direct use of the TPM can lead to resource exhaustion, use a TPM resource manager instead")
 		return linuxtpm.Open(path)
 	default:
@@ -45,16 +47,50 @@ func Open(path string) (Closer, error) {
 	}
 }
 
-func IsDevNode(path, kind string) bool {
-	if strings.Contains(kind, "/") {
-		return false
-	}
-	prefix := "/dev/" + kind
+// DevNodeKind enumerates managed and unmanaged TPM dev node kinds.
+type DevNodeKind uint8
 
+// PathPrefix returns the standard unix /dev node path without the numerical
+// index.
+func (n DevNodeKind) PathPrefix() string {
+	switch n {
+	case DevNodeUnmanaged:
+		return "/dev/tpm"
+	case DevNodeManaged:
+		return "/dev/tpmrm"
+	}
+	panic("invalid TPM dev node kind")
+}
+
+const (
+	// DevNodeUnmanaged is an unmanaged TPM resource which should not be used
+	// by concurrent processes.
+	DevNodeUnmanaged DevNodeKind = iota
+
+	// DevNodeManaged is a kernel-managed TPM resource that is safe for
+	// concurrent usage.
+	DevNodeManaged
+)
+
+// IsDevNode checks that path is a device node at the standard unix path for
+// kind.
+func IsDevNode(path string, kind DevNodeKind) bool {
+	path = filepath.Clean(path)
+
+	// Check path has appropriate prefix and numerical index
+	prefix := kind.PathPrefix()
 	if !strings.HasPrefix(path, prefix) {
 		return false
 	}
+	sIdx := strings.TrimPrefix(path, prefix)
+	if _, err := strconv.ParseUint(sIdx, 10, 16); err != nil {
+		return false
+	}
 
-	_, err := strconv.ParseUint(strings.TrimPrefix(path, prefix), 10, 16)
-	return err == nil
+	// Check that node exists and is an actual device node
+	stat, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return stat.Mode().Type() == os.ModeDevice
 }
