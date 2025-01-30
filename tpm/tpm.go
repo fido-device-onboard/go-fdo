@@ -35,9 +35,9 @@ type Closer interface {
 // when using the kernel resource manager.
 func Open(path string) (Closer, error) {
 	switch {
-	case isDevNode(path, "tpmrm"):
+	case IsDevNode(path, "tpmrm"):
 		return linuxtpm.Open(path)
-	case isDevNode(path, "tpm"):
+	case IsDevNode(path, "tpm"):
 		slog.Warn("direct use of the TPM can lead to resource exhaustion, use a TPM resource manager instead")
 		return linuxtpm.Open(path)
 	default:
@@ -45,7 +45,7 @@ func Open(path string) (Closer, error) {
 	}
 }
 
-func isDevNode(path, kind string) bool {
+func IsDevNode(path, kind string) bool {
 	if strings.Contains(kind, "/") {
 		return false
 	}
