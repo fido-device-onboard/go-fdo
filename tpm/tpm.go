@@ -30,16 +30,16 @@ type Closer interface {
 	io.Closer
 }
 
-// Open a TPM device at the given path.
+// OpenUnix opens a TPM device at the given path.
 //
 // Clients should use /dev/tpmrm0 because using /dev/tpm0 requires more
 // extensive resource management that the kernel already handles for us
 // when using the kernel resource manager.
-func Open(path string) (Closer, error) {
+func OpenUnix(path string) (Closer, error) {
 	switch {
-	case IsDevNode(path, DevNodeManaged):
+	case isDevNode(path, DevNodeManaged):
 		return linuxtpm.Open(path)
-	case IsDevNode(path, DevNodeUnmanaged):
+	case isDevNode(path, DevNodeUnmanaged):
 		slog.Warn("direct use of the TPM can lead to resource exhaustion, use a TPM resource manager instead")
 		return linuxtpm.Open(path)
 	default:
@@ -74,7 +74,7 @@ const (
 
 // IsDevNode checks that path is a device node at the standard unix path for
 // kind.
-func IsDevNode(path string, kind DevNodeKind) bool {
+func isDevNode(path string, kind DevNodeKind) bool {
 	path = filepath.Clean(path)
 
 	// Check path has appropriate prefix and numerical index
