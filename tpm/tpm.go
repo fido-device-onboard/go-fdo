@@ -8,10 +8,8 @@
 package tpm
 
 import (
-	"fmt"
 	"io"
 	"log/slog"
-	"strconv"
 	"strings"
 
 	"github.com/google/go-tpm/tpm2/transport/linuxtpm"
@@ -34,27 +32,9 @@ type Closer interface {
 // extensive resource management that the kernel already handles for us
 // when using the kernel resource manager.
 func Open(path string) (Closer, error) {
-	switch {
-	case isDevNode(path, "tpmrm"):
-		return linuxtpm.Open(path)
-	case isDevNode(path, "tpm"):
-		slog.Warn("direct use of the TPM can lead to resource exhaustion, use a TPM resource manager instead")
-		return linuxtpm.Open(path)
-	default:
-		return nil, fmt.Errorf("unsupported TPM device path: %s", path)
-	}
-}
-
-func isDevNode(path, kind string) bool {
-	if strings.Contains(kind, "/") {
-		return false
-	}
-	prefix := "/dev/" + kind
-
-	if !strings.HasPrefix(path, prefix) {
-		return false
+	if !strings.HasPrefix(path, "/dev/tpmrm") {
+		slog.Warn("use a TPM resource manager to prevent resource exhaustion")
 	}
 
-	_, err := strconv.ParseUint(strings.TrimPrefix(path, prefix), 10, 16)
-	return err == nil
+	return linuxtpm.Open(path)
 }
