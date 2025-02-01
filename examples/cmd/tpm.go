@@ -8,6 +8,8 @@ package main
 import (
 	"fmt"
 
+	"github.com/google/go-tpm/tpm2/transport/linuxtpm"
+
 	"github.com/fido-device-onboard/go-fdo/tpm"
 )
 
@@ -15,5 +17,5 @@ func tpmOpen(tpmPath string) (tpm.Closer, error) {
 	if tpmPath == "simulator" {
 		return nil, fmt.Errorf("tpm simulator support requires a build with the tpmsim tag")
 	}
-	return tpm.Open(tpmPath)
+	return linuxtpm.Open(tpmPath)
 }
