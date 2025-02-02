@@ -71,7 +71,6 @@
 
           example-tpmsim = buildGoApplication {
             name = "fdo-tpmsim";
-            tags = [ "tpmsim" ];
             CGO_ENABLED = 1;
             buildInputs = with pkgs; [
               openssl

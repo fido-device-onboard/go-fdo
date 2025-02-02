@@ -15,11 +15,17 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/google/go-tpm-tools/simulator"
+	"github.com/google/go-tpm/tpm2/transport"
+	"github.com/google/go-tpm/tpm2/transport/linuxtpm"
+
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/blob"
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/tpm"
 )
+
+const tpmSimulatorPath = "simulator"
 
 func tpmCred() (hash.Hash, hash.Hash, crypto.Signer, func() error, error) {
 	var diKeyFlagSet bool
@@ -55,7 +61,7 @@ func tpmCred() (hash.Hash, hash.Hash, crypto.Signer, func() error, error) {
 	case "rsa2048":
 		key, err = tpm.GenerateRSAKey(tpmc, 2048)
 	case "rsa3072":
-		if tpmPath == "simulator" {
+		if tpmPath == tpmSimulatorPath {
 			err = fmt.Errorf("TPM simulator does not support RSA3072")
 		} else {
 			key, err = tpm.GenerateRSAKey(tpmc, 3072)
@@ -74,6 +80,17 @@ func tpmCred() (hash.Hash, hash.Hash, crypto.Signer, func() error, error) {
 		_ = key.Close()
 		return tpmc.Close()
 	}, nil
+}
+
+func tpmOpen(tpmPath string) (tpm.Closer, error) {
+	if tpmPath == tpmSimulatorPath {
+		sim, err := simulator.GetWithFixedSeedInsecure(8086)
+		if err != nil {
+			return nil, err
+		}
+		return transport.FromReadWriteCloser(sim), nil
+	}
+	return linuxtpm.Open(tpmPath)
 }
 
 func readCred() (_ *fdo.DeviceCredential, hmacSha256, hmacSha384 hash.Hash, key crypto.Signer, cleanup func() error, _ error) {
