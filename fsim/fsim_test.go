@@ -293,7 +293,7 @@ func TestClientWithCommandModule(t *testing.T) {
 
 		epoch, err := strconv.Atoi(strings.TrimSpace(run.outbuf.String()))
 		if err != nil {
-			t.Errorf("expected stdout to be integer epoch time, got \n%s (err %v)", run.outbuf.String(), err)
+			t.Errorf("expected stdout to be integer epoch time, got %q (err %v)", run.outbuf.String(), err)
 			continue
 		}
 

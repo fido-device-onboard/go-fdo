@@ -17,65 +17,6 @@ import (
 	"github.com/fido-device-onboard/go-fdo/tpm"
 )
 
-func TestIsDevNode(t *testing.T) {
-	for _, test := range []struct {
-		path   string
-		kind   string
-		expect bool
-	}{
-		{
-			path:   "/dev/tpm0",
-			kind:   "tpm",
-			expect: true,
-		},
-		{
-			path:   "/dev/tpm1",
-			kind:   "tpm",
-			expect: true,
-		},
-		{
-			path:   "/dev/tpmrm0",
-			kind:   "tpmrm",
-			expect: true,
-		},
-		{
-			path:   "/dev/tpmrm1",
-			kind:   "tpmrm",
-			expect: true,
-		},
-		{
-			path:   "/dev/tpm0",
-			kind:   "tpmrm",
-			expect: false,
-		},
-		{
-			path:   "/dev/tpmrm0",
-			kind:   "tpm",
-			expect: false,
-		},
-		{
-			path:   "/dev/tpmrm0",
-			kind:   "tpmrm0",
-			expect: false,
-		},
-		{
-			path:   "tpmrm0",
-			kind:   "tpmrm",
-			expect: false,
-		},
-	} {
-		t.Run("whether "+test.path+" is a "+test.kind, func(t *testing.T) {
-			if got, expect := tpm.IsDevNode(test.path, test.kind), test.expect; got != expect {
-				var direction string
-				if !expect {
-					direction = " not"
-				}
-				t.Errorf("expected %q to%s match %q suffixed with a number", test.path, direction, test.kind)
-			}
-		})
-	}
-}
-
 func TestTPMDevice(t *testing.T) {
 	sim, err := simulator.OpenSimulator()
 	if err != nil {

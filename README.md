@@ -354,15 +354,15 @@ The TPM simulator may be used with 3 caveats:
 
 1. RSA3072 keys are not supported
 2. OpenSSL libraries and headers must be installed
-3. The `tpmsim` build tag must be used
+3. The executable must be built with cgo enabled
 
 ```console
-$ go run -tags tpmsim ./examples/cmd client -di http://127.0.0.1:9999 -di-key rsa2048 -tpm simulator
+$ go run ./examples/cmd client -di http://127.0.0.1:9999 -di-key rsa2048 -tpm simulator
 [2024-09-01 00:00:00] INFO: tpm: max input buffer size undefined, using default
   size: 1024
 Success
 
-$ go run -tags tpmsim ./examples/cmd client -di-key rsa2048 -tpm simulator
+$ go run ./examples/cmd client -di-key rsa2048 -tpm simulator
 [2024-09-01 00:00:00] INFO: tpm: max input buffer size undefined, using default
   size: 1024
 Success
