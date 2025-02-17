@@ -17,7 +17,7 @@ require (
 	github.com/fido-device-onboard/go-fdo/tpm v0.0.0-00010101000000-000000000000
 	github.com/google/go-tpm v0.9.3
 	github.com/google/go-tpm-tools v0.4.4
-	github.com/syumai/workers v0.27.0
+	github.com/syumai/workers v0.28.0
 	hermannm.dev/devlog v0.5.0
 )
 
