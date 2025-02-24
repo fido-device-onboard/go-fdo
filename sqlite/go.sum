@@ -1,9 +1,9 @@
-github.com/ncruces/go-sqlite3 v0.23.0 h1:90j/ar8Ywu2AtsfDl5WhO9sgP/rNk76BcKGIzAHO8AQ=
-github.com/ncruces/go-sqlite3 v0.23.0/go.mod h1:gq2nriHSczOs11SqGW5+0X+SgLdkdj4K+j4F/AhQ+8g=
+github.com/ncruces/go-sqlite3 v0.23.3 h1:RHaQPjd5hPhhVXuS2B4z07rqhV/3SuAsBbDCk23fyMw=
+github.com/ncruces/go-sqlite3 v0.23.3/go.mod h1:WvU8gwMpK1rNG3JqJ7QZGRXNVNeIAwuButtr/Ze3iso=
 github.com/ncruces/julianday v1.0.0 h1:fH0OKwa7NWvniGQtxdJRxAgkBMolni2BjDHaWTxqt7M=
 github.com/ncruces/julianday v1.0.0/go.mod h1:Dusn2KvZrrovOMJuOt0TNXL6tB7U2E8kvza5fFc9G7g=
-github.com/tetratelabs/wazero v1.8.2 h1:yIgLR/b2bN31bjxwXHD8a3d+BogigR952csSDdLYEv4=
-github.com/tetratelabs/wazero v1.8.2/go.mod h1:yAI0XTsMBhREkM/YDAK/zNou3GoiAce1P6+rp/wQhjs=
+github.com/tetratelabs/wazero v1.9.0 h1:IcZ56OuxrtaEz8UYNRHBrUa9bYeX9oVY93KspZZBf/I=
+github.com/tetratelabs/wazero v1.9.0/go.mod h1:TSbcXCfFP0L2FGkRPxHphadXPjo1T6W+CseNNY7EkjM=
 golang.org/x/crypto v0.33.0 h1:IOBPskki6Lysi0lo9qQvbxiQ+FvsCC/YWOecCHAixus=
 golang.org/x/crypto v0.33.0/go.mod h1:bVdXmD7IV/4GdElGPozy6U7lWdRXA4qyRVGJV57uQ5M=
 golang.org/x/sys v0.30.0 h1:QjkSwP/36a20jFYWkSue1YwXzLmsV5Gfq7Eiy72C1uc=
