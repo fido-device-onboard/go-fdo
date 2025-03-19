@@ -243,6 +243,17 @@ func (s *TO0Server) acceptOwner(ctx context.Context, msg io.Reader) (*to0AcceptO
 		return nil, fmt.Errorf("voucher is not valid: %w", err)
 	}
 
+	// Check owner sign nonce in to0d
+	signNonce, err := s.Session.TO0SignNonce(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error getting TO0 owner sign nonce: %w", err)
+	}
+	nonce := sig.To0d.Val.NonceTO0Sign
+	if !bytes.Equal(nonce[:], signNonce[:]) {
+		captureErr(ctx, protocol.InvalidMessageErrCode, "")
+		return nil, fmt.Errorf("TO0 owner sign nonces not match")
+	}
+
 	// Use optional callback to decide whether to accept voucher
 	if s.AcceptVoucher != nil {
 		if accept, err := s.AcceptVoucher(ctx, ov); err != nil {
