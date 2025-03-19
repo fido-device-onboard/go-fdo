@@ -342,7 +342,7 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 				defer cancel()
 				if _, err := fdo.TO1(ctx, transport, *cred, key, &fdo.TO1Options{
 					PSS: table.keyType == protocol.RsaPssKeyType,
-				}); !strings.HasSuffix(err.Error(), fdo.ErrNotFound.Error()) {
+				}); err == nil || !strings.HasSuffix(err.Error(), fdo.ErrNotFound.Error()) {
 					t.Fatalf("expected TO1 to fail with no resource found, got %v", err)
 				}
 				dnsAddr := "owner.fidoalliance.org"
