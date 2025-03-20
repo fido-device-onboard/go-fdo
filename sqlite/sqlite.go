@@ -9,6 +9,7 @@ import (
 	"crypto"
 	"crypto/hmac"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/sha512"
 	"crypto/x509"
@@ -56,14 +57,18 @@ func Init(db *sql.DB) error {
 			, secret BLOB NOT NULL
 			)`,
 		`CREATE TABLE IF NOT EXISTS mfg_keys
-			( type INTEGER UNIQUE NOT NULL
+			( type INTEGER NOT NULL
 			, pkcs8 BLOB NOT NULL
+			, rsa_bits INT
 			, x509_chain BLOB NOT NULL
+			, PRIMARY KEY(type, rsa_bits)
 			)`,
 		`CREATE TABLE IF NOT EXISTS owner_keys
-			( type INTEGER UNIQUE NOT NULL
+			( type INTEGER NOT NULL
 			, pkcs8 BLOB NOT NULL
+			, rsa_bits INT
 			, x509_chain BLOB
+			, PRIMARY KEY(type, rsa_bits)
 			)`,
 		`CREATE TABLE IF NOT EXISTS rv_blobs
 			( guid BLOB PRIMARY KEY
@@ -491,24 +496,51 @@ func remove(ctx context.Context, db queryexecer, table string, where map[string]
 // AddManufacturerKey for signing device certificate chains. Unlike
 // [DB.AddOwnerKey], chain is always required.
 func (db *DB) AddManufacturerKey(keyType protocol.KeyType, key crypto.PrivateKey, chain []*x509.Certificate) error {
+	if len(chain) == 0 {
+		return fmt.Errorf("required certificate chain is missing")
+	}
+
 	der, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
 		return err
 	}
-	return db.insertOrIgnore(context.Background(), "mfg_keys", map[string]any{
+
+	kvs := map[string]any{
 		"type":       int(keyType),
 		"pkcs8":      der,
 		"x509_chain": derEncode(chain),
-	})
+	}
+
+	switch keyType {
+	case protocol.Rsa2048RestrKeyType:
+		kvs["rsa_bits"] = 2048
+	case protocol.RsaPkcsKeyType, protocol.RsaPssKeyType:
+		rsaKey, ok := key.(*rsa.PrivateKey)
+		if !ok {
+			return fmt.Errorf("expected key type to be *rsa.PrivateKey, got %T", key)
+		}
+		kvs["rsa_bits"] = rsaKey.Size() * 8
+	}
+
+	return db.insertOrIgnore(context.Background(), "mfg_keys", kvs)
 }
 
 // ManufacturerKey returns the signer of a given key type and its certificate
-// chain (required).
-func (db *DB) ManufacturerKey(keyType protocol.KeyType) (crypto.Signer, []*x509.Certificate, error) {
-	var pkcs8, der []byte
-	if err := db.query(context.Background(), "mfg_keys", []string{"pkcs8", "x509_chain"}, map[string]any{
+// chain (required). If key type is not RSAPKCS or RSAPSS then rsaBits is
+// ignored. Otherwise it must be either 2048 or 3072.
+func (db *DB) ManufacturerKey(keyType protocol.KeyType, rsaBits int) (crypto.Signer, []*x509.Certificate, error) {
+	where := map[string]any{
 		"type": int(keyType),
-	}, &pkcs8, &der); err != nil {
+	}
+	switch keyType {
+	case protocol.Rsa2048RestrKeyType:
+		where["rsa_bits"] = 2048
+	case protocol.RsaPkcsKeyType, protocol.RsaPssKeyType:
+		where["rsa_bits"] = rsaBits
+	}
+
+	var pkcs8, der []byte
+	if err := db.query(context.Background(), "mfg_keys", []string{"pkcs8", "x509_chain"}, where, &pkcs8, &der); err != nil {
 		return nil, nil, err
 	}
 	if pkcs8 == nil || der == nil {
@@ -1088,27 +1120,49 @@ func (db *DB) AddOwnerKey(keyType protocol.KeyType, key crypto.PrivateKey, chain
 	if err != nil {
 		return err
 	}
-	if chain == nil {
-		return db.insertOrIgnore(context.Background(), "owner_keys", map[string]any{
-			"type":  int(keyType),
-			"pkcs8": der,
-		})
+
+	kvs := map[string]any{
+		"type":  int(keyType),
+		"pkcs8": der,
 	}
-	return db.insertOrIgnore(context.Background(), "owner_keys", map[string]any{
-		"type":       int(keyType),
-		"pkcs8":      der,
-		"x509_chain": derEncode(chain),
-	})
+	if chain != nil {
+		kvs["x509_chain"] = derEncode(chain)
+	}
+
+	switch keyType {
+	case protocol.Rsa2048RestrKeyType:
+		kvs["rsa_bits"] = 2048
+	case protocol.RsaPkcsKeyType, protocol.RsaPssKeyType:
+		rsaKey, ok := key.(*rsa.PrivateKey)
+		if !ok {
+			return fmt.Errorf("expected key type to be *rsa.PrivateKey, got %T", key)
+		}
+		kvs["rsa_bits"] = rsaKey.Size() * 8
+	}
+
+	return db.insertOrIgnore(context.Background(), "owner_keys", kvs)
 }
 
 // OwnerKey returns the private key matching a given key type and optionally
-// its certificate chain.
-func (db *DB) OwnerKey(keyType protocol.KeyType) (crypto.Signer, []*x509.Certificate, error) {
-	var keyDer, certChainDer []byte
-	if err := db.query(context.Background(), "owner_keys", []string{"pkcs8", "x509_chain"}, map[string]any{
+// its certificate chain. If key type is not RSAPKCS or RSAPSS then rsaBits
+// is ignored. Otherwise it must be either 2048 or 3072.
+func (db *DB) OwnerKey(keyType protocol.KeyType, rsaBits int) (crypto.Signer, []*x509.Certificate, error) {
+	where := map[string]any{
 		"type": int(keyType),
-	}, &keyDer, &certChainDer); err != nil {
-		return nil, nil, fmt.Errorf("error querying owner key [type=%s]: %w", keyType, err)
+	}
+	switch keyType {
+	case protocol.Rsa2048RestrKeyType:
+		rsaBits = 2048
+		where["rsa_bits"] = rsaBits
+	case protocol.RsaPkcsKeyType, protocol.RsaPssKeyType:
+		where["rsa_bits"] = rsaBits
+	default:
+		rsaBits = 0
+	}
+
+	var keyDer, certChainDer []byte
+	if err := db.query(context.Background(), "owner_keys", []string{"pkcs8", "x509_chain"}, where, &keyDer, &certChainDer); err != nil {
+		return nil, nil, fmt.Errorf("error querying owner key [type=%s,size=%d]: %w", keyType, rsaBits, err)
 	}
 	if keyDer == nil { // x509_chain may be NULL
 		return nil, nil, fdo.ErrNotFound
