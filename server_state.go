@@ -149,8 +149,9 @@ type RendezvousBlobPersistentState interface {
 // OwnerKeyPersistentState maintains the owner service keys.
 type OwnerKeyPersistentState interface {
 	// OwnerKey returns the private key matching a given key type and optionally
-	// its certificate chain.
-	OwnerKey(protocol.KeyType) (crypto.Signer, []*x509.Certificate, error)
+	// its certificate chain. If key type is not RSAPKCS or RSAPSS then rsaBits
+	// is ignored. Otherwise it must be either 2048 or 3072.
+	OwnerKey(keyType protocol.KeyType, rsaBits int) (crypto.Signer, []*x509.Certificate, error)
 }
 
 // ManufacturerVoucherPersistentState maintains vouchers created during DI
@@ -185,20 +186,23 @@ type OwnerVoucherPersistentState interface {
 // device voucher upon the completion of DI.
 type AutoExtend interface {
 	// ManufacturerKey returns the signer of a given key type and its certificate
-	// chain (required).
-	ManufacturerKey(keyType protocol.KeyType) (crypto.Signer, []*x509.Certificate, error)
+	// chain (required). If key type is not RSAPKCS or RSAPSS then rsaBits is
+	// ignored. Otherwise it must be either 2048 or 3072.
+	ManufacturerKey(keyType protocol.KeyType, rsaBits int) (crypto.Signer, []*x509.Certificate, error)
 
 	// OwnerKey returns the private key matching a given key type and optionally
-	// its certificate chain.
-	OwnerKey(keyType protocol.KeyType) (crypto.Signer, []*x509.Certificate, error)
+	// its certificate chain. If key type is not RSAPKCS or RSAPSS then rsaBits
+	// is ignored. Otherwise it must be either 2048 or 3072.
+	OwnerKey(keyType protocol.KeyType, rsaBits int) (crypto.Signer, []*x509.Certificate, error)
 }
 
 // AutoTO0 provides the necessary methods for setting a rendezvous blob upon
 // device voucher auto-extension.
 type AutoTO0 interface {
 	// OwnerKey returns the private key matching a given key type and optionally
-	// its certificate chain.
-	OwnerKey(keyType protocol.KeyType) (crypto.Signer, []*x509.Certificate, error)
+	// its certificate chain. If key type is not RSAPKCS or RSAPSS then rsaBits
+	// is ignored. Otherwise it must be either 2048 or 3072.
+	OwnerKey(keyType protocol.KeyType, rsaBits int) (crypto.Signer, []*x509.Certificate, error)
 
 	// SetRVBlob sets the owner rendezvous blob for a device.
 	SetRVBlob(context.Context, *Voucher, *cose.Sign1[protocol.To1d, []byte], time.Time) error

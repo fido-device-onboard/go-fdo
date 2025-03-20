@@ -28,24 +28,40 @@ import (
 type State struct {
 	RVBlobs   map[protocol.GUID]*cose.Sign1[protocol.To1d, []byte]
 	Vouchers  map[protocol.GUID]*fdo.Voucher
-	OwnerKeys map[protocol.KeyType]struct {
+	OwnerKeys map[KeyTypeAndRsaBits]struct {
 		Key   crypto.Signer
 		Chain []*x509.Certificate
 	}
+}
+
+// KeyTypeAndRsaBits identifies an owner/manufacturer key by its type and bit
+// size.
+type KeyTypeAndRsaBits struct {
+	Type    protocol.KeyType
+	RsaBits int
 }
 
 var _ fdo.RendezvousBlobPersistentState = (*State)(nil)
 var _ fdo.ManufacturerVoucherPersistentState = (*State)(nil)
 var _ fdo.OwnerVoucherPersistentState = (*State)(nil)
 var _ fdo.OwnerKeyPersistentState = (*State)(nil)
+var _ fdo.AutoExtend = (*State)(nil)
 
 // NewState initializes the in-memory state.
 func NewState() (*State, error) {
-	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	rsa2048Key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return nil, err
 	}
-	rsaCert, err := newCA(rsaKey)
+	rsa2048Cert, err := newCA(rsa2048Key)
+	if err != nil {
+		return nil, err
+	}
+	rsa3072Key, err := rsa.GenerateKey(rand.Reader, 3072)
+	if err != nil {
+		return nil, err
+	}
+	rsa3072Cert, err := newCA(rsa3072Key)
 	if err != nil {
 		return nil, err
 	}
@@ -68,15 +84,17 @@ func NewState() (*State, error) {
 	return &State{
 		RVBlobs:  make(map[protocol.GUID]*cose.Sign1[protocol.To1d, []byte]),
 		Vouchers: make(map[protocol.GUID]*fdo.Voucher),
-		OwnerKeys: map[protocol.KeyType]struct {
+		OwnerKeys: map[KeyTypeAndRsaBits]struct {
 			Key   crypto.Signer
 			Chain []*x509.Certificate
 		}{
-			protocol.Rsa2048RestrKeyType: {Key: rsaKey, Chain: []*x509.Certificate{rsaCert}},
-			protocol.RsaPkcsKeyType:      {Key: rsaKey, Chain: []*x509.Certificate{rsaCert}},
-			protocol.RsaPssKeyType:       {Key: rsaKey, Chain: []*x509.Certificate{rsaCert}},
-			protocol.Secp256r1KeyType:    {Key: ec256Key, Chain: []*x509.Certificate{ec256Cert}},
-			protocol.Secp384r1KeyType:    {Key: ec384Key, Chain: []*x509.Certificate{ec384Cert}},
+			{protocol.Rsa2048RestrKeyType, 2048}: {Key: rsa2048Key, Chain: []*x509.Certificate{rsa2048Cert}},
+			{protocol.RsaPkcsKeyType, 2048}:      {Key: rsa2048Key, Chain: []*x509.Certificate{rsa2048Cert}},
+			{protocol.RsaPssKeyType, 2048}:       {Key: rsa2048Key, Chain: []*x509.Certificate{rsa2048Cert}},
+			{protocol.RsaPkcsKeyType, 3072}:      {Key: rsa3072Key, Chain: []*x509.Certificate{rsa3072Cert}},
+			{protocol.RsaPssKeyType, 3072}:       {Key: rsa3072Key, Chain: []*x509.Certificate{rsa3072Cert}},
+			{protocol.Secp256r1KeyType, 0}:       {Key: ec256Key, Chain: []*x509.Certificate{ec256Cert}},
+			{protocol.Secp384r1KeyType, 0}:       {Key: ec384Key, Chain: []*x509.Certificate{ec384Cert}},
 		},
 	}, nil
 }
@@ -124,9 +142,13 @@ func (s *State) Voucher(_ context.Context, guid protocol.GUID) (*fdo.Voucher, er
 }
 
 // OwnerKey returns the private key matching a given key type and optionally
-// its certificate chain.
-func (s *State) OwnerKey(keyType protocol.KeyType) (crypto.Signer, []*x509.Certificate, error) {
-	key, ok := s.OwnerKeys[keyType]
+// its certificate chain. If key type is not RSAPKCS or RSAPSS then rsaBits
+// is ignored. Otherwise it must be either 2048 or 3072.
+func (s *State) OwnerKey(keyType protocol.KeyType, rsaBits int) (crypto.Signer, []*x509.Certificate, error) {
+	if keyType == protocol.Rsa2048RestrKeyType {
+		rsaBits = 2048
+	}
+	key, ok := s.OwnerKeys[KeyTypeAndRsaBits{keyType, rsaBits}]
 	if !ok {
 		return nil, nil, fdo.ErrNotFound
 	}
@@ -158,9 +180,11 @@ func newCA(priv crypto.Signer) (*x509.Certificate, error) {
 	return cert, nil
 }
 
-// ManufacturerKey returns the signer of a given key type.
-func (s *State) ManufacturerKey(keyType protocol.KeyType) (crypto.Signer, []*x509.Certificate, error) {
-	return s.OwnerKey(keyType)
+// ManufacturerKey returns the signer of a given key type and its certificate
+// chain (required). If key type is not RSAPKCS or RSAPSS then rsaBits is
+// ignored. Otherwise it must be either 2048 or 3072.
+func (s *State) ManufacturerKey(keyType protocol.KeyType, rsaBits int) (crypto.Signer, []*x509.Certificate, error) {
+	return s.OwnerKey(keyType, rsaBits)
 }
 
 // SetRVBlob sets the owner rendezvous blob for a device.

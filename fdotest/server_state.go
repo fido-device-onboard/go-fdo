@@ -45,7 +45,7 @@ type AllServerState interface {
 	fdo.ManufacturerVoucherPersistentState
 	fdo.OwnerVoucherPersistentState
 	fdo.OwnerKeyPersistentState
-	ManufacturerKey(keyType protocol.KeyType) (crypto.Signer, []*x509.Certificate, error)
+	ManufacturerKey(keyType protocol.KeyType, rsaBits int) (crypto.Signer, []*x509.Certificate, error)
 }
 
 // RunServerStateSuite is used to test different implementations of all server
@@ -619,7 +619,7 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 		var state fdo.OwnerKeyPersistentState = state
 
 		// RSA
-		rsaKey, _, err := state.OwnerKey(protocol.RsaPkcsKeyType)
+		rsaKey, _, err := state.OwnerKey(protocol.RsaPkcsKeyType, 2048)
 		if err != nil {
 			t.Fatal("RSA owner key", err)
 		}
@@ -628,7 +628,7 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 		}
 
 		// EC
-		ecKey, _, err := state.OwnerKey(protocol.Secp256r1KeyType)
+		ecKey, _, err := state.OwnerKey(protocol.Secp256r1KeyType, 0)
 		if err != nil {
 			t.Fatal("EC owner key", err)
 		}

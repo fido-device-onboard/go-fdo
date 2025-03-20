@@ -231,7 +231,7 @@ func (s *TO2Server) Resell(ctx context.Context, guid protocol.GUID, nextOwner cr
 	if len(ov.Entries) > 0 {
 		ownerPubKey = ov.Entries[len(ov.Entries)-1].Payload.Val.PublicKey
 	}
-	ownerKey, _, err := s.OwnerKeys.OwnerKey(ownerPubKey.Type)
+	ownerKey, _, err := s.OwnerKeys.OwnerKey(ownerPubKey.Type, ownerPubKey.RsaBits())
 	if err != nil {
 		_ = s.Vouchers.AddVoucher(ctx, ov)
 		return nil, fmt.Errorf("error getting key used to sign voucher: %w", err)
