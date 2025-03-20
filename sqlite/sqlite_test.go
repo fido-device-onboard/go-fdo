@@ -64,18 +64,44 @@ func newDB(t *testing.T) (_ *sqlite.DB, cleanup func() error) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for keyType, key := range map[protocol.KeyType]crypto.Signer{
-		protocol.Rsa2048RestrKeyType: rsa2048MfgKey,
-		protocol.RsaPkcsKeyType:      rsa3072MfgKey,
-		protocol.RsaPssKeyType:       rsa3072MfgKey,
-		protocol.Secp256r1KeyType:    ec256MfgKey,
-		protocol.Secp384r1KeyType:    ec384MfgKey,
+	for _, key := range []struct {
+		Type protocol.KeyType
+		Key  crypto.Signer
+	}{
+		{
+			Type: protocol.Rsa2048RestrKeyType,
+			Key:  rsa2048MfgKey,
+		},
+		{
+			Type: protocol.RsaPkcsKeyType,
+			Key:  rsa2048MfgKey,
+		},
+		{
+			Type: protocol.RsaPssKeyType,
+			Key:  rsa2048MfgKey,
+		},
+		{
+			Type: protocol.RsaPkcsKeyType,
+			Key:  rsa3072MfgKey,
+		},
+		{
+			Type: protocol.RsaPssKeyType,
+			Key:  rsa3072MfgKey,
+		},
+		{
+			Type: protocol.Secp256r1KeyType,
+			Key:  ec256MfgKey,
+		},
+		{
+			Type: protocol.Secp384r1KeyType,
+			Key:  ec384MfgKey,
+		},
 	} {
-		chain, err := generateCA(key)
+		chain, err := generateCA(key.Key)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := state.AddManufacturerKey(keyType, key, chain); err != nil {
+		if err := state.AddManufacturerKey(key.Type, key.Key, chain); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -98,18 +124,44 @@ func newDB(t *testing.T) (_ *sqlite.DB, cleanup func() error) {
 		t.Fatal(err)
 	}
 
-	for keyType, key := range map[protocol.KeyType]crypto.Signer{
-		protocol.Rsa2048RestrKeyType: rsa2048OwnerKey,
-		protocol.RsaPkcsKeyType:      rsa3072OwnerKey,
-		protocol.RsaPssKeyType:       rsa3072OwnerKey,
-		protocol.Secp256r1KeyType:    ec256OwnerKey,
-		protocol.Secp384r1KeyType:    ec384OwnerKey,
+	for _, key := range []struct {
+		Type protocol.KeyType
+		Key  crypto.Signer
+	}{
+		{
+			Type: protocol.Rsa2048RestrKeyType,
+			Key:  rsa2048OwnerKey,
+		},
+		{
+			Type: protocol.RsaPkcsKeyType,
+			Key:  rsa2048OwnerKey,
+		},
+		{
+			Type: protocol.RsaPssKeyType,
+			Key:  rsa2048OwnerKey,
+		},
+		{
+			Type: protocol.RsaPkcsKeyType,
+			Key:  rsa3072OwnerKey,
+		},
+		{
+			Type: protocol.RsaPssKeyType,
+			Key:  rsa3072OwnerKey,
+		},
+		{
+			Type: protocol.Secp256r1KeyType,
+			Key:  ec256OwnerKey,
+		},
+		{
+			Type: protocol.Secp384r1KeyType,
+			Key:  ec384OwnerKey,
+		},
 	} {
-		chain, err := generateCA(key)
+		chain, err := generateCA(key.Key)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := state.AddOwnerKey(keyType, key, chain); err != nil {
+		if err := state.AddOwnerKey(key.Type, key.Key, chain); err != nil {
 			t.Fatal(err)
 		}
 	}

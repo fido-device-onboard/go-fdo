@@ -54,8 +54,9 @@ type DeviceMfgInfo struct {
 // for signing device certificates.
 type CertificateAuthority interface {
 	// ManufacturerKey returns the signer of a given key type and its certificate
-	// chain (required).
-	ManufacturerKey(keyType protocol.KeyType) (crypto.Signer, []*x509.Certificate, error)
+	// chain (required). If key type is not RSAPKCS or RSAPSS then rsaBits is
+	// ignored. Otherwise it must be either 2048 or 3072.
+	ManufacturerKey(keyType protocol.KeyType, rsaBits int) (crypto.Signer, []*x509.Certificate, error)
 }
 
 // SignDeviceCertificate creates a device certificate chain from the info sent
@@ -69,7 +70,7 @@ func SignDeviceCertificate(ca CertificateAuthority) func(*DeviceMfgInfo) ([]*x50
 		}
 
 		// Sign CSR
-		key, chain, err := ca.ManufacturerKey(info.KeyType)
+		key, chain, err := ca.ManufacturerKey(info.KeyType, 3072) // Always use 3072-bit for RSA PKCS/PSS
 		if err != nil {
 			var unsupportedErr fdo.ErrUnsupportedKeyType
 			if errors.As(err, &unsupportedErr) {
