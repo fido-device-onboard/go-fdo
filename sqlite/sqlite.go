@@ -528,7 +528,7 @@ func (db *DB) AddManufacturerKey(keyType protocol.KeyType, key crypto.PrivateKey
 // ManufacturerKey returns the signer of a given key type and its certificate
 // chain (required). If key type is not RSAPKCS or RSAPSS then rsaBits is
 // ignored. Otherwise it must be either 2048 or 3072.
-func (db *DB) ManufacturerKey(keyType protocol.KeyType, rsaBits int) (crypto.Signer, []*x509.Certificate, error) {
+func (db *DB) ManufacturerKey(ctx context.Context, keyType protocol.KeyType, rsaBits int) (crypto.Signer, []*x509.Certificate, error) {
 	where := map[string]any{
 		"type": int(keyType),
 	}
@@ -1146,7 +1146,7 @@ func (db *DB) AddOwnerKey(keyType protocol.KeyType, key crypto.PrivateKey, chain
 // OwnerKey returns the private key matching a given key type and optionally
 // its certificate chain. If key type is not RSAPKCS or RSAPSS then rsaBits
 // is ignored. Otherwise it must be either 2048 or 3072.
-func (db *DB) OwnerKey(keyType protocol.KeyType, rsaBits int) (crypto.Signer, []*x509.Certificate, error) {
+func (db *DB) OwnerKey(ctx context.Context, keyType protocol.KeyType, rsaBits int) (crypto.Signer, []*x509.Certificate, error) {
 	where := map[string]any{
 		"type": int(keyType),
 	}

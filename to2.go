@@ -575,7 +575,7 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 			rsaBits = 3072
 		}
 	}
-	ownerKey, ownerPublicKey, err := s.ownerKey(keyType, ov.Header.Val.ManufacturerKey.Encoding, rsaBits)
+	ownerKey, ownerPublicKey, err := s.ownerKey(ctx, keyType, ov.Header.Val.ManufacturerKey.Encoding, rsaBits)
 	if err != nil {
 		return nil, err
 	}
@@ -671,8 +671,8 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 	return proof, nil
 }
 
-func (s *TO2Server) ownerKey(keyType protocol.KeyType, keyEncoding protocol.KeyEncoding, rsaBits int) (crypto.Signer, *protocol.PublicKey, error) {
-	key, chain, err := s.OwnerKeys.OwnerKey(keyType, rsaBits)
+func (s *TO2Server) ownerKey(ctx context.Context, keyType protocol.KeyType, keyEncoding protocol.KeyEncoding, rsaBits int) (crypto.Signer, *protocol.PublicKey, error) {
+	key, chain, err := s.OwnerKeys.OwnerKey(ctx, keyType, rsaBits)
 	if errors.Is(err, ErrNotFound) {
 		return nil, nil, fmt.Errorf("owner key type %s not supported", keyType)
 	} else if err != nil {
@@ -976,7 +976,7 @@ func (s *TO2Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1
 	defer sess.Destroy()
 	mfgKey := ov.Header.Val.ManufacturerKey
 	keyType, rsaBits := mfgKey.Type, mfgKey.RsaBits()
-	ownerKey, ownerPublicKey, err := s.ownerKey(keyType, ov.Header.Val.ManufacturerKey.Encoding, rsaBits)
+	ownerKey, ownerPublicKey, err := s.ownerKey(ctx, keyType, ov.Header.Val.ManufacturerKey.Encoding, rsaBits)
 	if err != nil {
 		return nil, err
 	}
@@ -1620,7 +1620,7 @@ func (s *TO2Server) to2Done2(ctx context.Context, msg io.Reader) (*done2Msg, err
 	keyType := mfgKey.Type
 	keyEncoding := mfgKey.Encoding
 	rsaBits := mfgKey.RsaBits()
-	_, ownerPublicKey, err := s.ownerKey(keyType, keyEncoding, rsaBits)
+	_, ownerPublicKey, err := s.ownerKey(ctx, keyType, keyEncoding, rsaBits)
 	if err != nil {
 		return nil, err
 	}

@@ -347,7 +347,7 @@ func (s *DIServer[T]) diDone(ctx context.Context, msg io.Reader) (struct{}, erro
 		CertChain: &certChain,
 		Entries:   nil,
 	}
-	if err := s.maybeAutoExtend(ov); err != nil {
+	if err := s.maybeAutoExtend(ctx, ov); err != nil {
 		return struct{}{}, fmt.Errorf("error extending voucher: %w", err)
 	}
 	if err := s.Vouchers.NewVoucher(ctx, ov); err != nil {
@@ -359,18 +359,18 @@ func (s *DIServer[T]) diDone(ctx context.Context, msg io.Reader) (struct{}, erro
 	return struct{}{}, nil
 }
 
-func (s *DIServer[T]) maybeAutoExtend(ov *Voucher) error {
+func (s *DIServer[T]) maybeAutoExtend(ctx context.Context, ov *Voucher) error {
 	if s.AutoExtend == nil {
 		return nil
 	}
 
 	mfgKey := ov.Header.Val.ManufacturerKey
 	keyType, rsaBits := mfgKey.Type, mfgKey.RsaBits()
-	owner, _, err := s.AutoExtend.ManufacturerKey(keyType, rsaBits)
+	owner, _, err := s.AutoExtend.ManufacturerKey(ctx, keyType, rsaBits)
 	if err != nil {
 		return fmt.Errorf("error getting %s manufacturer key: %w", keyType, err)
 	}
-	nextOwner, _, err := s.AutoExtend.OwnerKey(keyType, rsaBits)
+	nextOwner, _, err := s.AutoExtend.OwnerKey(ctx, keyType, rsaBits)
 	if err != nil {
 		return fmt.Errorf("error getting %s owner key: %w", keyType, err)
 	}
@@ -417,7 +417,7 @@ func (s *DIServer[T]) maybeAutoTO0(ctx context.Context, ov *Voucher) error {
 
 	mfgKey := ov.Header.Val.ManufacturerKey
 	keyType, rsaBits := mfgKey.Type, mfgKey.RsaBits()
-	nextOwner, _, err := s.AutoTO0.OwnerKey(keyType, rsaBits)
+	nextOwner, _, err := s.AutoTO0.OwnerKey(ctx, keyType, rsaBits)
 	if err != nil {
 		return fmt.Errorf("error getting %s owner key: %w", keyType, err)
 	}

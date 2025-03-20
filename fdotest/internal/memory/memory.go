@@ -144,7 +144,7 @@ func (s *State) Voucher(_ context.Context, guid protocol.GUID) (*fdo.Voucher, er
 // OwnerKey returns the private key matching a given key type and optionally
 // its certificate chain. If key type is not RSAPKCS or RSAPSS then rsaBits
 // is ignored. Otherwise it must be either 2048 or 3072.
-func (s *State) OwnerKey(keyType protocol.KeyType, rsaBits int) (crypto.Signer, []*x509.Certificate, error) {
+func (s *State) OwnerKey(ctx context.Context, keyType protocol.KeyType, rsaBits int) (crypto.Signer, []*x509.Certificate, error) {
 	if keyType == protocol.Rsa2048RestrKeyType {
 		rsaBits = 2048
 	}
@@ -183,8 +183,8 @@ func newCA(priv crypto.Signer) (*x509.Certificate, error) {
 // ManufacturerKey returns the signer of a given key type and its certificate
 // chain (required). If key type is not RSAPKCS or RSAPSS then rsaBits is
 // ignored. Otherwise it must be either 2048 or 3072.
-func (s *State) ManufacturerKey(keyType protocol.KeyType, rsaBits int) (crypto.Signer, []*x509.Certificate, error) {
-	return s.OwnerKey(keyType, rsaBits)
+func (s *State) ManufacturerKey(ctx context.Context, keyType protocol.KeyType, rsaBits int) (crypto.Signer, []*x509.Certificate, error) {
+	return s.OwnerKey(ctx, keyType, rsaBits)
 }
 
 // SetRVBlob sets the owner rendezvous blob for a device.

@@ -133,7 +133,7 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 			}
 
 			// Sign CSR
-			key, chain, err := conf.State.ManufacturerKey(info.KeyType, rsaBits)
+			key, chain, err := conf.State.ManufacturerKey(context.Background(), info.KeyType, rsaBits)
 			if err != nil {
 				var unsupportedErr fdo.ErrUnsupportedKeyType
 				if errors.As(err, &unsupportedErr) {

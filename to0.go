@@ -153,7 +153,7 @@ func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid pro
 	// Sign to1d rendezvous blob
 	mfgKey := ov.Header.Val.ManufacturerKey
 	keyType := mfgKey.Type
-	ownerKey, _, err := c.OwnerKeys.OwnerKey(keyType, mfgKey.RsaBits())
+	ownerKey, _, err := c.OwnerKeys.OwnerKey(ctx, keyType, mfgKey.RsaBits())
 	if errors.Is(err, ErrNotFound) {
 		return 0, fmt.Errorf("no available owner key for TO0.OwnerSign [type=%s]", keyType)
 	} else if err != nil {
