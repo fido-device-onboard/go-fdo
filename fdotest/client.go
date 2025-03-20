@@ -109,14 +109,37 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 				return nil, fmt.Errorf("invalid CSR: %w", err)
 			}
 
+			// Recommended configurations (see section 3.3.2) have matching
+			// strengths between device and owner attestation keys and
+			// therefore the RSA key size should match the device public key or
+			// should be 2048 for secp256r1 and 3072 for secp384r1
+			var rsaBits int
+			if info.KeyType == protocol.Rsa2048RestrKeyType || info.KeyType == protocol.RsaPkcsKeyType || info.KeyType == protocol.RsaPssKeyType {
+				switch pub := csr.PublicKey.(type) {
+				case *rsa.PublicKey:
+					rsaBits = pub.Size() * 8
+				case *ecdsa.PublicKey:
+					switch pub.Curve {
+					case elliptic.P256():
+						rsaBits = 2048
+					case elliptic.P384():
+						rsaBits = 3072
+					default:
+						return nil, fmt.Errorf("device key uses unsupported EC curve: %s", pub.Curve.Params().Name)
+					}
+				default:
+					return nil, fmt.Errorf("device key type is unsupported")
+				}
+			}
+
 			// Sign CSR
-			key, chain, err := conf.State.ManufacturerKey(info.KeyType)
+			key, chain, err := conf.State.ManufacturerKey(info.KeyType, rsaBits)
 			if err != nil {
 				var unsupportedErr fdo.ErrUnsupportedKeyType
 				if errors.As(err, &unsupportedErr) {
 					return nil, unsupportedErr
 				}
-				return nil, fmt.Errorf("error retrieving manufacturer key [type=%s]: %w", info.KeyType, err)
+				return nil, fmt.Errorf("error retrieving manufacturer key [type=%s,bits=%d]: %w", info.KeyType, rsaBits, err)
 			}
 			serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
 			serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)

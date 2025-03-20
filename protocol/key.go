@@ -223,6 +223,19 @@ func (pub *PublicKey) Chain() ([]*x509.Certificate, error) {
 	return pub.chain, pub.err
 }
 
+// RsaBits returns the bit size of the underlying RSA key or zero.
+func (pub *PublicKey) RsaBits() int {
+	pubKey, err := pub.Public()
+	if err != nil {
+		return 0
+	}
+	rsaPub, ok := pubKey.(*rsa.PublicKey)
+	if !ok {
+		return 0
+	}
+	return rsaPub.Size() * 8
+}
+
 func (pub *PublicKey) parse() error {
 	switch pub.Encoding {
 	case X509KeyEnc:

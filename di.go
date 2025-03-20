@@ -364,12 +364,13 @@ func (s *DIServer[T]) maybeAutoExtend(ov *Voucher) error {
 		return nil
 	}
 
-	keyType := ov.Header.Val.ManufacturerKey.Type
-	owner, _, err := s.AutoExtend.ManufacturerKey(keyType)
+	mfgKey := ov.Header.Val.ManufacturerKey
+	keyType, rsaBits := mfgKey.Type, mfgKey.RsaBits()
+	owner, _, err := s.AutoExtend.ManufacturerKey(keyType, rsaBits)
 	if err != nil {
 		return fmt.Errorf("error getting %s manufacturer key: %w", keyType, err)
 	}
-	nextOwner, _, err := s.AutoExtend.OwnerKey(keyType)
+	nextOwner, _, err := s.AutoExtend.OwnerKey(keyType, rsaBits)
 	if err != nil {
 		return fmt.Errorf("error getting %s owner key: %w", keyType, err)
 	}
@@ -414,8 +415,9 @@ func (s *DIServer[T]) maybeAutoTO0(ctx context.Context, ov *Voucher) error {
 		return fmt.Errorf("TO2 addrs cannot be empty when auto-TO0 is enabled")
 	}
 
-	keyType := ov.Header.Val.ManufacturerKey.Type
-	nextOwner, _, err := s.AutoTO0.OwnerKey(keyType)
+	mfgKey := ov.Header.Val.ManufacturerKey
+	keyType, rsaBits := mfgKey.Type, mfgKey.RsaBits()
+	nextOwner, _, err := s.AutoTO0.OwnerKey(keyType, rsaBits)
 	if err != nil {
 		return fmt.Errorf("error getting %s owner key: %w", keyType, err)
 	}

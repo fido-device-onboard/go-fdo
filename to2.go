@@ -566,7 +566,16 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 	if err != nil {
 		return nil, fmt.Errorf("error getting key type from device sig info: %w", err)
 	}
-	ownerKey, ownerPublicKey, err := s.ownerKey(keyType, ov.Header.Val.ManufacturerKey.Encoding)
+	var rsaBits int
+	if keyType == protocol.Rsa2048RestrKeyType || keyType == protocol.RsaPkcsKeyType || keyType == protocol.RsaPssKeyType {
+		switch hello.SigInfoA.Type.HashFunc() {
+		case crypto.SHA256:
+			rsaBits = 2048
+		case crypto.SHA384:
+			rsaBits = 3072
+		}
+	}
+	ownerKey, ownerPublicKey, err := s.ownerKey(keyType, ov.Header.Val.ManufacturerKey.Encoding, rsaBits)
 	if err != nil {
 		return nil, err
 	}
@@ -662,8 +671,8 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 	return proof, nil
 }
 
-func (s *TO2Server) ownerKey(keyType protocol.KeyType, keyEncoding protocol.KeyEncoding) (crypto.Signer, *protocol.PublicKey, error) {
-	key, chain, err := s.OwnerKeys.OwnerKey(keyType)
+func (s *TO2Server) ownerKey(keyType protocol.KeyType, keyEncoding protocol.KeyEncoding, rsaBits int) (crypto.Signer, *protocol.PublicKey, error) {
+	key, chain, err := s.OwnerKeys.OwnerKey(keyType, rsaBits)
 	if errors.Is(err, ErrNotFound) {
 		return nil, nil, fmt.Errorf("owner key type %s not supported", keyType)
 	} else if err != nil {
@@ -965,8 +974,9 @@ func (s *TO2Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1
 		return nil, fmt.Errorf("error getting associated key exchange session: %w", err)
 	}
 	defer sess.Destroy()
-	keyType := ov.Header.Val.ManufacturerKey.Type
-	ownerKey, ownerPublicKey, err := s.ownerKey(keyType, ov.Header.Val.ManufacturerKey.Encoding)
+	mfgKey := ov.Header.Val.ManufacturerKey
+	keyType, rsaBits := mfgKey.Type, mfgKey.RsaBits()
+	ownerKey, ownerPublicKey, err := s.ownerKey(keyType, ov.Header.Val.ManufacturerKey.Encoding, rsaBits)
 	if err != nil {
 		return nil, err
 	}
@@ -1606,9 +1616,11 @@ func (s *TO2Server) to2Done2(ctx context.Context, msg io.Reader) (*done2Msg, err
 	}
 
 	// Create and store a new voucher
-	keyType := currentOV.Header.Val.ManufacturerKey.Type
-	keyEncoding := currentOV.Header.Val.ManufacturerKey.Encoding
-	_, ownerPublicKey, err := s.ownerKey(keyType, keyEncoding)
+	mfgKey := currentOV.Header.Val.ManufacturerKey
+	keyType := mfgKey.Type
+	keyEncoding := mfgKey.Encoding
+	rsaBits := mfgKey.RsaBits()
+	_, ownerPublicKey, err := s.ownerKey(keyType, keyEncoding, rsaBits)
 	if err != nil {
 		return nil, err
 	}
