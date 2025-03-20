@@ -303,7 +303,7 @@ func doPrintOwnerPubKey(state *sqlite.DB) error {
 	if err != nil {
 		return fmt.Errorf("%w: see usage", err)
 	}
-	key, _, err := state.OwnerKey(keyType, 3072) // Always use 3072-bit for RSA PKCS/PSS
+	key, _, err := state.OwnerKey(context.Background(), keyType, 3072) // Always use 3072-bit for RSA PKCS/PSS
 	if err != nil {
 		return err
 	}
@@ -340,7 +340,7 @@ func doImportVoucher(state *sqlite.DB) error {
 	if err != nil {
 		return fmt.Errorf("error parsing owner public key from voucher: %w", err)
 	}
-	ownerKey, _, err := state.OwnerKey(ov.Header.Val.ManufacturerKey.Type, 3072) // Always use 3072-bit for RSA PKCS/PSS
+	ownerKey, _, err := state.OwnerKey(context.Background(), ov.Header.Val.ManufacturerKey.Type, 3072) // Always use 3072-bit for RSA PKCS/PSS
 	if err != nil {
 		return fmt.Errorf("error getting owner key: %w", err)
 	}
