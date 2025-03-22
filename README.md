@@ -4,7 +4,7 @@
 [![Lint](https://github.com/fido-device-onboard/go-fdo/actions/workflows/lint.yml/badge.svg)](https://github.com/fido-device-onboard/go-fdo/actions/workflows/lint.yml)
 [![Test](https://github.com/fido-device-onboard/go-fdo/actions/workflows/test.yml/badge.svg)](https://github.com/fido-device-onboard/go-fdo/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://raw.githubusercontent.com/fido-device-onboard/go-fdo/main/LICENSE)
-[![Building](https://img.shields.io/badge/go-%3E%3D%201.23-blue)](#building-the-example-application)
+[![Building](https://img.shields.io/badge/go-%3E%3D%201.24-blue)](#building-the-example-application)
 [![Go Reference](https://pkg.go.dev/badge/github.com/fido-device-onboard/go-fdo.svg)](https://pkg.go.dev/github.com/fido-device-onboard/go-fdo)
 
 > [!WARNING]
@@ -370,23 +370,4 @@ Success
 
 ## FIPS Compliance
 
-To build a FIPS 140-2 certifiable binary, use the [Microsoft Go][Microsoft Go] toolchain and be sure to deploy with a FIPS-compliant version of OpenSSL 3.0.
-
-As an example, the following multi-stage `Dockerfile` will build the included example FDO application with FIPS-compliant crypto.
-
-```Dockerfile
-FROM mcr.microsoft.com/oss/go/microsoft/golang:1.23-fips-cbl-mariner2.0 AS build
-WORKDIR /build
-COPY . .
-RUN go work; go work use -r . && \
-    go build -tags=requirefips -o fdo ./examples/cmd
-
-FROM gcr.io/distroless/cc-debian12
-COPY --from=build /build/fdo .
-# COPY in a FIPS-compliant OpenSSL 3.0 library!
-ENTRYPOINT [ "./fdo" ]
-```
-
-Note that for FIPS certification, the NIST 800-108 key derivation function in `internal/nistkdf/kdf.go` would still need to be inspected.
-
-[Microsoft Go]: https://github.com/microsoft/go/blob/microsoft/main/eng/doc/fips/README.md
+To build a FIPS 140-3 certifiable binary, see [FIPS 140-3 compliance](https://go.dev/doc/security/fips140).
