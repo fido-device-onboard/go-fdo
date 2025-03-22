@@ -292,7 +292,7 @@ func verifyOwner(ctx context.Context, transport Transport, to1d *cose.Sign1[prot
 func verifyVoucher(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1d, []byte], info *ovhValidationContext, c *TO2Config) error {
 	// Construct ownership voucher from parts received from the owner service
 	var entries []cose.Sign1Tag[VoucherEntryPayload, []byte]
-	for i := 0; i < info.NumVoucherEntries; i++ {
+	for i := range info.NumVoucherEntries {
 		entry, err := sendNextOVEntry(ctx, transport, i)
 		if err != nil {
 			return err
@@ -665,9 +665,7 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 	// The lifetime of xA is until the transport has marshaled and sent the proof. Therefore, the
 	// best option for clearing the secret is to set a finalizer (unfortunately).
 	proof := s1.Tag()
-	runtime.SetFinalizer(proof, func(proof *cose.Sign1Tag[ovhProof, []byte]) {
-		clear(proof.Payload.Val.KeyExchangeA)
-	})
+	runtime.AddCleanup(proof, func(secret []byte) { clear(secret) }, proof.Payload.Val.KeyExchangeA)
 	return proof, nil
 }
 
