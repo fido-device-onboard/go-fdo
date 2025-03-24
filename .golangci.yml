@@ -1,36 +1,46 @@
+version: "2"
 run:
-  timeout: 5m
   modules-download-mode: readonly
-
 linters:
   enable:
-    - errcheck
     - gocyclo
-    - gofmt
-    - goimports
-    - govet
-    - revive
-    - staticcheck
     - gosec
     - misspell
-
-linters-settings:
-  gocyclo:
-    min-complexity: 15
-  goimports:
-    local-prefixes: github.com/fido-device-onboard/go-fdo
-  misspell:
-    locale: US
-
+    - revive
+  settings:
+    gocyclo:
+      min-complexity: 15
+    misspell:
+      locale: US
+  exclusions:
+    generated: lax
+    rules:
+      - linters:
+          - gocyclo
+          - gosec
+        path: _test\.go
+      - path: (.+)\.go$
+        text: declaration of "(err|ctx)" shadows declaration at
+      - path: (.+)\.go$
+        text: '^unused-parameter: '
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
 issues:
-  exclude-use-default: false
   max-issues-per-linter: 0
   max-same-issues: 0
-  exclude:
-    - 'declaration of "(err|ctx)" shadows declaration at'
-    - "^unused-parameter: "
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - gocyclo
-        - gosec
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/fido-device-onboard/go-fdo
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
