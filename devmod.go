@@ -35,7 +35,7 @@ func (d *devmodOwnerModule) HandleInfo(ctx context.Context, messageName string, 
 	}
 
 	dm := reflect.ValueOf(&d.Devmod).Elem()
-	for i := 0; i < dm.NumField(); i++ {
+	for i := range dm.NumField() {
 		tag := dm.Type().Field(i).Tag.Get("devmod")
 		fieldMessageName, _, _ := strings.Cut(tag, ",")
 		if fieldMessageName != messageName {
@@ -78,7 +78,7 @@ func (d *devmodOwnerModule) parseModules(messageBody io.Reader) error {
 func (d *devmodOwnerModule) ProduceInfo(_ context.Context, _ *serviceinfo.Producer) (bool, bool, error) {
 	// Validate required fields were sent before sending IsDone
 	if d.done {
-		if err := d.Devmod.Validate(); err != nil {
+		if err := d.Validate(); err != nil {
 			return false, false, err
 		}
 		if slices.Contains(d.Modules, "") {
