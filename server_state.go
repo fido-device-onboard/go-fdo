@@ -13,6 +13,7 @@ import (
 	"github.com/fido-device-onboard/go-fdo/cose"
 	"github.com/fido-device-onboard/go-fdo/kex"
 	"github.com/fido-device-onboard/go-fdo/protocol"
+	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
 
 /*
@@ -41,7 +42,8 @@ func (err ErrUnsupportedKeyType) Error() string {
 	return "unsupported key type " + protocol.KeyType(err).String()
 }
 
-// DISessionState stores DI protocol state for a particular session.
+// DISessionState stores DI protocol state for a particular session. Any errors
+// will cause DI to fail.
 type DISessionState interface {
 	// SetDeviceCertChain sets the device certificate chain generated from
 	// DI.AppStart info.
@@ -60,7 +62,8 @@ type DISessionState interface {
 	IncompleteVoucherHeader(context.Context) (*VoucherHeader, error)
 }
 
-// TO0SessionState stores TO0 protocol state for a particular session.
+// TO0SessionState stores TO0 protocol state for a particular session. Any
+// errors will cause TO0 to fail.
 type TO0SessionState interface {
 	// SetTO0SignNonce sets the Nonce expected in TO0.OwnerSign.
 	SetTO0SignNonce(context.Context, protocol.Nonce) error
@@ -69,7 +72,8 @@ type TO0SessionState interface {
 	TO0SignNonce(context.Context) (protocol.Nonce, error)
 }
 
-// TO1SessionState stores TO1 protocol state for a particular session.
+// TO1SessionState stores TO1 protocol state for a particular session. Any
+// errors will cause TO1 to fail.
 type TO1SessionState interface {
 	// SetTO1ProofNonce sets the Nonce expected in TO1.ProveToRV.
 	SetTO1ProofNonce(context.Context, protocol.Nonce) error
@@ -78,7 +82,8 @@ type TO1SessionState interface {
 	TO1ProofNonce(context.Context) (protocol.Nonce, error)
 }
 
-// TO2SessionState stores TO2 protocol state for a particular session.
+// TO2SessionState stores TO2 protocol state for a particular session. Any
+// errors will cause TO2 to fail.
 type TO2SessionState interface {
 	// SetGUID associates a voucher GUID with a TO2 session.
 	SetGUID(context.Context, protocol.GUID) error
@@ -134,6 +139,12 @@ type TO2SessionState interface {
 
 	// MTU returns the max service info size the device may receive.
 	MTU(context.Context) (uint16, error)
+
+	// SetDevmod sets the device info and module support.
+	SetDevmod(_ context.Context, _ serviceinfo.Devmod, modules []string, complete bool) error
+
+	// Devmod returns the device info and module support.
+	Devmod(context.Context) (_ serviceinfo.Devmod, modules []string, complete bool, _ error)
 }
 
 // RendezvousBlobPersistentState maintains device to owner info state used in

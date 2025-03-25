@@ -10,13 +10,11 @@ import (
 	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"hash"
 	"io"
-	"iter"
 	"log/slog"
 	"math"
 	"reflect"
@@ -230,8 +228,22 @@ func TO2(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1
 	}, nil
 }
 
+func stopOwnerPlugin(ctx context.Context, name string, module plugin.Module) {
+	// Try a graceful stop for up to five seconds
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	if err := module.GracefulStop(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		slog.Warn("plugin graceful stop failed", "module", name, "error", err)
+	}
+
+	if err := module.Stop(); err != nil {
+		slog.Warn("plugin forceful stop failed", "module", name, "error", err)
+	}
+}
+
 // Stop any plugin device modules
-func stopPlugins(modules *deviceModuleMap) {
+func stopDevicePlugins(modules *deviceModuleMap) {
 	pluginStopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var pluginStopWg sync.WaitGroup
@@ -292,7 +304,7 @@ func verifyOwner(ctx context.Context, transport Transport, to1d *cose.Sign1[prot
 func verifyVoucher(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1d, []byte], info *ovhValidationContext, c *TO2Config) error {
 	// Construct ownership voucher from parts received from the owner service
 	var entries []cose.Sign1Tag[VoucherEntryPayload, []byte]
-	for i := 0; i < info.NumVoucherEntries; i++ {
+	for i := range info.NumVoucherEntries {
 		entry, err := sendNextOVEntry(ctx, transport, i)
 		if err != nil {
 			return err
@@ -1115,58 +1127,12 @@ func (s *TO2Server) ownerServiceInfoReady(ctx context.Context, msg io.Reader) (*
 		return nil, fmt.Errorf("error storing max service info size to send to device: %w", err)
 	}
 
-	// Get current voucher
-	guid, err := s.Session.GUID(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("error retrieving associated device GUID of proof session: %w", err)
-	}
-	ov, err := s.Vouchers.Voucher(ctx, guid)
-	if err != nil {
-		return nil, fmt.Errorf("error retrieving voucher for device %x: %w", guid, err)
-	}
-	info := ov.Header.Val.DeviceInfo
-	var deviceCertChain []*x509.Certificate
-	if ov.CertChain != nil {
-		deviceCertChain = make([]*x509.Certificate, len(*ov.CertChain))
-		for i, cert := range *ov.CertChain {
-			deviceCertChain[i] = (*x509.Certificate)(cert)
-		}
-	}
-
-	// If not using the Credential Reuse Protocol (i.e. device sends an HMAC),
-	// then store the HMAC and get the replacement GUID
+	// Store the new HMAC if not using the Credential Reuse Protocol
 	if deviceReady.Hmac != nil {
 		if err := s.Session.SetReplacementHmac(ctx, *deviceReady.Hmac); err != nil {
 			return nil, fmt.Errorf("error storing replacement voucher HMAC for device: %w", err)
 		}
-		if guid, err = s.Session.ReplacementGUID(ctx); err != nil {
-			return nil, fmt.Errorf("error retrieving replacement GUID for device: %w", err)
-		}
 	}
-
-	// Initialize service info modules
-	s.plugins = make(map[string]plugin.Module)
-	s.nextModule, s.stop = iter.Pull2(func() iter.Seq2[string, serviceinfo.OwnerModule] {
-		var devmod devmodOwnerModule
-		var ownerModules iter.Seq2[string, serviceinfo.OwnerModule]
-
-		return func(yield func(string, serviceinfo.OwnerModule) bool) {
-			if ownerModules == nil {
-				if !yield("devmod", &devmod) {
-					return
-				}
-				ownerModules = s.OwnerModules(ctx, guid, info, deviceCertChain, devmod.Devmod, devmod.Modules)
-			}
-
-			ownerModules(func(moduleName string, mod serviceinfo.OwnerModule) bool {
-				if p, ok := mod.(plugin.Module); ok {
-					// Collect plugins before yielding the module
-					s.plugins[moduleName] = p
-				}
-				return yield(moduleName, mod)
-			})
-		}
-	}())
 
 	// Send response
 	ownerReady := new(ownerServiceInfoReady)
@@ -1226,7 +1192,7 @@ func exchangeServiceInfo(ctx context.Context,
 
 	// Track active modules
 	modules := deviceModuleMap{modules: c.DeviceModules, active: make(map[string]bool)}
-	defer stopPlugins(&modules)
+	defer stopDevicePlugins(&modules)
 
 	var prevModuleName string
 	for {
@@ -1465,7 +1431,7 @@ func sendDeviceServiceInfo(ctx context.Context, transport Transport, msg deviceS
 }
 
 // DeviceServiceInfo(68) -> OwnerServiceInfo(69)
-func (s *TO2Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*ownerServiceInfo, error) {
+func (s *TO2Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*ownerServiceInfo, error) { //nolint:gocyclo
 	// Parse request
 	var deviceInfo deviceServiceInfo
 	if err := cbor.NewDecoder(msg).Decode(&deviceInfo); err != nil {
@@ -1473,13 +1439,19 @@ func (s *TO2Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*owner
 	}
 
 	// Get next owner service info module
-	moduleName, mod, ok := s.nextModule()
-	if !ok {
-		return &ownerServiceInfo{
-			IsMoreServiceInfo: false,
-			IsDone:            true,
-			ServiceInfo:       nil,
-		}, nil
+	var moduleName string
+	var module serviceinfo.OwnerModule
+	if devmod, modules, complete, err := s.Session.Devmod(ctx); errors.Is(err, ErrNotFound) || (err == nil && !complete) {
+		moduleName, module = "devmod", &devmodOwnerModule{
+			Devmod:  devmod,
+			Modules: modules,
+		}
+	} else {
+		var err error
+		moduleName, module, err = s.Modules.Module(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("error getting current service info module: %w", err)
+		}
 	}
 
 	// Handle data with owner module
@@ -1498,7 +1470,7 @@ func (s *TO2Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*owner
 			break
 		}
 		moduleName, messageName, _ := strings.Cut(key, ":")
-		if err := mod.HandleInfo(ctx, messageName, messageBody); err != nil {
+		if err := module.HandleInfo(ctx, messageName, messageBody); err != nil {
 			return nil, fmt.Errorf("error handling device service info %q: %w", key, err)
 		}
 		if n, err := io.Copy(io.Discard, messageBody); err != nil {
@@ -1513,55 +1485,94 @@ func (s *TO2Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*owner
 		}
 	}
 
-	if deviceInfo.IsMoreServiceInfo {
-		s.continueWithModule(moduleName, mod)
-
-		return &ownerServiceInfo{
-			IsMoreServiceInfo: false,
-			IsDone:            false,
-			ServiceInfo:       nil,
-		}, nil
+	// Save devmod state. All devmod messages are "sent by the Device in the
+	// first Device ServiceInfo" but IsMoreServiceInfo may allow it to be sent
+	// over multiple network roundtrips.
+	if devmod, ok := module.(*devmodOwnerModule); ok {
+		if err := s.Session.SetDevmod(ctx, devmod.Devmod, devmod.Modules, false); err != nil {
+			return nil, fmt.Errorf("error storing devmod state: %w", err)
+		}
 	}
 
-	return s.produceOwnerServiceInfo(ctx, moduleName, mod)
-}
-
-// Override nextModule so that the same module is used in the next round
-func (s *TO2Server) continueWithModule(moduleName string, mod serviceinfo.OwnerModule) {
-	nextModule := s.nextModule
-	s.nextModule = func() (string, serviceinfo.OwnerModule, bool) {
-		s.nextModule = nextModule
-		return moduleName, mod, true
+	// Allow owner module to produce data unless blocked by device
+	if !deviceInfo.IsMoreServiceInfo {
+		return s.produceOwnerServiceInfo(ctx, moduleName, module)
 	}
+
+	// Store the current module state
+	if devmod, ok := module.(*devmodOwnerModule); ok {
+		if err := s.Session.SetDevmod(ctx, devmod.Devmod, devmod.Modules, false); err != nil {
+			return nil, fmt.Errorf("error storing devmod state: %w", err)
+		}
+	}
+	if modules, ok := s.Modules.(serviceinfo.ModulePersister); ok {
+		if err := modules.PersistModule(ctx, moduleName, module); err != nil {
+			return nil, fmt.Errorf("error persisting service info module %q state: %w", moduleName, err)
+		}
+	}
+
+	return &ownerServiceInfo{
+		IsMoreServiceInfo: false,
+		IsDone:            false,
+		ServiceInfo:       nil,
+	}, nil
 }
 
 // Allow owner module to produce data
-func (s *TO2Server) produceOwnerServiceInfo(ctx context.Context, moduleName string, mod serviceinfo.OwnerModule) (*ownerServiceInfo, error) {
+func (s *TO2Server) produceOwnerServiceInfo(ctx context.Context, moduleName string, module serviceinfo.OwnerModule) (*ownerServiceInfo, error) {
 	mtu, err := s.Session.MTU(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error getting max device service info size: %w", err)
 	}
 
+	// Get service info produced by the module
 	producer := serviceinfo.NewProducer(moduleName, mtu)
-	explicitBlock, isComplete, err := mod.ProduceInfo(ctx, producer)
+	explicitBlock, complete, err := module.ProduceInfo(ctx, producer)
 	if err != nil {
 		return nil, fmt.Errorf("error producing owner service info from module: %w", err)
 	}
-
-	if size := serviceinfo.ArraySizeCBOR(producer.ServiceInfo()); size > int64(mtu) {
+	if explicitBlock && complete {
+		slog.Warn("service info module completed but indicated that it had more service info to send", "module", moduleName)
+		explicitBlock = false
+	}
+	serviceInfo := producer.ServiceInfo()
+	if size := serviceinfo.ArraySizeCBOR(serviceInfo); size > int64(mtu) {
 		return nil, fmt.Errorf("owner service info module produced service info exceeding the MTU=%d - 3 (message overhead), size=%d", mtu, size)
 	}
 
-	// If module is not yet complete, override nextModule to return it again
-	if !isComplete {
-		s.continueWithModule(moduleName, mod)
+	// Store the current module state
+	if devmod, ok := module.(*devmodOwnerModule); ok {
+		if err := s.Session.SetDevmod(ctx, devmod.Devmod, devmod.Modules, complete); err != nil {
+			return nil, fmt.Errorf("error storing devmod state: %w", err)
+		}
+	}
+	if modules, ok := s.Modules.(serviceinfo.ModulePersister); ok {
+		if err := modules.PersistModule(ctx, moduleName, module); err != nil {
+			return nil, fmt.Errorf("error persisting service info module %q state: %w", moduleName, err)
+		}
+	}
+
+	// Progress the module state machine when the module completes
+	allModulesDone := false
+	if complete {
+		// Cleanup current module
+		if plugin, ok := module.(plugin.Module); ok {
+			stopOwnerPlugin(ctx, moduleName, plugin)
+		}
+
+		// Find out if there will be more modules
+		moreModules, err := s.Modules.NextModule(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("error progressing service info module %q state: %w", moduleName, err)
+		}
+		allModulesDone = !moreModules
 	}
 
 	// Return chunked data
 	return &ownerServiceInfo{
 		IsMoreServiceInfo: explicitBlock,
-		IsDone:            false,
-		ServiceInfo:       producer.ServiceInfo(),
+		IsDone:            allModulesDone,
+		ServiceInfo:       serviceInfo,
 	}, nil
 }
 

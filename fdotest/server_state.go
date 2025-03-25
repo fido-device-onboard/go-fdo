@@ -20,6 +20,7 @@ import (
 	"math/big"
 	"net"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -30,6 +31,7 @@ import (
 	"github.com/fido-device-onboard/go-fdo/fdotest/internal/token"
 	"github.com/fido-device-onboard/go-fdo/kex"
 	"github.com/fido-device-onboard/go-fdo/protocol"
+	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 	"github.com/fido-device-onboard/go-fdo/testdata"
 )
 
@@ -484,6 +486,61 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 			}
 			if got != mtu {
 				t.Fatal("mtu state did not match expected")
+			}
+		})
+
+		t.Run("Devmod", func(t *testing.T) {
+			token, err := state.NewToken(context.TODO(), protocol.TO2Protocol)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx := state.TokenContext(context.TODO(), token)
+			defer func() { _ = state.InvalidateToken(ctx) }()
+
+			// Shadow state to limit testable functions
+			var state fdo.TO2SessionState = state
+
+			// Store and retrieve
+			if _, _, _, err := state.Devmod(ctx); !errors.Is(err, fdo.ErrNotFound) {
+				t.Fatalf("expected ErrNotFound, got %v", err)
+			}
+			devmod := serviceinfo.Devmod{Serial: []byte{0x01, 0x02, 0x03, 0x04}}
+			modules := []string{"fdo.download", "fdo.upload"}
+			complete := false
+			if err := state.SetDevmod(ctx, devmod, modules, complete); err != nil {
+				t.Fatal(err)
+			}
+			gotDevmod, gotModules, gotComplete, err := state.Devmod(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(gotDevmod, devmod) {
+				t.Fatal("devmod state did not match expected")
+			}
+			if !slices.Equal(gotModules, modules) {
+				t.Fatal("devmod modules state did not match expected")
+			}
+			if gotComplete != complete {
+				t.Fatal("devmod complete state did not match expected")
+			}
+
+			// Store again with complete true
+			complete = true
+			if err := state.SetDevmod(ctx, devmod, modules, complete); err != nil {
+				t.Fatal(err)
+			}
+			gotDevmod, gotModules, gotComplete, err = state.Devmod(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(gotDevmod, devmod) {
+				t.Fatal("devmod state did not match expected")
+			}
+			if !slices.Equal(gotModules, modules) {
+				t.Fatal("devmod modules state did not match expected")
+			}
+			if gotComplete != complete {
+				t.Fatal("devmod complete state did not match expected")
 			}
 		})
 	})

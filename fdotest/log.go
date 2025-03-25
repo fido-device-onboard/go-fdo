@@ -16,6 +16,7 @@ type errorLog testing.T
 
 // Write implements io.Writer.
 func (t *errorLog) Write(p []byte) (int, error) {
+	(*testing.T)(t).Helper()
 	t.Log(string(bytes.TrimSpace(p)))
 	return len(p), nil
 }
