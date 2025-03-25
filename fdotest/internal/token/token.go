@@ -26,6 +26,7 @@ import (
 	"github.com/fido-device-onboard/go-fdo/cose"
 	"github.com/fido-device-onboard/go-fdo/kex"
 	"github.com/fido-device-onboard/go-fdo/protocol"
+	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
 
 type diState struct {
@@ -53,10 +54,13 @@ type to2State struct {
 		GUID protocol.GUID
 		Hmac protocol.Hmac
 	}
-	KeyExchange keyExchange `cbor:",flat2"`
-	ProveDv     protocol.Nonce
-	SetupDv     protocol.Nonce
-	MTU         uint16
+	KeyExchange    keyExchange `cbor:",flat2"`
+	ProveDv        protocol.Nonce
+	SetupDv        protocol.Nonce
+	MTU            uint16
+	Devmod         *serviceinfo.Devmod
+	Modules        []string
+	DevmodComplete bool
 }
 
 type keyExchange struct {
@@ -468,6 +472,46 @@ func (s Service) SetupDeviceNonce(ctx context.Context) (protocol.Nonce, error) {
 	})
 }
 
+// SetMTU sets the max service info size the device may receive.
+func (s Service) SetMTU(ctx context.Context, mtu uint16) error {
+	return update(ctx, s, func(state *to2State) error {
+		state.MTU = mtu
+		return nil
+	})
+}
+
+// MTU returns the max service info size the device may receive.
+func (s Service) MTU(ctx context.Context) (uint16, error) {
+	return fetch(ctx, s, func(state to2State) (uint16, error) {
+		if state.MTU == 0 {
+			return 0, fdo.ErrNotFound
+		}
+		return state.MTU, nil
+	})
+}
+
+// SetDevmod sets the device info and module support.
+func (s Service) SetDevmod(ctx context.Context, devmod serviceinfo.Devmod, modules []string, complete bool) error {
+	return update(ctx, s, func(state *to2State) error {
+		state.Devmod = &devmod
+		state.Modules = modules
+		state.DevmodComplete = complete
+		return nil
+	})
+}
+
+// Devmod returns the device info and module support.
+func (s Service) Devmod(ctx context.Context) (devmod serviceinfo.Devmod, modules []string, complete bool, err error) {
+	_, err = fetch(ctx, s, func(state to2State) (struct{}, error) {
+		if state.Devmod == nil {
+			return struct{}{}, fdo.ErrNotFound
+		}
+		devmod, modules, complete = *state.Devmod, state.Modules, state.DevmodComplete
+		return struct{}{}, nil
+	})
+	return
+}
+
 // ExtendVoucher adds a new signed voucher entry to the list and returns the
 // new extended vouchers. Vouchers should be treated as immutable structures.
 func (s Service) ExtendVoucher(ov *fdo.Voucher, nextOwner crypto.PublicKey) (*fdo.Voucher, error) {
@@ -486,22 +530,4 @@ func (s Service) ExtendVoucher(ov *fdo.Voucher, nextOwner crypto.PublicKey) (*fd
 	default:
 		return nil, fmt.Errorf("invalid public key type %T", nextOwner)
 	}
-}
-
-// SetMTU sets the max service info size the device may receive.
-func (s Service) SetMTU(ctx context.Context, mtu uint16) error {
-	return update(ctx, s, func(state *to2State) error {
-		state.MTU = mtu
-		return nil
-	})
-}
-
-// MTU returns the max service info size the device may receive.
-func (s Service) MTU(ctx context.Context) (uint16, error) {
-	return fetch(ctx, s, func(state to2State) (uint16, error) {
-		if state.MTU == 0 {
-			return 0, fdo.ErrNotFound
-		}
-		return state.MTU, nil
-	})
 }

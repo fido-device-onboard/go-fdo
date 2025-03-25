@@ -585,17 +585,79 @@ func newHandler(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) (*transport
 		},
 		TO2Responder: &fdo.TO2Server{
 			Session:         state,
+			Modules:         moduleStateMachines{DB: state, states: make(map[string]*moduleStateMachineState)},
 			Vouchers:        state,
 			OwnerKeys:       state,
 			RvInfo:          func(context.Context, fdo.Voucher) ([][]protocol.RvInstruction, error) { return rvInfo, nil },
-			OwnerModules:    ownerModules,
 			ReuseCredential: func(context.Context, fdo.Voucher) bool { return reuseCred },
 		},
 	}, nil
 }
 
-//nolint:gocyclo
-func ownerModules(ctx context.Context, guid protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, modules []string) iter.Seq2[string, serviceinfo.OwnerModule] {
+type moduleStateMachines struct {
+	DB *sqlite.DB
+	// current module state machine state for all sessions (indexed by token)
+	states map[string]*moduleStateMachineState
+}
+
+type moduleStateMachineState struct {
+	Name string
+	Impl serviceinfo.OwnerModule
+	Next func() (string, serviceinfo.OwnerModule, bool)
+	Stop func()
+}
+
+func (s moduleStateMachines) Module(ctx context.Context) (string, serviceinfo.OwnerModule, error) {
+	token, ok := s.DB.TokenFromContext(ctx)
+	if !ok {
+		return "", nil, fmt.Errorf("invalid context: no token")
+	}
+	module, ok := s.states[token]
+	if !ok {
+		return "", nil, fmt.Errorf("NextModule not called")
+	}
+	return module.Name, module.Impl, nil
+}
+
+func (s moduleStateMachines) NextModule(ctx context.Context) (bool, error) {
+	token, ok := s.DB.TokenFromContext(ctx)
+	if !ok {
+		return false, fmt.Errorf("invalid context: no token")
+	}
+	module, ok := s.states[token]
+	if !ok {
+		// Create a new module state machine
+		_, modules, _, err := s.DB.Devmod(ctx)
+		if err != nil {
+			return false, fmt.Errorf("error getting devmod: %w", err)
+		}
+		next, stop := iter.Pull2(ownerModules(modules))
+		module = &moduleStateMachineState{
+			Next: next,
+			Stop: stop,
+		}
+		s.states[token] = module
+	}
+
+	var valid bool
+	module.Name, module.Impl, valid = module.Next()
+	return valid, nil
+}
+
+func (s moduleStateMachines) CleanupModules(ctx context.Context) {
+	token, ok := s.DB.TokenFromContext(ctx)
+	if !ok {
+		return
+	}
+	module, ok := s.states[token]
+	if !ok {
+		return
+	}
+	module.Stop()
+	delete(s.states, token)
+}
+
+func ownerModules(modules []string) iter.Seq2[string, serviceinfo.OwnerModule] { //nolint:gocyclo
 	return func(yield func(string, serviceinfo.OwnerModule) bool) {
 		if slices.Contains(modules, "fdo.download") {
 			for _, name := range downloads {

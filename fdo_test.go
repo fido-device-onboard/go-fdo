@@ -91,14 +91,20 @@ func TestClientWithMockModuleAndAutoUnchunking(t *testing.T) {
 		},
 		OwnerModules: func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 			return func(yield func(string, serviceinfo.OwnerModule) bool) {
+				// Provide the owner module twice, because just once will not
+				// error due to IsDone=true on the last service info. In this
+				// case, the device does not send an error and just discards
+				// all remaining service info.
+				if !yield(mockModuleName, ownerModule) {
+					return
+				}
 				yield(mockModuleName, ownerModule)
 			}
 		},
 		CustomExpect: func(t *testing.T, err error) {
 			if err == nil {
 				t.Error("expected err to occur when not handling all message chunks")
-			}
-			if !strings.Contains(err.Error(), "device module did not read full body") {
+			} else if !strings.Contains(err.Error(), "device module did not read full body") {
 				t.Error("expected err to refer to device module not reading full message body")
 			}
 		},

@@ -30,6 +30,7 @@ import (
 	"github.com/fido-device-onboard/go-fdo/custom"
 	"github.com/fido-device-onboard/go-fdo/kex"
 	"github.com/fido-device-onboard/go-fdo/protocol"
+	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
 
 // DB implements FDO server state persistence.
@@ -115,6 +116,9 @@ func Init(db *sql.DB) error {
 			, prove_device BLOB
 			, setup_device BLOB
 			, mtu INTEGER
+			, devmod BLOB
+			, modules BLOB
+			, devmod_complete BOOLEAN CHECK (devmod_complete IN (0, 1))
 			, FOREIGN KEY(session) REFERENCES sessions(id) ON DELETE CASCADE
 			)`,
 		`CREATE TABLE IF NOT EXISTS mfg_vouchers
@@ -1211,6 +1215,70 @@ func (db *DB) MTU(ctx context.Context) (uint16, error) {
 	}
 
 	return mtu.V, nil
+}
+
+// SetDevmod sets the device info and module support.
+func (db *DB) SetDevmod(ctx context.Context, devmod serviceinfo.Devmod, modules []string, complete bool) error {
+	sessID, ok := db.sessionID(ctx)
+	if !ok {
+		return fdo.ErrInvalidSession
+	}
+	devmodBytes, err := cbor.Marshal(devmod)
+	if err != nil {
+		return err
+	}
+	modulesBytes, err := cbor.Marshal(modules)
+	if err != nil {
+		return err
+	}
+	completeInt := uint8(0)
+	if complete {
+		completeInt = 1
+	}
+	return db.insert(ctx, "to2_sessions", map[string]any{
+		"session":         sessID,
+		"devmod":          devmodBytes,
+		"modules":         modulesBytes,
+		"devmod_complete": completeInt,
+	}, []string{"session"})
+}
+
+// Devmod returns the device info and module support.
+func (db *DB) Devmod(ctx context.Context) (devmod serviceinfo.Devmod, modules []string, complete bool, err error) {
+	sessID, ok := db.sessionID(ctx)
+	if !ok {
+		return devmod, nil, false, fdo.ErrInvalidSession
+	}
+
+	// Query encoded values
+	var (
+		devmodBytes  sql.Null[[]byte]
+		modulesBytes sql.Null[[]byte]
+		completeInt  sql.Null[int]
+	)
+	if err := db.query(ctx, "to2_sessions", []string{
+		"devmod",
+		"modules",
+		"devmod_complete",
+	}, map[string]any{
+		"session": sessID,
+	}, &devmodBytes, &modulesBytes, &completeInt); err != nil {
+		return devmod, nil, false, err
+	}
+	if !devmodBytes.Valid || !modulesBytes.Valid || !completeInt.Valid {
+		return devmod, nil, false, fdo.ErrNotFound
+	}
+
+	// Parse values
+	if err := cbor.Unmarshal(devmodBytes.V, &devmod); err != nil {
+		return devmod, nil, false, fmt.Errorf("error unmarshaling CBOR devmod: %w", err)
+	}
+	if err := cbor.Unmarshal(modulesBytes.V, &modules); err != nil {
+		return devmod, nil, false, fmt.Errorf("error unmarshaling CBOR modules: %w", err)
+	}
+	complete = completeInt.V == 1
+
+	return devmod, modules, complete, nil
 }
 
 // SetRVBlob sets the owner rendezvous blob for a device.

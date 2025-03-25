@@ -78,6 +78,12 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	token = strings.TrimPrefix(token, bearerPrefix)
 	ctx := h.Tokens.TokenContext(r.Context(), token)
 
+	// Immediately respond to an error
+	if msgType == protocol.ErrorMsgType {
+		debugRequest(w, r, h.handleError(ctx, token))
+		return
+	}
+
 	// Get responder for message
 	var resp protocol.Responder
 	var isProtocolStart bool
@@ -94,15 +100,6 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case protocol.TO2Protocol:
 		resp = h.TO2Responder
 		isProtocolStart = msgType == 60
-	case protocol.AnyProtocol:
-		// Immediately respond to an error
-		if token == "" {
-			return
-		}
-		if err := h.Tokens.InvalidateToken(ctx); err != nil {
-			slog.Warn("invalidating token", "error", err)
-		}
-		return
 	}
 	if resp == nil {
 		writeErr(w, msgType, fmt.Errorf("unsupported message type"))
@@ -129,6 +126,32 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	debugRequest(w, r, func(w http.ResponseWriter, r *http.Request) {
 		h.handleRequest(ctx, w, r, msgType, resp)
 	})
+}
+
+func (h Handler) handleError(ctx context.Context, token string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var errMsg protocol.ErrorMessage
+		if err := cbor.NewDecoder(r.Body).Decode(&errMsg); err != nil {
+			slog.Warn("decoding error message request body", "error", err)
+		} else {
+			switch protocol.Of(errMsg.PrevMsgType) {
+			case protocol.DIProtocol:
+				h.DIResponder.HandleError(ctx, errMsg)
+			case protocol.TO0Protocol:
+				h.TO0Responder.HandleError(ctx, errMsg)
+			case protocol.TO1Protocol:
+				h.TO1Responder.HandleError(ctx, errMsg)
+			case protocol.TO2Protocol:
+				h.TO2Responder.HandleError(ctx, errMsg)
+			}
+		}
+
+		if token != "" {
+			if err := h.Tokens.InvalidateToken(ctx); err != nil {
+				slog.Warn("invalidating token", "error", err)
+			}
+		}
+	}
 }
 
 func (h Handler) handleRequest(ctx context.Context, w http.ResponseWriter, r *http.Request, msgType uint8, resp protocol.Responder) {

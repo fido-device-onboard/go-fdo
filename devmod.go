@@ -18,9 +18,7 @@ import (
 
 type devmodOwnerModule struct {
 	serviceinfo.Devmod
-	Modules    []string
-	numModules int
-	done       bool
+	Modules []string
 }
 
 func (d *devmodOwnerModule) HandleInfo(ctx context.Context, messageName string, messageBody io.Reader) error {
@@ -29,7 +27,12 @@ func (d *devmodOwnerModule) HandleInfo(ctx context.Context, messageName string, 
 		var ignore bool
 		return cbor.NewDecoder(messageBody).Decode(&ignore)
 	case "nummodules":
-		return cbor.NewDecoder(messageBody).Decode(&d.numModules)
+		var numModules int
+		if err := cbor.NewDecoder(messageBody).Decode(&numModules); err != nil {
+			return err
+		}
+		d.Modules = make([]string, numModules)
+		return nil
 	case "modules":
 		return d.parseModules(messageBody)
 	}
@@ -48,9 +51,6 @@ func (d *devmodOwnerModule) HandleInfo(ctx context.Context, messageName string, 
 }
 
 func (d *devmodOwnerModule) parseModules(messageBody io.Reader) error {
-	if d.Modules == nil {
-		d.Modules = make([]string, d.numModules)
-	}
 	for {
 		var chunk serviceinfo.DevmodModulesChunk
 		if err := cbor.NewDecoder(messageBody).Decode(&chunk); errors.Is(err, io.EOF) {
@@ -60,8 +60,11 @@ func (d *devmodOwnerModule) parseModules(messageBody io.Reader) error {
 		}
 		// If the FDO 1.2 spec is made more clear, validate that start plus len
 		// is less than or equal to numModules.
-		if chunk.Start < 0 || chunk.Start > d.numModules || chunk.Len < 0 || len(chunk.Modules) != chunk.Len {
+		if chunk.Start < 0 || chunk.Start > len(d.Modules) || chunk.Len < 0 || len(chunk.Modules) != chunk.Len {
 			return fmt.Errorf("invalid devmod module chunk")
+		}
+		if slices.Contains(chunk.Modules, "") {
+			return fmt.Errorf("devmod sent an empty module name which is invalid")
 		}
 
 		// Handle implementations that don't use the first array item to
@@ -71,20 +74,18 @@ func (d *devmodOwnerModule) parseModules(messageBody io.Reader) error {
 		}
 
 		copy(d.Modules[chunk.Start:chunk.Start+chunk.Len], chunk.Modules)
-		d.done = chunk.Start+chunk.Len == d.numModules
 	}
 }
 
 func (d *devmodOwnerModule) ProduceInfo(_ context.Context, _ *serviceinfo.Producer) (bool, bool, error) {
-	// Validate required fields were sent before sending IsDone
-	if d.done {
-		if err := d.Validate(); err != nil {
-			return false, false, err
-		}
-		if slices.Contains(d.Modules, "") {
-			return false, false, fmt.Errorf("modules list did not match nummodules or included an empty module name")
-		}
-		return false, true, nil
+	if d.Modules == nil || slices.Contains(d.Modules, "") {
+		return false, false, nil
 	}
-	return false, false, nil
+
+	// Validate required fields were sent
+	if err := d.Validate(); err != nil {
+		return false, false, err
+	}
+
+	return false, true, nil
 }

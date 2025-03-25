@@ -43,11 +43,7 @@ import (
 
 const timeout = 10 * time.Second
 
-// OwnerModulesFunc creates an iterator of service info modules for a given
-// device.
-type OwnerModulesFunc func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule]
-
-// Config provides options to
+// Config provides options to modify how the test suite runs.
 type Config struct {
 	// If state is nil, then an in-memory implementation will be used. This is
 	// useful for only testing service info modules.
@@ -64,11 +60,20 @@ type Config struct {
 	// Use the Credential Reuse Protocol
 	Reuse bool
 
+	// If true, set the log level to info
 	NoDebug bool
 
+	// If DeviceModules is non-nil, then they will be reported as supported in
+	// devmod and called if any owner modules are executed.
 	DeviceModules map[string]serviceinfo.DeviceModule
-	OwnerModules  OwnerModulesFunc
 
+	// If OwnerModules is non-nil, then it will be used to initialize owner
+	// module state and owner services will be executed in order for each
+	// module supported by the device (as reported in devmod).
+	OwnerModules func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule]
+
+	// If CustomExpect is non-nil, then it is used to validate the result of
+	// TO2 with modules enabled
 	CustomExpect func(*testing.T, error)
 }
 
@@ -104,6 +109,13 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 			internalState.State = inMemory
 		})
 		conf.State = internalState
+	}
+
+	startModules := conf.OwnerModules
+	if conf.OwnerModules == nil {
+		startModules = func(context.Context, protocol.GUID, string, []*x509.Certificate, serviceinfo.Devmod, []string) iter.Seq2[string, serviceinfo.OwnerModule] {
+			return func(yield func(string, serviceinfo.OwnerModule) bool) {}
+		}
 	}
 
 	diResponder := &fdo.DIServer[custom.DeviceMfgInfo]{
@@ -186,27 +198,29 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 		RVBlobs: conf.State,
 	}
 	to2Responder := &fdo.TO2Server{
-		Session:   conf.State,
+		Session: conf.State,
+		Modules: &to2ModuleStateMachine{
+			Session:  conf.State,
+			Vouchers: conf.State,
+			OwnerModules: func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
+				mods := startModules(ctx, replacementGUID, info, chain, devmod, supportedMods)
+
+				// Filter out modules not in supportedMods
+				return func(yield func(string, serviceinfo.OwnerModule) bool) {
+					for modName, mod := range mods {
+						if slices.Contains(supportedMods, modName) {
+							if !yield(modName, mod) {
+								return
+							}
+						}
+					}
+				}
+			},
+		},
 		Vouchers:  conf.State,
 		OwnerKeys: conf.State,
 		RvInfo: func(context.Context, fdo.Voucher) ([][]protocol.RvInstruction, error) {
 			return [][]protocol.RvInstruction{}, nil
-		},
-		OwnerModules: func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
-			if conf.OwnerModules == nil {
-				return func(yield func(string, serviceinfo.OwnerModule) bool) {}
-			}
-
-			mods := conf.OwnerModules(ctx, replacementGUID, info, chain, devmod, supportedMods)
-			return func(yield func(string, serviceinfo.OwnerModule) bool) {
-				for modName, mod := range mods {
-					if slices.Contains(supportedMods, modName) {
-						if !yield(modName, mod) {
-							return
-						}
-					}
-				}
-			}
 		},
 		ReuseCredential: func(context.Context, fdo.Voucher) bool { return conf.Reuse },
 		VerifyVoucher:   func(context.Context, fdo.Voucher) error { return nil },
@@ -498,5 +512,94 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 				cred = newCred
 			})
 		})
+	}
+}
+
+// Store a single module state at a time, initializing it with OwnerModules and
+// relying on CleanupModules to be called to clear the state before the next
+// usage.
+type to2ModuleStateMachine struct {
+	Session      fdo.TO2SessionState
+	Vouchers     fdo.OwnerVoucherPersistentState
+	OwnerModules func(ctx context.Context, guid protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, modules []string) iter.Seq2[string, serviceinfo.OwnerModule]
+
+	module *moduleStateMachineState
+}
+
+type moduleStateMachineState struct {
+	Name string
+	Impl serviceinfo.OwnerModule
+	Next func() (string, serviceinfo.OwnerModule, bool)
+	Stop func()
+}
+
+func (s *to2ModuleStateMachine) Module(ctx context.Context) (string, serviceinfo.OwnerModule, error) {
+	if s.module == nil {
+		return "", nil, fmt.Errorf("NextModule never called")
+	}
+	if s.module.Impl == nil {
+		return "", nil, fmt.Errorf("NextModule already returned false")
+	}
+	return s.module.Name, s.module.Impl, nil
+}
+
+func (s *to2ModuleStateMachine) NextModule(ctx context.Context) (bool, error) {
+	if s.module != nil {
+		var valid bool
+		s.module.Name, s.module.Impl, valid = s.module.Next()
+		return valid, nil
+	}
+
+	guid, err := s.Session.GUID(ctx)
+	if err != nil {
+		return false, fmt.Errorf("error retrieving associated device GUID of TO2 session: %w", err)
+	}
+
+	ov, err := s.Vouchers.Voucher(ctx, guid)
+	if err != nil {
+		return false, fmt.Errorf("error retrieving voucher for device %x: %w", guid, err)
+	}
+	info := ov.Header.Val.DeviceInfo
+
+	replacementGUID, err := s.Session.ReplacementGUID(ctx)
+	if errors.Is(err, fdo.ErrNotFound) {
+		// replacement GUID is not found when using the Credential Reuse Protocol
+		replacementGUID = guid
+	} else if err != nil {
+		return false, fmt.Errorf("error retrieving replacement GUID for device: %w", err)
+	}
+
+	devmod, modules, devmodComplete, err := s.Session.Devmod(ctx)
+	if err == nil && !devmodComplete {
+		return false, fmt.Errorf("devmod did not complete")
+	}
+	if err != nil {
+		return false, fmt.Errorf("error retrieving devmod info for device %x: %w", guid, err)
+	}
+
+	var deviceCertChain []*x509.Certificate
+	if ov.CertChain != nil {
+		deviceCertChain = make([]*x509.Certificate, len(*ov.CertChain))
+		for i, cert := range *ov.CertChain {
+			deviceCertChain[i] = (*x509.Certificate)(cert)
+		}
+	}
+
+	// Start iterator
+	nextModule, stopIter := iter.Pull2(s.OwnerModules(ctx, replacementGUID, info, deviceCertChain, devmod, modules))
+	name, impl, valid := nextModule()
+	s.module = &moduleStateMachineState{
+		Name: name,
+		Impl: impl,
+		Next: nextModule,
+		Stop: stopIter,
+	}
+	return valid, nil
+}
+
+func (s *to2ModuleStateMachine) CleanupModules(ctx context.Context) {
+	if s.module != nil {
+		s.module.Stop()
+		s.module = nil
 	}
 }
