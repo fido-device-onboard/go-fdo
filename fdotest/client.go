@@ -26,6 +26,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -71,6 +72,12 @@ type Config struct {
 	CustomExpect func(*testing.T, error)
 }
 
+var internalStateOnce sync.Once
+var internalState struct {
+	*token.Service
+	*memory.State
+}
+
 // RunClientTestSuite is used to test different implementations of server state
 // methods at an almost end-to-end level (transport is mocked).
 //
@@ -83,20 +90,20 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(TestingLog(t), &slog.HandlerOptions{Level: level})))
 
 	if conf.State == nil {
-		stateless, err := token.NewService()
-		if err != nil {
-			t.Fatal(err)
-		}
+		internalStateOnce.Do(func() {
+			stateless, err := token.NewService()
+			if err != nil {
+				t.Fatal(err)
+			}
+			internalState.Service = stateless
 
-		inMemory, err := memory.NewState()
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		conf.State = struct {
-			*token.Service
-			*memory.State
-		}{stateless, inMemory}
+			inMemory, err := memory.NewState()
+			if err != nil {
+				t.Fatal(err)
+			}
+			internalState.State = inMemory
+		})
+		conf.State = internalState
 	}
 
 	diResponder := &fdo.DIServer[custom.DeviceMfgInfo]{
