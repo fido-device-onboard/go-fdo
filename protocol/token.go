@@ -16,6 +16,8 @@ type TokenService interface {
 	NewToken(context.Context, Protocol) (string, error)
 
 	// InvalidateToken destroys the state associated with a given token.
+	// fdo.ErrNotFound or an error wrapping it must be returned if the token
+	// has already been invalidated.
 	InvalidateToken(context.Context) error
 
 	// TokenContext injects a context with a token value so that it may be used

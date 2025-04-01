@@ -163,11 +163,13 @@ func (h Handler) handleRequest(ctx context.Context, w http.ResponseWriter, r *ht
 	if maxSize > 0 && r.ContentLength > maxSize {
 		_ = r.Body.Close()
 		writeErr(w, msgType, fmt.Errorf("content too large (%d bytes)", r.ContentLength))
+		h.invalidateToken(ctx)
 		return
 	}
 	if maxSize > 0 && r.ContentLength < 0 {
 		_ = r.Body.Close()
 		writeErr(w, msgType, errors.New("content length must be specified in request headers"))
+		h.invalidateToken(ctx)
 		return
 	}
 
@@ -190,6 +192,7 @@ func (h Handler) handleRequest(ctx context.Context, w http.ResponseWriter, r *ht
 		}).CryptSession(ctx)
 		if err != nil {
 			writeErr(w, msgType, err)
+			h.invalidateToken(ctx)
 			return
 		}
 		defer sess.Destroy()
@@ -198,6 +201,7 @@ func (h Handler) handleRequest(ctx context.Context, w http.ResponseWriter, r *ht
 		decrypted, err := sess.Decrypt(rand.Reader, msg)
 		if err != nil {
 			writeErr(w, msgType, fmt.Errorf("error decrypting message %d: %w", msgType, err))
+			h.invalidateToken(ctx)
 			return
 		}
 
@@ -217,7 +221,7 @@ func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, msgTy
 	respType, respData := resp.Respond(ctx, msgType, msg)
 	if respType == protocol.ErrorMsgType {
 		if err := h.Tokens.InvalidateToken(ctx); err != nil {
-			slog.Warn("error invalidating token", "error", err)
+			slog.Warn("invalidating token", "error", err)
 		}
 	}
 
@@ -228,6 +232,7 @@ func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, msgTy
 		}).CryptSession(ctx)
 		if err != nil {
 			writeErr(w, msgType, err)
+			h.invalidateToken(ctx)
 			return
 		}
 		defer sess.Destroy()
@@ -240,30 +245,27 @@ func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, msgTy
 		respData, err = sess.Encrypt(rand.Reader, respData)
 		if err != nil {
 			writeErr(w, msgType, fmt.Errorf("error encrypting message %d: %w", respType, err))
+			h.invalidateToken(ctx)
 			return
 		}
 	}
 
-	// Invalidate token when finishing a protocol or erroring
-	newToken, _ := h.Tokens.TokenFromContext(ctx)
+	// Invalidate token when finishing a protocol
 	switch respType {
-	case 13, 32, 71, protocol.ErrorMsgType:
-		if newToken != "" {
-			ctx := h.Tokens.TokenContext(ctx, newToken)
-			if err := h.Tokens.InvalidateToken(ctx); err != nil {
-				slog.Warn("invalidating token", "error", err)
-			}
-		}
+	case 13, 23, 33, 71:
+		h.invalidateToken(ctx)
 	}
 
 	// Marshal response to get size
 	var body bytes.Buffer
 	if err := cbor.NewEncoder(&body).Encode(respData); err != nil {
 		writeErr(w, msgType, fmt.Errorf("error marshaling response message %d: %w", respType, err))
+		h.invalidateToken(ctx)
 		return
 	}
 
 	// Add response headers
+	newToken, _ := h.Tokens.TokenFromContext(ctx)
 	w.Header().Add("Authorization", bearerPrefix+newToken)
 	w.Header().Add("Content-Length", strconv.Itoa(body.Len()))
 	w.Header().Add("Content-Type", "application/cbor")
@@ -272,7 +274,23 @@ func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, msgTy
 
 	if _, err := w.Write(body.Bytes()); err != nil {
 		writeErr(w, msgType, fmt.Errorf("error writing response message %d: %w", respType, err))
+		h.invalidateToken(ctx)
 		return
+	}
+}
+
+func (h Handler) invalidateToken(ctx context.Context) {
+	token, _ := h.Tokens.TokenFromContext(ctx)
+	if token == "" {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	ctx = h.Tokens.TokenContext(ctx, token)
+	if err := h.Tokens.InvalidateToken(ctx); err != nil {
+		slog.Warn("invalidating token", "error", err)
 	}
 }
 
