@@ -54,9 +54,7 @@ func (t *Transport) Send(ctx context.Context, msgType uint8, msg any, sess kex.S
 	}
 
 	t.T.Logf("Request %d: %v", msgType, tryDebugNotation(msg))
-	var responder interface {
-		Respond(context.Context, uint8, io.Reader) (uint8, any)
-	}
+	var responder protocol.Responder
 	proto := protocol.Of(msgType)
 	var isProtocolStart bool
 	switch proto {
@@ -94,6 +92,13 @@ func (t *Transport) Send(ctx context.Context, msgType uint8, msg any, sess kex.S
 	var respBody bytes.Buffer
 	if err := cbor.NewEncoder(&respBody).Encode(resp); err != nil {
 		return 0, nil, err
+	}
+
+	switch respType {
+	case 13, 23, 33, 71, protocol.ErrorMsgType:
+		if err := t.Tokens.InvalidateToken(t.Tokens.TokenContext(context.Background(), t.token)); err != nil {
+			t.T.Logf("error invalidating token: %v", err)
+		}
 	}
 
 	return respType, io.NopCloser(&respBody), nil

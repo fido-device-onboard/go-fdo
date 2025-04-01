@@ -28,6 +28,24 @@ func TestClient(t *testing.T) {
 	fdotest.RunClientTestSuite(t, fdotest.Config{
 		State: state,
 	})
+
+	// After the test runs, all sessions should have been deleted, so log any
+	// that remain as an error
+	sessions, err := state.DB().Query("SELECT id, protocol FROM sessions")
+	if err != nil {
+		t.Fatal("querying sessions", err)
+	}
+	for sessions.Next() {
+		var id []byte
+		var protocol int
+		if err := sessions.Scan(&id, &protocol); err != nil {
+			t.Error("scanning session row", err)
+		}
+		t.Errorf("session wasn't invalidated [id=%x]: protocol %d", id, protocol)
+	}
+	if err := sessions.Err(); err != nil {
+		t.Fatal("querying sessions", err)
+	}
 }
 
 func TestServerState(t *testing.T) {
