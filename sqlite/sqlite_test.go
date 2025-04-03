@@ -4,6 +4,7 @@
 package sqlite_test
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -12,40 +13,72 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
 
+	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/fdotest"
+	fdo_http "github.com/fido-device-onboard/go-fdo/http"
 	"github.com/fido-device-onboard/go-fdo/protocol"
 	"github.com/fido-device-onboard/go-fdo/sqlite"
 )
 
 func TestClient(t *testing.T) {
-	state, cleanup := newDB(t)
-	defer func() { _ = cleanup() }()
+	newTransport := func(t *testing.T, tokens protocol.TokenService, di, to0, to1, to2 protocol.Responder) fdo.Transport {
+		return &fdo_http.Transport{
+			BaseURL: "http://example.com",
+			Client: &http.Client{Transport: &transport{
+				T: t,
+				Handler: &fdo_http.Handler{
+					Tokens:       tokens,
+					DIResponder:  di,
+					TO0Responder: to0,
+					TO1Responder: to1,
+					TO2Responder: to2,
+				},
+			}},
+		}
+	}
 
-	fdotest.RunClientTestSuite(t, fdotest.Config{
-		State: state,
+	t.Run("with mock transport", func(t *testing.T) {
+		state, cleanup := newDB(t)
+		defer func() { _ = cleanup() }()
+
+		fdotest.RunClientTestSuite(t, fdotest.Config{
+			State: state,
+		})
 	})
 
-	// After the test runs, all sessions should have been deleted, so log any
-	// that remain as an error
-	sessions, err := state.DB().Query("SELECT id, protocol FROM sessions")
-	if err != nil {
-		t.Fatal("querying sessions", err)
-	}
-	for sessions.Next() {
-		var id []byte
-		var protocol int
-		if err := sessions.Scan(&id, &protocol); err != nil {
-			t.Error("scanning session row", err)
+	t.Run("with HTTP transport", func(t *testing.T) {
+		state, cleanup := newDB(t)
+		defer func() { _ = cleanup() }()
+
+		fdotest.RunClientTestSuite(t, fdotest.Config{
+			State:        state,
+			NewTransport: newTransport,
+		})
+
+		// After the test runs, all sessions should have been deleted, so log any
+		// that remain as an error
+		sessions, err := state.DB().Query("SELECT id, protocol FROM sessions")
+		if err != nil {
+			t.Fatal("querying sessions", err)
 		}
-		t.Errorf("session wasn't invalidated [id=%x]: protocol %d", id, protocol)
-	}
-	if err := sessions.Err(); err != nil {
-		t.Fatal("querying sessions", err)
-	}
+		for sessions.Next() {
+			var id []byte
+			var protocol int
+			if err := sessions.Scan(&id, &protocol); err != nil {
+				t.Error("scanning session row", err)
+			}
+			t.Errorf("session wasn't invalidated [id=%x]: protocol %d", id, protocol)
+		}
+		if err := sessions.Err(); err != nil {
+			t.Fatal("querying sessions", err)
+		}
+	})
 }
 
 func TestServerState(t *testing.T) {
@@ -205,4 +238,19 @@ func generateCA(key crypto.Signer) ([]*x509.Certificate, error) {
 		return nil, err
 	}
 	return []*x509.Certificate{cert}, nil
+}
+
+type transport struct {
+	T       *testing.T
+	Handler http.Handler
+}
+
+// Assume request is well-formed and ignore timeouts, retries, etc.
+func (tr *transport) RoundTrip(req *http.Request) (*http.Response, error) {
+	var buf bytes.Buffer
+	rr := &httptest.ResponseRecorder{Body: &buf}
+	tr.Handler.ServeHTTP(rr, req)
+	resp := rr.Result()
+	resp.Request = req
+	return resp, nil
 }

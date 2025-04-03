@@ -62,6 +62,8 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		panic("token service not set")
 	}
 
+	ctx := r.Context()
+
 	// Parse message type from request URL
 	msgType, ok := msgTypeFromPath(w, r)
 	if !ok {
@@ -75,8 +77,10 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, msgType, fmt.Errorf("invalid bearer token"))
 		return
 	}
-	token = strings.TrimPrefix(token, bearerPrefix)
-	ctx := h.Tokens.TokenContext(r.Context(), token)
+	if token != "" {
+		token = strings.TrimPrefix(token, bearerPrefix)
+		ctx = h.Tokens.TokenContext(r.Context(), token)
+	}
 
 	// Immediately respond to an error
 	if msgType == protocol.ErrorMsgType {
