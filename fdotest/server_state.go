@@ -129,7 +129,7 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 		if len(chain) != len(gotChain) {
 			t.Fatal("device cert chain lengths did not match")
 		}
-		for i := 0; i < len(chain); i++ {
+		for i := range len(chain) {
 			if !chain[i].Equal(gotChain[i]) {
 				t.Fatalf("device cert chain index %d did not match server state", i)
 			}
