@@ -1231,15 +1231,11 @@ func (db *DB) SetDevmod(ctx context.Context, devmod serviceinfo.Devmod, modules 
 	if err != nil {
 		return err
 	}
-	completeInt := uint8(0)
-	if complete {
-		completeInt = 1
-	}
 	return db.insert(ctx, "to2_sessions", map[string]any{
 		"session":         sessID,
 		"devmod":          devmodBytes,
 		"modules":         modulesBytes,
-		"devmod_complete": completeInt,
+		"devmod_complete": complete,
 	}, []string{"session"})
 }
 
@@ -1254,7 +1250,7 @@ func (db *DB) Devmod(ctx context.Context) (devmod serviceinfo.Devmod, modules []
 	var (
 		devmodBytes  sql.Null[[]byte]
 		modulesBytes sql.Null[[]byte]
-		completeInt  sql.Null[int]
+		completeVal  sql.NullBool
 	)
 	if err := db.query(ctx, "to2_sessions", []string{
 		"devmod",
@@ -1262,10 +1258,10 @@ func (db *DB) Devmod(ctx context.Context) (devmod serviceinfo.Devmod, modules []
 		"devmod_complete",
 	}, map[string]any{
 		"session": sessID,
-	}, &devmodBytes, &modulesBytes, &completeInt); err != nil {
+	}, &devmodBytes, &modulesBytes, &completeVal); err != nil {
 		return devmod, nil, false, err
 	}
-	if !devmodBytes.Valid || !modulesBytes.Valid || !completeInt.Valid {
+	if !devmodBytes.Valid || !modulesBytes.Valid || !completeVal.Valid {
 		return devmod, nil, false, fdo.ErrNotFound
 	}
 
@@ -1276,7 +1272,7 @@ func (db *DB) Devmod(ctx context.Context) (devmod serviceinfo.Devmod, modules []
 	if err := cbor.Unmarshal(modulesBytes.V, &modules); err != nil {
 		return devmod, nil, false, fmt.Errorf("error unmarshaling CBOR modules: %w", err)
 	}
-	complete = completeInt.V == 1
+	complete = completeVal.Bool
 
 	return devmod, modules, complete, nil
 }
