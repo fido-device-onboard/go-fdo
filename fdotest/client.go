@@ -184,7 +184,7 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 			chain = append([]*x509.Certificate{cert}, chain...)
 			return chain, nil
 		},
-		AutoExtend: conf.State,
+		BeforeVoucherPersist: fdo.AllInOne{DIAndOwner: conf.State}.Extend,
 		RvInfo: func(context.Context, *fdo.Voucher) ([][]protocol.RvInstruction, error) {
 			return [][]protocol.RvInstruction{}, nil
 		},
@@ -222,7 +222,7 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 		RvInfo: func(context.Context, fdo.Voucher) ([][]protocol.RvInstruction, error) {
 			return [][]protocol.RvInstruction{}, nil
 		},
-		ReuseCredential: func(context.Context, fdo.Voucher) bool { return conf.Reuse },
+		ReuseCredential: func(context.Context, fdo.Voucher) (bool, error) { return conf.Reuse, nil },
 		VerifyVoucher:   func(context.Context, fdo.Voucher) error { return nil },
 	}
 

@@ -31,12 +31,13 @@ type DIServer[T any] struct {
 	// based on its self-reported info and certificate chain.
 	DeviceInfo func(context.Context, *T, []*x509.Certificate) (string, protocol.KeyType, protocol.KeyEncoding, error)
 
-	// When set, new vouchers will be extended using the appropriate owner key.
-	AutoExtend AutoExtend
+	// Optional callback for before a new voucher is persisted.
+	BeforeVoucherPersist func(context.Context, *Voucher) error
 
-	// When set, new vouchers will be registered for rendezvous.
-	AutoTO0      AutoTO0
-	AutoTO0Addrs []protocol.RvTO2Addr
+	// Optional callback for immediately after a new voucher is persisted.
+	// There is no guarantee that the device will receive and process the Done
+	// message (13) without error.
+	AfterVoucherPersist func(context.Context, Voucher) error
 
 	// Rendezvous directives
 	RvInfo func(context.Context, *Voucher) ([][]protocol.RvInstruction, error)
@@ -87,18 +88,15 @@ type TO0Server struct {
 	RVBlobs RendezvousBlobPersistentState
 
 	// AcceptVoucher is an optional function which, when given, is used to
-	// determine whether to accept a voucher from a client.
+	// determine whether to accept a voucher from a client and how long (TTL)
+	// to retain a rendezvous blob for the owner service for the given voucher.
 	//
-	// If AcceptVoucher is not set, then all vouchers will be accepted. It is
-	// expected that some other means of authorization is used in this case.
-	AcceptVoucher func(context.Context, Voucher) (accept bool, err error)
-
-	// NegotiateTTL is an optional function to select a validity period for a
-	// rendezvous blob based on the requested number of seconds and the
-	// ownership voucher contents.
+	// If the TTL is 0, the request is rejected.
 	//
-	// If NegotiateTTL is not set, the requested TTL will be used.
-	NegotiateTTL func(requestedSeconds uint32, ov Voucher) (waitSeconds uint32)
+	// If AcceptVoucher is not set, then all vouchers will be accepted and the
+	// requested TTL will be used. It is expected that some other means of
+	// authorization is used in this case.
+	AcceptVoucher func(ctx context.Context, ov Voucher, requestedTTLSecs uint32) (ttlSecs uint32, err error)
 }
 
 // Respond validates a request and returns the appropriate response message.
@@ -199,7 +197,7 @@ type TO2Server struct {
 	// ReuseCredential, if not nil, will be called to determine whether to
 	// apply the Credential Reuse Protocol based on the current voucher of an
 	// onboarding device.
-	ReuseCredential func(context.Context, Voucher) bool
+	ReuseCredential func(context.Context, Voucher) (bool, error)
 
 	// VerifyVoucher, if not nil, will be called before creating and responding
 	// with a TO2.ProveOVHdr message. Any error will cause TO2 to fail with a
@@ -218,7 +216,7 @@ type TO2Server struct {
 	// configured to only read data of a maximum size. Choosing a lower value
 	// is useful when it can help a well-behaved device communicate faster over
 	// a well understood network.
-	MaxDeviceServiceInfoSize uint16
+	MaxDeviceServiceInfoSize func(context.Context, Voucher) (uint16, error)
 }
 
 // Resell implements the FDO Resale Protocol by removing a voucher from

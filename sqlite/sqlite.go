@@ -191,8 +191,6 @@ var _ interface {
 	fdo.ManufacturerVoucherPersistentState
 	fdo.OwnerVoucherPersistentState
 	fdo.OwnerKeyPersistentState
-	fdo.AutoExtend
-	fdo.AutoTO0
 } = (*DB)(nil)
 
 const sessionIDSize = 16

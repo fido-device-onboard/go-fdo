@@ -255,29 +255,26 @@ func (s *TO0Server) acceptOwner(ctx context.Context, msg io.Reader) (*to0AcceptO
 		return nil, fmt.Errorf("TO0 owner sign nonces not match")
 	}
 
-	// Use optional callback to decide whether to accept voucher
+	// Use optional callback to decide whether to accept voucher and how long
+	// the rendezvous blob should be valid
+	ttl := sig.To0d.Val.WaitSeconds
 	if s.AcceptVoucher != nil {
-		if accept, err := s.AcceptVoucher(ctx, ov); err != nil {
+		if ttl, err = s.AcceptVoucher(ctx, ov, ttl); err != nil {
 			return nil, err
-		} else if !accept {
+		}
+		if ttl == 0 {
 			captureErr(ctx, protocol.InvalidMessageErrCode, "")
 			return nil, fmt.Errorf("voucher has been rejected")
 		}
 	}
 
-	// Allow adjusting rendezvous blob mapping validity period
-	negotiatedTTL := sig.To0d.Val.WaitSeconds
-	if s.NegotiateTTL != nil {
-		negotiatedTTL = s.NegotiateTTL(negotiatedTTL, ov)
-	}
-
 	// Store rendezvous blob
-	expiration := time.Now().Add(time.Duration(negotiatedTTL) * time.Second)
+	expiration := time.Now().Add(time.Duration(ttl) * time.Second)
 	if err := s.RVBlobs.SetRVBlob(ctx, &ov, sig.To1d.Untag(), expiration); err != nil {
 		return nil, fmt.Errorf("error storing rendezvous blob: %w", err)
 	}
 
 	return &to0AcceptOwner{
-		WaitSeconds: negotiatedTTL,
+		WaitSeconds: ttl,
 	}, nil
 }

@@ -1001,24 +1001,9 @@ func (s *TO2Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1
 	}
 
 	// Get replacement GUID and rendezvous directives
-	var replacementGUID protocol.GUID
-	var replacementRvInfo [][]protocol.RvInstruction
-	if s.ReuseCredential != nil && s.ReuseCredential(ctx, *ov) {
-		replacementGUID = ov.Header.Val.GUID
-		replacementRvInfo = ov.Header.Val.RvInfo
-	} else {
-		if _, err := rand.Read(replacementGUID[:]); err != nil {
-			return nil, fmt.Errorf("error generating replacement GUID for device: %w", err)
-		}
-		if err := s.Session.SetReplacementGUID(ctx, replacementGUID); err != nil {
-			return nil, fmt.Errorf("error storing replacement GUID for device: %w", err)
-		}
-		if replacementRvInfo, err = s.RvInfo(ctx, *ov); err != nil {
-			return nil, fmt.Errorf("error determining rendezvous info for device: %w", err)
-		}
-		if err := s.Session.SetRvInfo(ctx, replacementRvInfo); err != nil {
-			return nil, fmt.Errorf("error storing rendezvous info for device: %w", err)
-		}
+	replacementGUID, replacementRvInfo, err := s.replacementCredential(ctx, ov)
+	if err != nil {
+		return nil, err
 	}
 
 	// Respond with device setup
@@ -1038,6 +1023,34 @@ func (s *TO2Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1
 		return nil, fmt.Errorf("error signing TO2.SetupDevice payload: %w", err)
 	}
 	return s1.Tag(), nil
+}
+
+func (s *TO2Server) replacementCredential(ctx context.Context, ov *Voucher) (protocol.GUID, [][]protocol.RvInstruction, error) {
+	if s.ReuseCredential != nil {
+		reuse, err := s.ReuseCredential(ctx, *ov)
+		if err != nil {
+			return protocol.GUID{}, nil, fmt.Errorf("error checking if credential reuse should be performed for device based on voucher: %w", err)
+		}
+		if reuse {
+			return ov.Header.Val.GUID, ov.Header.Val.RvInfo, nil
+		}
+	}
+
+	var replacementGUID protocol.GUID
+	if _, err := rand.Read(replacementGUID[:]); err != nil {
+		return protocol.GUID{}, nil, fmt.Errorf("error generating replacement GUID for device: %w", err)
+	}
+	if err := s.Session.SetReplacementGUID(ctx, replacementGUID); err != nil {
+		return protocol.GUID{}, nil, fmt.Errorf("error storing replacement GUID for device: %w", err)
+	}
+	replacementRvInfo, err := s.RvInfo(ctx, *ov)
+	if err != nil {
+		return protocol.GUID{}, nil, fmt.Errorf("error determining rendezvous info for device: %w", err)
+	}
+	if err := s.Session.SetRvInfo(ctx, replacementRvInfo); err != nil {
+		return protocol.GUID{}, nil, fmt.Errorf("error storing rendezvous info for device: %w", err)
+	}
+	return replacementGUID, replacementRvInfo, nil
 }
 
 type deviceServiceInfoReady struct {
@@ -1136,8 +1149,20 @@ func (s *TO2Server) ownerServiceInfoReady(ctx context.Context, msg io.Reader) (*
 
 	// Send response
 	ownerReady := new(ownerServiceInfoReady)
-	if s.MaxDeviceServiceInfoSize != 0 {
-		ownerReady.MaxDeviceServiceInfoSize = &s.MaxDeviceServiceInfoSize
+	if s.MaxDeviceServiceInfoSize != nil {
+		guid, err := s.Session.GUID(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("error retrieving associated device GUID of proof session: %w", err)
+		}
+		ov, err := s.Vouchers.Voucher(ctx, guid)
+		if err != nil {
+			return nil, fmt.Errorf("error retrieving voucher for device %x: %w", guid, err)
+		}
+		size, err := s.MaxDeviceServiceInfoSize(ctx, *ov)
+		if err != nil {
+			return nil, fmt.Errorf("error getting service info size limit for device %x: %w", ov.Header.Val.GUID, err)
+		}
+		ownerReady.MaxDeviceServiceInfoSize = &size
 	}
 	return ownerReady, nil
 }
