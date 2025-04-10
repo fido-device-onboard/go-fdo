@@ -45,7 +45,6 @@ var _ fdo.RendezvousBlobPersistentState = (*State)(nil)
 var _ fdo.ManufacturerVoucherPersistentState = (*State)(nil)
 var _ fdo.OwnerVoucherPersistentState = (*State)(nil)
 var _ fdo.OwnerKeyPersistentState = (*State)(nil)
-var _ fdo.AutoExtend = (*State)(nil)
 
 // NewState initializes the in-memory state.
 func NewState() (*State, error) {

@@ -22,7 +22,7 @@ linters:
       - path: (.+)\.go$
         text: declaration of "(err|ctx)" shadows declaration at
       - path: (.+)\.go$
-        text: '^unused-parameter: '
+        text: "^unused-parameter: "
     paths:
       - third_party$
       - builtin$

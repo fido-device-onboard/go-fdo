@@ -530,35 +530,17 @@ func mustMarshal(v any) []byte {
 }
 
 func newHandler(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) (*transport.Handler, error) {
+	aio := fdo.AllInOne{
+		DIAndOwner:         state,
+		RendezvousAndOwner: withOwnerAddrs{state, rvInfo},
+	}
+	autoExtend := aio.Extend
+
 	// Auto-register RV blob so that TO1 can be tested unless a TO0 address is
 	// given or RV bypass is set
-	var autoTO0 fdo.AutoTO0
-	var autoTO0Addrs []protocol.RvTO2Addr
+	var autoTO0 func(context.Context, fdo.Voucher) error
 	if to0Addr == "" && !rvBypass {
-		autoTO0 = state
-
-		for _, directive := range protocol.ParseDeviceRvInfo(rvInfo) {
-			if directive.Bypass {
-				continue
-			}
-
-			for _, url := range directive.URLs {
-				to1Host := url.Hostname()
-				to1Port, err := strconv.ParseUint(url.Port(), 10, 16)
-				if err != nil {
-					return nil, fmt.Errorf("error parsing TO1 port to use for TO2: %w", err)
-				}
-				proto := protocol.HTTPTransport
-				if useTLS {
-					proto = protocol.HTTPSTransport
-				}
-				autoTO0Addrs = append(autoTO0Addrs, protocol.RvTO2Addr{
-					DNSAddress:        &to1Host,
-					Port:              uint16(to1Port),
-					TransportProtocol: proto,
-				})
-			}
-		}
+		autoTO0 = aio.RegisterOwnerAddr
 	}
 
 	return &transport.Handler{
@@ -570,10 +552,9 @@ func newHandler(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) (*transport
 			DeviceInfo: func(_ context.Context, info *custom.DeviceMfgInfo, _ []*x509.Certificate) (string, protocol.KeyType, protocol.KeyEncoding, error) {
 				return info.DeviceInfo, info.KeyType, info.KeyEncoding, nil
 			},
-			AutoExtend:   state,
-			AutoTO0:      autoTO0,
-			AutoTO0Addrs: autoTO0Addrs,
-			RvInfo:       func(context.Context, *fdo.Voucher) ([][]protocol.RvInstruction, error) { return rvInfo, nil },
+			BeforeVoucherPersist: autoExtend,
+			AfterVoucherPersist:  autoTO0,
+			RvInfo:               func(context.Context, *fdo.Voucher) ([][]protocol.RvInstruction, error) { return rvInfo, nil },
 		},
 		TO0Responder: &fdo.TO0Server{
 			Session: state,
@@ -589,9 +570,41 @@ func newHandler(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) (*transport
 			Vouchers:        state,
 			OwnerKeys:       state,
 			RvInfo:          func(context.Context, fdo.Voucher) ([][]protocol.RvInstruction, error) { return rvInfo, nil },
-			ReuseCredential: func(context.Context, fdo.Voucher) bool { return reuseCred },
+			ReuseCredential: func(context.Context, fdo.Voucher) (bool, error) { return reuseCred, nil },
 		},
 	}, nil
+}
+
+type withOwnerAddrs struct {
+	*sqlite.DB
+	RVInfo [][]protocol.RvInstruction
+}
+
+func (s withOwnerAddrs) OwnerAddrs(context.Context, fdo.Voucher) ([]protocol.RvTO2Addr, time.Duration, error) {
+	var autoTO0Addrs []protocol.RvTO2Addr
+	for _, directive := range protocol.ParseDeviceRvInfo(s.RVInfo) {
+		if directive.Bypass {
+			continue
+		}
+
+		for _, url := range directive.URLs {
+			to1Host := url.Hostname()
+			to1Port, err := strconv.ParseUint(url.Port(), 10, 16)
+			if err != nil {
+				return nil, 0, fmt.Errorf("error parsing TO1 port to use for TO2: %w", err)
+			}
+			proto := protocol.HTTPTransport
+			if useTLS {
+				proto = protocol.HTTPSTransport
+			}
+			autoTO0Addrs = append(autoTO0Addrs, protocol.RvTO2Addr{
+				DNSAddress:        &to1Host,
+				Port:              uint16(to1Port),
+				TransportProtocol: proto,
+			})
+		}
+	}
+	return autoTO0Addrs, 0, nil
 }
 
 type moduleStateMachines struct {

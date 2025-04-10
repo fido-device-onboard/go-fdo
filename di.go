@@ -13,10 +13,8 @@ import (
 	"fmt"
 	"hash"
 	"io"
-	"time"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
-	"github.com/fido-device-onboard/go-fdo/cose"
 	"github.com/fido-device-onboard/go-fdo/protocol"
 )
 
@@ -347,117 +345,18 @@ func (s *DIServer[T]) diDone(ctx context.Context, msg io.Reader) (struct{}, erro
 		CertChain: &certChain,
 		Entries:   nil,
 	}
-	if err := s.maybeAutoExtend(ctx, ov); err != nil {
-		return struct{}{}, fmt.Errorf("error extending voucher: %w", err)
+	if s.BeforeVoucherPersist != nil {
+		if err := s.BeforeVoucherPersist(ctx, ov); err != nil {
+			return struct{}{}, fmt.Errorf("error in callback before new voucher is persisted: %w", err)
+		}
 	}
 	if err := s.Vouchers.NewVoucher(ctx, ov); err != nil {
 		return struct{}{}, fmt.Errorf("error storing voucher: %w", err)
 	}
-	if err := s.maybeAutoTO0(ctx, ov); err != nil {
-		return struct{}{}, fmt.Errorf("error auto-registering device for rendezvous: %w", err)
+	if s.AfterVoucherPersist != nil {
+		if err := s.AfterVoucherPersist(ctx, *ov); err != nil {
+			return struct{}{}, fmt.Errorf("error in callback after new voucher is persisted: %w", err)
+		}
 	}
 	return struct{}{}, nil
-}
-
-func (s *DIServer[T]) maybeAutoExtend(ctx context.Context, ov *Voucher) error {
-	if s.AutoExtend == nil {
-		return nil
-	}
-
-	mfgKey := ov.Header.Val.ManufacturerKey
-	keyType, rsaBits := mfgKey.Type, mfgKey.RsaBits()
-	owner, _, err := s.AutoExtend.ManufacturerKey(ctx, keyType, rsaBits)
-	if err != nil {
-		return fmt.Errorf("error getting %s manufacturer key: %w", keyType, err)
-	}
-	nextOwner, _, err := s.AutoExtend.OwnerKey(ctx, keyType, rsaBits)
-	if err != nil {
-		return fmt.Errorf("error getting %s owner key: %w", keyType, err)
-	}
-	switch owner.Public().(type) {
-	case *ecdsa.PublicKey:
-		nextOwner, ok := nextOwner.Public().(*ecdsa.PublicKey)
-		if !ok {
-			return fmt.Errorf("owner key must be %s", keyType)
-		}
-		extended, err := ExtendVoucher(ov, owner, nextOwner, nil)
-		if err != nil {
-			return err
-		}
-		*ov = *extended
-		return nil
-
-	case *rsa.PublicKey:
-		nextOwner, ok := nextOwner.Public().(*rsa.PublicKey)
-		if !ok {
-			return fmt.Errorf("owner key must be %s", keyType)
-		}
-		extended, err := ExtendVoucher(ov, owner, nextOwner, nil)
-		if err != nil {
-			return err
-		}
-		*ov = *extended
-		return nil
-
-	default:
-		return fmt.Errorf("invalid key type %T", owner)
-	}
-}
-
-func (s *DIServer[T]) maybeAutoTO0(ctx context.Context, ov *Voucher) error {
-	if s.AutoTO0 == nil {
-		return nil
-	}
-	if s.AutoExtend == nil {
-		return fmt.Errorf("voucher auto-extension must be enabled when auto-TO0 is enabled")
-	}
-	if len(s.AutoTO0Addrs) == 0 {
-		return fmt.Errorf("TO2 addrs cannot be empty when auto-TO0 is enabled")
-	}
-
-	mfgKey := ov.Header.Val.ManufacturerKey
-	keyType, rsaBits := mfgKey.Type, mfgKey.RsaBits()
-	nextOwner, _, err := s.AutoTO0.OwnerKey(ctx, keyType, rsaBits)
-	if err != nil {
-		return fmt.Errorf("error getting %s owner key: %w", keyType, err)
-	}
-
-	var opts crypto.SignerOpts
-	switch keyType {
-	case protocol.Rsa2048RestrKeyType, protocol.RsaPkcsKeyType, protocol.RsaPssKeyType:
-		switch rsaPub := nextOwner.Public().(*rsa.PublicKey); rsaPub.Size() {
-		case 2048 / 8:
-			opts = crypto.SHA256
-		case 3072 / 8:
-			opts = crypto.SHA384
-		default:
-			return fmt.Errorf("unsupported RSA key size: %d bits", rsaPub.Size()*8)
-		}
-
-		if keyType == protocol.RsaPssKeyType {
-			opts = &rsa.PSSOptions{
-				SaltLength: rsa.PSSSaltLengthEqualsHash,
-				Hash:       opts.(crypto.Hash),
-			}
-		}
-	}
-
-	sign1 := cose.Sign1[protocol.To1d, []byte]{
-		Payload: cbor.NewByteWrap(protocol.To1d{
-			RV: s.AutoTO0Addrs,
-			To0dHash: protocol.Hash{
-				Algorithm: protocol.Sha256Hash,
-				Value:     make([]byte, 32),
-			},
-		}),
-	}
-	if err := sign1.Sign(nextOwner, nil, nil, opts); err != nil {
-		return fmt.Errorf("error signing to1d: %w", err)
-	}
-	exp := time.Now().AddDate(30, 0, 0) // Expire in 30 years
-	if err := s.AutoTO0.SetRVBlob(ctx, ov, &sign1, exp); err != nil {
-		return fmt.Errorf("error storing to1d: %w", err)
-	}
-
-	return nil
 }
