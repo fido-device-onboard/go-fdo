@@ -11,5 +11,6 @@ require (
 
 require (
 	github.com/google/go-tpm-tools v0.3.13-0.20230620182252-4639ecce2aba // indirect
-	golang.org/x/sys v0.28.0 // indirect
+	golang.org/x/crypto v0.37.0 // indirect
+	golang.org/x/sys v0.32.0 // indirect
 )
