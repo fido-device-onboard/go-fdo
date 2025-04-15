@@ -461,7 +461,7 @@ func (d *Decoder) decodeRawVal(highThreeBits, lowFiveBits byte, additional []byt
 		}
 
 		decoded := head
-		for i := 0; i < int(length); i++ {
+		for i := range length {
 			b, err := d.decodeRaw()
 			if err != nil {
 				return nil, fmt.Errorf("error decoding array/map at item %d: %w", i, err)
@@ -781,7 +781,7 @@ func (d *Decoder) decodeArrayToStruct(rv reflect.Value, additional []byte) error
 				}
 
 				omittedOne = true
-				indices = append(indices[:i], indices[i+1:]...)
+				indices = slices.Delete(indices, i, i+1)
 			}
 		}
 	}
@@ -890,7 +890,7 @@ func (d *Decoder) decodeArrayToSlice(rv reflect.Value, additional []byte) error 
 
 	// Decode each item into the correctly sized slice
 	itemType := slice.Type().Elem()
-	for i := 0; i < int(length); i++ {
+	for i := range int(length) {
 		newVal := reflect.New(itemType)
 		if err := d.Decode(newVal.Interface()); err != nil {
 			return fmt.Errorf("error decoding array item %d: %w", i, err)
@@ -930,7 +930,7 @@ func (d *Decoder) decodeMap(rv reflect.Value, additional []byte) error {
 	if length > math.MaxInt || length >= MaxArrayDecodeLength/2 {
 		return fmt.Errorf("map exceeds max size: %d", length)
 	}
-	for i := 0; i < int(length); i++ {
+	for i := range int(length) {
 		newKey := reflect.New(keyType)
 		if err := d.Decode(newKey.Interface()); err != nil {
 			return fmt.Errorf("error decoding map key %d: %w", i, err)
@@ -1274,7 +1274,7 @@ func (e *Encoder) encodeArray(size int, get func(int) reflect.Value) error {
 	}
 
 	// Write each item
-	for i := 0; i < size; i++ {
+	for i := range size {
 		if err := e.Encode(get(i).Interface()); err != nil {
 			return err
 		}
@@ -1297,7 +1297,7 @@ func (e *Encoder) encodeStruct(size int, get func([]int) reflect.Value, field fu
 	// Filter omittable fields which are the zero value for the associated type
 	for i, idx := range indices {
 		if omittable(idx) && isEmpty(get(idx)) {
-			indices = append(indices[:i], indices[i+1:]...)
+			indices = slices.Delete(indices, i, i+1)
 		}
 	}
 
@@ -1440,7 +1440,7 @@ func fieldOrder(n int, field func(int) reflect.StructField) (indices [][]int, om
 		if fields[i].weight != fields[j].weight {
 			return fields[i].weight < fields[j].weight
 		}
-		for k := 0; k < len(fields[i].index); k++ {
+		for k := range len(fields[i].index) {
 			if k+1 > len(fields[i].index) || k+1 > len(fields[j].index) {
 				panic("programming error - indices to sort cannot be a parent embedded field of another")
 			}
@@ -1502,7 +1502,7 @@ func collectFieldWeights(parents []int, i, upper int, field func(int) reflect.St
 
 	// Return duplicate indices if flat (un)marshaling
 	if n, ok := flatN(f); ok {
-		for j := 0; j < n; j++ {
+		for range n {
 			fields = append(fields, weightedField{
 				index:  append(parents, i),
 				weight: weight,
@@ -1570,7 +1570,7 @@ func (o OmitEmpty[T]) isOmitEmpty() {}
 func BytewiseLexicalSort(indices []int, keys [][]byte) func(i, j int) bool {
 	return func(i, j int) bool {
 		left, right := keys[indices[i]], keys[indices[j]]
-		for k := 0; k < len(left); k++ {
+		for k := range len(left) {
 			if left[k] != right[k] {
 				return left[k] < right[k]
 			}
