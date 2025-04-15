@@ -854,10 +854,8 @@ func (d *Decoder) typeInfo() (highThreeBits, lowFiveBits byte, additional []byte
 		return highThreeBits, lowFiveBits, nil, nil
 	}
 
-	if n, err := d.r.Read(additional); err != nil && err != io.EOF {
+	if _, err := io.ReadFull(d.r, additional); err != nil {
 		return 0, 0, nil, err
-	} else if n < len(additional) {
-		return 0, 0, nil, fmt.Errorf("read of additional info was short: %w", io.ErrUnexpectedEOF)
 	}
 	return highThreeBits, lowFiveBits, additional, nil
 }
