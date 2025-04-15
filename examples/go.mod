@@ -22,11 +22,11 @@ require (
 )
 
 require (
-	github.com/ncruces/go-sqlite3 v0.23.3 // indirect
+	github.com/ncruces/go-sqlite3 v0.25.0 // indirect
 	github.com/ncruces/julianday v1.0.0 // indirect
 	github.com/neilotoole/jsoncolor v0.7.1 // indirect
 	github.com/tetratelabs/wazero v1.9.0 // indirect
-	golang.org/x/crypto v0.33.0 // indirect
-	golang.org/x/sys v0.30.0 // indirect
-	golang.org/x/term v0.29.0 // indirect
+	golang.org/x/crypto v0.37.0 // indirect
+	golang.org/x/sys v0.32.0 // indirect
+	golang.org/x/term v0.31.0 // indirect
 )
