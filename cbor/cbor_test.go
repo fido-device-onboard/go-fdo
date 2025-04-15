@@ -764,7 +764,7 @@ func TestDecodeAny(t *testing.T) {
 		var got any
 		var (
 			input  = []byte{0xf6}
-			expect interface{}
+			expect any
 		)
 		if err := cbor.Unmarshal(input, &got); err != nil {
 			t.Errorf("error unmarshaling % x: %v", input, err)
@@ -1206,6 +1206,20 @@ func TestDecodeMap(t *testing.T) {
 			t.Errorf("error unmarshaling % x: %v", input, err)
 		} else if !reflect.DeepEqual(got, expect) {
 			t.Errorf("unmarshaling % x; expected %v, got %v", input, expect, got)
+		}
+	})
+
+	t.Run("any->any (uncomparable error)", func(t *testing.T) {
+		var (
+			input = []byte{0xa2,
+				0x45, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x02,
+				0x03, 0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f,
+			}
+			got       = make(map[any]any)
+			expectErr = "map key type ([]uint8) not comparable"
+		)
+		if err := cbor.Unmarshal(input, &got); err == nil || err.Error() != expectErr {
+			t.Errorf("expected error %q, got %q", expectErr, err)
 		}
 	})
 
