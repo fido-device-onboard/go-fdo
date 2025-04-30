@@ -263,10 +263,13 @@ func (r *UnchunkReader) NextServiceInfo() (key string, val io.ReadCloser, ok boo
 // and message name, then the full body is written via zero or more calls to
 // Write.
 type UnchunkWriter struct {
-	readers chan<- pipeReader
-	w       pipeWriter
-	closed  bool
-	pipe    func() (pipeReader, pipeWriter)
+	readers  chan<- pipeReader
+	readerMu sync.Mutex // to keep closing and sending from happening simultaneously
+	w        pipeWriter
+	pipe     func() (pipeReader, pipeWriter)
+
+	closing chan struct{} // closed when writer closing has started
+	closeMu sync.Mutex    // to keep Close and CloseWithError from happening simultaneously
 }
 
 // NextServiceInfo must be called once before each logical ServiceInfo.
@@ -289,14 +292,21 @@ func (w *UnchunkWriter) ForceNewMessage() error {
 }
 
 func (w *UnchunkWriter) nextPipe(forceNewMessage bool) error {
-	if w.closed {
-		return io.ErrClosedPipe
-	}
 	if w.w != nil {
 		_ = w.w.Close()
 	}
+
 	pr, pw := w.pipe()
-	w.readers <- pr
+
+	w.readerMu.Lock()
+	select {
+	case <-w.closing:
+		w.readerMu.Unlock()
+		return io.ErrClosedPipe
+	case w.readers <- pr:
+		w.readerMu.Unlock()
+	}
+
 	if forceNewMessage {
 		_ = pw.Close()
 	}
@@ -312,25 +322,39 @@ func (w *UnchunkWriter) Write(p []byte) (n int, err error) { return w.w.Write(p)
 // Close is called when all ServiceInfos have been written and no further calls
 // to Next or Write will be made.
 func (w *UnchunkWriter) Close() error {
-	if w.closed {
+	w.closeMu.Lock()
+	select {
+	case <-w.closing:
+		w.closeMu.Unlock()
 		return io.ErrClosedPipe
+	default:
+		close(w.closing)
+		w.closeMu.Unlock()
 	}
-	w.closed = true
-	close(w.readers)
 
 	if w.w == nil {
 		_, w.w = io.Pipe()
 	}
+
+	w.readerMu.Lock()
+	close(w.readers)
+	w.readerMu.Unlock()
+
 	return w.w.Close()
 }
 
 // CloseWithError causes reads from the associated ChunkReader to error with
 // the given error.
 func (w *UnchunkWriter) CloseWithError(err error) error {
-	if w.closed {
+	w.closeMu.Lock()
+	select {
+	case <-w.closing:
+		w.closeMu.Unlock()
 		return io.ErrClosedPipe
+	default:
+		close(w.closing)
+		w.closeMu.Unlock()
 	}
-	w.closed = true
 
 	if w.w == nil {
 		pr, pw := io.Pipe()
@@ -338,7 +362,10 @@ func (w *UnchunkWriter) CloseWithError(err error) error {
 		w.w = pw
 	}
 
+	w.readerMu.Lock()
 	close(w.readers)
+	w.readerMu.Unlock()
+
 	return w.w.CloseWithError(err)
 }
 
@@ -364,5 +391,5 @@ func NewChunkOutPipe(buffers int) (*ChunkReader, *UnchunkWriter) {
 		readers = make(chan pipeReader, buffers)
 		pipe = bufferedPipe
 	}
-	return &ChunkReader{readers: readers}, &UnchunkWriter{readers: readers, pipe: pipe}
+	return &ChunkReader{readers: readers}, &UnchunkWriter{readers: readers, closing: make(chan struct{}), pipe: pipe}
 }
