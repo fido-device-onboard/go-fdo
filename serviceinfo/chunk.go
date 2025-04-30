@@ -115,9 +115,14 @@ func (r *ChunkReader) ReadChunk(size uint16) (*KV, error) {
 		if err := cbor.NewDecoder(keyReader).Decode(&r.rkey); err != nil {
 			_ = r.r.CloseWithError(err)
 			r.r = nil
+
+			// A writer which immediately sends EOF instead of a key indicates
+			// that the writer wants to force a message break, so no combining
+			// data chunks up to the MTU
 			if errors.Is(err, io.EOF) {
 				err = ErrSizeTooSmall
 			}
+
 			return nil, fmt.Errorf("could not read service info key: %w", err)
 		}
 
@@ -199,23 +204,29 @@ type ChunkWriter struct {
 
 // WriteChunk is called with chunked ServiceInfos.
 func (w *ChunkWriter) WriteChunk(kv *KV) error {
-	if kv.Key != w.prevKey {
-		if w.w != nil {
-			if err := w.w.Close(); err != nil {
-				return err
-			}
-		}
+	// If the key hasn't changed, keep streaming data
+	if kv.Key == w.prevKey {
+		_, err := w.w.Write(kv.Val)
+		return err
+	}
 
-		pr, pw := w.pipe()
-		w.readers <- pr
-		w.w = pw
-		w.prevKey = kv.Key
-
-		if err := cbor.NewEncoder(w.w).Encode(kv.Key); err != nil {
+	// Close the last writer because the key has changed
+	if w.w != nil {
+		if err := w.w.Close(); err != nil {
 			return err
 		}
 	}
 
+	// Create a new IO pipe and send the reader to the UnchunkReader
+	pr, pw := w.pipe()
+	w.readers <- pr
+	w.w = pw
+	w.prevKey = kv.Key
+
+	// Write the key string followed by the first chunk of data
+	if err := cbor.NewEncoder(w.w).Encode(kv.Key); err != nil {
+		return err
+	}
 	_, err := w.w.Write(kv.Val)
 	return err
 }
@@ -263,10 +274,13 @@ func (r *UnchunkReader) NextServiceInfo() (key string, val io.ReadCloser, ok boo
 // and message name, then the full body is written via zero or more calls to
 // Write.
 type UnchunkWriter struct {
-	readers chan<- pipeReader
-	w       pipeWriter
-	closed  bool
-	pipe    func() (pipeReader, pipeWriter)
+	readers  chan<- pipeReader
+	readerMu sync.Mutex // to keep closing and sending from happening simultaneously
+	w        pipeWriter
+	pipe     func() (pipeReader, pipeWriter)
+
+	closing chan struct{} // closed when writer closing has started
+	closeMu sync.Mutex    // to keep Close and CloseWithError from happening simultaneously
 }
 
 // NextServiceInfo must be called once before each logical ServiceInfo.
@@ -289,17 +303,33 @@ func (w *UnchunkWriter) ForceNewMessage() error {
 }
 
 func (w *UnchunkWriter) nextPipe(forceNewMessage bool) error {
-	if w.closed {
-		return io.ErrClosedPipe
-	}
+	// Close the writer of any existing pipe
 	if w.w != nil {
 		_ = w.w.Close()
 	}
+
+	// Create a new pipe
 	pr, pw := w.pipe()
-	w.readers <- pr
+
+	// Lock the readers channel so that it's not closed while waiting on the
+	// select
+	w.readerMu.Lock()
+	// Send reader to ChunkerReader
+	select {
+	case <-w.closing:
+		w.readerMu.Unlock()
+		return io.ErrClosedPipe
+	case w.readers <- pr:
+		w.readerMu.Unlock()
+	}
+
+	// Intentional breaks between messages are indicated by sending a writer
+	// which immediately returns EOF. This stops data chunks from automatically
+	// being combined until the MTU is reached.
 	if forceNewMessage {
 		_ = pw.Close()
 	}
+
 	w.w = pw
 	return nil
 }
@@ -312,33 +342,76 @@ func (w *UnchunkWriter) Write(p []byte) (n int, err error) { return w.w.Write(p)
 // Close is called when all ServiceInfos have been written and no further calls
 // to Next or Write will be made.
 func (w *UnchunkWriter) Close() error {
-	if w.closed {
+	// Lock the closing channel to ensure that concurrent calls to Close or
+	// CloseWithError don't double close the channel (will panic)
+	w.closeMu.Lock()
+	select {
+	// Already closing
+	case <-w.closing:
+		w.closeMu.Unlock()
 		return io.ErrClosedPipe
-	}
-	w.closed = true
-	close(w.readers)
 
+	// First to close
+	default:
+		close(w.closing)
+		w.closeMu.Unlock()
+	}
+
+	// Ensure a writer exists so that it can be closed and any further calls to
+	// write fail without a panic
 	if w.w == nil {
 		_, w.w = io.Pipe()
 	}
+
+	// Lock the readers channel before closing in case a ChunkReader is waiting
+	// on one and hasn't exited the select due to the closing channel being
+	// closed
+	w.readerMu.Lock()
+	close(w.readers)
+	w.readerMu.Unlock()
+
+	// Close the writer so that all calls to Write error and ChunkReader
+	// receives EOF
 	return w.w.Close()
 }
 
 // CloseWithError causes reads from the associated ChunkReader to error with
 // the given error.
 func (w *UnchunkWriter) CloseWithError(err error) error {
-	if w.closed {
+	// Lock the closing channel to ensure that concurrent calls to Close or
+	// CloseWithError don't double close the channel (will panic)
+	w.closeMu.Lock()
+	select {
+	// Already closing
+	case <-w.closing:
+		w.closeMu.Unlock()
 		return io.ErrClosedPipe
-	}
-	w.closed = true
 
+		// First to close
+	default:
+		close(w.closing)
+		w.closeMu.Unlock()
+	}
+
+	// Create a new pipe and ensure that it is sent to the corresponding
+	// ChunkReader so that the error of CloseWithError is receivable
 	if w.w == nil {
 		pr, pw := io.Pipe()
+		// NOTE: This can deadlock if the reader is not performing a ReadChunk
+		// loop until readers is closed
 		w.readers <- pr
 		w.w = pw
 	}
 
+	// Lock the readers channel before closing in case a ChunkReader is waiting
+	// on one and hasn't exited the select due to the closing channel being
+	// closed
+	w.readerMu.Lock()
 	close(w.readers)
+	w.readerMu.Unlock()
+
+	// Close the writer so that all calls to Write error and ChunkReader
+	// receives err
 	return w.w.CloseWithError(err)
 }
 
@@ -364,5 +437,5 @@ func NewChunkOutPipe(buffers int) (*ChunkReader, *UnchunkWriter) {
 		readers = make(chan pipeReader, buffers)
 		pipe = bufferedPipe
 	}
-	return &ChunkReader{readers: readers}, &UnchunkWriter{readers: readers, pipe: pipe}
+	return &ChunkReader{readers: readers}, &UnchunkWriter{readers: readers, closing: make(chan struct{}), pipe: pipe}
 }
