@@ -9,6 +9,7 @@ import (
 	"io"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
@@ -1095,5 +1096,22 @@ func TestForceNewMessageBuffered(t *testing.T) {
 
 	if _, err := r.ReadChunk(1024); !errors.Is(err, io.EOF) {
 		t.Fatalf("expected EOF upon reading third chunk, got: %v", err)
+	}
+}
+
+func TestCloseDuringNextServiceInfo(t *testing.T) {
+	_, ucw := serviceinfo.NewChunkOutPipe(0)
+
+	errc := make(chan error)
+	go func() { errc <- ucw.NextServiceInfo("mod", "msg") }()
+
+	// Wait for channel to block
+	time.Sleep(50 * time.Millisecond)
+	if err := ucw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := <-errc; !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("expected error from closed pipe, got: %v", err)
 	}
 }

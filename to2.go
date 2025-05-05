@@ -1471,6 +1471,8 @@ func (s *TO2Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*owner
 			Devmod:  devmod,
 			Modules: modules,
 		}
+	} else if err != nil {
+		return nil, fmt.Errorf("error getting devmod state: %w", err)
 	} else {
 		var err error
 		moduleName, module, err = s.Modules.Module(ctx)
