@@ -6,7 +6,7 @@ replace github.com/fido-device-onboard/go-fdo => ../
 
 require (
 	github.com/fido-device-onboard/go-fdo v0.0.0-00010101000000-000000000000
-	github.com/google/go-tpm v0.9.4
+	github.com/google/go-tpm v0.9.5
 )
 
 require (
