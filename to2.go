@@ -316,7 +316,10 @@ func verifyVoucher(ctx context.Context, transport Transport, to1d *cose.Sign1[pr
 		Hmac:    info.OVHHmac,
 		Entries: entries,
 	}
+	return VerifyVoucherMem(ctx, ov, to1d, info, c)
+}
 
+func VerifyVoucherMem(ctx context.Context, ov Voucher, to1d *cose.Sign1[protocol.To1d, []byte], info *ovhValidationContext, c *TO2Config) error {
 	// Verify ownership voucher header
 	if err := ov.VerifyHeader(c.HmacSha256, c.HmacSha384); err != nil {
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
