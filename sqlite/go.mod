@@ -6,7 +6,7 @@ replace github.com/fido-device-onboard/go-fdo => ../
 
 require (
 	github.com/fido-device-onboard/go-fdo v0.0.0-00010101000000-000000000000
-	github.com/ncruces/go-sqlite3 v0.25.2
+	github.com/ncruces/go-sqlite3 v0.26.0
 )
 
 require (
