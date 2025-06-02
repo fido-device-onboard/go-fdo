@@ -17,11 +17,15 @@ type Header struct {
 	Unprotected HeaderMap
 }
 
-var _ cbor.FlatMarshaler = (*Header)(nil)
-var _ cbor.FlatUnmarshaler = (*Header)(nil)
+var _ cbor.StreamMarshaler = (*Header)(nil)
+var _ cbor.StreamUnmarshaler = (*Header)(nil)
 
-// FlatMarshalCBOR implements cbor.FlatMarshaler.
-func (hdr Header) FlatMarshalCBOR(w io.Writer) error {
+// MarshalCBORStream implements cbor.StreamMarshaler.
+func (hdr Header) MarshalCBORStream(w io.Writer, o cbor.EncoderOptions, flattened int) error {
+	if flattened == 0 {
+		return cbor.ErrSkip
+	}
+
 	protectedHeader, err := newEmptyOrSerializedMap(hdr.Protected)
 	if err != nil {
 		return err
@@ -32,15 +36,30 @@ func (hdr Header) FlatMarshalCBOR(w io.Writer) error {
 	}
 
 	enc := cbor.NewEncoder(w)
+	enc.EncoderOptions = o
+
+	if flattened != 2 {
+		return fmt.Errorf("Header only supports CBOR encoding with flat2 tag")
+	}
+
 	if err := enc.Encode(protectedHeader); err != nil {
 		return err
 	}
 	return enc.Encode(unprotectedHeader)
 }
 
-// FlatUnmarshalCBOR implements cbor.FlatUnmarshaler.
-func (hdr *Header) FlatUnmarshalCBOR(r io.Reader) error {
+// UnmarshalCBORStream implements cbor.StreamUnmarshaler.
+func (hdr *Header) UnmarshalCBORStream(r io.Reader, o cbor.DecoderOptions, flattened int) error {
+	if flattened == 0 {
+		return cbor.ErrSkip
+	}
+
 	dec := cbor.NewDecoder(r)
+	dec.DecoderOptions = o
+
+	if flattened != 2 {
+		return fmt.Errorf("Header only supports CBOR decoding with flat2 tag")
+	}
 
 	var protectedHeader emptyOrSerializedMap
 	if err := dec.Decode(&protectedHeader); err != nil {
@@ -53,7 +72,7 @@ func (hdr *Header) FlatUnmarshalCBOR(r io.Reader) error {
 	}
 
 	hdr.Protected = make(map[Label]any)
-	for k, raw := range protectedHeader.Val.Val {
+	for k, raw := range protectedHeader {
 		var v any
 		if err := cbor.Unmarshal([]byte(raw), &v); err != nil {
 			return fmt.Errorf("error decoding protected value for %s: %w", k, err)
@@ -162,15 +181,45 @@ func newRawHeaderMap(unmarshaled map[Label]any) (rawHeaderMap, error) {
 
 // emptyOrSerializedMap encodes to/from a CBOR byte string which either
 // contains a serialized non-empty map or is empty itself.
-type emptyOrSerializedMap = cbor.Bstr[cbor.OmitEmpty[rawHeaderMap]]
+type emptyOrSerializedMap rawHeaderMap
+
+var _ cbor.StreamMarshaler = (emptyOrSerializedMap)(nil)
+var _ cbor.StreamUnmarshaler = (*emptyOrSerializedMap)(nil)
+
+func (h emptyOrSerializedMap) MarshalCBORStream(w io.Writer, o cbor.EncoderOptions, flattened int) error {
+	if flattened > 1 {
+		panic("emptyOrSerializedMap does not support flattening")
+	}
+
+	enc := cbor.NewEncoder(w)
+	enc.EncoderOptions = o
+	if len(h) == 0 {
+		return enc.Encode([]byte{})
+	}
+	return enc.Encode(cbor.Bstr[rawHeaderMap]{Val: rawHeaderMap(h)})
+}
+
+func (h *emptyOrSerializedMap) UnmarshalCBORStream(r io.Reader, o cbor.DecoderOptions, flattened int) error {
+	if flattened > 1 {
+		panic("emptyOrSerializedMap does not support flattening")
+	}
+
+	dec := cbor.NewDecoder(r)
+	dec.DecoderOptions = o
+
+	var data []byte
+	if err := dec.Decode(&data); err != nil {
+		return err
+	}
+	if len(data) == 0 {
+		return nil
+	}
+	return cbor.Unmarshal(data, (*map[Label]cbor.RawBytes)(h))
+}
 
 // newEmptyOrSerializedMap marshals the values of a header map and wraps
 // it in a SerializedOrEmptyHeaders type.
 func newEmptyOrSerializedMap(unmarshaled map[Label]any) (emptyOrSerializedMap, error) {
 	hmap, err := newRawHeaderMap(unmarshaled)
-	return emptyOrSerializedMap{
-		Val: cbor.OmitEmpty[rawHeaderMap]{
-			Val: hmap,
-		},
-	}, err
+	return emptyOrSerializedMap(hmap), err
 }
