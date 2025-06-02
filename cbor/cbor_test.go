@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"reflect"
 	"testing"
@@ -1997,25 +1998,47 @@ type Flatten struct {
 	C []byte
 }
 
-var _ cbor.FlatMarshaler = (*Flatten)(nil)
-var _ cbor.FlatUnmarshaler = (*Flatten)(nil)
+var _ cbor.StreamMarshaler = (*Flatten)(nil)
+var _ cbor.StreamUnmarshaler = (*Flatten)(nil)
 
-func (f Flatten) FlatMarshalCBOR(w io.Writer) error {
+func (f Flatten) MarshalCBORStream(w io.Writer, o cbor.EncoderOptions, flattened int) error {
+	if flattened == 0 {
+		return cbor.ErrSkip
+	}
+
+	enc := cbor.NewEncoder(w)
+	enc.EncoderOptions = o
+
+	if flattened != 2 {
+		return fmt.Errorf("only flat2 tag supported")
+	}
+
 	// Note the extra rune!
-	if err := cbor.NewEncoder(w).Encode(f.B + "!"); err != nil {
+	if err := enc.Encode(f.B + "!"); err != nil {
 		return err
 	}
-	return cbor.NewEncoder(w).Encode(f.C)
+	return enc.Encode(f.C)
 }
 
-func (f *Flatten) FlatUnmarshalCBOR(r io.Reader) error {
-	if err := cbor.NewDecoder(r).Decode(&f.B); err != nil {
+func (f *Flatten) UnmarshalCBORStream(r io.Reader, o cbor.DecoderOptions, flattened int) error {
+	if flattened == 0 {
+		return cbor.ErrSkip
+	}
+
+	dec := cbor.NewDecoder(r)
+	dec.DecoderOptions = o
+
+	if flattened != 2 {
+		return fmt.Errorf("only flat2 tag supported")
+	}
+
+	if err := dec.Decode(&f.B); err != nil {
 		return err
 	}
-	return cbor.NewDecoder(r).Decode(&f.C)
+	return dec.Decode(&f.C)
 }
 
-func TestFlatMarshal(t *testing.T) {
+func TestStreamMarshal(t *testing.T) {
 	type st struct {
 		A int
 		Z Flatten `cbor:",flat2"`
@@ -2036,7 +2059,7 @@ func TestFlatMarshal(t *testing.T) {
 	}
 
 	expectS := s
-	expectS.Z.B += "!" // added in FlatMarshalCBOR
+	expectS.Z.B += "!" // added in MarshalCBORStream
 
 	var gotS st
 	if err := cbor.Unmarshal(got, &gotS); err != nil {
@@ -2047,7 +2070,7 @@ func TestFlatMarshal(t *testing.T) {
 	}
 }
 
-func TestFlatMarshalEmbedded(t *testing.T) {
+func TestStreamMarshalEmbedded(t *testing.T) {
 	type st struct {
 		A       int
 		Flatten `cbor:",flat2"`
@@ -2068,7 +2091,7 @@ func TestFlatMarshalEmbedded(t *testing.T) {
 	}
 
 	expectS := s
-	expectS.B += "!" // added in FlatMarshalCBOR
+	expectS.B += "!" // added in MarshalCBORStream
 
 	var gotS st
 	if err := cbor.Unmarshal(got, &gotS); err != nil {
@@ -2178,26 +2201,6 @@ func TestEmbeddedOmitEmptyTag(t *testing.T) {
 		}
 		if !reflect.DeepEqual(d, expectData) {
 			t.Fatalf("expected %+v, got %+v", expectData, d)
-		}
-	})
-}
-
-func TestOmitEmptyType(t *testing.T) {
-	t.Run("Marshal", func(t *testing.T) {
-		v := cbor.OmitEmpty[int]{Val: 0}
-		data, err := cbor.Marshal(&v)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(data) > 0 {
-			t.Fatal("expected zero bytes")
-		}
-	})
-
-	t.Run("Unmarshal", func(t *testing.T) {
-		var v cbor.OmitEmpty[*int]
-		if err := cbor.Unmarshal([]byte{}, &v); err != nil {
-			t.Fatal(err)
 		}
 	})
 }
