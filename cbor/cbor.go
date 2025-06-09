@@ -168,21 +168,33 @@ type Tag[T any] struct {
 	Val T
 }
 
-func (Tag[T]) isTag() {}
+// MarshalCBORStream implements StreamMarshaler.
+func (t Tag[T]) MarshalCBORStream(w io.Writer, o EncoderOptions, flattened int) error {
+	enc := NewEncoder(w)
+	enc.EncoderOptions = o
 
-// Number returns the underlying Num field and is used to implement the TagData
-// interface.
-func (t Tag[T]) Number() uint64 { return t.Num }
+	// Write tag number as additional info
+	info := u64Bytes(t.Num)
+	if err := enc.write(additionalInfo(tagMajorType, info)); err != nil {
+		return err
+	}
 
-// Value returns the underlying Val field and is used to implement the TagData
-// interface.
-func (t Tag[T]) Value() any { return t.Val }
+	// Write the enclosed value
+	return enc.Encode(t.Val)
+}
 
-// TagData allows read-only access to a Tag without value type information.
-type TagData interface {
-	isTag() // no external types can implement a Tag
-	Number() uint64
-	Value() any
+// UnmarshalCBORStream implements StreamUnmarshaler.
+func (t *Tag[T]) UnmarshalCBORStream(r io.Reader, o DecoderOptions, flattened int) error {
+	dec := NewDecoder(r)
+	dec.DecoderOptions = o
+
+	n, err := dec.Untag()
+	if err != nil {
+		return err
+	}
+	t.Num = n
+
+	return dec.Decode(&t.Val)
 }
 
 // Marshal any type into CBOR.
@@ -411,8 +423,19 @@ func (d *Decoder) decodeVal(rv reflect.Value) error {
 		allocateInterface(rv, reflect.TypeOf(map[any]any(nil)))
 		return d.decodeMap(rv, additional)
 	case tagMajorType:
-		allocateInterface(rv, reflect.TypeOf(Tag[RawBytes]{}))
-		return d.decodeTag(rv, additional)
+		if rv.Kind() == reflect.Interface && rv.IsNil() {
+			raw, err := d.decodeRaw()
+			if err != nil {
+				return err
+			}
+			rv.Set(reflect.ValueOf(Tag[RawBytes]{
+				Num: toU64(additional),
+				Val: raw,
+			}))
+			return nil
+		}
+		return fmt.Errorf("%w: expected a CBOR Tag (implemented with StreamMarshaler/StreamUnmarshaler)",
+			ErrUnsupportedType{typeName: rv.Type().String()})
 	case simpleMajorType:
 		if lowFiveBits == falseVal || lowFiveBits == trueVal {
 			allocateInterface(rv, reflect.TypeOf(false))
@@ -822,39 +845,6 @@ func (d *Decoder) decodeMap(rv reflect.Value, additional []byte) error {
 	return nil
 }
 
-func (d *Decoder) decodeTag(rv reflect.Value, additional []byte) error {
-	if _, ok := rv.Interface().(TagData); !ok {
-		return fmt.Errorf("%w: expected a cbor.Tag type (or interface wrapping it)",
-			ErrUnsupportedType{typeName: rv.Type().String()})
-	}
-
-	// If the value is an interface wrapping a Tag, then a new struct with
-	// addressable fields must be created and set.
-	var iface reflect.Value
-	if rv.Kind() == reflect.Interface {
-		newVal := reflect.New(rv.Elem().Type())
-		iface, rv = rv, newVal.Elem()
-	}
-
-	// Set number field
-	num := toU64(additional)
-	numField := rv.FieldByName("Num")
-	numField.SetUint(num)
-
-	// Set value field
-	valField := rv.FieldByName("Val")
-	if err := d.Decode(valField.Addr().Interface()); err != nil {
-		return fmt.Errorf("error decoding tag %d type: %w", num, err)
-	}
-
-	// When decoding to an interface, set its value to the newly created struct
-	if iface.IsValid() {
-		iface.Set(rv)
-	}
-
-	return nil
-}
-
 func (d *Decoder) decodeSimple(rv reflect.Value, lowFiveBits byte, additional []byte) error {
 	switch lowFiveBits {
 	case falseVal, trueVal:
@@ -1003,8 +993,6 @@ func (e *Encoder) Encode(v any) error {
 
 	// Dispatch encoding by reflected data type
 	switch {
-	case func() bool { _, ok := v.(TagData); return ok }():
-		return e.encodeTag(v.(TagData))
 	case rv.CanInt() || rv.CanUint():
 		return e.encodeNumber(rv)
 	case rv.Kind() == reflect.String,
@@ -1269,17 +1257,6 @@ func (e *Encoder) encodeMap(length int, keys []reflect.Value, get func(k reflect
 	}
 
 	return nil
-}
-
-func (e *Encoder) encodeTag(tag TagData) error {
-	// Write tag number as additional info
-	info := u64Bytes(tag.Number())
-	if err := e.write(additionalInfo(tagMajorType, info)); err != nil {
-		return err
-	}
-
-	// Write the enclosed value
-	return e.Encode(tag.Value())
 }
 
 func (e *Encoder) encodeBool(truthy bool) error {
