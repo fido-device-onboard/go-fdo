@@ -710,7 +710,7 @@ func TestDecodeAny(t *testing.T) {
 			var tag any
 			if err := cbor.Unmarshal(test.input, &tag); err != nil {
 				t.Errorf("error unmarshaling % x: %v", test.input, err)
-			} else if n := tag.(cbor.TagData).Number(); n != test.expectNum {
+			} else if n := tag.(cbor.Tag[cbor.RawBytes]).Num; n != test.expectNum {
 				t.Errorf("unmarshaling % x; expected tag number %d, got %d", test.input, test.expectNum, n)
 				continue
 			}
