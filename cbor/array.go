@@ -3,7 +3,9 @@
 
 package cbor
 
-import "bytes"
+import (
+	"bytes"
+)
 
 // ArrayShift returns the first element of a CBOR array type (not text or byte
 // strings) as unparsed CBOR and the rest as a CBOR-encoded array of one fewer
@@ -19,43 +21,15 @@ func ArrayShift(data []byte) (first, remaining []byte) {
 		panic("data cannot be empty")
 	}
 
-	// Immediately return an empty array (with any trailing data)
-	if data[0] == 0x80 {
-		return nil, data
-	}
-
-	// Parse the type info
-	highThreeBits, lowFiveBits := data[0]>>5, data[0]&fiveBitMask
-	if highThreeBits != arrayMajorType {
-		return nil, data
-	}
-	additional := data[1:]
-
-	// Parse the array length
-	var length uint64
-	var items *bytes.Buffer
-	switch {
-	case lowFiveBits < oneByteAdditional:
-		length = toU64([]byte{lowFiveBits})
-		items = bytes.NewBuffer(additional)
-	case lowFiveBits == oneByteAdditional && len(data) >= 1:
-		length = toU64(additional[:1])
-		items = bytes.NewBuffer(additional[1:])
-	case lowFiveBits == twoBytesAdditional && len(data) >= 2:
-		length = toU64(additional[:2])
-		items = bytes.NewBuffer(additional[2:])
-	case lowFiveBits == fourBytesAdditional && len(data) >= 4:
-		length = toU64(additional[:4])
-		items = bytes.NewBuffer(additional[4:])
-	case lowFiveBits == eightBytesAdditional && len(data) >= 8:
-		length = toU64(additional[:8])
-		items = bytes.NewBuffer(additional[8:])
-	default:
+	b := bytes.NewBuffer(data)
+	dec := NewDecoder(b)
+	length, err := dec.UnwrapArray()
+	if err != nil || length == 0 {
 		return nil, data
 	}
 
 	// Parse the first item from the array contents
-	first, err := NewDecoder(items).decodeRaw()
+	first, err = dec.decodeRaw()
 	if err != nil {
 		return nil, data
 	}
@@ -64,5 +38,5 @@ func ArrayShift(data []byte) (first, remaining []byte) {
 	// (with length decremented by one)
 	return first, append(
 		additionalInfo(arrayMajorType, u64Bytes(length-1)),
-		items.Bytes()...)
+		b.Bytes()...)
 }
