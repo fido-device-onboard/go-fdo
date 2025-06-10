@@ -88,6 +88,7 @@ func TestSignAndVerify(t *testing.T) {
 			t.Fatalf("error marshaling: %v", err)
 		}
 		var s1a cose.Sign1[[]byte, []byte]
+		t.Logf("unmarshal: %x", data)
 		if err := cbor.Unmarshal(data, &s1a); err != nil {
 			t.Fatalf("error unmarshaling: %v", err)
 		}

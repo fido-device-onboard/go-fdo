@@ -7,6 +7,8 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
+	"math"
 	"time"
 )
 
@@ -30,28 +32,40 @@ type Bstr[T any] struct{ Val T }
 // often does not require writing the type parameter.
 func NewBstr[T any](v T) *Bstr[T] { return &Bstr[T]{Val: v} }
 
-// MarshalCBOR implements Marshaler.
-func (b Bstr[T]) MarshalCBOR() ([]byte, error) {
+// MarshalCBORStream implements StreamMarshaler.
+func (b Bstr[T]) MarshalCBORStream(w io.Writer, o EncoderOptions, flattened int) error {
 	data, err := Marshal(b.Val)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if data == nil { // possibly due to bad Marshaler implementation
 		data = []byte{}
 	}
-	return Marshal(data)
+	enc := NewEncoder(w)
+	enc.EncoderOptions = o
+	return enc.Encode(data)
 }
 
-// UnmarshalCBOR implements Unmarshaler.
-func (b *Bstr[T]) UnmarshalCBOR(p []byte) error {
-	var data []byte
-	if err := Unmarshal(p, &data); err != nil {
+// UnmarshalCBORStream implements StreamUnmarshaler.
+func (b *Bstr[T]) UnmarshalCBORStream(r io.Reader, o DecoderOptions, flattened int) error {
+	dec := NewDecoder(r)
+	dec.DecoderOptions = o
+
+	n, err := dec.UnwrapBytes()
+	if errors.Is(err, ErrNullOrUndefined) {
+		return nil
+	}
+	if err != nil {
 		return err
 	}
-	if data == nil {
-		return nil // decoded null or undefined
+	if n > math.MaxInt64 {
+		return fmt.Errorf("bstr too long to decode")
 	}
-	return Unmarshal(data, &b.Val)
+	r = io.LimitReader(r, int64(n))
+
+	dec = NewDecoder(r)
+	dec.DecoderOptions = o
+	return dec.Decode(&b.Val)
 }
 
 // ByteWrap is a Bstr that treats Bstr[[]byte] as Bstr[cbor.RawBytes]. While
@@ -66,46 +80,77 @@ type ByteWrap[T any] struct{ Val T }
 // it often does not require writing the type parameter.
 func NewByteWrap[T any](v T) *ByteWrap[T] { return &ByteWrap[T]{Val: v} }
 
-// MarshalCBOR implements Marshaler.
-func (b ByteWrap[T]) MarshalCBOR() ([]byte, error) {
+// MarshalCBORStream implements StreamMarshaler.
+func (b ByteWrap[T]) MarshalCBORStream(w io.Writer, o EncoderOptions, flattened int) error {
+	enc := NewEncoder(w)
+	enc.EncoderOptions = o
 	if bs, ok := any(b.Val).([]byte); ok {
-		return Marshal(bs)
+		return enc.Encode(bs)
 	}
-	return Marshal(Bstr[T](b))
+	return enc.Encode(Bstr[T](b))
 }
 
-// UnmarshalCBOR implements Unmarshaler.
-func (b *ByteWrap[T]) UnmarshalCBOR(p []byte) error {
-	var data []byte
-	if err := Unmarshal(p, &data); err != nil {
-		return err
-	}
-	if bs, ok := any(&b.Val).(*[]byte); ok {
-		*bs = data
+// UnmarshalCBORStream implements StreamUnmarshaler.
+func (b *ByteWrap[T]) UnmarshalCBORStream(r io.Reader, o DecoderOptions, flattened int) error {
+	dec := NewDecoder(r)
+	dec.DecoderOptions = o
+
+	n, err := dec.UnwrapBytes()
+	if errors.Is(err, ErrNullOrUndefined) {
 		return nil
 	}
-	return Unmarshal(data, &b.Val)
+	if err != nil {
+		return err
+	}
+	if n > math.MaxInt64 {
+		return fmt.Errorf("bytewrap too long to decode")
+	}
+	r = io.LimitReader(r, int64(n))
+
+	if bs, ok := any(&b.Val).(*[]byte); ok {
+		*bs = make([]byte, n)
+		_, err := io.ReadFull(r, *bs)
+		return err
+	}
+
+	dec = NewDecoder(r)
+	dec.DecoderOptions = o
+	return dec.Decode(&b.Val)
 }
 
 // X509Certificate is a newtype for x509.Certificate implementing proper CBOR
 // encoding.
 type X509Certificate x509.Certificate
 
-// MarshalCBOR implements Marshaler interface.
-func (c *X509Certificate) MarshalCBOR() ([]byte, error) {
+// MarshalCBORStream implements StreamMarshaler.
+func (c *X509Certificate) MarshalCBORStream(w io.Writer, o EncoderOptions, flattened int) error {
+	enc := NewEncoder(w)
+	enc.EncoderOptions = o
 	if c == nil {
-		return Marshal(nil)
+		return enc.Encode(nil)
 	}
-	return Marshal(c.Raw)
+	return enc.Encode(c.Raw)
 }
 
-// UnmarshalCBOR implements Unmarshaler interface.
-func (c *X509Certificate) UnmarshalCBOR(data []byte) error {
+// UnmarshalCBORStream implements StreamUnmarshaler.
+func (c *X509Certificate) UnmarshalCBORStream(r io.Reader, o DecoderOptions, flattened int) error {
 	if c == nil {
 		return errors.New("cannot unmarshal to a nil pointer")
 	}
-	var der []byte
-	if err := Unmarshal(data, &der); err != nil {
+
+	dec := NewDecoder(r)
+	dec.DecoderOptions = o
+
+	n, err := dec.UnwrapBytes()
+	if errors.Is(err, ErrNullOrUndefined) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	der := make([]byte, n)
+	if _, err := io.ReadFull(r, der); err != nil {
 		return err
 	}
 	cert, err := x509.ParseCertificate(der)
@@ -120,16 +165,32 @@ func (c *X509Certificate) UnmarshalCBOR(data []byte) error {
 // proper CBOR encoding.
 type X509CertificateRequest x509.CertificateRequest
 
-// MarshalCBOR implements Marshaler interface.
-func (c X509CertificateRequest) MarshalCBOR() ([]byte, error) { return Marshal(c.Raw) }
+// MarshalCBORStream implements StreamMarshaler.
+func (c X509CertificateRequest) MarshalCBORStream(w io.Writer, o EncoderOptions, flattened int) error {
+	enc := NewEncoder(w)
+	enc.EncoderOptions = o
+	return enc.Encode(c.Raw)
+}
 
-// UnmarshalCBOR implements Unmarshaler interface.
-func (c *X509CertificateRequest) UnmarshalCBOR(data []byte) error {
+// UnmarshalCBORStream implements StreamUnmarshaler.
+func (c *X509CertificateRequest) UnmarshalCBORStream(r io.Reader, o DecoderOptions, flattened int) error {
 	if c == nil {
 		return errors.New("cannot unmarshal to a nil pointer")
 	}
-	var der []byte
-	if err := Unmarshal(data, &der); err != nil {
+
+	dec := NewDecoder(r)
+	dec.DecoderOptions = o
+
+	n, err := dec.UnwrapBytes()
+	if errors.Is(err, ErrNullOrUndefined) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	der := make([]byte, n)
+	if _, err := io.ReadFull(r, der); err != nil {
 		return err
 	}
 	csr, err := x509.ParseCertificateRequest(der)
@@ -149,36 +210,39 @@ func (c *X509CertificateRequest) UnmarshalCBOR(data []byte) error {
 //	TIMET  = #6.1(uint)
 type Timestamp time.Time
 
-// MarshalCBOR implements Marshaler.
-func (ts Timestamp) MarshalCBOR() ([]byte, error) {
+// MarshalCBORStream implements StreamMarshaler.
+func (ts Timestamp) MarshalCBORStream(w io.Writer, o EncoderOptions, flattened int) error {
+	enc := NewEncoder(w)
+	enc.EncoderOptions = o
 	if time.Time(ts).IsZero() {
-		return Marshal(nil)
+		return enc.Encode(nil)
 	}
-	return Marshal(Tag[int]{
+	return enc.Encode(Tag[int]{
 		Num: 1,
 		Val: time.Time(ts).UTC().Second(),
 	})
 }
 
-// UnmarshalCBOR implements Unmarshaler.
-func (ts *Timestamp) UnmarshalCBOR(data []byte) error {
-	// Parse into a null or tag structure
-	var tag *Tag[RawBytes]
-	if err := Unmarshal(data, &tag); err != nil {
-		return err
-	}
+// UnmarshalCBORStream implements StreamUnmarshaler.
+func (ts *Timestamp) UnmarshalCBORStream(r io.Reader, o DecoderOptions, flattened int) error {
+	dec := NewDecoder(r)
+	dec.DecoderOptions = o
 
-	// If value is null, set timestamp to zero value
-	if tag == nil {
+	tag, err := dec.Untag()
+	if errors.Is(err, ErrNullOrUndefined) {
+		// If value is null, set timestamp to zero value
 		*ts = Timestamp(time.Time{})
 		return nil
 	}
+	if err != nil {
+		return err
+	}
 
-	switch tag.Number() {
+	switch tag {
 	// Tag 0: Parse string as RFC3339
 	case 0:
 		var value string
-		if err := Unmarshal([]byte(tag.Val), &value); err != nil {
+		if err := dec.Decode(&value); err != nil {
 			return err
 		}
 		t, err := time.Parse(time.RFC3339, value)
@@ -191,12 +255,12 @@ func (ts *Timestamp) UnmarshalCBOR(data []byte) error {
 	// Tag 1: Parse uint as seconds
 	case 1:
 		var sec int64
-		if err := Unmarshal([]byte(tag.Val), &sec); err != nil {
+		if err := dec.Decode(&sec); err != nil {
 			return err
 		}
 		*ts = Timestamp(time.Unix(sec, 0))
 		return nil
 	}
 
-	return fmt.Errorf("unknown tag number %d", tag.Number())
+	return fmt.Errorf("unknown tag number %d", tag)
 }
