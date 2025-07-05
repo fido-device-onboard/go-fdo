@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"io"
+	"maps"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 )
@@ -99,9 +100,7 @@ func (e0 *Encrypt0[P, A]) Encrypt(alg EncryptAlgorithm, key []byte, payload P, a
 	if err != nil {
 		return fmt.Errorf("error encrypting plaintext: %w", err)
 	}
-	for label, val := range newUnprotected {
-		e0.Unprotected[label] = val
-	}
+	maps.Copy(e0.Unprotected, newUnprotected)
 	e0.Ciphertext = &ciphertext
 
 	return nil
