@@ -28,8 +28,10 @@ type DIServer[T any] struct {
 	SignDeviceCertificate func(*T) ([]*x509.Certificate, error)
 
 	// DeviceInfo returns the device info string to use for a given device,
-	// based on its self-reported info and certificate chain.
-	DeviceInfo func(context.Context, *T, []*x509.Certificate) (string, protocol.KeyType, protocol.KeyEncoding, error)
+	// based on its self-reported info and certificate chain (from
+	// SignDeviceCertificate). The PublicKey returned is for the DI server and
+	// must be the key that will be used for voucher extension.
+	DeviceInfo func(context.Context, *T, []*x509.Certificate) (info string, mfgPubKey protocol.PublicKey, _ error)
 
 	// Optional callback for before a new voucher is persisted.
 	BeforeVoucherPersist func(context.Context, *Voucher) error

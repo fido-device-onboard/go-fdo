@@ -292,7 +292,6 @@ func (pub *PublicKey) parseX5Chain() error {
 	}
 	pub.chain = make([]*x509.Certificate, len(certs))
 	for i, cert := range certs {
-		cert := cert
 		pub.chain[i] = (*x509.Certificate)(cert)
 	}
 

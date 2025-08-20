@@ -144,8 +144,13 @@ func (s *State) Voucher(_ context.Context, guid protocol.GUID) (*fdo.Voucher, er
 // its certificate chain. If key type is not RSAPKCS or RSAPSS then rsaBits
 // is ignored. Otherwise it must be either 2048 or 3072.
 func (s *State) OwnerKey(ctx context.Context, keyType protocol.KeyType, rsaBits int) (crypto.Signer, []*x509.Certificate, error) {
-	if keyType == protocol.Rsa2048RestrKeyType {
+	switch keyType {
+	case protocol.Secp256r1KeyType, protocol.Secp384r1KeyType:
+		rsaBits = 0
+	case protocol.Rsa2048RestrKeyType:
 		rsaBits = 2048
+	default:
+		// keep user selection
 	}
 	key, ok := s.OwnerKeys[KeyTypeAndRsaBits{keyType, rsaBits}]
 	if !ok {
@@ -180,8 +185,8 @@ func newCA(priv crypto.Signer) (*x509.Certificate, error) {
 }
 
 // ManufacturerKey returns the signer of a given key type and its certificate
-// chain (required). If key type is not RSAPKCS or RSAPSS then rsaBits is
-// ignored. Otherwise it must be either 2048 or 3072.
+// chain. If key type is not RSAPKCS or RSAPSS then rsaBits is ignored.
+// Otherwise it must be either 2048 or 3072.
 func (s *State) ManufacturerKey(ctx context.Context, keyType protocol.KeyType, rsaBits int) (crypto.Signer, []*x509.Certificate, error) {
 	return s.OwnerKey(ctx, keyType, rsaBits)
 }
