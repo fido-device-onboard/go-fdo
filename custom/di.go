@@ -5,16 +5,12 @@
 package custom
 
 import (
-	"context"
 	"crypto"
 	"crypto/rand"
 	"crypto/x509"
-	"errors"
 	"fmt"
-	"math/big"
 	"time"
 
-	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/protocol"
 )
@@ -51,18 +47,17 @@ type DeviceMfgInfo struct {
 	// TestSigMAROEPrefix []byte // deprecated
 }
 
-// CertificateAuthority contains the necessary method to get a CA key and chain
-// for signing device certificates.
-type CertificateAuthority interface {
-	// ManufacturerKey returns the signer of a given key type and its certificate
-	// chain (required). If key type is not RSAPKCS or RSAPSS then rsaBits is
-	// ignored. Otherwise it must be either 2048 or 3072.
-	ManufacturerKey(ctx context.Context, keyType protocol.KeyType, rsaBits int) (crypto.Signer, []*x509.Certificate, error)
-}
-
 // SignDeviceCertificate creates a device certificate chain from the info sent
-// in DI.AppStart.
-func SignDeviceCertificate(ca CertificateAuthority) func(*DeviceMfgInfo) ([]*x509.Certificate, error) {
+// in DI.AppStart. All info sent from the device is ignored except for its
+// certificate signing request (CSR), which is signed by the device CA key and
+// prepended to the device CA chain.
+//
+// Unlike voucher extension chains, device certificate chains may contain any
+// signers of mixed key types. There is no restriction, because the device does
+// not ever receive or validate the device certificate chain and key
+// restrictions in FDO are for the purpose of reducing the amount of crypto
+// support a possibly constrained device needs.
+func SignDeviceCertificate(deviceCAKey crypto.Signer, deviceCAChain []*x509.Certificate) func(*DeviceMfgInfo) ([]*x509.Certificate, error) {
 	return func(info *DeviceMfgInfo) ([]*x509.Certificate, error) {
 		// Validate device info
 		csr := x509.CertificateRequest(info.CertInfo)
@@ -71,28 +66,14 @@ func SignDeviceCertificate(ca CertificateAuthority) func(*DeviceMfgInfo) ([]*x50
 		}
 
 		// Sign CSR
-		key, chain, err := ca.ManufacturerKey(context.Background(), info.KeyType, 3072) // Always use 3072-bit for RSA PKCS/PSS
-		if err != nil {
-			var unsupportedErr fdo.ErrUnsupportedKeyType
-			if errors.As(err, &unsupportedErr) {
-				return nil, unsupportedErr
-			}
-			return nil, fmt.Errorf("error retrieving manufacturer key [type=%s]: %w", info.KeyType, err)
-		}
-		serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
-		serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
-		if err != nil {
-			return nil, fmt.Errorf("error generating certificate serial number: %w", err)
-		}
 		template := &x509.Certificate{
-			SerialNumber: serialNumber,
-			Issuer:       chain[0].Subject,
-			Subject:      csr.Subject,
-			NotBefore:    time.Now(),
-			NotAfter:     time.Now().Add(30 * 360 * 24 * time.Hour), // Matches Java impl
-			KeyUsage:     x509.KeyUsageDigitalSignature,
+			Issuer:    deviceCAChain[0].Subject,
+			Subject:   csr.Subject,
+			NotBefore: time.Now(),
+			NotAfter:  time.Now().Add(30 * 360 * 24 * time.Hour), // Matches Java impl
+			KeyUsage:  x509.KeyUsageDigitalSignature,
 		}
-		der, err := x509.CreateCertificate(rand.Reader, template, chain[0], csr.PublicKey, key)
+		der, err := x509.CreateCertificate(rand.Reader, template, deviceCAChain[0], csr.PublicKey, deviceCAKey)
 		if err != nil {
 			return nil, fmt.Errorf("error signing CSR: %w", err)
 		}
@@ -100,7 +81,6 @@ func SignDeviceCertificate(ca CertificateAuthority) func(*DeviceMfgInfo) ([]*x50
 		if err != nil {
 			return nil, fmt.Errorf("error parsing signed device cert: %w", err)
 		}
-		chain = append([]*x509.Certificate{cert}, chain...)
-		return chain, nil
+		return append([]*x509.Certificate{cert}, deviceCAChain...), nil
 	}
 }

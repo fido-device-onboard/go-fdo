@@ -49,6 +49,14 @@ type Config struct {
 	// useful for only testing service info modules.
 	State AllServerState
 
+	// If both key and chain are given, DeviceCAKey and DeviceCAChain will be
+	// used to sign all CSRs in the DI protocol.
+	DeviceCAKey   crypto.Signer
+	DeviceCAChain []*x509.Certificate
+
+	// Explicit disable for cases such as TPM simulators
+	UnsupportedRSA3072 bool
+
 	// If NewCredential is non-nil, then it will be used to create and format
 	// the device credential. Otherwise the blob package will be used.
 	NewCredential func(protocol.KeyType) (hmacSha256, hmacSha384 hash.Hash, key crypto.Signer, toDeviceCred func(fdo.DeviceCredential) any)
@@ -118,71 +126,69 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 		}
 	}
 
+	// Generate Device Certificate Authority if not given in config
+	deviceCAKey, deviceCAChain := conf.DeviceCAKey, conf.DeviceCAChain
+	if deviceCAKey == nil || len(deviceCAChain) == 0 {
+		var err error
+		deviceCAKey, err = rsa.GenerateKey(rand.Reader, 3072)
+		if err != nil {
+			t.Fatal(err)
+		}
+		template := &x509.Certificate{
+			SerialNumber:          big.NewInt(1),
+			Subject:               pkix.Name{CommonName: "Test CA"},
+			NotBefore:             time.Now(),
+			NotAfter:              time.Now().Add(30 * 365 * 24 * time.Hour),
+			BasicConstraintsValid: true,
+			IsCA:                  true,
+		}
+		der, err := x509.CreateCertificate(rand.Reader, template, template, deviceCAKey.Public(), deviceCAKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cert, err := x509.ParseCertificate(der)
+		if err != nil {
+			t.Fatal(err)
+		}
+		deviceCAChain = []*x509.Certificate{cert}
+	}
+
 	diResponder := &fdo.DIServer[custom.DeviceMfgInfo]{
-		Session:  conf.State,
-		Vouchers: conf.State,
-		SignDeviceCertificate: func(info *custom.DeviceMfgInfo) ([]*x509.Certificate, error) {
-			// Validate device info
-			csr := x509.CertificateRequest(info.CertInfo)
-			if err := csr.CheckSignature(); err != nil {
-				return nil, fmt.Errorf("invalid CSR: %w", err)
+		Session:               conf.State,
+		Vouchers:              conf.State,
+		SignDeviceCertificate: custom.SignDeviceCertificate(deviceCAKey, deviceCAChain),
+		DeviceInfo: func(ctx context.Context, info *custom.DeviceMfgInfo, devChain []*x509.Certificate) (string, protocol.PublicKey, error) {
+			rsaBits := 3072
+			if conf.UnsupportedRSA3072 {
+				rsaBits = 2048
+			}
+			mfgKey, mfgChain, err := conf.State.ManufacturerKey(ctx, info.KeyType, rsaBits)
+			if err != nil {
+				return "", protocol.PublicKey{}, fmt.Errorf("error getting manufacturer key [type=%s]: %w", info.KeyType, err)
 			}
 
-			// Recommended configurations (see section 3.3.2) have matching
-			// strengths between device and owner attestation keys and
-			// therefore the RSA key size should match the device public key or
-			// should be 2048 for secp256r1 and 3072 for secp384r1
-			var rsaBits int
-			if info.KeyType == protocol.Rsa2048RestrKeyType || info.KeyType == protocol.RsaPkcsKeyType || info.KeyType == protocol.RsaPssKeyType {
-				switch pub := csr.PublicKey.(type) {
-				case *rsa.PublicKey:
-					rsaBits = pub.Size() * 8
-				case *ecdsa.PublicKey:
-					switch pub.Curve {
-					case elliptic.P256():
-						rsaBits = 2048
-					case elliptic.P384():
-						rsaBits = 3072
-					default:
-						return nil, fmt.Errorf("device key uses unsupported EC curve: %s", pub.Curve.Params().Name)
-					}
+			var mfgPubKey *protocol.PublicKey
+			switch info.KeyEncoding {
+			case protocol.X509KeyEnc, protocol.CoseKeyEnc:
+				// Intentionally panic if pub is not the correct key type
+				switch info.KeyType {
+				case protocol.Secp256r1KeyType, protocol.Secp384r1KeyType:
+					mfgPubKey, err = protocol.NewPublicKey(info.KeyType, mfgKey.Public().(*ecdsa.PublicKey), info.KeyEncoding == protocol.CoseKeyEnc)
+				case protocol.Rsa2048RestrKeyType, protocol.RsaPkcsKeyType, protocol.RsaPssKeyType:
+					mfgPubKey, err = protocol.NewPublicKey(info.KeyType, mfgKey.Public().(*rsa.PublicKey), info.KeyEncoding == protocol.CoseKeyEnc)
 				default:
-					return nil, fmt.Errorf("device key type is unsupported")
+					err = fmt.Errorf("unsupported key type: %s", info.KeyType)
 				}
+			case protocol.X5ChainKeyEnc:
+				mfgPubKey, err = protocol.NewPublicKey(info.KeyType, mfgChain, false)
+			default:
+				err = fmt.Errorf("unsupported key encoding: %s", info.KeyEncoding)
+			}
+			if err != nil {
+				return "", protocol.PublicKey{}, err
 			}
 
-			// Sign CSR
-			key, chain, err := conf.State.ManufacturerKey(context.Background(), info.KeyType, rsaBits)
-			if err != nil {
-				var unsupportedErr fdo.ErrUnsupportedKeyType
-				if errors.As(err, &unsupportedErr) {
-					return nil, unsupportedErr
-				}
-				return nil, fmt.Errorf("error retrieving manufacturer key [type=%s,bits=%d]: %w", info.KeyType, rsaBits, err)
-			}
-			serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
-			serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
-			if err != nil {
-				return nil, fmt.Errorf("error generating certificate serial number: %w", err)
-			}
-			template := &x509.Certificate{
-				SerialNumber: serialNumber,
-				Issuer:       chain[0].Subject,
-				Subject:      csr.Subject,
-				NotBefore:    time.Now(),
-				NotAfter:     time.Now().Add(30 * 360 * 24 * time.Hour), // Matches Java impl
-				KeyUsage:     x509.KeyUsageDigitalSignature,
-			}
-			der, err := x509.CreateCertificate(rand.Reader, template, chain[0], csr.PublicKey, key)
-			if err != nil {
-				return nil, fmt.Errorf("error signing CSR: %w", err)
-			}
-			cert, err := x509.ParseCertificate(der)
-			if err != nil {
-				return nil, fmt.Errorf("error parsing signed device cert: %w", err)
-			}
-			chain = append([]*x509.Certificate{cert}, chain...)
-			return chain, nil
+			return "test_device", *mfgPubKey, nil
 		},
 		BeforeVoucherPersist: fdo.AllInOne{DIAndOwner: conf.State}.Extend,
 		RvInfo: func(context.Context, *fdo.Voucher) ([][]protocol.RvInstruction, error) {
@@ -275,10 +281,6 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 		},
 	} {
 		t.Run(fmt.Sprintf("Key %q Encoding %q Exchange %q Cipher %q", table.keyType, table.keyEncoding, table.keyExchange, table.cipherSuite), func(t *testing.T) {
-			diResponder.DeviceInfo = func(context.Context, *custom.DeviceMfgInfo, []*x509.Certificate) (string, protocol.KeyType, protocol.KeyEncoding, error) {
-				return "test_device", table.keyType, table.keyEncoding, nil
-			}
-
 			newCredential := func(keyType protocol.KeyType) (hmacSha256, hmacSha384 hash.Hash, key crypto.Signer, toDeviceCred func(fdo.DeviceCredential) any) {
 				secret := make([]byte, 32)
 				if _, err := rand.Read(secret); err != nil {

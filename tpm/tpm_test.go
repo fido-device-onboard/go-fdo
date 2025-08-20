@@ -29,6 +29,7 @@ func TestTPMDevice(t *testing.T) {
 	}()
 
 	fdotest.RunClientTestSuite(t, fdotest.Config{
+		UnsupportedRSA3072: true,
 		NewCredential: func(keyType protocol.KeyType) (hmacSha256, hmacSha384 hash.Hash, key crypto.Signer, toDeviceCred func(fdo.DeviceCredential) any) {
 			hmacSha256, err := tpm.NewHmac(sim, crypto.SHA256)
 			if err != nil {

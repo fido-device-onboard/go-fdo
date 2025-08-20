@@ -529,8 +529,11 @@ func ExtendVoucher[T protocol.PublicKeyOrChain](v *Voucher, owner crypto.Signer,
 	return xv, nil
 }
 
-// hashAlgFor determines the appropriate hash algorithm to use based on the
-// table in section 3.2.2 of the FDO spec
+// hashAlgFor determines the appropriate hash algorithm to use based on device
+// and owner attestation key types. Recommended configurations (see section
+// 3.3.2) have matching strengths between device and owner attestation keys and
+// therefore the RSA key size should match the device public key or should be
+// 2048 for secp256r1 and 3072 for secp384r1.
 func hashAlgFor(devicePubKey, ownerPubKey crypto.PublicKey) (protocol.HashAlg, error) {
 	deviceSize, err := hashSizeForPubKey(devicePubKey)
 	if err != nil {

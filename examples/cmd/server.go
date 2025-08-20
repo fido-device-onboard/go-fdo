@@ -543,14 +543,32 @@ func newHandler(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) (*transport
 		autoTO0 = aio.RegisterOwnerAddr
 	}
 
+	// Use Manufacturer key as device certificate authority
+	deviceCAKey, deviceCAChain, err := state.ManufacturerKey(context.Background(), protocol.Secp384r1KeyType, 0)
+	if err != nil {
+		return nil, fmt.Errorf("error getting manufacturer key for use as device certificate authority: %w", err)
+	}
+
 	return &transport.Handler{
 		Tokens: state,
 		DIResponder: &fdo.DIServer[custom.DeviceMfgInfo]{
 			Session:               state,
 			Vouchers:              state,
-			SignDeviceCertificate: custom.SignDeviceCertificate(state),
-			DeviceInfo: func(_ context.Context, info *custom.DeviceMfgInfo, _ []*x509.Certificate) (string, protocol.KeyType, protocol.KeyEncoding, error) {
-				return info.DeviceInfo, info.KeyType, info.KeyEncoding, nil
+			SignDeviceCertificate: custom.SignDeviceCertificate(deviceCAKey, deviceCAChain),
+			DeviceInfo: func(ctx context.Context, info *custom.DeviceMfgInfo, _ []*x509.Certificate) (string, protocol.PublicKey, error) {
+				// Always use RSA 3072 for non 2048 restricted key type. In a
+				// real implementation, the manufacturing server must ensure
+				// that the device has the capability to process such crypto
+				// (including SHA-384 hashes).
+				mfgKey, mfgChain, err := state.ManufacturerKey(ctx, info.KeyType, 3072)
+				if err != nil {
+					return "", protocol.PublicKey{}, err
+				}
+				mfgPubKey, err := encodePublicKey(info.KeyType, info.KeyEncoding, mfgKey.Public(), mfgChain)
+				if err != nil {
+					return "", protocol.PublicKey{}, err
+				}
+				return info.DeviceInfo, *mfgPubKey, nil
 			},
 			BeforeVoucherPersist: autoExtend,
 			AfterVoucherPersist:  autoTO0,
@@ -605,6 +623,32 @@ func (s withOwnerAddrs) OwnerAddrs(context.Context, fdo.Voucher) ([]protocol.RvT
 		}
 	}
 	return autoTO0Addrs, 0, nil
+}
+
+func encodePublicKey(keyType protocol.KeyType, keyEncoding protocol.KeyEncoding, pub crypto.PublicKey, chain []*x509.Certificate) (*protocol.PublicKey, error) {
+	if pub == nil && len(chain) > 0 {
+		pub = chain[0].PublicKey
+	}
+	if pub == nil {
+		return nil, fmt.Errorf("no key to encode")
+	}
+
+	switch keyEncoding {
+	case protocol.X509KeyEnc, protocol.CoseKeyEnc:
+		// Intentionally panic if pub is not the correct key type
+		switch keyType {
+		case protocol.Secp256r1KeyType, protocol.Secp384r1KeyType:
+			return protocol.NewPublicKey(keyType, pub.(*ecdsa.PublicKey), keyEncoding == protocol.CoseKeyEnc)
+		case protocol.Rsa2048RestrKeyType, protocol.RsaPkcsKeyType, protocol.RsaPssKeyType:
+			return protocol.NewPublicKey(keyType, pub.(*rsa.PublicKey), keyEncoding == protocol.CoseKeyEnc)
+		default:
+			return nil, fmt.Errorf("unsupported key type: %s", keyType)
+		}
+	case protocol.X5ChainKeyEnc:
+		return protocol.NewPublicKey(keyType, chain, false)
+	default:
+		return nil, fmt.Errorf("unsupported key encoding: %s", keyEncoding)
+	}
 }
 
 type moduleStateMachines struct {
