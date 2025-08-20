@@ -548,7 +548,7 @@ func newHandler(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) (*transport
 		DIResponder: &fdo.DIServer[custom.DeviceMfgInfo]{
 			Session:               state,
 			Vouchers:              state,
-			SignDeviceCertificate: custom.SignDeviceCertificate(state),
+			SignDeviceCertificate: custom.SignDeviceCertificate(useManufacturerKeyAsDeviceCA{state}),
 			DeviceInfo: func(_ context.Context, info *custom.DeviceMfgInfo, _ []*x509.Certificate) (string, protocol.KeyType, protocol.KeyEncoding, error) {
 				return info.DeviceInfo, info.KeyType, info.KeyEncoding, nil
 			},
@@ -573,6 +573,14 @@ func newHandler(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) (*transport
 			ReuseCredential: func(context.Context, fdo.Voucher) (bool, error) { return reuseCred, nil },
 		},
 	}, nil
+}
+
+type useManufacturerKeyAsDeviceCA struct {
+	DB *sqlite.DB
+}
+
+func (ca useManufacturerKeyAsDeviceCA) DeviceCAKey(ctx context.Context, keyType protocol.KeyType, rsaBits int) (crypto.Signer, []*x509.Certificate, error) {
+	return ca.DB.ManufacturerKey(ctx, keyType, rsaBits)
 }
 
 type withOwnerAddrs struct {

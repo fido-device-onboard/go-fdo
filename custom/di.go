@@ -54,10 +54,14 @@ type DeviceMfgInfo struct {
 // CertificateAuthority contains the necessary method to get a CA key and chain
 // for signing device certificates.
 type CertificateAuthority interface {
-	// ManufacturerKey returns the signer of a given key type and its certificate
+	// DeviceCAKey returns the signer of a given key type and its certificate
 	// chain (required). If key type is not RSAPKCS or RSAPSS then rsaBits is
 	// ignored. Otherwise it must be either 2048 or 3072.
-	ManufacturerKey(ctx context.Context, keyType protocol.KeyType, rsaBits int) (crypto.Signer, []*x509.Certificate, error)
+	//
+	// This key may be the same as the manufacturing key, which is used for
+	// extending the voucher and its hash is included as part of the device
+	// credential. However, it may also be a different key (of the same type).
+	DeviceCAKey(ctx context.Context, keyType protocol.KeyType, rsaBits int) (crypto.Signer, []*x509.Certificate, error)
 }
 
 // SignDeviceCertificate creates a device certificate chain from the info sent
@@ -71,7 +75,7 @@ func SignDeviceCertificate(ca CertificateAuthority) func(*DeviceMfgInfo) ([]*x50
 		}
 
 		// Sign CSR
-		key, chain, err := ca.ManufacturerKey(context.Background(), info.KeyType, 3072) // Always use 3072-bit for RSA PKCS/PSS
+		key, chain, err := ca.DeviceCAKey(context.Background(), info.KeyType, 3072) // Always use 3072-bit for RSA PKCS/PSS
 		if err != nil {
 			var unsupportedErr fdo.ErrUnsupportedKeyType
 			if errors.As(err, &unsupportedErr) {
