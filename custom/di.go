@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
 	"errors"
 	"fmt"
@@ -73,9 +74,13 @@ func SignDeviceCertificate(ca CertificateAuthority) func(*DeviceMfgInfo) ([]*x50
 		if err := csr.CheckSignature(); err != nil {
 			return nil, fmt.Errorf("invalid CSR: %w", err)
 		}
+		var rsaBits int
+		if rsaPub, ok := csr.PublicKey.(*rsa.PublicKey); ok {
+			rsaBits = rsaPub.Size() * 8
+		}
 
 		// Sign CSR
-		key, chain, err := ca.DeviceCAKey(context.Background(), info.KeyType, 3072) // Always use 3072-bit for RSA PKCS/PSS
+		key, chain, err := ca.DeviceCAKey(context.Background(), info.KeyType, rsaBits)
 		if err != nil {
 			var unsupportedErr fdo.ErrUnsupportedKeyType
 			if errors.As(err, &unsupportedErr) {
