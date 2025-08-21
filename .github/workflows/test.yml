@@ -38,8 +38,10 @@ jobs:
     name: Test Go packages (TinyGo)
     runs-on: ubuntu-latest
     container:
-      image: tinygo/tinygo:0.35.0
+      image: tinygo/tinygo:0.39.0
       options: --user root
+    env:
+      GOFLAGS: -buildvcs=false
     steps:
       - name: Check out repository code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
