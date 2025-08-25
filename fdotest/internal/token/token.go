@@ -68,27 +68,47 @@ type keyExchange struct {
 	Sess  kex.Session
 }
 
-func (x keyExchange) FlatMarshalCBOR(w io.Writer) error {
-	if err := cbor.NewEncoder(w).Encode(x.Suite); err != nil {
+func (x keyExchange) MarshalCBORStream(w io.Writer, o cbor.EncoderOptions, flattened int) error {
+	if flattened == 0 {
+		return cbor.ErrSkip
+	}
+	if flattened != 2 {
+		return fmt.Errorf("keyExchange only supports CBOR encoding with flat2 tag")
+	}
+
+	enc := cbor.NewEncoder(w)
+	enc.EncoderOptions = o
+
+	if err := enc.Encode(x.Suite); err != nil {
 		return err
 	}
-	return cbor.NewEncoder(w).Encode(x.Sess)
+	return enc.Encode(x.Sess)
 }
 
-func (x *keyExchange) FlatUnmarshalCBOR(r io.Reader) error {
-	if err := cbor.NewDecoder(r).Decode(&x.Suite); err != nil {
+func (x *keyExchange) UnmarshalCBORStream(r io.Reader, o cbor.DecoderOptions, flattened int) error {
+	if flattened == 0 {
+		return cbor.ErrSkip
+	}
+	if flattened != 2 {
+		return fmt.Errorf("keyExchange only supports CBOR encoding with flat2 tag")
+	}
+
+	dec := cbor.NewDecoder(r)
+	dec.DecoderOptions = o
+
+	if err := dec.Decode(&x.Suite); err != nil {
 		return fmt.Errorf("error decoding key exchange suite: %w", err)
 	}
 
 	// If no suite is set, the next value will be nil
 	if x.Suite == "" {
 		var v struct{}
-		return cbor.NewDecoder(r).Decode(&v)
+		return dec.Decode(&v)
 	}
 
 	// Initialize a session with a valid cipher suite (any) to decode
 	x.Sess = x.Suite.New(nil, 1)
-	if err := cbor.NewDecoder(r).Decode(&x.Sess); err != nil {
+	if err := dec.Decode(&x.Sess); err != nil {
 		return fmt.Errorf("error decoding key exchange session: %w", err)
 	}
 	return nil

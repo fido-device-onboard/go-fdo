@@ -80,46 +80,71 @@ type Unmarshaler interface {
 	UnmarshalCBOR([]byte) error
 }
 
-// FlatMarshaler is implemented by types to provide more than one object of an
-// array. This is particularly useful in structs to match the behavior of
-// embedded struct fields, but with full control, like Marshaler.
+// ErrSkip can be returned by MarshalCBORStream and UnmarshalCBORStream to use
+// the Marshaler/Unmarshaler implementation or default coding instead.
+var ErrSkip = errors.New("skip encode/decode override")
+
+// StreamMarshaler is a more powerful interface for implementing the method of
+// encoding a type. It has three primary use cases:
 //
-// FlatMarshaler is used iff the field has a flatN cbor struct tag, i.e.
-// `cbor:",flat2"`.
-type FlatMarshaler interface {
-	// FlatMarshalCBOR encodes CBOR objects to a stream (not wrapped in a CBOR
-	// array). The number of objects decoded must match the flatN option of the
-	// cbor tag.
-	FlatMarshalCBOR(io.Writer) error
+//  1. Encoding with array flattening: when used in conjunction with a flatN
+//     struct tag it allows encoding more than one object of its parent array,
+//     effectively allowing customized embedded field behavior
+//  2. Encoding with options: receives all config from the Encoder
+//  3. Encoding large objects: avoids having to hold the entire marshaled
+//     representation in memory like Marshaler
+type StreamMarshaler interface {
+	// MarshalCBORStream encodes (a) CBOR object(s) directly to the underlying
+	// writer. It must only encode a single item unless flattened is greater
+	// than zero, in which case it must encode exactly that many items or fail.
+	//
+	// When the object being encoded is a struct field with the cbor struct tag
+	// and the flatN option (where N is a positive integer), then flattened
+	// will hold N and MarshalCBORStream must encode exactly N items (not
+	// wrapped in a CBOR array).
+	//
+	// When embedding a type and using the flatN option, this method will be
+	// promoted and cause the parent struct to implement the interface with an
+	// undesirable implementation (unless the struct implements it explicitly).
+	// To avoid this, the following code can be used:
+	//
+	//     // Abort CBOR representation override
+	//     if flattened == 0 {
+	//         return cbor.ErrSkip
+	//     }
+	MarshalCBORStream(w io.Writer, o EncoderOptions, flattened int) error
 }
 
-// FlatUnmarshaler is implemented by types to consume more than one object of
-// an array. This is particularly useful in structs to match the behavior of
-// embedded struct fields, but with full control, like Unmarshaler.
+// StreamUnmarshaler is a more powerful interface for implementing the method
+// of decoding a type. It has three primary use cases:
 //
-// FlatUnmarshaler is used iff the field has a flatN cbor struct tag, i.e.
-// `cbor:",flat2"`.
-type FlatUnmarshaler interface {
-	// FlatUnmarshalCBOR decodes CBOR objects from a stream (not an array). The
-	// number of objects decoded must match the flatN option of the cbor tag.
-	FlatUnmarshalCBOR(io.Reader) error
-}
-
-func flatN(sf reflect.StructField) (int, bool) {
-	_, options, _ := strings.Cut(sf.Tag.Get("cbor"), ",")
-	for _, option := range strings.Split(options, ",") {
-		if strings.HasPrefix(option, "flat") {
-			if option == "flat" {
-				return 1, true
-			}
-			n, err := strconv.Atoi(strings.TrimPrefix(option, "flat"))
-			if err != nil {
-				panic("invalid cbor struct tag 'flatNNN' option: " + err.Error())
-			}
-			return n, true
-		}
-	}
-	return 0, false
+//  1. Decoding with array flattening: when used in conjunction with a flatN
+//     struct tag it allows decoding more than one object from an array,
+//     effectively allowing customized embedded field behavior
+//  2. Decoding with options: receives all config from the Decoder
+//  3. Decoding large objects: avoids having to hold the entire marshaled
+//     representation in memory like Unmarshaler
+type StreamUnmarshaler interface {
+	// UnmarshalCBORStream decodes (a) CBOR object(s) directly to the
+	// underlying reader. It must only decode a single item unless flattened is
+	// greater than zero, in which case it must decode exactly that many items
+	// or fail.
+	//
+	// When the object being decoded is a struct field with the cbor struct tag
+	// and the flatN option (where N is a positive integer), then flattened
+	// will hold N and UnmarshalCBORStream must decode exactly N items (not
+	// wrapped in a CBOR array).
+	//
+	// When embedding a type and using the flatN option, this method will be
+	// promoted and cause the parent struct to implement the interface with an
+	// undesirable implementation (unless the struct implements it explicitly).
+	// To avoid this, the following code can be used:
+	//
+	//     // Abort CBOR representation override
+	//     if flattened == 0 {
+	//         return cbor.ErrSkip
+	//     }
+	UnmarshalCBORStream(r io.Reader, o DecoderOptions, flattened int) error
 }
 
 // RawBytes encodes and decodes untransformed. When encoding, it must contain
@@ -143,21 +168,33 @@ type Tag[T any] struct {
 	Val T
 }
 
-func (Tag[T]) isTag() {}
+// MarshalCBORStream implements StreamMarshaler.
+func (t Tag[T]) MarshalCBORStream(w io.Writer, o EncoderOptions, flattened int) error {
+	enc := NewEncoder(w)
+	enc.EncoderOptions = o
 
-// Number returns the underlying Num field and is used to implement the TagData
-// interface.
-func (t Tag[T]) Number() uint64 { return t.Num }
+	// Write tag number as additional info
+	info := u64Bytes(t.Num)
+	if err := enc.write(additionalInfo(tagMajorType, info)); err != nil {
+		return err
+	}
 
-// Value returns the underlying Val field and is used to implement the TagData
-// interface.
-func (t Tag[T]) Value() any { return t.Val }
+	// Write the enclosed value
+	return enc.Encode(t.Val)
+}
 
-// TagData allows read-only access to a Tag without value type information.
-type TagData interface {
-	isTag() // no external types can implement a Tag
-	Number() uint64
-	Value() any
+// UnmarshalCBORStream implements StreamUnmarshaler.
+func (t *Tag[T]) UnmarshalCBORStream(r io.Reader, o DecoderOptions, flattened int) error {
+	dec := NewDecoder(r)
+	dec.DecoderOptions = o
+
+	n, err := dec.Untag()
+	if err != nil {
+		return err
+	}
+	t.Num = n
+
+	return dec.Decode(&t.Val)
 }
 
 // Marshal any type into CBOR.
@@ -184,22 +221,31 @@ func Unmarshal(data []byte, v any) error {
 // Decoder iteratively consumes a reader, decoding CBOR types.
 type Decoder struct {
 	r io.Reader
+
+	DecoderOptions
 }
+
+// DecoderOptions configure advanced behavior of the Decoder.
+type DecoderOptions struct{}
 
 // NewDecoder returns a new Decoder. The [io.Reader] is not copied.
 func NewDecoder(r io.Reader) *Decoder { return &Decoder{r: r} }
 
 // Decode a single CBOR item from the internal [io.Reader].
 func (d *Decoder) Decode(v any) error {
-	// Use UnmarshalCBOR when value is an interface implementing Unmarshaler
+	// Opportunistically use StreamUnmarshaler or Unmarshaler implementation
 	for rv := reflect.ValueOf(v); (rv.Kind() == reflect.Pointer || rv.Kind() == reflect.Interface) && !rv.IsNil(); rv = rv.Elem() {
+		// Use StreamUnmarshaler implementation unless it comes from a
+		// flattened embedded field
+		if u, ok := rv.Interface().(StreamUnmarshaler); ok {
+			if err := u.UnmarshalCBORStream(d.r, d.DecoderOptions, 0); !errors.Is(err, ErrSkip) {
+				return err
+			}
+		}
+
 		if u, ok := rv.Interface().(Unmarshaler); ok {
 			b, err := d.decodeRaw()
 			if err != nil {
-				_, isOmitEmpty := rv.Interface().(interface{ isOmitEmpty() })
-				if errors.Is(err, io.EOF) && isOmitEmpty {
-					return nil
-				}
 				return err
 			}
 
@@ -326,8 +372,18 @@ func (d *Decoder) decodeVal(rv reflect.Value) error {
 			rv.Set(reflect.New(rv.Type().Elem()))
 		}
 
-		// Check one more time if the type implements Unmarshaler. This check was
-		// deferred until memory allocation for the underlying type was done.
+		// Check one more time if the type implements (Stream)Unmarshaler. This
+		// check was deferred until memory allocation for the underlying type
+		// was done.
+		if u, ok := rv.Interface().(StreamUnmarshaler); ok {
+			// Put typeinfo back at head of the reader
+			r := io.MultiReader(bytes.NewBuffer(
+				append([]byte{highThreeBits<<5 | lowFiveBits}, additional...)),
+				d.r)
+			if err := u.UnmarshalCBORStream(r, d.DecoderOptions, 0); !errors.Is(err, ErrSkip) {
+				return err
+			}
+		}
 		if u, ok := rv.Interface().(Unmarshaler); ok {
 			b, err := d.decodeRawVal(highThreeBits, lowFiveBits, additional)
 			if err != nil {
@@ -367,8 +423,19 @@ func (d *Decoder) decodeVal(rv reflect.Value) error {
 		allocateInterface(rv, reflect.TypeOf(map[any]any(nil)))
 		return d.decodeMap(rv, additional)
 	case tagMajorType:
-		allocateInterface(rv, reflect.TypeOf(Tag[RawBytes]{}))
-		return d.decodeTag(rv, additional)
+		if rv.Kind() == reflect.Interface && rv.IsNil() {
+			raw, err := d.decodeRaw()
+			if err != nil {
+				return err
+			}
+			rv.Set(reflect.ValueOf(Tag[RawBytes]{
+				Num: toU64(additional),
+				Val: raw,
+			}))
+			return nil
+		}
+		return fmt.Errorf("%w: expected a CBOR Tag (implemented with StreamMarshaler/StreamUnmarshaler)",
+			ErrUnsupportedType{typeName: rv.Type().String()})
 	case simpleMajorType:
 		if lowFiveBits == falseVal || lowFiveBits == trueVal {
 			allocateInterface(rv, reflect.TypeOf(false))
@@ -596,7 +663,7 @@ func (d *Decoder) decodeArrayToStruct(rv reflect.Value, additional []byte) error
 
 	// Decode each item into the appropriate field
 	for i, idx := range indices {
-		// If the previous index was the same, skip, because FlatUnmarshaler
+		// If the previous index was the same, skip, because StreamUnmarshaler
 		// already decoded all of its values. (The duplicate indices are just
 		// so the length of the indices slice matches the array size.)
 		if i > 0 && slices.Equal(idx, indices[i-1]) {
@@ -611,6 +678,23 @@ func (d *Decoder) decodeArrayToStruct(rv reflect.Value, additional []byte) error
 	return nil
 }
 
+func flatN(sf reflect.StructField) (int, bool) {
+	_, options, _ := strings.Cut(sf.Tag.Get("cbor"), ",")
+	for _, option := range strings.Split(options, ",") {
+		if strings.HasPrefix(option, "flat") {
+			if option == "flat" {
+				return 1, true
+			}
+			n, err := strconv.Atoi(strings.TrimPrefix(option, "flat"))
+			if err != nil {
+				panic("invalid cbor struct tag 'flatNNN' option: " + err.Error())
+			}
+			return n, true
+		}
+	}
+	return 0, false
+}
+
 func (d *Decoder) decodeStructField(rv reflect.Value, idx []int) error {
 	// Allocate any nil embedded struct pointer fields on the index path
 	for i := 1; i < len(idx); i++ {
@@ -622,16 +706,16 @@ func (d *Decoder) decodeStructField(rv reflect.Value, idx []int) error {
 	}
 	f := rv.FieldByIndex(idx)
 
-	// Use FlatUnmarshaler if flatN option is given
+	// Use StreamUnmarshaler if flatN option is given
 	if n, ok := flatN(rv.Type().FieldByIndex(idx)); ok {
-		fm, ok := f.Interface().(FlatUnmarshaler)
+		sm, ok := f.Interface().(StreamUnmarshaler)
 		if !ok && f.CanAddr() {
-			fm, ok = f.Addr().Interface().(FlatUnmarshaler)
+			sm, ok = f.Addr().Interface().(StreamUnmarshaler)
 		}
 		if !ok {
-			panic("struct field with cbor flat option must implement FlatUnmarshaler")
+			panic(rv.Type().FieldByIndex(idx).Name + ": struct field with cbor flat option must implement StreamUnmarshaler")
 		}
-		if err := fm.FlatUnmarshalCBOR(d.r); err != nil {
+		if err := sm.UnmarshalCBORStream(d.r, d.DecoderOptions, n); err != nil {
 			return fmt.Errorf("error decoding array item %+v (flat %d): %w", idx, n, err)
 		}
 		return nil
@@ -761,39 +845,6 @@ func (d *Decoder) decodeMap(rv reflect.Value, additional []byte) error {
 	return nil
 }
 
-func (d *Decoder) decodeTag(rv reflect.Value, additional []byte) error {
-	if _, ok := rv.Interface().(TagData); !ok {
-		return fmt.Errorf("%w: expected a cbor.Tag type (or interface wrapping it)",
-			ErrUnsupportedType{typeName: rv.Type().String()})
-	}
-
-	// If the value is an interface wrapping a Tag, then a new struct with
-	// addressable fields must be created and set.
-	var iface reflect.Value
-	if rv.Kind() == reflect.Interface {
-		newVal := reflect.New(rv.Elem().Type())
-		iface, rv = rv, newVal.Elem()
-	}
-
-	// Set number field
-	num := toU64(additional)
-	numField := rv.FieldByName("Num")
-	numField.SetUint(num)
-
-	// Set value field
-	valField := rv.FieldByName("Val")
-	if err := d.Decode(valField.Addr().Interface()); err != nil {
-		return fmt.Errorf("error decoding tag %d type: %w", num, err)
-	}
-
-	// When decoding to an interface, set its value to the newly created struct
-	if iface.IsValid() {
-		iface.Set(rv)
-	}
-
-	return nil
-}
-
 func (d *Decoder) decodeSimple(rv reflect.Value, lowFiveBits byte, additional []byte) error {
 	switch lowFiveBits {
 	case falseVal, trueVal:
@@ -864,6 +915,11 @@ func (d *Decoder) typeInfo() (highThreeBits, lowFiveBits byte, additional []byte
 type Encoder struct {
 	w io.Writer
 
+	EncoderOptions
+}
+
+// EncoderOptions configure advanced behavior of the Encoder.
+type EncoderOptions struct {
 	// MapKeySort is used to determine sort order of map keys for encoding. If
 	// none is set, then Core Deterministic (bytewise lexical) encoding is
 	// used.
@@ -896,7 +952,12 @@ func (e *Encoder) Encode(v any) error {
 	// interfaces, and unwrap named types
 	rv := reflect.ValueOf(v)
 	for (rv.Kind() == reflect.Pointer && !rv.IsNil()) || rv.Kind() == reflect.Interface {
-		// If the value implements Marshaler, use MarshalCBOR
+		if m, ok := rv.Interface().(StreamMarshaler); ok {
+			if err := m.MarshalCBORStream(e.w, e.EncoderOptions, 0); !errors.Is(err, ErrSkip) {
+				return err
+			}
+		}
+
 		if m, ok := rv.Interface().(Marshaler); ok {
 			b, err := m.MarshalCBOR()
 			if err != nil {
@@ -904,12 +965,21 @@ func (e *Encoder) Encode(v any) error {
 			}
 			return e.write(b)
 		}
+
 		rv = rv.Elem()
 	}
 	// Encoding nil will result in a zero reflect.Value and Interface will panic
 	if rv.IsValid() {
 		// Update v with the new value rv describes
 		v = rv.Interface()
+	}
+
+	// If the value implements StreamMarshaler, use MarshalCBORStream unless it
+	// has a flattened embedded field
+	if m, ok := v.(StreamMarshaler); ok && !holdsNilPtr(v) {
+		if err := m.MarshalCBORStream(e.w, e.EncoderOptions, 0); !errors.Is(err, ErrSkip) {
+			return err
+		}
 	}
 
 	// If the value implements Marshaler, use MarshalCBOR
@@ -923,8 +993,6 @@ func (e *Encoder) Encode(v any) error {
 
 	// Dispatch encoding by reflected data type
 	switch {
-	case func() bool { _, ok := v.(TagData); return ok }():
-		return e.encodeTag(v.(TagData))
 	case rv.CanInt() || rv.CanUint():
 		return e.encodeNumber(rv)
 	case rv.Kind() == reflect.String,
@@ -1111,24 +1179,25 @@ func (e *Encoder) encodeStruct(size int, get func([]int) reflect.Value, field fu
 
 	// Write each item
 	for i, idx := range indices {
-		// If the previous index was the same, skip, because FlatMarshaler
-		// already encoded all of its values. (The duplicate indices are just
-		// so the length of the indices slice matches the array size.)
+		// If the previous index was the same, skip, because flattened
+		// StreamMarshaler already encoded all of its values. (The duplicate
+		// indices are just so the length of the indices slice matches the
+		// array size.)
 		if i > 0 && slices.Equal(idx, indices[i-1]) {
 			continue
 		}
 
-		// Use FlatMarshaler, if available
+		// Use StreamMarshaler with flattened length
 		if n, ok := flatN(field(idx)); ok {
 			rv := get(idx)
-			fm, ok := rv.Interface().(FlatMarshaler)
+			sm, ok := rv.Interface().(StreamMarshaler)
 			if !ok && rv.CanAddr() {
-				fm, ok = rv.Addr().Interface().(FlatMarshaler)
+				sm, ok = rv.Addr().Interface().(StreamMarshaler)
 			}
 			if !ok {
-				panic("struct field with cbor flat option must implement FlatMarshaler")
+				panic(field(idx).Name + ": struct field with cbor flat option must implement StreamMarshaler")
 			}
-			if err := fm.FlatMarshalCBOR(e.w); err != nil {
+			if err := sm.MarshalCBORStream(e.w, e.EncoderOptions, n); err != nil {
 				return fmt.Errorf("error encoding struct field %+v (flat %d): %w", idx, n, err)
 			}
 			continue
@@ -1190,17 +1259,6 @@ func (e *Encoder) encodeMap(length int, keys []reflect.Value, get func(k reflect
 	return nil
 }
 
-func (e *Encoder) encodeTag(tag TagData) error {
-	// Write tag number as additional info
-	info := u64Bytes(tag.Number())
-	if err := e.write(additionalInfo(tagMajorType, info)); err != nil {
-		return err
-	}
-
-	// Write the enclosed value
-	return e.Encode(tag.Value())
-}
-
 func (e *Encoder) encodeBool(truthy bool) error {
 	b := simpleMajorType << 5
 	if truthy {
@@ -1250,7 +1308,7 @@ func fieldOrder(n int, field func(int) reflect.StructField) (indices [][]int, om
 				return fields[i].index[k] < fields[j].index[k]
 			}
 		}
-		return false // equal - allowed for FlatMarshaler fields which get encoded/decoded n times
+		return false // equal - allowed for flattened StreamMarshaler fields which get encoded/decoded n times
 	})
 
 	// Strip weights, leaving only the ordered indices
@@ -1334,35 +1392,6 @@ func collectFieldWeights(parents []int, i, upper int, field func(int) reflect.St
 		omittable: omittable,
 	}))
 }
-
-// OmitEmpty encodes a zero value (zero, empty array, empty byte string, empty
-// string, empty map) as zero bytes.
-type OmitEmpty[T any] struct{ Val T }
-
-// MarshalCBOR encodes a zero value (zero, empty array, empty byte string,
-// empty string, empty map) as zero bytes.
-func (o OmitEmpty[T]) MarshalCBOR() ([]byte, error) {
-	b, err := Marshal(o.Val)
-	if err != nil {
-		return nil, err
-	}
-	if len(b) != 1 {
-		return b, nil
-	}
-	switch b[0] {
-	case 0x00, 0x40, 0x60, 0x80, 0xa0:
-		return []byte{}, nil
-	default:
-		return b, nil
-	}
-}
-
-// UnmarshalCBOR decodes data into its generic typed Val field. Note that
-// OmitEmpty is treated specially by the cbor package such that reading zero
-// bytes (EOF) will not cause an error.
-func (o *OmitEmpty[T]) UnmarshalCBOR(p []byte) error { return Unmarshal(p, &o.Val) }
-
-func (o OmitEmpty[T]) isOmitEmpty() {}
 
 // BytewiseLexicalSort is a map key sorting function. It is the default for an
 // `Encoder`.
