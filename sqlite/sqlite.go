@@ -123,11 +123,17 @@ func Init(db *sql.DB) error {
 			)`,
 		`CREATE TABLE IF NOT EXISTS mfg_vouchers
 			( guid BLOB PRIMARY KEY
+			, device_info TEXT NOT NULL
 			, cbor BLOB NOT NULL
+			, created_at INTEGER NOT NULL /* Unix timestamp in microseconds */
+			, updated_at INTEGER NOT NULL /* Unix timestamp in microseconds */
 			)`,
 		`CREATE TABLE IF NOT EXISTS owner_vouchers
 			( guid BLOB PRIMARY KEY
+			, device_info TEXT NOT NULL
 			, cbor BLOB NOT NULL
+			, created_at INTEGER NOT NULL /* Unix timestamp in microseconds */
+			, updated_at INTEGER NOT NULL /* Unix timestamp in microseconds */
 			)`,
 		`CREATE TABLE IF NOT EXISTS replacement_vouchers
 			( session BLOB UNIQUE NOT NULL
@@ -829,8 +835,11 @@ func (db *DB) NewVoucher(ctx context.Context, ov *fdo.Voucher) error {
 		table = "owner_vouchers"
 	}
 	return db.insert(ctx, table, map[string]any{
-		"guid": ov.Header.Val.GUID[:],
-		"cbor": data,
+		"guid":        ov.Header.Val.GUID[:],
+		"device_info": ov.Header.Val.DeviceInfo,
+		"cbor":        data,
+		"created_at":  time.Now().Unix(),
+		"updated_at":  time.Now().Unix(),
 	}, nil)
 }
 
@@ -841,8 +850,11 @@ func (db *DB) AddVoucher(ctx context.Context, ov *fdo.Voucher) error {
 		return fmt.Errorf("error marshaling ownership voucher: %w", err)
 	}
 	return db.insert(ctx, "owner_vouchers", map[string]any{
-		"guid": ov.Header.Val.GUID[:],
-		"cbor": data,
+		"guid":        ov.Header.Val.GUID[:],
+		"device_info": ov.Header.Val.DeviceInfo,
+		"cbor":        data,
+		"created_at":  time.Now().Unix(),
+		"updated_at":  time.Now().Unix(),
 	}, nil)
 }
 
@@ -854,8 +866,10 @@ func (db *DB) ReplaceVoucher(ctx context.Context, guid protocol.GUID, ov *fdo.Vo
 	}
 	return db.update(ctx, "owner_vouchers",
 		map[string]any{
-			"guid": ov.Header.Val.GUID[:],
-			"cbor": data,
+			"guid":        ov.Header.Val.GUID[:],
+			"device_info": ov.Header.Val.DeviceInfo,
+			"cbor":        data,
+			"updated_at":  time.Now().Unix(),
 		},
 		map[string]any{
 			"guid": guid[:],
