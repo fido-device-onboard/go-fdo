@@ -18,7 +18,7 @@ jobs:
       GOFLAGS: -buildvcs=false
     steps:
       - name: Check out repository code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - name: Lint Go source files
         run: |
           apk add --no-cache gcc g++ openssl-dev
@@ -42,7 +42,7 @@ jobs:
       image: koalaman/shellcheck-alpine
     steps:
       - name: Check out repository code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - name: Run ShellCheck
         run: find . -name '*.sh' -o -name '*.bash' | xargs shellcheck
 
@@ -53,7 +53,7 @@ jobs:
       image: mvdan/shfmt:v3-alpine
     steps:
       - name: Check out repository code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - name: Check shfmt diff
         run: find . -name '*.sh' -o -name '*.bash' | FORCE_COLOR=1 xargs shfmt -d
 
@@ -64,6 +64,6 @@ jobs:
       image: node:20-alpine
     steps:
       - name: Check out repository code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - name: Lint all markdown
         run: npx markdownlint-cli2 --config .markdownlint.yml '**/*.md'
