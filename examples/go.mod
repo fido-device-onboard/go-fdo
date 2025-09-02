@@ -18,7 +18,7 @@ require (
 	github.com/google/go-tpm v0.9.5
 	github.com/google/go-tpm-tools v0.4.5
 	github.com/syumai/workers v0.27.0
-	hermannm.dev/devlog v0.5.0
+	hermannm.dev/devlog v0.6.0
 )
 
 require (
@@ -27,6 +27,6 @@ require (
 	github.com/neilotoole/jsoncolor v0.7.1 // indirect
 	github.com/tetratelabs/wazero v1.9.0 // indirect
 	golang.org/x/crypto v0.40.0 // indirect
-	golang.org/x/sys v0.34.0 // indirect
-	golang.org/x/term v0.33.0 // indirect
+	golang.org/x/sys v0.35.0 // indirect
+	golang.org/x/term v0.34.0 // indirect
 )
