@@ -46,6 +46,7 @@ type AllServerState interface {
 	fdo.RendezvousBlobPersistentState
 	fdo.ManufacturerVoucherPersistentState
 	fdo.OwnerVoucherPersistentState
+	fdo.OwnerDevicePersistentState
 	fdo.OwnerKeyPersistentState
 	ManufacturerKey(ctx context.Context, keyType protocol.KeyType, rsaBits int) (crypto.Signer, []*x509.Certificate, error)
 }
@@ -651,23 +652,135 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 		if err := state.ReplaceVoucher(context.TODO(), oldGUID, ov); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := state.Voucher(context.TODO(), oldGUID); !errors.Is(err, fdo.ErrNotFound) {
-			t.Fatalf("replaced voucher GUID should return not found, got error %v", err)
+		// Verify the old voucher can still be found (Voucher() doesn't filter by status)
+		oldVoucher, err := state.Voucher(context.TODO(), oldGUID)
+		if err != nil {
+			t.Fatalf("expected to find old voucher, got error %v", err)
 		}
-		if _, err := state.Voucher(context.TODO(), newGUID); err != nil {
-			t.Fatal(err)
+		if oldVoucher == nil {
+			t.Fatal("expected to find old voucher, got nil")
+		}
+		// Verify the new voucher is NOT found via Voucher() (it's in mfg_vouchers)
+		if _, err := state.Voucher(context.TODO(), newGUID); !errors.Is(err, fdo.ErrNotFound) {
+			t.Fatalf("expected ErrNotFound for new voucher in mfg_vouchers, got %v", err)
 		}
 
-		// Remove voucher
-		removed, err := state.RemoveVoucher(context.TODO(), newGUID)
+		// Verify the old voucher is marked as onboarded
+		oldStatus, err := state.VoucherStatus(context.TODO(), oldGUID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !reflect.DeepEqual(removed, ov) {
-			t.Errorf("removed voucher should match replaced %+v, got %+v", ov, removed)
+		if oldStatus != fdo.VoucherStatusOnboardedNew {
+			t.Fatalf("expected old voucher to have VoucherStatusOnboardedNew (1), got %d", oldStatus)
 		}
-		if _, err := state.RemoveVoucher(context.TODO(), newGUID); !errors.Is(err, fdo.ErrNotFound) {
-			t.Fatalf("removed voucher GUID should return not found, got error %v", err)
+
+		// Verify the new voucher status is not found (it's in mfg_vouchers)
+		_, err = state.VoucherStatus(context.TODO(), newGUID)
+		if !errors.Is(err, fdo.ErrNotFound) {
+			t.Fatalf("expected ErrNotFound for new voucher status in mfg_vouchers, got %v", err)
+		}
+
+		// Remove the old voucher (the new one is in mfg_vouchers and can't be removed)
+		removed, err := state.RemoveVoucher(context.TODO(), oldGUID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if removed.Header.Val.GUID != oldGUID {
+			t.Errorf("removed voucher should have old GUID %v, got %v", oldGUID, removed.Header.Val.GUID)
+		}
+		if _, err := state.RemoveVoucher(context.TODO(), oldGUID); !errors.Is(err, fdo.ErrNotFound) {
+			t.Fatalf("double removal of voucher should return not found, got error %v", err)
+		}
+	})
+
+	t.Run("VoucherStatusFunctions", func(t *testing.T) {
+		// Parse ownership voucher from testdata
+		b, err := testdata.Files.ReadFile("ov.pem")
+		if err != nil {
+			t.Fatalf("error opening voucher test data: %v", err)
+		}
+		blk, _ := pem.Decode(b)
+		if blk == nil {
+			t.Fatal("voucher contained invalid PEM data")
+		}
+		ov := new(fdo.Voucher)
+		if err := cbor.Unmarshal(blk.Bytes, ov); err != nil {
+			t.Fatalf("error parsing voucher test data: %v", err)
+		}
+
+		// Test VoucherStatus for non-existent voucher - use a different GUID
+		nonExistentGUID := protocol.GUID{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}
+		_, err = state.VoucherStatus(context.TODO(), nonExistentGUID)
+		if !errors.Is(err, fdo.ErrNotFound) {
+			t.Fatalf("expected ErrNotFound for non-existent voucher, got %v", err)
+		}
+
+		// Create a unique voucher for this test to avoid GUID conflicts
+		testOv := *ov // Copy the voucher
+		testOv.Header.Val.GUID = protocol.GUID{0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99}
+
+		// Add voucher and check initial status
+		if err = state.AddVoucher(context.TODO(), &testOv); err != nil {
+			t.Fatal(err)
+		}
+		status, err := state.VoucherStatus(context.TODO(), testOv.Header.Val.GUID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if status != fdo.VoucherStatusReady {
+			t.Fatalf("expected VoucherStatusReady (0), got %d", status)
+		}
+
+		// Verify we can retrieve the voucher when status is ready
+		retrievedVoucher, err := state.Voucher(context.TODO(), testOv.Header.Val.GUID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !testOv.Header.Val.Equal(&retrievedVoucher.Header.Val) {
+			t.Fatal("retrieved voucher did not match original")
+		}
+
+		// Test ReplaceVoucher which should automatically mark the old voucher as onboarded
+		var newGUID protocol.GUID
+		if _, err := rand.Read(newGUID[:]); err != nil {
+			t.Fatal(err)
+		}
+		oldGUID := testOv.Header.Val.GUID
+		newOv := testOv // Copy the test voucher
+		newOv.Header.Val.GUID = newGUID
+
+		if err := state.ReplaceVoucher(context.TODO(), oldGUID, &newOv); err != nil {
+			t.Fatal(err)
+		}
+
+		// Verify the old voucher is automatically marked as onboarded
+		oldStatus, err := state.VoucherStatus(context.TODO(), oldGUID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if oldStatus != fdo.VoucherStatusOnboardedNew {
+			t.Fatalf("expected old voucher to be VoucherStatusOnboardedNew (1), got %d", oldStatus)
+		}
+
+		// Verify old voucher is still accessible via Voucher() (Voucher() doesn't filter by status)
+		oldVoucherAfterReplace, err := state.Voucher(context.TODO(), oldGUID)
+		if err != nil {
+			t.Fatalf("expected to find old voucher after replace, got error %v", err)
+		}
+		if oldVoucherAfterReplace == nil {
+			t.Fatal("expected to find old voucher after replace, got nil")
+		}
+
+		// Verify the new voucher is NOT found via Voucher() (it's in mfg_vouchers)
+		_, err = state.Voucher(context.TODO(), newGUID)
+		if !errors.Is(err, fdo.ErrNotFound) {
+			t.Fatalf("expected ErrNotFound for new voucher in mfg_vouchers, got %v", err)
+		}
+
+		// Verify VoucherStatus also returns not found for the new voucher (since it's in mfg_vouchers)
+		_, err = state.VoucherStatus(context.TODO(), newGUID)
+		if !errors.Is(err, fdo.ErrNotFound) {
+			t.Fatalf("expected ErrNotFound for new voucher status in mfg_vouchers, got %v", err)
 		}
 	})
 

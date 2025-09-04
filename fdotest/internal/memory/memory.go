@@ -23,12 +23,19 @@ import (
 	"github.com/fido-device-onboard/go-fdo/protocol"
 )
 
+// VoucherWithStatus combines a voucher with its status for in-memory storage.
+type VoucherWithStatus struct {
+	Voucher *fdo.Voucher
+	Status  fdo.VoucherStatus
+}
+
 // State implements interfaces for state which must be persisted between
 // protocol sessions, but not between server processes.
 type State struct {
-	RVBlobs   map[protocol.GUID]*cose.Sign1[protocol.To1d, []byte]
-	Vouchers  map[protocol.GUID]*fdo.Voucher
-	OwnerKeys map[KeyTypeAndRsaBits]struct {
+	RVBlobs     map[protocol.GUID]*cose.Sign1[protocol.To1d, []byte]
+	Vouchers    map[protocol.GUID]*VoucherWithStatus
+	MfgVouchers map[protocol.GUID]*fdo.Voucher
+	OwnerKeys   map[KeyTypeAndRsaBits]struct {
 		Key   crypto.Signer
 		Chain []*x509.Certificate
 	}
@@ -81,8 +88,9 @@ func NewState() (*State, error) {
 		return nil, err
 	}
 	return &State{
-		RVBlobs:  make(map[protocol.GUID]*cose.Sign1[protocol.To1d, []byte]),
-		Vouchers: make(map[protocol.GUID]*fdo.Voucher),
+		RVBlobs:     make(map[protocol.GUID]*cose.Sign1[protocol.To1d, []byte]),
+		Vouchers:    make(map[protocol.GUID]*VoucherWithStatus),
+		MfgVouchers: make(map[protocol.GUID]*fdo.Voucher),
 		OwnerKeys: map[KeyTypeAndRsaBits]struct {
 			Key   crypto.Signer
 			Chain []*x509.Certificate
@@ -102,42 +110,76 @@ func NewState() (*State, error) {
 // Note that the voucher may have entries if the server was configured for
 // auto voucher extension.
 func (s *State) NewVoucher(_ context.Context, ov *fdo.Voucher) error {
-	s.Vouchers[ov.Header.Val.GUID] = ov
+	// Make a copy to avoid shared reference issues
+	ovCopy := *ov
+	s.Vouchers[ov.Header.Val.GUID] = &VoucherWithStatus{
+		Voucher: &ovCopy,
+		Status:  fdo.VoucherStatusReady,
+	}
 	return nil
 }
 
 // AddVoucher stores the voucher of a device owned by the service.
 func (s *State) AddVoucher(_ context.Context, ov *fdo.Voucher) error {
-	s.Vouchers[ov.Header.Val.GUID] = ov
+	// Make a copy to avoid shared reference issues
+	ovCopy := *ov
+	s.Vouchers[ov.Header.Val.GUID] = &VoucherWithStatus{
+		Voucher: &ovCopy,
+		Status:  fdo.VoucherStatusReady,
+	}
 	return nil
 }
 
 // ReplaceVoucher stores a new voucher, possibly deleting or marking the
 // previous voucher as replaced.
 func (s *State) ReplaceVoucher(_ context.Context, oldGUID protocol.GUID, ov *fdo.Voucher) error {
-	delete(s.Vouchers, oldGUID)
-	s.Vouchers[ov.Header.Val.GUID] = ov
+	// Mark old voucher as onboarded instead of deleting it
+	if oldVoucher, exists := s.Vouchers[oldGUID]; exists {
+		oldVoucher.Status = fdo.VoucherStatusOnboardedNew
+	}
+	// The new voucher goes into mfg_vouchers (separate from owner vouchers)
+	// Make a copy to avoid shared reference issues
+	ovCopy := *ov
+	s.MfgVouchers[ov.Header.Val.GUID] = &ovCopy
 	return nil
 }
 
 // RemoveVoucher untracks a voucher, possibly by deleting it or marking it
 // as removed, and returns it for extension.
 func (s *State) RemoveVoucher(ctx context.Context, guid protocol.GUID) (*fdo.Voucher, error) {
-	ov, ok := s.Vouchers[guid]
+	voucherWithStatus, ok := s.Vouchers[guid]
 	if !ok {
 		return nil, fdo.ErrNotFound
 	}
 	delete(s.Vouchers, guid)
-	return ov, nil
+	return voucherWithStatus.Voucher, nil
 }
 
 // Voucher retrieves a voucher by GUID.
 func (s *State) Voucher(_ context.Context, guid protocol.GUID) (*fdo.Voucher, error) {
-	ov, ok := s.Vouchers[guid]
+	voucherWithStatus, ok := s.Vouchers[guid]
 	if !ok {
 		return nil, fdo.ErrNotFound
 	}
-	return ov, nil
+	return voucherWithStatus.Voucher, nil
+}
+
+// VoucherStatus returns the status of a voucher by GUID.
+func (s *State) VoucherStatus(_ context.Context, guid protocol.GUID) (fdo.VoucherStatus, error) {
+	voucherWithStatus, ok := s.Vouchers[guid]
+	if !ok {
+		return fdo.VoucherStatusInvalid, fdo.ErrNotFound
+	}
+	return voucherWithStatus.Status, nil
+}
+
+// Device retrieves a device voucher by GUID from mfg vouchers.
+func (s *State) Device(_ context.Context, guid protocol.GUID) (*fdo.Voucher, error) {
+	mfgVoucher, ok := s.MfgVouchers[guid]
+	if !ok {
+		return nil, fdo.ErrNotFound
+	}
+	return mfgVoucher, nil
 }
 
 // OwnerKey returns the private key matching a given key type and optionally
@@ -195,7 +237,10 @@ func (s *State) ManufacturerKey(ctx context.Context, keyType protocol.KeyType, r
 func (s *State) SetRVBlob(ctx context.Context, ov *fdo.Voucher, to1d *cose.Sign1[protocol.To1d, []byte], exp time.Time) error {
 	// TODO: Handle expiration
 	s.RVBlobs[ov.Header.Val.GUID] = to1d
-	s.Vouchers[ov.Header.Val.GUID] = ov
+	s.Vouchers[ov.Header.Val.GUID] = &VoucherWithStatus{
+		Voucher: ov,
+		Status:  fdo.VoucherStatusReady,
+	}
 	return nil
 }
 
@@ -205,9 +250,9 @@ func (s *State) RVBlob(ctx context.Context, guid protocol.GUID) (*cose.Sign1[pro
 	if !ok {
 		return nil, nil, fdo.ErrNotFound
 	}
-	ov, ok := s.Vouchers[guid]
+	voucherWithStatus, ok := s.Vouchers[guid]
 	if !ok {
 		return nil, nil, fdo.ErrNotFound
 	}
-	return to1d, ov, nil
+	return to1d, voucherWithStatus.Voucher, nil
 }

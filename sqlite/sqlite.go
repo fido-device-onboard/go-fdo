@@ -132,6 +132,7 @@ func Init(db *sql.DB) error {
 			( guid BLOB PRIMARY KEY
 			, device_info TEXT NOT NULL
 			, cbor BLOB NOT NULL
+			, status INTEGER NOT NULL DEFAULT 0
 			, created_at INTEGER NOT NULL /* Unix timestamp in microseconds */
 			, updated_at INTEGER NOT NULL /* Unix timestamp in microseconds */
 			)`,
@@ -838,6 +839,7 @@ func (db *DB) NewVoucher(ctx context.Context, ov *fdo.Voucher) error {
 		"guid":        ov.Header.Val.GUID[:],
 		"device_info": ov.Header.Val.DeviceInfo,
 		"cbor":        data,
+		"status":      int(fdo.VoucherStatusReady),
 		"created_at":  time.Now().Unix(),
 		"updated_at":  time.Now().Unix(),
 	}, nil)
@@ -853,6 +855,7 @@ func (db *DB) AddVoucher(ctx context.Context, ov *fdo.Voucher) error {
 		"guid":        ov.Header.Val.GUID[:],
 		"device_info": ov.Header.Val.DeviceInfo,
 		"cbor":        data,
+		"status":      int(fdo.VoucherStatusReady),
 		"created_at":  time.Now().Unix(),
 		"updated_at":  time.Now().Unix(),
 	}, nil)
@@ -864,12 +867,19 @@ func (db *DB) ReplaceVoucher(ctx context.Context, guid protocol.GUID, ov *fdo.Vo
 	if err != nil {
 		return fmt.Errorf("error marshaling ownership voucher: %w", err)
 	}
+	if err := db.insert(ctx, "mfg_vouchers", map[string]any{
+		"guid":        ov.Header.Val.GUID[:],
+		"device_info": ov.Header.Val.DeviceInfo,
+		"cbor":        data,
+		"created_at":  time.Now().Unix(),
+		"updated_at":  time.Now().Unix(),
+	}, nil); err != nil {
+		return err
+	}
 	return db.update(ctx, "owner_vouchers",
 		map[string]any{
-			"guid":        ov.Header.Val.GUID[:],
-			"device_info": ov.Header.Val.DeviceInfo,
-			"cbor":        data,
-			"updated_at":  time.Now().Unix(),
+			"status":     int(fdo.VoucherStatusOnboardedNew),
+			"updated_at": time.Now().Unix(),
 		},
 		map[string]any{
 			"guid": guid[:],
@@ -881,7 +891,9 @@ func (db *DB) ReplaceVoucher(ctx context.Context, guid protocol.GUID, ov *fdo.Vo
 func (db *DB) RemoveVoucher(ctx context.Context, guid protocol.GUID) (*fdo.Voucher, error) {
 	var data []byte
 	if err := remove(db.debugCtx(ctx), db.db, "owner_vouchers",
-		map[string]any{"guid": guid[:]}, map[string]any{"cbor": &data}); err != nil {
+		map[string]any{
+			"guid": guid[:],
+		}, map[string]any{"cbor": &data}); err != nil {
 		return nil, err
 	}
 	if data == nil {
@@ -899,11 +911,48 @@ func (db *DB) RemoveVoucher(ctx context.Context, guid protocol.GUID) (*fdo.Vouch
 func (db *DB) Voucher(ctx context.Context, guid protocol.GUID) (*fdo.Voucher, error) {
 	var data []byte
 	if err := db.query(ctx, "owner_vouchers", []string{"cbor"},
-		map[string]any{"guid": guid[:]},
+		map[string]any{
+			"guid": guid[:],
+		},
 		&data,
 	); err != nil {
 		return nil, err
 	}
+	if data == nil {
+		return nil, fdo.ErrNotFound
+	}
+
+	var ov fdo.Voucher
+	if err := cbor.Unmarshal(data, &ov); err != nil {
+		return nil, fmt.Errorf("error unmarshaling ownership voucher: %w", err)
+	}
+	return &ov, nil
+}
+
+// VoucherStatus returns the status of a voucher by GUID.
+func (db *DB) VoucherStatus(ctx context.Context, guid protocol.GUID) (fdo.VoucherStatus, error) {
+	var status int
+	if err := db.query(ctx, "owner_vouchers", []string{"status"},
+		map[string]any{"guid": guid[:]},
+		&status,
+	); err != nil {
+		return fdo.VoucherStatusInvalid, err
+	}
+	return fdo.VoucherStatus(status), nil
+}
+
+// Device retrieves a device voucher by GUID from mfg_vouchers.
+func (db *DB) Device(ctx context.Context, guid protocol.GUID) (*fdo.Voucher, error) {
+	var data []byte
+	if err := db.query(ctx, "mfg_vouchers", []string{"cbor"},
+		map[string]any{
+			"guid": guid[:],
+		},
+		&data,
+	); err != nil {
+		return nil, err
+	}
+
 	if data == nil {
 		return nil, fdo.ErrNotFound
 	}

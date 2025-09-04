@@ -208,6 +208,7 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 		Modules: &to2ModuleStateMachine{
 			Session:  conf.State,
 			Vouchers: conf.State,
+			Devices:  conf.State,
 			OwnerModules: func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 				mods := startModules(ctx, replacementGUID, info, chain, devmod, supportedMods)
 
@@ -224,6 +225,7 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 			},
 		},
 		Vouchers:  conf.State,
+		Devices:   conf.State,
 		OwnerKeys: conf.State,
 		RvInfo: func(context.Context, fdo.Voucher) ([][]protocol.RvInstruction, error) {
 			return [][]protocol.RvInstruction{}, nil
@@ -449,6 +451,14 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 					t.Fatal("cred not set due to previous failure")
 				}
 
+				// For subsequent onboarding, copy the device voucher back to owner_vouchers for testing
+				if device, err := conf.State.Device(context.Background(), cred.GUID); err == nil {
+					// Copy the device voucher back to owner_vouchers for subsequent onboarding
+					if err := conf.State.AddVoucher(context.Background(), device); err != nil {
+						t.Logf("Warning: could not add device voucher to owner_vouchers: %v", err)
+					}
+				}
+
 				ctx, cancel := context.WithTimeout(context.Background(), timeout)
 				defer cancel()
 				var err error
@@ -479,6 +489,14 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 			t.Run("Transfer Ownership 2 w/ Modules", func(t *testing.T) {
 				if cred == nil {
 					t.Fatal("cred not set due to previous failure")
+				}
+
+				// For subsequent onboarding, copy the device voucher back to owner_vouchers for testing
+				if device, err := conf.State.Device(context.Background(), cred.GUID); err == nil {
+					// Copy the device voucher back to owner_vouchers for subsequent onboarding
+					if err := conf.State.AddVoucher(context.Background(), device); err != nil {
+						t.Logf("Warning: could not add device voucher to owner_vouchers: %v", err)
+					}
 				}
 
 				ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -523,6 +541,7 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 type to2ModuleStateMachine struct {
 	Session      fdo.TO2SessionState
 	Vouchers     fdo.OwnerVoucherPersistentState
+	Devices      fdo.OwnerDevicePersistentState
 	OwnerModules func(ctx context.Context, guid protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, modules []string) iter.Seq2[string, serviceinfo.OwnerModule]
 
 	module *moduleStateMachineState
