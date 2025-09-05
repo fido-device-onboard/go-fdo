@@ -190,6 +190,7 @@ type TO2Server struct {
 	Session   TO2SessionState
 	Modules   serviceinfo.ModuleStateMachine
 	Vouchers  OwnerVoucherPersistentState
+	Devices   OwnerDevicePersistentState
 	OwnerKeys OwnerKeyPersistentState
 
 	// Choose the replacement rendezvous directives based on the current

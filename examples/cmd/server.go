@@ -586,6 +586,7 @@ func newHandler(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) (*transport
 			Session:         state,
 			Modules:         moduleStateMachines{DB: state, states: make(map[string]*moduleStateMachineState)},
 			Vouchers:        state,
+			Devices:         state,
 			OwnerKeys:       state,
 			RvInfo:          func(context.Context, fdo.Voucher) ([][]protocol.RvInstruction, error) { return rvInfo, nil },
 			ReuseCredential: func(context.Context, fdo.Voucher) (bool, error) { return reuseCred, nil },
