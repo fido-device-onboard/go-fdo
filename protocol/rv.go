@@ -247,17 +247,29 @@ func parseURLs(vars []RvInstruction, device bool) (urls []*url.URL) { //nolint:g
 				case RVProtRest:
 					// Unsupported, use default
 				case RVProtHTTP:
-					scheme, port = "http", "80"
+					scheme = "http"
+					if port == "" {
+						port = "80"
+					}
 				case RVProtHTTPS:
-					scheme, port = "https", "443"
+					scheme = "https"
+					if port == "" {
+						port = "443"
+					}
 				case RVProtTCP:
 					scheme = "tcp"
 				case RVProtTLS:
 					scheme = "tls"
 				case RVProtCoapTCP:
-					scheme, port = "coap+tcp", "5683"
+					scheme = "coap+tcp"
+					if port == "" {
+						port = "5683"
+					}
 				case RVProtCoapUDP:
-					scheme, port = "coap", "5683"
+					scheme = "coap"
+					if port == "" {
+						port = "5683"
+					}
 				}
 			}
 
