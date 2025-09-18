@@ -190,7 +190,6 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 
 			return "test_device", *mfgPubKey, nil
 		},
-		BeforeVoucherPersist: fdo.AllInOne{DIAndOwner: conf.State}.Extend,
 		RvInfo: func(context.Context, *fdo.Voucher) ([][]protocol.RvInstruction, error) {
 			return [][]protocol.RvInstruction{}, nil
 		},
@@ -343,40 +342,46 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 			var cred *fdo.DeviceCredential
 
 			t.Run("Device Initialization", func(t *testing.T) {
-				// Generate Java implementation-compatible mfg string
-				csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
-					Subject:            pkix.Name{CommonName: "device.go-fdo"},
-					SignatureAlgorithm: sigAlg,
-				}, key)
-				if err != nil {
-					t.Fatalf("error creating CSR for device certificate chain: %v", err)
-				}
-				csr, err := x509.ParseCertificateRequest(csrDER)
-				if err != nil {
-					t.Fatalf("error parsing CSR for device certificate chain: %v", err)
+				test := func(t *testing.T) {
+					// Generate Java implementation-compatible mfg string
+					csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
+						Subject:            pkix.Name{CommonName: "device.go-fdo"},
+						SignatureAlgorithm: sigAlg,
+					}, key)
+					if err != nil {
+						t.Fatalf("error creating CSR for device certificate chain: %v", err)
+					}
+					csr, err := x509.ParseCertificateRequest(csrDER)
+					if err != nil {
+						t.Fatalf("error parsing CSR for device certificate chain: %v", err)
+					}
+
+					// Call the DI server
+					serial := make([]byte, 10)
+					if _, err := rand.Read(serial); err != nil {
+						t.Fatalf("error generating serial: %v", err)
+					}
+					cred, err = fdo.DI(context.TODO(), transport, custom.DeviceMfgInfo{
+						KeyType:      table.keyType,
+						KeyEncoding:  table.keyEncoding,
+						SerialNumber: hex.EncodeToString(serial),
+						DeviceInfo:   "gotest",
+						CertInfo:     cbor.X509CertificateRequest(*csr),
+					}, fdo.DIConfig{
+						HmacSha256: hmacSha256,
+						HmacSha384: hmacSha384,
+						Key:        key,
+						PSS:        table.keyType == protocol.RsaPssKeyType,
+					})
+					if err != nil {
+						t.Fatal(err)
+					}
+					t.Logf("Credential: %s", toDeviceCred(*cred))
 				}
 
-				// Call the DI server
-				serial := make([]byte, 10)
-				if _, err := rand.Read(serial); err != nil {
-					t.Fatalf("error generating serial: %v", err)
-				}
-				cred, err = fdo.DI(context.TODO(), transport, custom.DeviceMfgInfo{
-					KeyType:      table.keyType,
-					KeyEncoding:  table.keyEncoding,
-					SerialNumber: hex.EncodeToString(serial),
-					DeviceInfo:   "gotest",
-					CertInfo:     cbor.X509CertificateRequest(*csr),
-				}, fdo.DIConfig{
-					HmacSha256: hmacSha256,
-					HmacSha384: hmacSha384,
-					Key:        key,
-					PSS:        table.keyType == protocol.RsaPssKeyType,
-				})
-				if err != nil {
-					t.Fatal(err)
-				}
-				t.Logf("Credential: %s", toDeviceCred(*cred))
+				t.Run("without auto-extend", test)
+				diResponder.BeforeVoucherPersist = fdo.AllInOne{DIAndOwner: conf.State}.Extend
+				t.Run("with auto-extend", test)
 			})
 
 			t.Run("Transfer Ownership 0", func(t *testing.T) {
@@ -384,7 +389,7 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 					t.Fatal("cred not set due to previous failure")
 				}
 
-				ctx, cancel := context.WithTimeout(context.Background(), timeout)
+				ctx, cancel := context.WithTimeout(t.Context(), timeout)
 				defer cancel()
 				if _, err := fdo.TO1(ctx, transport, *cred, key, &fdo.TO1Options{
 					PSS: table.keyType == protocol.RsaPssKeyType,
@@ -410,7 +415,7 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 					t.Fatal("cred not set due to previous failure")
 				}
 
-				ctx, cancel := context.WithTimeout(context.Background(), timeout)
+				ctx, cancel := context.WithTimeout(t.Context(), timeout)
 				defer cancel()
 				to1d, err := fdo.TO1(ctx, transport, *cred, key, &fdo.TO1Options{
 					PSS: table.keyType == protocol.RsaPssKeyType,
@@ -449,7 +454,7 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 					t.Fatal("cred not set due to previous failure")
 				}
 
-				ctx, cancel := context.WithTimeout(context.Background(), timeout)
+				ctx, cancel := context.WithTimeout(t.Context(), timeout)
 				defer cancel()
 				var err error
 				cred, err = fdo.TO2(ctx, transport, nil, fdo.TO2Config{
@@ -481,7 +486,7 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 					t.Fatal("cred not set due to previous failure")
 				}
 
-				ctx, cancel := context.WithTimeout(context.Background(), timeout)
+				ctx, cancel := context.WithTimeout(t.Context(), timeout)
 				defer cancel()
 				newCred, err := fdo.TO2(ctx, transport, nil, fdo.TO2Config{
 					Cred:       *cred,
