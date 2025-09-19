@@ -101,7 +101,7 @@ func init() {
 	serverFlags.Var(&wgets, "wget", "Use fdo.wget FSIM for each `url` (flag may be used multiple times)")
 }
 
-func server() error { //nolint:gocyclo
+func server(ctx context.Context) error { //nolint:gocyclo
 	if debug {
 		level.Set(slog.LevelDebug)
 	}
@@ -124,12 +124,12 @@ func server() error { //nolint:gocyclo
 
 	// If printing owner public key, do so and exit
 	if printOwnerPubKey != "" {
-		return doPrintOwnerPubKey(state)
+		return doPrintOwnerPubKey(ctx, state)
 	}
 
 	// If importing a voucher, do so and exit
 	if importVoucher != "" {
-		return doImportVoucher(state)
+		return doImportVoucher(ctx, state)
 	}
 
 	// Normalize address flags
@@ -154,15 +154,15 @@ func server() error { //nolint:gocyclo
 
 	// Invoke TO0 client if a GUID is specified
 	if to0GUID != "" {
-		return registerRvBlob(state)
+		return registerRvBlob(ctx, state)
 	}
 
 	// Invoke resale protocol if a GUID is specified
 	if resaleGUID != "" {
-		return resell(state)
+		return resell(ctx, state)
 	}
 
-	return serveHTTP(rvInfo, state)
+	return serveHTTP(ctx, rvInfo, state)
 }
 
 func generateKeys(state *sqlite.DB) error { //nolint:gocyclo
@@ -269,9 +269,9 @@ func generateKeys(state *sqlite.DB) error { //nolint:gocyclo
 	return nil
 }
 
-func serveHTTP(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) error {
+func serveHTTP(ctx context.Context, rvInfo [][]protocol.RvInstruction, state *sqlite.DB) error {
 	// Create FDO responder
-	handler, err := newHandler(rvInfo, state)
+	handler, err := newHandler(ctx, rvInfo, state)
 	if err != nil {
 		return err
 	}
@@ -298,12 +298,12 @@ func serveHTTP(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) error {
 	return srv.Serve(lis)
 }
 
-func doPrintOwnerPubKey(state *sqlite.DB) error {
+func doPrintOwnerPubKey(ctx context.Context, state *sqlite.DB) error {
 	keyType, err := protocol.ParseKeyType(printOwnerPubKey)
 	if err != nil {
 		return fmt.Errorf("%w: see usage", err)
 	}
-	key, _, err := state.OwnerKey(context.Background(), keyType, 3072) // Always use 3072-bit for RSA PKCS/PSS
+	key, _, err := state.OwnerKey(ctx, keyType, 3072) // Always use 3072-bit for RSA PKCS/PSS
 	if err != nil {
 		return err
 	}
@@ -317,7 +317,7 @@ func doPrintOwnerPubKey(state *sqlite.DB) error {
 	})
 }
 
-func doImportVoucher(state *sqlite.DB) error {
+func doImportVoucher(ctx context.Context, state *sqlite.DB) error {
 	// Parse voucher
 	pemVoucher, err := os.ReadFile(filepath.Clean(importVoucher))
 	if err != nil {
@@ -340,7 +340,7 @@ func doImportVoucher(state *sqlite.DB) error {
 	if err != nil {
 		return fmt.Errorf("error parsing owner public key from voucher: %w", err)
 	}
-	ownerKey, _, err := state.OwnerKey(context.Background(), ov.Header.Val.ManufacturerKey.Type, 3072) // Always use 3072-bit for RSA PKCS/PSS
+	ownerKey, _, err := state.OwnerKey(ctx, ov.Header.Val.ManufacturerKey.Type, 3072) // Always use 3072-bit for RSA PKCS/PSS
 	if err != nil {
 		return fmt.Errorf("error getting owner key: %w", err)
 	}
@@ -349,7 +349,7 @@ func doImportVoucher(state *sqlite.DB) error {
 	}
 
 	// Store voucher
-	return state.AddVoucher(context.Background(), &ov)
+	return state.AddVoucher(ctx, &ov)
 }
 
 func to0AddrToRvInfo() ([][]protocol.RvInstruction, error) {
@@ -420,7 +420,7 @@ func extAddrToRvInfo() ([][]protocol.RvInstruction, error) {
 	return rvInfo, nil
 }
 
-func registerRvBlob(state *sqlite.DB) error {
+func registerRvBlob(ctx context.Context, state *sqlite.DB) error {
 	if to0Addr == "" {
 		return fmt.Errorf("to0-guid depends on to0 flag being set")
 	}
@@ -465,7 +465,7 @@ func registerRvBlob(state *sqlite.DB) error {
 	refresh, err := (&fdo.TO0Client{
 		Vouchers:  state,
 		OwnerKeys: state,
-	}).RegisterBlob(context.Background(), tlsTransport(to0Addr, nil), guid, to2Addrs)
+	}).RegisterBlob(ctx, tlsTransport(to0Addr, nil), guid, to2Addrs)
 	if err != nil {
 		return fmt.Errorf("error performing to0: %w", err)
 	}
@@ -474,7 +474,7 @@ func registerRvBlob(state *sqlite.DB) error {
 	return nil
 }
 
-func resell(state *sqlite.DB) error {
+func resell(ctx context.Context, state *sqlite.DB) error {
 	// Parse resale-guid flag
 	guidBytes, err := hex.DecodeString(strings.ReplaceAll(resaleGUID, "-", ""))
 	if err != nil {
@@ -507,7 +507,7 @@ func resell(state *sqlite.DB) error {
 	extended, err := (&fdo.TO2Server{
 		Vouchers:  state,
 		OwnerKeys: state,
-	}).Resell(context.TODO(), guid, nextOwner, nil)
+	}).Resell(ctx, guid, nextOwner, nil)
 	if err != nil {
 		return fmt.Errorf("resale protocol: %w", err)
 	}
@@ -529,7 +529,7 @@ func mustMarshal(v any) []byte {
 	return data
 }
 
-func newHandler(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) (*transport.Handler, error) {
+func newHandler(ctx context.Context, rvInfo [][]protocol.RvInstruction, state *sqlite.DB) (*transport.Handler, error) {
 	aio := fdo.AllInOne{
 		DIAndOwner:         state,
 		RendezvousAndOwner: withOwnerAddrs{state, rvInfo},
@@ -544,7 +544,7 @@ func newHandler(rvInfo [][]protocol.RvInstruction, state *sqlite.DB) (*transport
 	}
 
 	// Use Manufacturer key as device certificate authority
-	deviceCAKey, deviceCAChain, err := state.ManufacturerKey(context.Background(), protocol.Secp384r1KeyType, 0)
+	deviceCAKey, deviceCAChain, err := state.ManufacturerKey(ctx, protocol.Secp384r1KeyType, 0)
 	if err != nil {
 		return nil, fmt.Errorf("error getting manufacturer key for use as device certificate authority: %w", err)
 	}

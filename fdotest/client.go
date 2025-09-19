@@ -389,7 +389,7 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 					t.Fatal("cred not set due to previous failure")
 				}
 
-				ctx, cancel := context.WithTimeout(t.Context(), timeout)
+				ctx, cancel := context.WithTimeout(context.Background(), timeout)
 				defer cancel()
 				if _, err := fdo.TO1(ctx, transport, *cred, key, &fdo.TO1Options{
 					PSS: table.keyType == protocol.RsaPssKeyType,
@@ -415,7 +415,7 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 					t.Fatal("cred not set due to previous failure")
 				}
 
-				ctx, cancel := context.WithTimeout(t.Context(), timeout)
+				ctx, cancel := context.WithTimeout(context.Background(), timeout)
 				defer cancel()
 				to1d, err := fdo.TO1(ctx, transport, *cred, key, &fdo.TO1Options{
 					PSS: table.keyType == protocol.RsaPssKeyType,
@@ -454,7 +454,7 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 					t.Fatal("cred not set due to previous failure")
 				}
 
-				ctx, cancel := context.WithTimeout(t.Context(), timeout)
+				ctx, cancel := context.WithTimeout(context.Background(), timeout)
 				defer cancel()
 				var err error
 				cred, err = fdo.TO2(ctx, transport, nil, fdo.TO2Config{
@@ -486,7 +486,7 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 					t.Fatal("cred not set due to previous failure")
 				}
 
-				ctx, cancel := context.WithTimeout(t.Context(), timeout)
+				ctx, cancel := context.WithTimeout(context.Background(), timeout)
 				defer cancel()
 				newCred, err := fdo.TO2(ctx, transport, nil, fdo.TO2Config{
 					Cred:       *cred,

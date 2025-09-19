@@ -25,7 +25,6 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -86,18 +85,10 @@ func encodeValue(b *bytes.Buffer, v any) error { //nolint:gocyclo
 		_, _ = b.WriteString("'")
 
 	case string:
-		d, err := json.Marshal(v)
-		if err != nil {
-			return err
-		}
-		_, _ = b.WriteString(string(d))
+		_, _ = fmt.Fprintf(b, "%q", v)
 
 	case bool:
-		d, err := json.Marshal(v)
-		if err != nil {
-			return err
-		}
-		_, _ = b.WriteString(string(d))
+		_, _ = fmt.Fprintf(b, "%t", v)
 
 	case nil:
 		_, _ = b.WriteString("null")

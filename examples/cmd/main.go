@@ -6,9 +6,11 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 )
 
 var flags = flag.NewFlagSet("root", flag.ContinueOnError)
@@ -80,6 +82,9 @@ func main() {
 		os.Exit(1)
 	}
 
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+
 	sub := flags.Arg(0)
 	var args []string
 	if flags.NArg() > 1 {
@@ -95,7 +100,7 @@ func main() {
 			usage()
 			os.Exit(1)
 		}
-		if err := client(); err != nil {
+		if err := client(ctx); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "client error: %v\n", err)
 			os.Exit(2)
 		}
@@ -104,7 +109,7 @@ func main() {
 			usage()
 			os.Exit(1)
 		}
-		if err := server(); err != nil {
+		if err := server(ctx); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "server error: %v\n", err)
 			os.Exit(2)
 		}

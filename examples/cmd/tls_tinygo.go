@@ -12,9 +12,16 @@ import (
 	net_http "net/http"
 	"strings"
 
+	"github.com/niemeyer/muslnet"
+	"tinygo.org/x/drivers/netdev"
+
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/http"
 )
+
+func init() {
+	netdev.UseNetdev(muslnet.New())
+}
 
 var insecureTLS bool
 
