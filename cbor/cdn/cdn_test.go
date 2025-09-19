@@ -10,6 +10,24 @@ import (
 	"github.com/fido-device-onboard/go-fdo/cbor/cdn"
 )
 
+func TestEncodeHelloDevice(t *testing.T) {
+	t.Run("EncodeHelloDevice", func(t *testing.T) {
+		want := `[65535, h'83770fc9985bffc84701a8af77a9e0cf', h'd6c6b1b3d93555f75c0b829b3888735e', "ECDH384", 1, [-35, h'']]`
+		b, err := hex.DecodeString("8619ffff5083770fc9985bffc84701a8af77a9e0cf50d6c6b1b3d93555f75c0b829b3888735e67454344483338340182382240")
+		if err != nil {
+			t.Errorf("UnMarshalCbor: %v", err)
+		}
+
+		got, err := cdn.FromCBOR(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Errorf("got: %s want: %s", got, want)
+		}
+	})
+}
+
 func TestEncodeText(t *testing.T) {
 	t.Run("EncodeText", func(t *testing.T) {
 		want := "\"hello\""
