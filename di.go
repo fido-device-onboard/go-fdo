@@ -326,7 +326,7 @@ func (s *DIServer[T]) diDone(ctx context.Context, msg io.Reader) (struct{}, erro
 			return struct{}{}, fmt.Errorf("error in callback before new voucher is persisted: %w", err)
 		}
 	}
-	if err := s.Vouchers.NewVoucher(ctx, ov); err != nil {
+	if err := s.Vouchers.AddVoucher(ctx, ov); err != nil {
 		return struct{}{}, fmt.Errorf("error storing voucher: %w", err)
 	}
 	if s.AfterVoucherPersist != nil {

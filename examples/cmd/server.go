@@ -509,6 +509,7 @@ func resell(ctx context.Context, state *sqlite.DB) error {
 		OwnerKeys: state,
 	}).Resell(ctx, guid, nextOwner, nil)
 	if err != nil {
+		// TODO: If extended != nil, then call AddVoucher to restore state
 		return fmt.Errorf("resale protocol: %w", err)
 	}
 	ovBytes, err := cbor.Marshal(extended)
