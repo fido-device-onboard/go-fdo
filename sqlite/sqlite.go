@@ -858,31 +858,48 @@ func (db *DB) AddVoucher(ctx context.Context, ov *fdo.Voucher) error {
 	}, nil)
 }
 
-// ReplaceVoucher stores a new voucher, deleting the previous voucher.
+// ReplaceVoucher stores a new voucher with zero extensions, possibly deleting
+// or marking the previous voucher as replaced.
 func (db *DB) ReplaceVoucher(ctx context.Context, guid protocol.GUID, ov *fdo.Voucher) error {
-	data, err := cbor.Marshal(ov)
-	if err != nil {
-		return fmt.Errorf("error marshaling ownership voucher: %w", err)
+	if len(ov.Entries) > 0 {
+		return fmt.Errorf("ReplaceVoucher must be called with a voucher having zero extensions")
 	}
-	return db.update(ctx, "owner_vouchers",
-		map[string]any{
-			"guid":        ov.Header.Val.GUID[:],
-			"device_info": ov.Header.Val.DeviceInfo,
-			"cbor":        data,
-			"updated_at":  time.Now().Unix(),
-		},
-		map[string]any{
-			"guid": guid[:],
-		},
-	)
+
+	// NOTE: This should be a transaction, but that would break Cloudflare D1
+	// compatibility. Therefore, it is an allowed state to have both the
+	// replacement voucher and the previous voucher. An implementation that
+	// does not need to work with Cloudflare D1 should use a transaction.
+	if err := db.NewVoucher(ctx, ov); err != nil {
+		return err
+	}
+	removeErr := remove(db.debugCtx(ctx), db.db, "owner_vouchers",
+		map[string]any{"guid": guid[:]}, nil)
+	if removeErr == nil {
+		return nil
+	}
+
+	// Use best effort to remove the replacement voucher that was added
+	// optimistically
+	if errors.Is(removeErr, context.Canceled) || errors.Is(removeErr, context.DeadlineExceeded) {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+	}
+	if err := remove(db.debugCtx(ctx), db.db, "mfg_vouchers", map[string]any{"guid": ov.Header.Val.GUID[:]}, nil); err != nil {
+		debug(db.debugCtx(ctx), "error removing replacement voucher after failed original voucher removal: %v", err)
+	}
+	return removeErr
 }
 
-// RemoveVoucher untracks a voucher, deleting it, and returns it for extension.
+// RemoveVoucher untracks a voucher, whether extended or not, possibly by
+// deleting it or marking it as removed, and returns it for extension.
 func (db *DB) RemoveVoucher(ctx context.Context, guid protocol.GUID) (*fdo.Voucher, error) {
 	var data []byte
-	if err := remove(db.debugCtx(ctx), db.db, "owner_vouchers",
-		map[string]any{"guid": guid[:]}, map[string]any{"cbor": &data}); err != nil {
-		return nil, err
+	for _, table := range []string{"owner_vouchers", "mfg_vouchers"} {
+		if err := remove(db.debugCtx(ctx), db.db, table,
+			map[string]any{"guid": guid[:]}, map[string]any{"cbor": &data}); err != nil {
+			return nil, err
+		}
 	}
 	if data == nil {
 		return nil, fdo.ErrNotFound

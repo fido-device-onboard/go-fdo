@@ -181,14 +181,20 @@ type OwnerVoucherPersistentState interface {
 	// AddVoucher stores the voucher of a device owned by the service.
 	AddVoucher(context.Context, *Voucher) error
 
-	// ReplaceVoucher stores a new voucher, possibly deleting or marking the
-	// previous voucher as replaced.
+	// ReplaceVoucher stores a new voucher with zero extensions, possibly
+	// deleting or marking the previous voucher as replaced.
 	ReplaceVoucher(context.Context, protocol.GUID, *Voucher) error
 
-	// RemoveVoucher untracks a voucher, possibly by deleting it or marking it
-	// as removed, and returns it for extension.
-	RemoveVoucher(context.Context, protocol.GUID) (*Voucher, error)
-
-	// Voucher retrieves a voucher by GUID.
+	// Voucher retrieves a voucher by GUID. It must only return vouchers with
+	// at least one extension, as unextended vouchers are not usable for
+	// representing ownership.
 	Voucher(context.Context, protocol.GUID) (*Voucher, error)
+}
+
+// VoucherReseller provides the method(s) necessary to extend a voucher for
+// resale.
+type VoucherReseller interface {
+	// RemoveVoucher untracks a voucher, whether extended or not, possibly by
+	// deleting it or marking it as removed, and returns it for extension.
+	RemoveVoucher(context.Context, protocol.GUID) (*Voucher, error)
 }
