@@ -91,7 +91,12 @@
         tinygo = pkgs.mkShell {
           packages = with pkgs; [
             (pkgs-unstable.tinygo.overrideAttrs (old: {
-              patches = old.patches ++ [./nix/patches/tinygo-rand.diff];
+              patches =
+                old.patches
+                ++ [
+                  ./nix/patches/tinygo-rand.diff
+                  ./nix/patches/tinygo-testing-context.diff
+                ];
             }))
             gotools
             gomod2nix.packages.${system}.default

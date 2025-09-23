@@ -560,7 +560,7 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 		return nil, fmt.Errorf("error associating device GUID to proof session: %w", err)
 	}
 	ov, err := s.Vouchers.Voucher(ctx, hello.GUID)
-	if err != nil {
+	if err != nil || len(ov.Entries) == 0 {
 		captureErr(ctx, protocol.ResourceNotFound, "")
 		return nil, fmt.Errorf("error retrieving voucher for device %x: %w", hello.GUID, err)
 	}
@@ -786,7 +786,7 @@ func (s *TO2Server) ovNextEntry(ctx context.Context, msg io.Reader) (*ovEntry, e
 		return nil, fmt.Errorf("error retrieving associated device GUID of proof session: %w", err)
 	}
 	ov, err := s.Vouchers.Voucher(ctx, guid)
-	if err != nil {
+	if err != nil || len(ov.Entries) == 0 {
 		return nil, fmt.Errorf("error retrieving voucher for device %x: %w", guid, err)
 	}
 
@@ -937,7 +937,7 @@ func (s *TO2Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1
 		return nil, fmt.Errorf("error retrieving associated device GUID of proof session: %w", err)
 	}
 	ov, err := s.Vouchers.Voucher(ctx, guid)
-	if err != nil {
+	if err != nil || len(ov.Entries) == 0 {
 		return nil, fmt.Errorf("error retrieving voucher for device %x: %w", guid, err)
 	}
 
@@ -1155,7 +1155,7 @@ func (s *TO2Server) ownerServiceInfoReady(ctx context.Context, msg io.Reader) (*
 			return nil, fmt.Errorf("error retrieving associated device GUID of proof session: %w", err)
 		}
 		ov, err := s.Vouchers.Voucher(ctx, guid)
-		if err != nil {
+		if err != nil || len(ov.Entries) == 0 {
 			return nil, fmt.Errorf("error retrieving voucher for device %x: %w", guid, err)
 		}
 		size, err := s.MaxDeviceServiceInfoSize(ctx, *ov)
@@ -1641,7 +1641,7 @@ func (s *TO2Server) to2Done2(ctx context.Context, msg io.Reader) (*done2Msg, err
 		return nil, fmt.Errorf("error retrieving associated device GUID of proof session: %w", err)
 	}
 	currentOV, err := s.Vouchers.Voucher(ctx, currentGUID)
-	if err != nil {
+	if err != nil || len(currentOV.Entries) == 0 {
 		return nil, fmt.Errorf("error retrieving voucher for device %x: %w", currentGUID, err)
 	}
 	rvInfo, err := s.Session.RvInfo(ctx)

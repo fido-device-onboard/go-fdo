@@ -44,9 +44,10 @@ type AllServerState interface {
 	fdo.TO1SessionState
 	fdo.TO2SessionState
 	fdo.RendezvousBlobPersistentState
-	fdo.ManufacturerVoucherPersistentState
+	fdo.VoucherPersistentState
 	fdo.OwnerVoucherPersistentState
 	fdo.OwnerKeyPersistentState
+	fdo.VoucherReseller
 	ManufacturerKey(ctx context.Context, keyType protocol.KeyType, rsaBits int) (crypto.Signer, []*x509.Certificate, error)
 }
 
@@ -75,11 +76,11 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 		var state protocol.TokenService = state
 
 		for _, protocol := range []protocol.Protocol{protocol.DIProtocol, protocol.TO0Protocol, protocol.TO1Protocol, protocol.TO2Protocol} {
-			token, err := state.NewToken(context.Background(), protocol)
+			token, err := state.NewToken(t.Context(), protocol)
 			if err != nil {
 				t.Fatalf("error creating token for %s: %v", protocol, err)
 			}
-			ctx := state.TokenContext(context.Background(), token)
+			ctx := state.TokenContext(t.Context(), token)
 			defer func() { _ = state.InvalidateToken(ctx) }()
 			got, _ := state.TokenFromContext(ctx)
 			if got != token {
@@ -92,11 +93,11 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 	})
 
 	t.Run("DISessionState", func(t *testing.T) {
-		token, err := state.NewToken(context.TODO(), protocol.DIProtocol)
+		token, err := state.NewToken(t.Context(), protocol.DIProtocol)
 		if err != nil {
 			t.Fatal(err)
 		}
-		ctx := state.TokenContext(context.TODO(), token)
+		ctx := state.TokenContext(t.Context(), token)
 		defer func() { _ = state.InvalidateToken(ctx) }()
 
 		// Shadow state to limit testable functions
@@ -195,11 +196,11 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 	})
 
 	t.Run("TO0SessionState", func(t *testing.T) {
-		token, err := state.NewToken(context.TODO(), protocol.TO0Protocol)
+		token, err := state.NewToken(t.Context(), protocol.TO0Protocol)
 		if err != nil {
 			t.Fatal(err)
 		}
-		ctx := state.TokenContext(context.TODO(), token)
+		ctx := state.TokenContext(t.Context(), token)
 		defer func() { _ = state.InvalidateToken(ctx) }()
 
 		// Shadow state to limit testable functions
@@ -226,11 +227,11 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 	})
 
 	t.Run("TO1SessionState", func(t *testing.T) {
-		token, err := state.NewToken(context.TODO(), protocol.TO1Protocol)
+		token, err := state.NewToken(t.Context(), protocol.TO1Protocol)
 		if err != nil {
 			t.Fatal(err)
 		}
-		ctx := state.TokenContext(context.TODO(), token)
+		ctx := state.TokenContext(t.Context(), token)
 		defer func() { _ = state.InvalidateToken(ctx) }()
 
 		// Shadow state to limit testable functions
@@ -258,11 +259,11 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 
 	t.Run("TO2SessionState", func(t *testing.T) {
 		t.Run("GUID", func(t *testing.T) {
-			token, err := state.NewToken(context.TODO(), protocol.TO2Protocol)
+			token, err := state.NewToken(t.Context(), protocol.TO2Protocol)
 			if err != nil {
 				t.Fatal(err)
 			}
-			ctx := state.TokenContext(context.TODO(), token)
+			ctx := state.TokenContext(t.Context(), token)
 			defer func() { _ = state.InvalidateToken(ctx) }()
 
 			// Shadow state to limit testable functions
@@ -292,11 +293,11 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 		})
 
 		t.Run("RvInfo", func(t *testing.T) {
-			token, err := state.NewToken(context.TODO(), protocol.TO2Protocol)
+			token, err := state.NewToken(t.Context(), protocol.TO2Protocol)
 			if err != nil {
 				t.Fatal(err)
 			}
-			ctx := state.TokenContext(context.TODO(), token)
+			ctx := state.TokenContext(t.Context(), token)
 			defer func() { _ = state.InvalidateToken(ctx) }()
 
 			// Shadow state to limit testable functions
@@ -328,11 +329,11 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 		})
 
 		t.Run("Replacement", func(t *testing.T) {
-			token, err := state.NewToken(context.TODO(), protocol.TO2Protocol)
+			token, err := state.NewToken(t.Context(), protocol.TO2Protocol)
 			if err != nil {
 				t.Fatal(err)
 			}
-			ctx := state.TokenContext(context.TODO(), token)
+			ctx := state.TokenContext(t.Context(), token)
 			defer func() { _ = state.InvalidateToken(ctx) }()
 
 			// Shadow state to limit testable functions
@@ -381,11 +382,11 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 		})
 
 		t.Run("KeyExchangeState", func(t *testing.T) {
-			token, err := state.NewToken(context.TODO(), protocol.TO2Protocol)
+			token, err := state.NewToken(t.Context(), protocol.TO2Protocol)
 			if err != nil {
 				t.Fatal(err)
 			}
-			ctx := state.TokenContext(context.TODO(), token)
+			ctx := state.TokenContext(t.Context(), token)
 			defer func() { _ = state.InvalidateToken(ctx) }()
 
 			// Shadow state to limit testable functions
@@ -413,11 +414,11 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 		})
 
 		t.Run("Nonces", func(t *testing.T) {
-			token, err := state.NewToken(context.TODO(), protocol.TO2Protocol)
+			token, err := state.NewToken(t.Context(), protocol.TO2Protocol)
 			if err != nil {
 				t.Fatal(err)
 			}
-			ctx := state.TokenContext(context.TODO(), token)
+			ctx := state.TokenContext(t.Context(), token)
 			defer func() { _ = state.InvalidateToken(ctx) }()
 
 			// Shadow state to limit testable functions
@@ -462,11 +463,11 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 		})
 
 		t.Run("MTU", func(t *testing.T) {
-			token, err := state.NewToken(context.TODO(), protocol.TO2Protocol)
+			token, err := state.NewToken(t.Context(), protocol.TO2Protocol)
 			if err != nil {
 				t.Fatal(err)
 			}
-			ctx := state.TokenContext(context.TODO(), token)
+			ctx := state.TokenContext(t.Context(), token)
 			defer func() { _ = state.InvalidateToken(ctx) }()
 
 			// Shadow state to limit testable functions
@@ -490,11 +491,11 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 		})
 
 		t.Run("Devmod", func(t *testing.T) {
-			token, err := state.NewToken(context.TODO(), protocol.TO2Protocol)
+			token, err := state.NewToken(t.Context(), protocol.TO2Protocol)
 			if err != nil {
 				t.Fatal(err)
 			}
-			ctx := state.TokenContext(context.TODO(), token)
+			ctx := state.TokenContext(t.Context(), token)
 			defer func() { _ = state.InvalidateToken(ctx) }()
 
 			// Shadow state to limit testable functions
@@ -587,15 +588,15 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 		var state fdo.RendezvousBlobPersistentState = state
 
 		// Store and retrieve rendezvous blob 2 times to test upsert
-		if _, _, err := state.RVBlob(context.TODO(), guid); !errors.Is(err, fdo.ErrNotFound) {
+		if _, _, err := state.RVBlob(t.Context(), guid); !errors.Is(err, fdo.ErrNotFound) {
 			t.Fatalf("expected ErrNotFound, got %v", err)
 		}
 		for range 2 {
 			exp := time.Now().Add(time.Hour)
-			if err := state.SetRVBlob(context.TODO(), expectOV, &expectBlob, exp); err != nil {
+			if err := state.SetRVBlob(t.Context(), expectOV, &expectBlob, exp); err != nil {
 				t.Fatal(err)
 			}
-			gotBlob, gotOV, err := state.RVBlob(context.TODO(), guid)
+			gotBlob, gotOV, err := state.RVBlob(t.Context(), guid)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -622,18 +623,23 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 		if err := cbor.Unmarshal(blk.Bytes, ov); err != nil {
 			t.Fatalf("error parsing voucher test data: %v", err)
 		}
+		// TODO: Update test fixture to include an extension instead
+		ov.Entries = append(ov.Entries, cose.Sign1Tag[fdo.VoucherEntryPayload, []byte]{})
 
 		// Shadow state to limit testable functions
-		var state fdo.OwnerVoucherPersistentState = state
+		var state interface {
+			fdo.OwnerVoucherPersistentState
+			fdo.VoucherReseller
+		} = state
 
 		// Create and retrieve voucher
-		if _, err := state.Voucher(context.TODO(), ov.Header.Val.GUID); !errors.Is(err, fdo.ErrNotFound) {
+		if _, err := state.Voucher(t.Context(), ov.Header.Val.GUID); !errors.Is(err, fdo.ErrNotFound) {
 			t.Fatalf("expected ErrNotFound, got %v", err)
 		}
-		if err := state.AddVoucher(context.TODO(), ov); err != nil {
+		if err := state.AddVoucher(t.Context(), ov); err != nil {
 			t.Fatal(err)
 		}
-		got, err := state.Voucher(context.TODO(), ov.Header.Val.GUID)
+		got, err := state.Voucher(t.Context(), ov.Header.Val.GUID)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -647,26 +653,30 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 			t.Fatal(err)
 		}
 		oldGUID := ov.Header.Val.GUID
-		ov.Header.Val.GUID = newGUID
-		if err := state.ReplaceVoucher(context.TODO(), oldGUID, ov); err != nil {
+		newVoucher := *ov
+		newVoucher.Header.Val.GUID = newGUID
+		newVoucher.Entries = []cose.Sign1Tag[fdo.VoucherEntryPayload, []byte]{}
+		if err := state.ReplaceVoucher(t.Context(), oldGUID, &newVoucher); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := state.Voucher(context.TODO(), oldGUID); !errors.Is(err, fdo.ErrNotFound) {
+		if _, err := state.Voucher(t.Context(), oldGUID); !errors.Is(err, fdo.ErrNotFound) {
 			t.Fatalf("replaced voucher GUID should return not found, got error %v", err)
-		}
-		if _, err := state.Voucher(context.TODO(), newGUID); err != nil {
-			t.Fatal(err)
 		}
 
 		// Remove voucher
-		removed, err := state.RemoveVoucher(context.TODO(), newGUID)
+		removed, err := state.RemoveVoucher(t.Context(), newGUID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !reflect.DeepEqual(removed, ov) {
-			t.Errorf("removed voucher should match replaced %+v, got %+v", ov, removed)
+		if !reflect.DeepEqual(removed, &newVoucher) {
+			t.Logf("Versions equal: %t", removed.Version == newVoucher.Version)
+			t.Logf("Headers equal: %t", removed.Header.Val.Equal(&newVoucher.Header.Val))
+			t.Logf("Hmacs equal: %t", reflect.DeepEqual(removed.Hmac, newVoucher.Hmac))
+			t.Logf("CertChains equal: %t", reflect.DeepEqual(removed.CertChain, newVoucher.CertChain))
+			t.Logf("Extensions equal: %t", reflect.DeepEqual(removed.Entries, newVoucher.Entries))
+			t.Errorf("removed voucher should match replaced %+v, got %+v", &newVoucher, removed)
 		}
-		if _, err := state.RemoveVoucher(context.TODO(), newGUID); !errors.Is(err, fdo.ErrNotFound) {
+		if _, err := state.RemoveVoucher(t.Context(), newGUID); !errors.Is(err, fdo.ErrNotFound) {
 			t.Fatalf("removed voucher GUID should return not found, got error %v", err)
 		}
 	})
@@ -676,7 +686,7 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 		var state fdo.OwnerKeyPersistentState = state
 
 		// RSA
-		rsaKey, _, err := state.OwnerKey(context.Background(), protocol.RsaPkcsKeyType, 2048)
+		rsaKey, _, err := state.OwnerKey(t.Context(), protocol.RsaPkcsKeyType, 2048)
 		if err != nil {
 			t.Fatal("RSA owner key", err)
 		}
@@ -685,7 +695,7 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 		}
 
 		// EC
-		ecKey, _, err := state.OwnerKey(context.Background(), protocol.Secp256r1KeyType, 0)
+		ecKey, _, err := state.OwnerKey(t.Context(), protocol.Secp256r1KeyType, 0)
 		if err != nil {
 			t.Fatal("EC owner key", err)
 		}
