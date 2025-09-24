@@ -33,7 +33,9 @@ type DIServer[T any] struct {
 	// must be the key that will be used for voucher extension.
 	DeviceInfo func(context.Context, *T, []*x509.Certificate) (info string, mfgPubKey protocol.PublicKey, _ error)
 
-	// Optional callback for before a new voucher is persisted.
+	// Optional callback for before a new voucher is persisted. This
+	// modification only applies to vouchers created with DI. Vouchers created
+	// at the end of TO2 will be persisted unmodified.
 	BeforeVoucherPersist func(context.Context, *Voucher) error
 
 	// Optional callback for immediately after a new voucher is persisted.
@@ -192,6 +194,10 @@ type TO2Server struct {
 	Vouchers  OwnerVoucherPersistentState
 	OwnerKeys OwnerKeyPersistentState
 
+	// This field must be non-nil in order to use the Resale Protocol (see
+	// [TO2Server.Resell]).
+	VouchersForExtension VoucherReseller
+
 	// Choose the replacement rendezvous directives based on the current
 	// voucher of the onboarding device.
 	RvInfo func(context.Context, Voucher) ([][]protocol.RvInstruction, error)
@@ -224,9 +230,17 @@ type TO2Server struct {
 // Resell implements the FDO Resale Protocol by removing a voucher from
 // ownership, extending it to a new owner, and then returning it for
 // out-of-band transport.
+//
+// If an error occurs, the unextended voucher may be returned along with the
+// error. The caller should then retry extending the voucher or add it back to
+// persistent state to reverse the effects of the failed Resell call.
 func (s *TO2Server) Resell(ctx context.Context, guid protocol.GUID, nextOwner crypto.PublicKey, extra map[int][]byte) (*Voucher, error) {
+	if s.VouchersForExtension == nil {
+		return nil, fmt.Errorf("TO2 server is not configured for resale")
+	}
+
 	// Remove voucher from ownership of this service
-	ov, err := s.Vouchers.RemoveVoucher(ctx, guid)
+	ov, err := s.VouchersForExtension.RemoveVoucher(ctx, guid)
 	if err != nil {
 		return nil, fmt.Errorf("error untracking voucher for resale: %w", err)
 	}
@@ -238,8 +252,7 @@ func (s *TO2Server) Resell(ctx context.Context, guid protocol.GUID, nextOwner cr
 	}
 	ownerKey, _, err := s.OwnerKeys.OwnerKey(ctx, ownerPubKey.Type, ownerPubKey.RsaBits())
 	if err != nil {
-		_ = s.Vouchers.AddVoucher(ctx, ov)
-		return nil, fmt.Errorf("error getting key used to sign voucher: %w", err)
+		return ov, fmt.Errorf("error getting key used to sign voucher: %w", err)
 	}
 
 	// Extend voucher
@@ -255,8 +268,7 @@ func (s *TO2Server) Resell(ctx context.Context, guid protocol.GUID, nextOwner cr
 		err = fmt.Errorf("unsupported key type: %T", nextOwner)
 	}
 	if err != nil {
-		_ = s.Vouchers.AddVoucher(ctx, ov)
-		return nil, fmt.Errorf("error extending voucher to new owner: %w", err)
+		return ov, fmt.Errorf("error extending voucher to new owner: %w", err)
 	}
 
 	return extended, nil

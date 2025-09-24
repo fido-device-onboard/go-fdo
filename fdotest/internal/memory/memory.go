@@ -15,6 +15,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"fmt"
 	"math/big"
 	"time"
 
@@ -115,6 +116,9 @@ func (s *State) AddVoucher(_ context.Context, ov *fdo.Voucher) error {
 // ReplaceVoucher stores a new voucher, possibly deleting or marking the
 // previous voucher as replaced.
 func (s *State) ReplaceVoucher(_ context.Context, oldGUID protocol.GUID, ov *fdo.Voucher) error {
+	if len(ov.Entries) > 0 {
+		return fmt.Errorf("ReplaceVoucher must be called with a voucher having zero extensions")
+	}
 	delete(s.Vouchers, oldGUID)
 	s.Vouchers[ov.Header.Val.GUID] = ov
 	return nil
@@ -134,7 +138,7 @@ func (s *State) RemoveVoucher(ctx context.Context, guid protocol.GUID) (*fdo.Vou
 // Voucher retrieves a voucher by GUID.
 func (s *State) Voucher(_ context.Context, guid protocol.GUID) (*fdo.Voucher, error) {
 	ov, ok := s.Vouchers[guid]
-	if !ok {
+	if !ok || len(ov.Entries) == 0 {
 		return nil, fdo.ErrNotFound
 	}
 	return ov, nil
