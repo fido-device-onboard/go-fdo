@@ -5,6 +5,7 @@ package protocol_test
 
 import (
 	"fmt"
+	"net"
 	"reflect"
 	"testing"
 
@@ -48,4 +49,94 @@ func TestParseExternal(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPortBeforeProtocol(t *testing.T) {
+	// Test that setting port first, then protocol, preserves the explicit port
+	// instead of overwriting it with the protocol's default port
+
+	t.Run("DevicePort", func(t *testing.T) {
+		// Set DevPort to 8080 followed by RVProtHTTP
+		instructions := []protocol.RvInstruction{
+			{Variable: protocol.RVDevPort, Value: mustMarshal(t, uint16(8080))},
+			{Variable: protocol.RVProtocol, Value: mustMarshal(t, protocol.RVProtHTTP)},
+			{Variable: protocol.RVIPAddress, Value: mustMarshal(t, net.IP{127, 0, 0, 1})},
+		}
+
+		directives := protocol.ParseDeviceRvInfo([][]protocol.RvInstruction{instructions})
+		if len(directives) != 1 {
+			t.Fatalf("expected 1 directive, got %d", len(directives))
+		}
+
+		urls := directives[0].URLs
+		if len(urls) != 1 {
+			t.Fatalf("expected 1 URL, got %d", len(urls))
+		}
+
+		if urls[0].Scheme != "http" {
+			t.Errorf("expected scheme 'http', got %q", urls[0].Scheme)
+		}
+
+		if port := urls[0].Port(); port != "8080" {
+			t.Errorf("expected port '8080', got %q", port)
+		}
+	})
+
+	t.Run("OwnerPort", func(t *testing.T) {
+		// Set OwnerPort to 8080 followed by RVProtHTTP
+		instructions := []protocol.RvInstruction{
+			{Variable: protocol.RVOwnerPort, Value: mustMarshal(t, uint16(8080))},
+			{Variable: protocol.RVProtocol, Value: mustMarshal(t, protocol.RVProtHTTP)},
+			{Variable: protocol.RVIPAddress, Value: mustMarshal(t, net.IP{127, 0, 0, 1})},
+		}
+
+		directives := protocol.ParseOwnerRvInfo([][]protocol.RvInstruction{instructions})
+		if len(directives) != 1 {
+			t.Fatalf("expected 1 directive, got %d", len(directives))
+		}
+
+		urls := directives[0].URLs
+		if len(urls) != 1 {
+			t.Fatalf("expected 1 URL, got %d", len(urls))
+		}
+
+		if urls[0].Scheme != "http" {
+			t.Errorf("expected scheme 'http', got %q", urls[0].Scheme)
+		}
+
+		if port := urls[0].Port(); port != "8080" {
+			t.Errorf("expected port '8080', got %q", port)
+		}
+	})
+
+	t.Run("DefaultPortWhenNotExplicit", func(t *testing.T) {
+		// Verify that default port is still used when no explicit port is set
+		instructions := []protocol.RvInstruction{
+			{Variable: protocol.RVProtocol, Value: mustMarshal(t, protocol.RVProtHTTP)},
+			{Variable: protocol.RVIPAddress, Value: mustMarshal(t, net.IP{127, 0, 0, 1})},
+		}
+
+		directives := protocol.ParseDeviceRvInfo([][]protocol.RvInstruction{instructions})
+		if len(directives) != 1 {
+			t.Fatalf("expected 1 directive, got %d", len(directives))
+		}
+
+		urls := directives[0].URLs
+		if len(urls) != 1 {
+			t.Fatalf("expected 1 URL, got %d", len(urls))
+		}
+
+		if port := urls[0].Port(); port != "80" {
+			t.Errorf("expected default port '80', got %q", port)
+		}
+	})
+}
+
+func mustMarshal(t *testing.T, v any) []byte {
+	t.Helper()
+	data, err := cbor.Marshal(v)
+	if err != nil {
+		t.Fatalf("error marshaling %v: %v", v, err)
+	}
+	return data
 }

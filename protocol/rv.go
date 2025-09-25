@@ -238,6 +238,7 @@ func parseURLs(vars []RvInstruction, device bool) (urls []*url.URL) { //nolint:g
 	scheme, port := "tls", ""
 	var dnsAddr string
 	var ipAddr net.IP
+	var portSet bool // Track if port was explicitly set
 	for _, v := range vars {
 		switch v.Variable {
 		case RVProtocol:
@@ -247,17 +248,29 @@ func parseURLs(vars []RvInstruction, device bool) (urls []*url.URL) { //nolint:g
 				case RVProtRest:
 					// Unsupported, use default
 				case RVProtHTTP:
-					scheme, port = "http", "80"
+					scheme = "http"
+					if !portSet {
+						port = "80"
+					}
 				case RVProtHTTPS:
-					scheme, port = "https", "443"
+					scheme = "https"
+					if !portSet {
+						port = "443"
+					}
 				case RVProtTCP:
 					scheme = "tcp"
 				case RVProtTLS:
 					scheme = "tls"
 				case RVProtCoapTCP:
-					scheme, port = "coap+tcp", "5683"
+					scheme = "coap+tcp"
+					if !portSet {
+						port = "5683"
+					}
 				case RVProtCoapUDP:
-					scheme, port = "coap", "5683"
+					scheme = "coap"
+					if !portSet {
+						port = "5683"
+					}
 				}
 			}
 
@@ -269,6 +282,7 @@ func parseURLs(vars []RvInstruction, device bool) (urls []*url.URL) { //nolint:g
 			var portU16 uint16
 			if err := cbor.Unmarshal(v.Value, &portU16); err == nil {
 				port = strconv.Itoa(int(portU16))
+				portSet = true
 			}
 
 		case RVDns:
