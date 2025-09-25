@@ -176,6 +176,20 @@ type ManufacturerVoucherPersistentState interface {
 	NewVoucher(context.Context, *Voucher) error
 }
 
+// VoucherStatus represents the lifecycle state of an owner voucher.
+type VoucherStatus int
+
+const (
+	// VoucherStatusReady indicates the voucher is ready for onboarding.
+	VoucherStatusReady VoucherStatus = iota
+	// VoucherStatusOnboardedNew indicates the voucher was used for onboarding with a new credential created.
+	VoucherStatusOnboardedNew
+	// VoucherStatusOnboardedReuse indicates the voucher was used for onboarding with credential reuse.
+	VoucherStatusOnboardedReuse
+	// VoucherStatusInvalid indicates the voucher has been deleted or is otherwise invalid.
+	VoucherStatusInvalid
+)
+
 // OwnerVoucherPersistentState maintains vouchers owned by the service.
 type OwnerVoucherPersistentState interface {
 	// AddVoucher stores the voucher of a device owned by the service.
@@ -191,4 +205,13 @@ type OwnerVoucherPersistentState interface {
 
 	// Voucher retrieves a voucher by GUID.
 	Voucher(context.Context, protocol.GUID) (*Voucher, error)
+
+	// VoucherStatus returns the status of a voucher by GUID.
+	VoucherStatus(context.Context, protocol.GUID) (VoucherStatus, error)
+}
+
+// OwnerDevicePersistentState manages device vouchers that have been onboarded.
+type OwnerDevicePersistentState interface {
+	// Device retrieves a device voucher by GUID.
+	Device(context.Context, protocol.GUID) (*Voucher, error)
 }
