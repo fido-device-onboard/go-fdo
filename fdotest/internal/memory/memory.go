@@ -15,6 +15,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"fmt"
 	"math/big"
 	"time"
 
@@ -41,8 +42,6 @@ type KeyTypeAndRsaBits struct {
 	RsaBits int
 }
 
-var _ fdo.RendezvousBlobPersistentState = (*State)(nil)
-var _ fdo.ManufacturerVoucherPersistentState = (*State)(nil)
 var _ fdo.OwnerVoucherPersistentState = (*State)(nil)
 var _ fdo.OwnerKeyPersistentState = (*State)(nil)
 
@@ -98,14 +97,6 @@ func NewState() (*State, error) {
 	}, nil
 }
 
-// NewVoucher creates and stores a voucher for a newly initialized device.
-// Note that the voucher may have entries if the server was configured for
-// auto voucher extension.
-func (s *State) NewVoucher(_ context.Context, ov *fdo.Voucher) error {
-	s.Vouchers[ov.Header.Val.GUID] = ov
-	return nil
-}
-
 // AddVoucher stores the voucher of a device owned by the service.
 func (s *State) AddVoucher(_ context.Context, ov *fdo.Voucher) error {
 	s.Vouchers[ov.Header.Val.GUID] = ov
@@ -115,6 +106,9 @@ func (s *State) AddVoucher(_ context.Context, ov *fdo.Voucher) error {
 // ReplaceVoucher stores a new voucher, possibly deleting or marking the
 // previous voucher as replaced.
 func (s *State) ReplaceVoucher(_ context.Context, oldGUID protocol.GUID, ov *fdo.Voucher) error {
+	if len(ov.Entries) > 0 {
+		return fmt.Errorf("ReplaceVoucher must be called with a voucher having zero extensions")
+	}
 	delete(s.Vouchers, oldGUID)
 	s.Vouchers[ov.Header.Val.GUID] = ov
 	return nil

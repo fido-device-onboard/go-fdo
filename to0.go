@@ -26,7 +26,7 @@ const DefaultRVBlobTTL = 4_294_967_295 // max uint32
 type TO0Client struct {
 	// Vouchers is used to lookup the ownership voucher for registering a
 	// rendezvous blob for a given device.
-	Vouchers OwnerVoucherPersistentState
+	Vouchers VoucherPersistentState
 
 	// OwnerKeys are used for signing the rendezvous blob.
 	OwnerKeys OwnerKeyPersistentState

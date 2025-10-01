@@ -222,8 +222,9 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 				}
 			},
 		},
-		Vouchers:  conf.State,
-		OwnerKeys: conf.State,
+		Vouchers:             conf.State,
+		OwnerKeys:            conf.State,
+		VouchersForExtension: conf.State,
 		RvInfo: func(context.Context, fdo.Voucher) ([][]protocol.RvInstruction, error) {
 			return [][]protocol.RvInstruction{}, nil
 		},
@@ -453,10 +454,24 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 				if cred == nil {
 					t.Fatal("cred not set due to previous failure")
 				}
+				rsaBits := 3072
+				if conf.UnsupportedRSA3072 {
+					rsaBits = 2048
+				}
+				nextOwner, _, err := to2Responder.OwnerKeys.OwnerKey(t.Context(), table.keyType, rsaBits)
+				if err != nil {
+					t.Fatalf("could not get owner key for voucher extension: %v", err)
+				}
+				ov, err := to2Responder.Resell(t.Context(), cred.GUID, nextOwner.Public(), nil)
+				if err != nil {
+					t.Fatalf("could not extend voucher from previous onboarding: %v", err)
+				}
+				if err := to2Responder.Vouchers.AddVoucher(t.Context(), ov); err != nil {
+					t.Fatalf("could not add voucher for TO2: %v", err)
+				}
 
 				ctx, cancel := context.WithTimeout(context.Background(), timeout)
 				defer cancel()
-				var err error
 				cred, err = fdo.TO2(ctx, transport, nil, fdo.TO2Config{
 					Cred:       *cred,
 					HmacSha256: hmacSha256,
@@ -484,6 +499,21 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 			t.Run("Transfer Ownership 2 w/ Modules", func(t *testing.T) {
 				if cred == nil {
 					t.Fatal("cred not set due to previous failure")
+				}
+				rsaBits := 3072
+				if conf.UnsupportedRSA3072 {
+					rsaBits = 2048
+				}
+				nextOwner, _, err := to2Responder.OwnerKeys.OwnerKey(t.Context(), table.keyType, rsaBits)
+				if err != nil {
+					t.Fatalf("could not get owner key for voucher extension: %v", err)
+				}
+				ov, err := to2Responder.Resell(t.Context(), cred.GUID, nextOwner.Public(), nil)
+				if err != nil {
+					t.Fatalf("could not extend voucher from previous onboarding: %v", err)
+				}
+				if err := to2Responder.Vouchers.AddVoucher(t.Context(), ov); err != nil {
+					t.Fatalf("could not add voucher for TO2: %v", err)
 				}
 
 				ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -526,8 +556,11 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 // relying on CleanupModules to be called to clear the state before the next
 // usage.
 type to2ModuleStateMachine struct {
-	Session      fdo.TO2SessionState
-	Vouchers     fdo.OwnerVoucherPersistentState
+	Session  fdo.TO2SessionState
+	Vouchers interface {
+		fdo.VoucherPersistentState
+		fdo.OwnerVoucherPersistentState
+	}
 	OwnerModules func(ctx context.Context, guid protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, modules []string) iter.Seq2[string, serviceinfo.OwnerModule]
 
 	module *moduleStateMachineState

@@ -167,28 +167,30 @@ type OwnerKeyPersistentState interface {
 	OwnerKey(ctx context.Context, keyType protocol.KeyType, rsaBits int) (crypto.Signer, []*x509.Certificate, error)
 }
 
-// ManufacturerVoucherPersistentState maintains vouchers created during DI
-// which have not yet been extended.
-type ManufacturerVoucherPersistentState interface {
-	// NewVoucher creates and stores a voucher for a newly initialized device.
-	// Note that the voucher may have entries if the server was configured for
-	// auto voucher extension.
-	NewVoucher(context.Context, *Voucher) error
-}
-
-// OwnerVoucherPersistentState maintains vouchers owned by the service.
-type OwnerVoucherPersistentState interface {
-	// AddVoucher stores the voucher of a device owned by the service.
-	AddVoucher(context.Context, *Voucher) error
-
-	// ReplaceVoucher stores a new voucher, possibly deleting or marking the
-	// previous voucher as replaced.
-	ReplaceVoucher(context.Context, protocol.GUID, *Voucher) error
-
-	// RemoveVoucher untracks a voucher, possibly by deleting it or marking it
-	// as removed, and returns it for extension.
-	RemoveVoucher(context.Context, protocol.GUID) (*Voucher, error)
+// VoucherPersistentState maintains vouchers.
+type VoucherPersistentState interface {
+	// AddVoucher stores a voucher with zero or more extensions.
+	AddVoucher(ctx context.Context, ov *Voucher) error
 
 	// Voucher retrieves a voucher by GUID.
 	Voucher(context.Context, protocol.GUID) (*Voucher, error)
+}
+
+// OwnerVoucherPersistentState is a specialization for VoucherPersistentState
+// that adds the method for replacing a voucher atomically. Voucher replacement
+// is used for credential replacement at the end of onboarding.
+type OwnerVoucherPersistentState interface {
+	VoucherPersistentState
+
+	// ReplaceVoucher stores a new voucher with zero extensions, possibly
+	// deleting or marking the previous voucher as replaced.
+	ReplaceVoucher(context.Context, protocol.GUID, *Voucher) error
+}
+
+// VoucherReseller provides the method(s) necessary to extend a voucher for
+// resale.
+type VoucherReseller interface {
+	// RemoveVoucher untracks a voucher, whether extended or not, possibly by
+	// deleting it or marking it as removed, and returns it for extension.
+	RemoveVoucher(context.Context, protocol.GUID) (*Voucher, error)
 }
