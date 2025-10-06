@@ -16,7 +16,7 @@ require (
 	github.com/fido-device-onboard/go-fdo/sqlite v0.0.0-00010101000000-000000000000
 	github.com/fido-device-onboard/go-fdo/tpm v0.0.0-00010101000000-000000000000
 	github.com/google/go-tpm v0.9.6
-	github.com/google/go-tpm-tools v0.4.5
+	github.com/google/go-tpm-tools v0.4.6
 	github.com/niemeyer/muslnet v0.0.0-20250923220305-4b81d3c72602
 	github.com/syumai/workers v0.27.0
 	hermannm.dev/devlog v0.6.0
