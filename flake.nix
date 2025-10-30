@@ -20,14 +20,39 @@
     ...
   }:
     flake-utils.lib.eachDefaultSystem (system: let
+      go = pkgs-unstable.go_1_25;
       pkgs = nixpkgs.legacyPackages.${system};
       pkgs-unstable = nixpkgs-unstable.legacyPackages.${system};
 
-      buildGoApplication = {ldflags ? [], ...} @ attrs:
+      tinygo_patched = pkgs-unstable.tinygo.overrideAttrs (old: {
+        nativeBuildInputs = old.nativeBuildInputs ++ [pkgs-unstable.go_1_25];
+        postInstall = ''
+          ln -s ${pkgs.writeShellScript "go" ''
+            if [ "$1" = "build" ]; then
+              tinygo "$@"
+            else
+              ${go}/bin/go "$@"
+            fi
+          ''} $out/bin/go
+        '';
+        patches =
+          old.patches
+          ++ [
+            ./nix/patches/tinygo-rand.diff
+            ./nix/patches/tinygo-testing-context.diff
+          ];
+        doCheck = false;
+      });
+
+      buildGoApplication = {
+        go ? go,
+        ldflags ? [],
+        ...
+      } @ attrs:
         gomod2nix.legacyPackages.${system}.buildGoApplication (
           {
+            inherit go;
             src = ./.;
-            pwd = ./.;
             modules = ./nix/gomod2nix.toml;
             subPackages = ["examples/cmd"];
             postConfigure = ''
@@ -67,6 +92,14 @@
           ];
         };
 
+        example-tinygo = buildGoApplication {
+          name = "fdo";
+          go = tinygo_patched;
+          buildInputs = with pkgs; [
+            openssl
+          ];
+        };
+
         example-tpmsim = buildGoApplication {
           name = "fdo-tpmsim";
           CGO_ENABLED = 1;
@@ -90,14 +123,8 @@
 
         tinygo = pkgs.mkShell {
           packages = with pkgs; [
-            (pkgs-unstable.tinygo.overrideAttrs (old: {
-              patches =
-                old.patches
-                ++ [
-                  ./nix/patches/tinygo-rand.diff
-                  ./nix/patches/tinygo-testing-context.diff
-                ];
-            }))
+            tinygo_patched
+            pkgs-unstable.go_1_25
             gotools
             gomod2nix.packages.${system}.default
           ];

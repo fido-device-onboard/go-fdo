@@ -1,15 +1,13 @@
 ## workspace
 # github.com/fido-device-onboard/go-fdo v0.0.0-00010101000000-000000000000 => .
-## explicit; go 1.23.0
+## explicit; go 1.25.0
 # github.com/fido-device-onboard/go-fdo/fsim v0.0.0-00010101000000-000000000000 => ./fsim
-## explicit; go 1.23.0
+## explicit; go 1.25.0
 # github.com/fido-device-onboard/go-fdo/sqlite v0.0.0-00010101000000-000000000000 => ./sqlite
-## explicit; go 1.23.0
+## explicit; go 1.25.0
 # github.com/fido-device-onboard/go-fdo/tpm v0.0.0-00010101000000-000000000000 => ./tpm
-## explicit; go 1.23.0
-# github.com/google/go-configfs-tsm v0.3.2
-## explicit; go 1.19
-# github.com/google/go-tpm v0.9.3
+## explicit; go 1.25.0
+# github.com/google/go-tpm v0.9.6
 ## explicit; go 1.22
 github.com/google/go-tpm/legacy/tpm2
 github.com/google/go-tpm/tpm2
@@ -19,20 +17,19 @@ github.com/google/go-tpm/tpm2/transport/simulator
 github.com/google/go-tpm/tpmutil
 github.com/google/go-tpm/tpmutil/tbs
 # github.com/google/go-tpm-tools v0.3.13-0.20230620182252-4639ecce2aba
-## explicit; go 1.20
-# github.com/google/go-tpm-tools v0.4.4
-## explicit; go 1.20
+## explicit; go 1.21
+# github.com/google/go-tpm-tools v0.4.5
+## explicit; go 1.21
 github.com/google/go-tpm-tools/simulator
 github.com/google/go-tpm-tools/simulator/internal
-# github.com/ncruces/go-sqlite3 v0.22.0
-## explicit; go 1.21
+# github.com/ncruces/go-sqlite3 v0.29.0
+## explicit; go 1.24.0
 github.com/ncruces/go-sqlite3
 github.com/ncruces/go-sqlite3/driver
 github.com/ncruces/go-sqlite3/embed
 github.com/ncruces/go-sqlite3/internal/alloc
 github.com/ncruces/go-sqlite3/internal/dotlk
 github.com/ncruces/go-sqlite3/internal/util
-github.com/ncruces/go-sqlite3/util/osutil
 github.com/ncruces/go-sqlite3/util/sql3util
 github.com/ncruces/go-sqlite3/util/vfsutil
 github.com/ncruces/go-sqlite3/vfs
@@ -43,6 +40,10 @@ github.com/ncruces/julianday
 # github.com/neilotoole/jsoncolor v0.7.1
 ## explicit; go 1.16
 github.com/neilotoole/jsoncolor
+# github.com/niemeyer/muslnet v0.0.0-20250923220305-4b81d3c72602
+## explicit; go 1.24.6
+github.com/niemeyer/muslnet
+github.com/niemeyer/muslnet/internal/musl
 # github.com/syumai/workers v0.27.0
 ## explicit; go 1.21.3
 github.com/syumai/workers
@@ -52,8 +53,8 @@ github.com/syumai/workers/cloudflare/internal/cfruntimecontext
 github.com/syumai/workers/internal/jshttp
 github.com/syumai/workers/internal/jsutil
 github.com/syumai/workers/internal/runtimecontext
-# github.com/tetratelabs/wazero v1.8.2
-## explicit; go 1.21
+# github.com/tetratelabs/wazero v1.9.0
+## explicit; go 1.22.0
 github.com/tetratelabs/wazero
 github.com/tetratelabs/wazero/api
 github.com/tetratelabs/wazero/experimental
@@ -87,22 +88,26 @@ github.com/tetratelabs/wazero/internal/wasm/binary
 github.com/tetratelabs/wazero/internal/wasmdebug
 github.com/tetratelabs/wazero/internal/wasmruntime
 github.com/tetratelabs/wazero/sys
-# golang.org/x/crypto v0.32.0
-## explicit; go 1.20
+# golang.org/x/crypto v0.37.0
+## explicit; go 1.23.0
+# golang.org/x/crypto v0.41.0
+## explicit; go 1.23.0
 golang.org/x/crypto/internal/alias
 golang.org/x/crypto/pbkdf2
 golang.org/x/crypto/xts
-# golang.org/x/sys v0.28.0
-## explicit; go 1.18
-# golang.org/x/sys v0.29.0
-## explicit; go 1.18
-golang.org/x/sys/cpu
+# golang.org/x/sys v0.32.0
+## explicit; go 1.24.0
+# golang.org/x/sys v0.36.0
+## explicit; go 1.24.0
 golang.org/x/sys/plan9
 golang.org/x/sys/unix
 golang.org/x/sys/windows
-# golang.org/x/term v0.28.0
-## explicit; go 1.18
+# golang.org/x/term v0.34.0
+## explicit; go 1.23.0
 golang.org/x/term
-# hermannm.dev/devlog v0.5.0
-## explicit; go 1.22.0
+# hermannm.dev/devlog v0.6.0
+## explicit; go 1.23.0
 hermannm.dev/devlog
+# tinygo.org/x/drivers v0.33.0
+## explicit; go 1.22.1
+tinygo.org/x/drivers/netdev
