@@ -44,14 +44,10 @@
         doCheck = false;
       });
 
-      buildGoApplication = {
-        go ? go,
-        ldflags ? [],
-        ...
-      } @ attrs:
+      buildGoApplication = {ldflags ? [], ...} @ attrs:
         gomod2nix.legacyPackages.${system}.buildGoApplication (
           {
-            inherit go;
+            go = attrs.go or go;
             src = ./.;
             modules = ./nix/gomod2nix.toml;
             subPackages = ["examples/cmd"];
@@ -109,8 +105,10 @@
         };
       };
 
-      devShells = {
-        default = pkgs.mkShell {
+      devShells = rec {
+        default = go;
+
+        go = pkgs.mkShell {
           packages = with pkgs; [
             pkgs-unstable.go_1_25
             gotools
