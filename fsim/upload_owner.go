@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
@@ -121,6 +122,41 @@ func (u *UploadRequest) ProduceInfo(ctx context.Context, producer *serviceinfo.P
 	return false, false, nil
 }
 
+// sameFilesystem checks if two paths are on the same filesystem by comparing device IDs
+func sameFilesystem(path1, path2 string) (bool, error) {
+	var stat1, stat2 syscall.Stat_t
+
+	if err := syscall.Stat(path1, &stat1); err != nil {
+		return false, err
+	}
+	if err := syscall.Stat(path2, &stat2); err != nil {
+		return false, err
+	}
+
+	return stat1.Dev == stat2.Dev, nil
+}
+
+// backupExistingFile renames an existing file with a timestamp suffix if it exists
+func backupExistingFile(root *os.Root, filename string) error {
+	info, err := root.Stat(filename)
+	if err != nil {
+		// File doesn't exist, nothing to backup
+		return nil
+	}
+
+	// File exists, rename it with timestamp from its modification time
+	timestamp := info.ModTime().Format("20060102150405.000000")
+	ext := filepath.Ext(filename)
+	nameWithoutExt := filename[:len(filename)-len(ext)]
+	backupName := fmt.Sprintf("%s.%s%s", nameWithoutExt, timestamp, ext)
+
+	if err := root.Rename(filename, backupName); err != nil {
+		return fmt.Errorf("error renaming existing file %q to %q: %w", filename, backupName, err)
+	}
+
+	return nil
+}
+
 func (u *UploadRequest) request(producer *serviceinfo.Producer) (blockPeer, moduleDone bool, _ error) {
 	// Marshal message bodies
 	trueBody, err := cbor.Marshal(true)
@@ -157,13 +193,79 @@ func (u *UploadRequest) finalize() (blockPeer, moduleDone bool, _ error) {
 	if err := u.temp.Close(); err != nil {
 		return false, false, fmt.Errorf("error closing temp file for upload %q: %w", u.Name, err)
 	}
-	// TODO: Enforce chroot-like security
+
+	// Enforce chroot-like security using os.OpenRoot
 	if u.Rename == "" {
 		u.Rename = filepath.Base(u.Name)
 	}
-	oldpath, newpath := u.temp.Name(), filepath.Join(u.Dir, u.Rename)
-	if err := os.Rename(oldpath, newpath); err != nil {
-		return false, false, fmt.Errorf("error renaming temp file %q to %q: %w", oldpath, newpath, err)
+
+	// Create a rooted filesystem to prevent path traversal attacks
+	rootDir, err := os.OpenRoot(u.Dir)
+	if err != nil {
+		return false, false, fmt.Errorf("error creating root filesystem for %q: %w", u.Dir, err)
+	}
+	defer rootDir.Close()
+
+	tempFilePath := u.temp.Name()
+	// Remove the temp file when exiting, ignore errors
+	defer os.Remove(tempFilePath)
+
+	// Check if temp file and destination directory are on the same filesystem
+	samefs, err := sameFilesystem(tempFilePath, u.Dir)
+	if err != nil {
+		return false, false, fmt.Errorf("error checking filesystem for temp file and destination: %w", err)
+	}
+
+	if samefs {
+		// Same filesystem - we can use rename for efficiency
+		// Construct the actual destination path
+		destPath := filepath.Join(u.Dir, u.Rename)
+
+		// Verify the resolved path is still within u.Dir (security check)
+		realDest, err := filepath.EvalSymlinks(u.Dir)
+		if err != nil {
+			realDest = u.Dir
+		}
+		realDestFile := filepath.Join(realDest, u.Rename)
+		if !filepath.IsLocal(u.Rename) || filepath.Dir(realDestFile) != realDest {
+			return false, false, fmt.Errorf("path traversal detected in rename: %q", u.Rename)
+		}
+
+		// Backup existing file if present
+		if err = backupExistingFile(rootDir, u.Rename); err != nil {
+			return false, false, err
+		}
+
+		// Perform the rename
+		if err = os.Rename(tempFilePath, destPath); err != nil {
+			return false, false, fmt.Errorf("error renaming temp file to %q: %w", u.Rename, err)
+		}
+	} else {
+		// Different filesystems - fall back to copy
+		// Open the temp file for reading
+		src, err := os.Open(tempFilePath)
+		if err != nil {
+			return false, false, fmt.Errorf("error opening temp file %q: %w", tempFilePath, err)
+		}
+		defer src.Close()
+
+		// Backup existing file if present
+		if err = backupExistingFile(rootDir, u.Rename); err != nil {
+			return false, false, err
+		}
+
+		// Create the destination file within the rooted filesystem
+		// This ensures u.Rename cannot escape u.Dir even with path traversal
+		dst, err := rootDir.Create(u.Rename)
+		if err != nil {
+			return false, false, fmt.Errorf("error creating destination file %q: %w", u.Rename, err)
+		}
+		defer dst.Close()
+
+		// Copy the data
+		if _, err = io.Copy(dst, src); err != nil {
+			return false, false, fmt.Errorf("error copying to destination file %q: %w", u.Rename, err)
+		}
 	}
 	return false, true, nil
 }
