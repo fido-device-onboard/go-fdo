@@ -18,7 +18,7 @@ require (
 	github.com/google/go-tpm v0.9.6
 	github.com/google/go-tpm-tools v0.4.5
 	github.com/niemeyer/muslnet v0.0.0-20250923220305-4b81d3c72602
-	github.com/syumai/workers v0.27.0
+	github.com/syumai/workers v0.31.0
 	hermannm.dev/devlog v0.6.0
 	tinygo.org/x/drivers v0.33.0
 )
