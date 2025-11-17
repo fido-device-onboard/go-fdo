@@ -24,7 +24,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install Nix
-        uses: cachix/install-nix-action@v22
+        uses: cachix/install-nix-action@456688f15bc354bef6d396e4a35f4f89d40bf2b7
         with:
           nix_path: nixpkgs=channel:nixos-unstable
 
