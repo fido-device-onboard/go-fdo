@@ -2,11 +2,13 @@
   description = "Flake for building and testing with Nix";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs/nixos-25.05";
-    nixpkgs-unstable.url = "github:nixos/nixpkgs/nixos-unstable";
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     gomod2nix = {
-      url = "github:nix-community/gomod2nix";
+      # Fork:
+      # - Fixes a panic when symlinking existing directories containing files
+      # - Trims package list from `gomod2nix.toml` when patched version used for `gomod2nix generate`
+      url = "github:ben-krieger/gomod2nix";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.flake-utils.follows = "flake-utils";
     };
@@ -14,18 +16,16 @@
 
   outputs = {
     nixpkgs,
-    nixpkgs-unstable,
     gomod2nix,
     flake-utils,
     ...
   }:
     flake-utils.lib.eachDefaultSystem (system: let
-      go = pkgs-unstable.go_1_25;
+      go = pkgs.go_1_25;
       pkgs = nixpkgs.legacyPackages.${system};
-      pkgs-unstable = nixpkgs-unstable.legacyPackages.${system};
 
-      tinygo_patched = pkgs-unstable.tinygo.overrideAttrs (old: {
-        nativeBuildInputs = old.nativeBuildInputs ++ [pkgs-unstable.go_1_25];
+      tinygo_patched = pkgs.tinygo.overrideAttrs (old: {
+        nativeBuildInputs = old.nativeBuildInputs ++ [go];
         postInstall = ''
           ln -s ${pkgs.writeShellScript "go" ''
             if [ "$1" = "build" ]; then
@@ -52,14 +52,18 @@
             modules = ./nix/gomod2nix.toml;
             subPackages = ["examples/cmd"];
             postConfigure = ''
+              # Copy known good modules.txt into vendor, because gomod2nix
+              # doesn't do this for us
+              chmod 755 vendor
+              cp ${./nix/modules.txt} vendor/modules.txt
+
+              # Setup workspace
               go work init
               go work use .
               go work use examples
               go work use fsim
               go work use sqlite
               go work use tpm
-              chmod 755 vendor
-              cp ${./nix/modules.txt} vendor/modules.txt
             '';
             postInstall = ''
               mv $out/bin/cmd $out/bin/${attrs.name}
@@ -110,7 +114,7 @@
 
         go = pkgs.mkShell {
           packages = with pkgs; [
-            pkgs-unstable.go_1_25
+            go_1_25
             gotools
             gomod2nix.packages.${system}.default
           ];
@@ -122,7 +126,7 @@
         tinygo = pkgs.mkShell {
           packages = with pkgs; [
             tinygo_patched
-            pkgs-unstable.go_1_25
+            go_1_25
             gotools
             gomod2nix.packages.${system}.default
           ];
