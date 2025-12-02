@@ -211,9 +211,9 @@ func parseDirective(vars []RvInstruction, device bool) *RvDirective { //nolint:g
 			}
 
 		case RVDelaysec:
-			var secs time.Duration
+			var secs uint32
 			if err := cbor.Unmarshal(v.Value, &secs); err == nil {
-				dir.Delay = secs * time.Second
+				dir.Delay = time.Duration(secs) * time.Second
 			}
 
 		case RVSvCertHash:
