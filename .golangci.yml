@@ -23,6 +23,9 @@ linters:
         text: declaration of "(err|ctx)" shadows declaration at
       - path: (.+)\.go$
         text: "^unused-parameter: "
+      - linters:
+          - revive
+        text: 'var-naming: avoid package names that conflict with Go standard library package names'
     paths:
       - third_party$
       - builtin$
