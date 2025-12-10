@@ -11,8 +11,8 @@ schema = 3
     version = "v0.3.3-0.20240919001351-b4b5b84fdcbc"
     hash = "sha256-Gz7xKpSZNQelOVQgaZ/Ld83iBcdvcaT7Os56434/JCg="
   [mod."github.com/google/go-sev-guest"]
-    version = "v0.12.1"
-    hash = "sha256-hqa1ms7V4eBbSoH4oUChsp+QoWMUItbaWhbL+rgWG7c="
+    version = "v0.14.0"
+    hash = "sha256-7OtU0mbvC88aRh9oSS01e6KgU/+QNGYYkSxeaWcRynA="
   [mod."github.com/google/go-tdx-guest"]
     version = "v0.3.2-0.20241009005452-097ee70d0843"
     hash = "sha256-ZvqoLlg4VfnGOGGF2PN65qpdmiVFqfPpu5iLjkQe2ao="
@@ -20,8 +20,8 @@ schema = 3
     version = "v0.9.7"
     hash = "sha256-JxETYLaetCufzJp/srXqwFZGDuYSl0jBM5So0+ovYZ4="
   [mod."github.com/google/go-tpm-tools"]
-    version = "v0.4.5"
-    hash = "sha256-FfTK+TnvuzUqelkLp3b9H1tYF1DVU64QFhMY4iz3yOU="
+    version = "v0.4.7"
+    hash = "sha256-Wwecp81g7cJHQNslkibj7V2RstFxL0Yw9s9vCgHanQI="
   [mod."github.com/google/logger"]
     version = "v1.1.1"
     hash = "sha256-92ECLiBcM8ahLducThWxaAzB0P3wA72Wycu66fetTfQ="
