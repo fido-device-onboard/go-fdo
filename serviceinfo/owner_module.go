@@ -19,6 +19,10 @@ type OwnerModule interface {
 	// info for this module. Whether the owner module then errors (failing TO2)
 	// or completes is up to the logic of the owner service's onboarding
 	// process.
+	//
+	// The ctx parameter contains the devmod and device certificate chain,
+	// which can be extracted with functions from the serviceinfo package named
+	// ___FromContext.
 	HandleInfo(ctx context.Context, messageName string, messageBody io.Reader) error
 
 	// ProduceInfo is called once for each TO2.DeviceServiceInfo, after
@@ -33,6 +37,10 @@ type OwnerModule interface {
 	// next exchange. If `moduleDone` is true, then IsMoreServiceInfo will not
 	// be set true, regardless of the value of `more`, and this module will no
 	// longer be used in the TO2 protocol.
+	//
+	// The ctx parameter contains the devmod and device certificate chain,
+	// which can be extracted with functions from the serviceinfo package named
+	// ___FromContext.
 	ProduceInfo(ctx context.Context, producer *Producer) (blockPeer, moduleDone bool, _ error)
 }
 

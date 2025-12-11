@@ -10,6 +10,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -1479,6 +1480,24 @@ func (s *TO2Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*owner
 		if err != nil {
 			return nil, fmt.Errorf("error getting current service info module: %w", err)
 		}
+
+		// Set the context values that an FSIM expects
+		guid, err := s.Session.GUID(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("error retrieving associated device GUID of proof session: %w", err)
+		}
+		ov, err := s.Vouchers.Voucher(ctx, guid)
+		if err != nil {
+			return nil, fmt.Errorf("error retrieving voucher for device %x: %w", guid, err)
+		}
+		var deviceCertChain []*x509.Certificate
+		if ov.CertChain != nil {
+			deviceCertChain = make([]*x509.Certificate, len(*ov.CertChain))
+			for i, cert := range *ov.CertChain {
+				deviceCertChain[i] = (*x509.Certificate)(cert)
+			}
+		}
+		ctx = serviceinfo.Context(ctx, &devmod, deviceCertChain)
 	}
 
 	// Handle data with owner module
