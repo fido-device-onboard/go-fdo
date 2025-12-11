@@ -8,6 +8,7 @@ import (
 	"net"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/protocol"
@@ -51,14 +52,22 @@ func TestParseExternal(t *testing.T) {
 	}
 }
 
-func cborMarshal(t *testing.T, v any) []byte {
-	t.Helper()
-
-	b, err := cbor.Marshal(v)
-	if err != nil {
-		t.Fatalf("failed to marshal CBOR: %v", err)
+func TestParseDelay(t *testing.T) {
+	expect := time.Duration(10 * time.Second)
+	directives := protocol.ParseDeviceRvInfo([][]protocol.RvInstruction{
+		{
+			{
+				Variable: protocol.RVDelaysec,
+				Value:    cborMarshal(t, uint32(expect.Seconds())),
+			},
+		},
+	})
+	if n := len(directives); n != 1 {
+		t.Fatalf("expected one directive, got %d", n)
 	}
-	return b
+	if got := directives[0].Delay; expect != got {
+		t.Fatalf("expected %v delay, got %v", expect, got)
+	}
 }
 
 func TestParseURL(t *testing.T) {
@@ -181,4 +190,14 @@ func TestParseURL(t *testing.T) {
 			}
 		})
 	}
+}
+
+func cborMarshal(t *testing.T, v any) []byte {
+	t.Helper()
+
+	b, err := cbor.Marshal(v)
+	if err != nil {
+		t.Fatalf("failed to marshal CBOR: %v", err)
+	}
+	return b
 }
