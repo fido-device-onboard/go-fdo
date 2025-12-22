@@ -38,8 +38,7 @@
         patches =
           old.patches
           ++ [
-            ./nix/patches/tinygo-rand.diff
-            ./nix/patches/tinygo-testing-context.diff
+            # No additional patches needed in 0.40
           ];
         doCheck = false;
       });
