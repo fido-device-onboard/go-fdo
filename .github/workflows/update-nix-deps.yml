@@ -16,7 +16,8 @@ jobs:
           # pushes trigger actions to run again.
           token: ${{ secrets.WRITE_GO_FDO }}
           # Checkout the head of the PR branch.
-          ref: ${{ github.event.pull_request.head.sha }}
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
           # We need full history to amend the commit.
           fetch-depth: 0
 
