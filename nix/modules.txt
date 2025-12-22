@@ -106,6 +106,6 @@ golang.org/x/term
 # hermannm.dev/devlog v0.6.0
 ## explicit; go 1.23.0
 hermannm.dev/devlog
-# tinygo.org/x/drivers v0.33.0
+# tinygo.org/x/drivers v0.34.0
 ## explicit; go 1.22.1
 tinygo.org/x/drivers/netdev
