@@ -1,7 +1,7 @@
 name: Update Nix Dependencies
 
 on:
-  pull_request:
+  pull_request_target:
     paths:
       - "**/go.sum"
 
@@ -10,13 +10,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout PR branch
-        uses: actions/checkout@v6
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           # Use personal access token instead of GITHUB_TOKEN so that any
           # pushes trigger actions to run again.
           token: ${{ secrets.WRITE_GO_FDO }}
           # Checkout the head of the PR branch.
-          ref: ${{ github.head_ref }}
+          ref: ${{ github.event.pull_request.head.sha }}
           # We need full history to amend the commit.
           fetch-depth: 0
 
