@@ -35,8 +35,8 @@ schema = 3
     version = "v0.0.20"
     hash = "sha256-qhw9hWtU5wnyFyuMbKx+7RB8ckQaFQ8D+8GKPkN3HHQ="
   [mod."github.com/ncruces/go-sqlite3"]
-    version = "v0.30.3"
-    hash = "sha256-Yflzb/7EDz60mcWZedInaxT8T9v/GKZBiIOGFkkj6y0="
+    version = "v0.30.4"
+    hash = "sha256-9dyO5ih8x4ReYtsM5cF4JKeq2bu+9ZAY1WcUDAhow/A="
   [mod."github.com/ncruces/julianday"]
     version = "v1.0.0"
     hash = "sha256-EelxOI6DLHy0jYnAcTeda24wLWkGOYuFtoJvuDg874s="
@@ -65,8 +65,8 @@ schema = 3
     version = "v0.27.0"
     hash = "sha256-acWyf6OhF+2vpejyVsTXF250RlsY52gWvLz/2SvYueU="
   [mod."github.com/tetratelabs/wazero"]
-    version = "v1.10.1"
-    hash = "sha256-b0uZWDO0++af38zJ0TS9FGLM/Ver5dfkBiqas3tg388="
+    version = "v1.11.0"
+    hash = "sha256-bXmvMmQLsfyEa3C1kjE0AAVhGzj2tIiO67MxI3otMo8="
   [mod."go.uber.org/multierr"]
     version = "v1.11.0"
     hash = "sha256-Lb6rHHfR62Ozg2j2JZy3MKOMKdsfzd1IYTR57r3Mhp0="
