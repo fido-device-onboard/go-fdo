@@ -11,8 +11,10 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
@@ -30,12 +32,16 @@ type UploadRequest struct {
 	// Name to use in upload request
 	Name string
 
-	// Optional name to use on local filesystem
-	Rename string
+	// Rename func optionally overrides the behavior of how the module saves
+	// the device file to the local filesystem
+	Rename func(string) string
 
 	// CreateTemp optionally overrides the behavior of how the module creates a
 	// temporary file to download to.
 	CreateTemp func() (*os.File, error)
+
+	// Ovewrite makes the module to ovewrite the local file if it already exist
+	Overwrite bool
 
 	// internal state
 	requested bool
@@ -157,13 +163,84 @@ func (u *UploadRequest) finalize() (blockPeer, moduleDone bool, _ error) {
 	if err := u.temp.Close(); err != nil {
 		return false, false, fmt.Errorf("error closing temp file for upload %q: %w", u.Name, err)
 	}
-	// TODO: Enforce chroot-like security
-	if u.Rename == "" {
-		u.Rename = filepath.Base(u.Name)
+
+	// Enforce chroot-like security using os.OpenRoot
+	// Create a rooted filesystem to prevent path traversal attacks
+	rootDir, err := os.OpenRoot(u.Dir)
+	if err != nil {
+		return false, false, fmt.Errorf("error creating '%q' as root dir for uploads: %w", u.Dir, err)
 	}
-	oldpath, newpath := u.temp.Name(), filepath.Join(u.Dir, u.Rename)
-	if err := os.Rename(oldpath, newpath); err != nil {
-		return false, false, fmt.Errorf("error renaming temp file %q to %q: %w", oldpath, newpath, err)
+	defer rootDir.Close()
+
+	rootDirName := rootDir.Name()
+	tempFileName := u.temp.Name()
+
+	defer os.Remove(tempFileName)
+
+	// Check if temp file and destination directory are on the same filesystem
+	samefs, err := sameFilesystem(tempFileName, rootDirName)
+	if err != nil {
+		return false, false, fmt.Errorf("error checking filesystem for temp file and destination: %w", err)
+	}
+
+	if u.Rename == nil {
+		u.Rename = func(name string) string {
+			return strings.TrimLeft(name, "/")
+		}
+	}
+
+	// Construct the actual destination filename (relative to u.Dir)
+	// Clean the path to prevent traversal attacks with ../
+	dstFileName := filepath.Clean(u.Rename(u.Name))
+
+	// Use rootDir to validate the destination path doesn't escape
+	var dstFileInfo fs.FileInfo
+	dstFileInfo, err = rootDir.Stat(dstFileName)
+	// The file exists and overwrite is false
+	if err == nil && !u.Overwrite {
+		return false, false, fmt.Errorf("'%s' already exists", dstFileInfo.Name())
+	}
+	// The was an unexpected error
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return false, false, err
+	}
+
+	// Create parent directories if needed
+	if err = rootDir.MkdirAll(filepath.Dir(dstFileName), 0o755); err != nil {
+		return false, false, fmt.Errorf("error creating parent directories for %q: %w", dstFileName, err)
+	}
+
+	// Construct the full destination path for operations outside rootDir
+	dstFilePath := filepath.Join(u.Dir, dstFileName)
+
+	// Same filesystem - we can use rename for efficiency
+	// Use os.Rename since temp file is outside the rooted directory
+	if samefs {
+		if err = os.Rename(tempFileName, dstFilePath); err != nil {
+			return false, false, fmt.Errorf("error renaming temp file %q to %q: %w", tempFileName, dstFilePath, err)
+		}
+		return false, true, nil
+	}
+
+	// Different filesystems - fall back to copy
+	// Open the temp file for reading
+	src, err := os.Open(tempFileName)
+	if err != nil {
+		return false, false, fmt.Errorf("error opening temp file %q: %w", tempFileName, err)
+	}
+	defer src.Close()
+
+	// Create the destination file within the rooted filesystem
+	// This ensures u.Rename cannot escape u.Dir even with path traversal
+	dst, err := rootDir.Create(dstFileName)
+	if err != nil {
+		return false, false, fmt.Errorf("error creating destination file %q: %w", dstFileName, err)
+	}
+	defer dst.Close()
+
+	// Copy the data
+	if _, err = io.Copy(dst, src); err != nil {
+		return false, false, fmt.Errorf("error copying to destination file %q: %w", dstFileName, err)
 	}
 	return false, true, nil
 }
