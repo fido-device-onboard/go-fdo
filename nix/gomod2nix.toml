@@ -17,8 +17,8 @@ schema = 3
     version = "v0.3.2-0.20241009005452-097ee70d0843"
     hash = "sha256-ZvqoLlg4VfnGOGGF2PN65qpdmiVFqfPpu5iLjkQe2ao="
   [mod."github.com/google/go-tpm"]
-    version = "v0.9.7"
-    hash = "sha256-JxETYLaetCufzJp/srXqwFZGDuYSl0jBM5So0+ovYZ4="
+    version = "v0.9.8"
+    hash = "sha256-L9lF8qj0N1mH5pwzXQNKw4CAP340P0PTTG0OmZkCQZw="
   [mod."github.com/google/go-tpm-tools"]
     version = "v0.4.7"
     hash = "sha256-Wwecp81g7cJHQNslkibj7V2RstFxL0Yw9s9vCgHanQI="
