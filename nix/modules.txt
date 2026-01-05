@@ -7,8 +7,6 @@
 ## explicit; go 1.25.0
 # github.com/fido-device-onboard/go-fdo/tpm v0.0.0-00010101000000-000000000000 => ./tpm
 ## explicit; go 1.25.0
-# github.com/google/go-tpm v0.9.7
-## explicit; go 1.22
 # github.com/google/go-tpm v0.9.8
 ## explicit; go 1.22
 github.com/google/go-tpm/legacy/tpm2
@@ -22,8 +20,6 @@ github.com/google/go-tpm/tpmutil/tbs
 ## explicit; go 1.22
 github.com/google/go-tpm-tools/simulator
 github.com/google/go-tpm-tools/simulator/internal
-# github.com/ncruces/go-sqlite3 v0.30.3
-## explicit; go 1.24.0
 # github.com/ncruces/go-sqlite3 v0.30.4
 ## explicit; go 1.24.0
 github.com/ncruces/go-sqlite3
@@ -55,8 +51,6 @@ github.com/syumai/workers/cloudflare/internal/cfruntimecontext
 github.com/syumai/workers/internal/jshttp
 github.com/syumai/workers/internal/jsutil
 github.com/syumai/workers/internal/runtimecontext
-# github.com/tetratelabs/wazero v1.10.1
-## explicit; go 1.24.0
 # github.com/tetratelabs/wazero v1.11.0
 ## explicit; go 1.24.0
 github.com/tetratelabs/wazero
