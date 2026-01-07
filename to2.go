@@ -1467,20 +1467,14 @@ func (s *TO2Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*owner
 	// Get next owner service info module
 	var moduleName string
 	var module serviceinfo.OwnerModule
-	if devmod, modules, complete, err := s.Session.Devmod(ctx); errors.Is(err, ErrNotFound) || (err == nil && !complete) {
+	if devmod, supportedModules, complete, err := s.Session.Devmod(ctx); errors.Is(err, ErrNotFound) || (err == nil && !complete) {
 		moduleName, module = "devmod", &devmodOwnerModule{
 			Devmod:  devmod,
-			Modules: modules,
+			Modules: supportedModules,
 		}
 	} else if err != nil {
 		return nil, fmt.Errorf("error getting devmod state: %w", err)
 	} else {
-		var err error
-		moduleName, module, err = s.Modules.Module(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("error getting current service info module: %w", err)
-		}
-
 		// Set the context values that an FSIM expects
 		guid, err := s.Session.GUID(ctx)
 		if err != nil {
@@ -1497,7 +1491,14 @@ func (s *TO2Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*owner
 				deviceCertChain[i] = (*x509.Certificate)(cert)
 			}
 		}
-		ctx = serviceinfo.Context(ctx, &devmod, deviceCertChain)
+		ctx = serviceinfo.Context(ctx, &devmod, supportedModules, deviceCertChain)
+
+		// Get the current module with the devmod and device certificate chain
+		// values in the context for use in devmod instantiation
+		moduleName, module, err = s.Modules.Module(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("error getting current service info module: %w", err)
+		}
 	}
 
 	// Handle data with owner module
@@ -1586,11 +1587,36 @@ func (s *TO2Server) produceOwnerServiceInfo(ctx context.Context, moduleName stri
 		return nil, fmt.Errorf("owner service info module produced service info exceeding the MTU=%d - 3 (message overhead), size=%d", mtu, size)
 	}
 
+	// Get device certificate chain to put in the context so that they can be
+	// used to select the next module
+	guid, err := s.Session.GUID(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error retrieving associated device GUID of proof session: %w", err)
+	}
+	ov, err := s.Vouchers.Voucher(ctx, guid)
+	if err != nil {
+		return nil, fmt.Errorf("error retrieving voucher for device %x: %w", guid, err)
+	}
+	var deviceCertChain []*x509.Certificate
+	if ov.CertChain != nil {
+		deviceCertChain = make([]*x509.Certificate, len(*ov.CertChain))
+		for i, cert := range *ov.CertChain {
+			deviceCertChain[i] = (*x509.Certificate)(cert)
+		}
+	}
+
 	// Store the current module state
 	if devmod, ok := module.(*devmodOwnerModule); ok {
 		if err := s.Session.SetDevmod(ctx, devmod.Devmod, devmod.Modules, complete); err != nil {
 			return nil, fmt.Errorf("error storing devmod state: %w", err)
 		}
+		ctx = serviceinfo.Context(ctx, &devmod.Devmod, devmod.Modules, deviceCertChain)
+	} else {
+		devmod, supportedModules, _, err := s.Session.Devmod(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("error getting devmod state: %w", err)
+		}
+		ctx = serviceinfo.Context(ctx, &devmod, supportedModules, deviceCertChain)
 	}
 	if modules, ok := s.Modules.(serviceinfo.ModulePersister); ok {
 		if err := modules.PersistModule(ctx, moduleName, module); err != nil {
