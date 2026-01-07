@@ -141,10 +141,10 @@ type TO2SessionState interface {
 	MTU(context.Context) (uint16, error)
 
 	// SetDevmod sets the device info and module support.
-	SetDevmod(_ context.Context, _ serviceinfo.Devmod, modules []string, complete bool) error
+	SetDevmod(_ context.Context, _ serviceinfo.Devmod, supportedModules []string, complete bool) error
 
 	// Devmod returns the device info and module support.
-	Devmod(context.Context) (_ serviceinfo.Devmod, modules []string, complete bool, _ error)
+	Devmod(context.Context) (_ serviceinfo.Devmod, supportedModules []string, complete bool, _ error)
 }
 
 // RendezvousBlobPersistentState maintains device to owner info state used in

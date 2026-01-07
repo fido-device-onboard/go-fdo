@@ -1456,6 +1456,32 @@ func sendDeviceServiceInfo(ctx context.Context, transport Transport, msg deviceS
 	}
 }
 
+// Set the context values that an FSIM expects
+func (s *TO2Server) fsimContext(ctx context.Context, devmod *serviceinfo.Devmod, supportedModules []string) (context.Context, error) {
+	guid, err := s.Session.GUID(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error retrieving associated device GUID of proof session: %w", err)
+	}
+	replacementGUID, err := s.Session.ReplacementGUID(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error retrieving replacement GUID of proof session: %w", err)
+	}
+
+	ov, err := s.Vouchers.Voucher(ctx, guid)
+	if err != nil {
+		return nil, fmt.Errorf("error retrieving voucher for device %x: %w", guid, err)
+	}
+	var deviceCertChain []*x509.Certificate
+	if ov.CertChain != nil {
+		deviceCertChain = make([]*x509.Certificate, len(*ov.CertChain))
+		for i, cert := range *ov.CertChain {
+			deviceCertChain[i] = (*x509.Certificate)(cert)
+		}
+	}
+
+	return serviceinfo.Context(ctx, devmod, supportedModules, deviceCertChain, guid, replacementGUID), nil
+}
+
 // DeviceServiceInfo(68) -> OwnerServiceInfo(69)
 func (s *TO2Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*ownerServiceInfo, error) { //nolint:gocyclo
 	// Parse request
@@ -1467,37 +1493,25 @@ func (s *TO2Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*owner
 	// Get next owner service info module
 	var moduleName string
 	var module serviceinfo.OwnerModule
-	if devmod, modules, complete, err := s.Session.Devmod(ctx); errors.Is(err, ErrNotFound) || (err == nil && !complete) {
+	if devmod, supportedModules, complete, err := s.Session.Devmod(ctx); errors.Is(err, ErrNotFound) || (err == nil && !complete) {
 		moduleName, module = "devmod", &devmodOwnerModule{
 			Devmod:  devmod,
-			Modules: modules,
+			Modules: supportedModules,
 		}
 	} else if err != nil {
 		return nil, fmt.Errorf("error getting devmod state: %w", err)
 	} else {
-		var err error
+		ctx, err = s.fsimContext(ctx, &devmod, supportedModules)
+		if err != nil {
+			return nil, err
+		}
+
+		// Get the current module with the devmod and device certificate chain
+		// values in the context for use in devmod instantiation
 		moduleName, module, err = s.Modules.Module(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("error getting current service info module: %w", err)
 		}
-
-		// Set the context values that an FSIM expects
-		guid, err := s.Session.GUID(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("error retrieving associated device GUID of proof session: %w", err)
-		}
-		ov, err := s.Vouchers.Voucher(ctx, guid)
-		if err != nil {
-			return nil, fmt.Errorf("error retrieving voucher for device %x: %w", guid, err)
-		}
-		var deviceCertChain []*x509.Certificate
-		if ov.CertChain != nil {
-			deviceCertChain = make([]*x509.Certificate, len(*ov.CertChain))
-			for i, cert := range *ov.CertChain {
-				deviceCertChain[i] = (*x509.Certificate)(cert)
-			}
-		}
-		ctx = serviceinfo.Context(ctx, &devmod, deviceCertChain)
 	}
 
 	// Handle data with owner module
@@ -1565,7 +1579,7 @@ func (s *TO2Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*owner
 }
 
 // Allow owner module to produce data
-func (s *TO2Server) produceOwnerServiceInfo(ctx context.Context, moduleName string, module serviceinfo.OwnerModule) (*ownerServiceInfo, error) {
+func (s *TO2Server) produceOwnerServiceInfo(ctx context.Context, moduleName string, module serviceinfo.OwnerModule) (*ownerServiceInfo, error) { //nolint:gocyclo
 	mtu, err := s.Session.MTU(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error getting max device service info size: %w", err)
@@ -1590,6 +1604,19 @@ func (s *TO2Server) produceOwnerServiceInfo(ctx context.Context, moduleName stri
 	if devmod, ok := module.(*devmodOwnerModule); ok {
 		if err := s.Session.SetDevmod(ctx, devmod.Devmod, devmod.Modules, complete); err != nil {
 			return nil, fmt.Errorf("error storing devmod state: %w", err)
+		}
+		ctx, err = s.fsimContext(ctx, &devmod.Devmod, devmod.Modules)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		devmod, supportedModules, _, err := s.Session.Devmod(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("error getting devmod state: %w", err)
+		}
+		ctx, err = s.fsimContext(ctx, &devmod, supportedModules)
+		if err != nil {
+			return nil, err
 		}
 	}
 	if modules, ok := s.Modules.(serviceinfo.ModulePersister); ok {
