@@ -26,8 +26,14 @@ go.work.sum
 # VS Code
 .vscode/
 
+test.db
+
 # Test artifacts
 fdo.download_*
+testvoucher*.ov
 
 # Nix artifacts
 /result
+
+# Retain spec for reference
+FIDO-IoT-spec.bs

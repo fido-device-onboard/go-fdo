@@ -195,10 +195,11 @@ func (s *TO1Server) HandleError(ctx context.Context, errMsg protocol.ErrorMessag
 
 // TO2Server implements the TO2 protocol.
 type TO2Server struct {
-	Session   TO2SessionState
-	Modules   serviceinfo.ModuleStateMachine
-	Vouchers  OwnerVoucherPersistentState
-	OwnerKeys OwnerKeyPersistentState
+	Session      TO2SessionState
+	Modules      serviceinfo.ModuleStateMachine
+	Vouchers     OwnerVoucherPersistentState
+	OwnerKeys    OwnerKeyPersistentState
+	DelegateKeys DelegateKeyPersistentState
 
 	// This field must be non-nil in order to use the Resale Protocol (see
 	// [TO2Server.Resell]).
@@ -231,6 +232,12 @@ type TO2Server struct {
 	// is useful when it can help a well-behaved device communicate faster over
 	// a well understood network.
 	MaxDeviceServiceInfoSize func(context.Context, Voucher) (uint16, error)
+
+	// Use this delegate cert for onboarding (or empty string)
+	OnboardDelegate string
+
+	// Use this delegate cert for rendezvous (or empty string)
+	RvDelegate string
 }
 
 // Resell implements the FDO Resale Protocol by removing a voucher from
@@ -290,6 +297,7 @@ func (s *TO2Server) Respond(ctx context.Context, msgType uint8, msg io.Reader) (
 	// Handle each message type
 	var err error
 	switch msgType {
+	// FDO 1.01 TO2 messages
 	case protocol.TO2HelloDeviceMsgType:
 		respType = protocol.TO2ProveOVHdrMsgType
 		resp, err = s.proveOVHdr(ctx, msg)
@@ -312,6 +320,31 @@ func (s *TO2Server) Respond(ctx context.Context, msgType uint8, msg io.Reader) (
 		s.Modules.CleanupModules(ctx)
 		respType = protocol.TO2Done2MsgType
 		resp, err = s.to2Done2(ctx, msg)
+
+	// FDO 2.0 TO2 messages
+	// Key difference: Device proves itself FIRST (anti-DoS)
+	case protocol.TO2HelloDeviceProbeMsgType:
+		respType = protocol.TO2HelloDeviceAck20MsgType
+		resp, err = s.helloDeviceAck20(ctx, msg)
+	case protocol.TO2ProveDevice20MsgType:
+		respType = protocol.TO2ProveOVHdr20MsgType
+		resp, err = s.proveOVHdr20(ctx, msg)
+	case protocol.TO2GetOVNextEntry20MsgType:
+		respType = protocol.TO2OVNextEntry20MsgType
+		resp, err = s.ovNextEntry20(ctx, msg)
+	case protocol.TO2DeviceSvcInfoRdy20MsgType:
+		respType = protocol.TO2SetupDevice20MsgType
+		resp, err = s.setupDevice20(ctx, msg)
+	case protocol.TO2DeviceSvcInfo20MsgType:
+		respType = protocol.TO2OwnerSvcInfo20MsgType
+		resp, err = s.ownerSvcInfo20(ctx, msg)
+		if err != nil {
+			s.Modules.CleanupModules(ctx)
+		}
+	case protocol.TO2Done20MsgType:
+		s.Modules.CleanupModules(ctx)
+		respType = protocol.TO2DoneAck20MsgType
+		resp, err = s.doneAck20(ctx, msg)
 	}
 
 	// Return response on success

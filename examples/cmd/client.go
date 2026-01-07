@@ -57,6 +57,7 @@ var (
 	echoCmds    bool
 	uploads     = make(fsVar)
 	wgetDir     string
+	fdoVersion  int
 )
 
 type fsVar map[string]string
@@ -150,6 +151,7 @@ func init() {
 	clientFlags.Var(&uploads, "upload", "List of dirs and `files` to upload files from, "+
 		"comma-separated and/or flag provided multiple times (FSIM disabled if empty)")
 	clientFlags.StringVar(&wgetDir, "wget-dir", "", "A `dir` to wget files into (FSIM disabled if empty)")
+	clientFlags.IntVar(&fdoVersion, "fdo-version", 101, "FDO protocol version (101 or 200)")
 }
 
 func client(ctx context.Context) error {
@@ -385,7 +387,10 @@ TO1:
 
 	// Try TO2 on each address only once
 	for _, baseURL := range to2URLs {
-		newDC := transferOwnership2(ctx, tlsTransport(baseURL, nil), to1d, conf)
+		// Use version-aware transport for TO2
+		version := protocol.Version(fdoVersion)
+		transport := tlsTransportWithVersion(baseURL, nil, version)
+		newDC := transferOwnership2(ctx, transport, to1d, conf)
 		if newDC != nil {
 			return newDC
 		}
@@ -443,7 +448,14 @@ func transferOwnership2(ctx context.Context, transport fdo.Transport, to1d *cose
 	}
 	conf.DeviceModules = fsims
 
-	cred, err := fdo.TO2(ctx, transport, to1d, conf)
+	// Call version-specific TO2 function
+	var cred *fdo.DeviceCredential
+	var err error
+	if fdoVersion == 200 {
+		cred, err = fdo.TO2v200(ctx, transport, to1d, conf)
+	} else {
+		cred, err = fdo.TO2(ctx, transport, to1d, conf)
+	}
 	if err != nil {
 		slog.Error("TO2 failed", "error", err)
 		return nil

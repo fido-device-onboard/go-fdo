@@ -69,7 +69,8 @@ func (t *Transport) Send(ctx context.Context, msgType uint8, msg any, sess kex.S
 		isProtocolStart = msgType == 30
 	case protocol.TO2Protocol:
 		responder = t.TO2Responder
-		isProtocolStart = msgType == 60
+		// TO2 starts at msg 60 (1.01) or msg 80 (2.0)
+		isProtocolStart = msgType == protocol.TO2HelloDeviceMsgType || msgType == protocol.TO2HelloDeviceProbeMsgType
 	case protocol.AnyProtocol:
 		return 0, nil, nil
 	default:
@@ -95,7 +96,8 @@ func (t *Transport) Send(ctx context.Context, msgType uint8, msg any, sess kex.S
 	}
 
 	switch respType {
-	case 13, 23, 33, 71, protocol.ErrorMsgType:
+	case protocol.DISetCredentialsMsgType, protocol.TO0AcceptOwnerMsgType, protocol.TO1RVRedirectMsgType,
+		protocol.TO2Done2MsgType, protocol.TO2DoneAck20MsgType, protocol.ErrorMsgType:
 		if err := t.Tokens.InvalidateToken(t.Tokens.TokenContext(context.Background(), t.token)); err != nil {
 			t.T.Logf("error invalidating token: %v", err)
 		}

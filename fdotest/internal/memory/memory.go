@@ -15,6 +15,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"fmt"
 	"math/big"
 	"time"
@@ -30,6 +31,10 @@ type State struct {
 	RVBlobs   map[protocol.GUID]*cose.Sign1[protocol.To1d, []byte]
 	Vouchers  map[protocol.GUID]*fdo.Voucher
 	OwnerKeys map[KeyTypeAndRsaBits]struct {
+		Key   crypto.Signer
+		Chain []*x509.Certificate
+	}
+	DelegateKeys map[string]struct {
 		Key   crypto.Signer
 		Chain []*x509.Certificate
 	}
@@ -63,6 +68,10 @@ func NewState() (*State, error) {
 	if err != nil {
 		return nil, err
 	}
+	rsaDelegateKey, rsaDelegate, err := newDelegateChain(rsa2048Key, func() crypto.Signer { s, _ := rsa.GenerateKey(rand.Reader, 2048); return s })
+	if err != nil {
+		return nil, err
+	}
 	ec256Key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, err
@@ -71,11 +80,19 @@ func NewState() (*State, error) {
 	if err != nil {
 		return nil, err
 	}
+	ec256DelegateKey, ec256Delegate, err := newDelegateChain(ec256Key, func() crypto.Signer { s, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader); return s })
+	if err != nil {
+		return nil, err
+	}
 	ec384Key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	if err != nil {
 		return nil, err
 	}
 	ec384Cert, err := newCA(ec384Key)
+	if err != nil {
+		return nil, err
+	}
+	ec384DelegateKey, ec384Delegate, err := newDelegateChain(ec384Key, func() crypto.Signer { s, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader); return s })
 	if err != nil {
 		return nil, err
 	}
@@ -93,6 +110,15 @@ func NewState() (*State, error) {
 			{protocol.RsaPssKeyType, 3072}:       {Key: rsa3072Key, Chain: []*x509.Certificate{rsa3072Cert}},
 			{protocol.Secp256r1KeyType, 0}:       {Key: ec256Key, Chain: []*x509.Certificate{ec256Cert}},
 			{protocol.Secp384r1KeyType, 0}:       {Key: ec384Key, Chain: []*x509.Certificate{ec384Cert}},
+		},
+		DelegateKeys: map[string]struct {
+			Key   crypto.Signer
+			Chain []*x509.Certificate
+		}{
+			"RSA2048RESTR": {Key: rsaDelegateKey, Chain: rsaDelegate},
+			"RSAPSS":       {Key: rsaDelegateKey, Chain: rsaDelegate},
+			"SECP256R1":    {Key: ec256DelegateKey, Chain: ec256Delegate},
+			"SECP384R1":    {Key: ec384DelegateKey, Chain: ec384Delegate},
 		},
 	}, nil
 }
@@ -153,6 +179,61 @@ func (s *State) OwnerKey(ctx context.Context, keyType protocol.KeyType, rsaBits 
 	return key.Key, key.Chain, nil
 }
 
+// DelegateKey returns the private key matching a given key type and
+// its certificate chain.
+func (s *State) DelegateKey(name string) (crypto.Signer, []*x509.Certificate, error) {
+	key, ok := s.DelegateKeys[name]
+	if !ok {
+		return nil, nil, fdo.ErrNotFound
+	}
+	return key.Key, key.Chain, nil
+}
+
+// TODO: Make things easier by using the same key for each cert in the chain
+func newDelegateChain(owner crypto.Signer, getNewKey func() crypto.Signer) (crypto.Signer, []*x509.Certificate, error) {
+	rootTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(111),
+		Issuer:                pkix.Name{CommonName: "DelegateRoot"},
+		Subject:               pkix.Name{CommonName: "DelegateRoot"},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(30 * 360 * 24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		UnknownExtKeyUsage:    []asn1.ObjectIdentifier{fdo.OID_permitOnboardNewCred, fdo.OID_permitOnboardReuseCred, fdo.OID_permitOnboardFdoDisable, fdo.OID_permitRedirect},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, rootTemplate, rootTemplate, owner.Public(), owner)
+	rootCert, err := x509.ParseCertificate(der)
+
+	intermediateTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(222),
+		Subject:               pkix.Name{CommonName: "DelegateIntermediate"},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(30 * 360 * 24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		UnknownExtKeyUsage:    []asn1.ObjectIdentifier{fdo.OID_permitOnboardNewCred, fdo.OID_permitOnboardReuseCred, fdo.OID_permitOnboardFdoDisable, fdo.OID_permitRedirect},
+	}
+	intermediateKey := getNewKey()
+	der, err = x509.CreateCertificate(rand.Reader, intermediateTemplate, rootTemplate, intermediateKey.Public(), owner)
+	intermediateCert, err := x509.ParseCertificate(der)
+
+	delegateTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(333),
+		Subject:      pkix.Name{CommonName: "DelegateCert"},
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(30 * 360 * 24 * time.Hour),
+
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		UnknownExtKeyUsage:    []asn1.ObjectIdentifier{fdo.OID_permitOnboardNewCred, fdo.OID_permitOnboardReuseCred, fdo.OID_permitOnboardFdoDisable, fdo.OID_permitRedirect},
+	}
+	delegateKey := getNewKey()
+	der, err = x509.CreateCertificate(rand.Reader, delegateTemplate, intermediateTemplate, delegateKey.Public(), intermediateKey)
+	delegateCert, err := x509.ParseCertificate(der)
+	return delegateKey, []*x509.Certificate{delegateCert, intermediateCert, rootCert}, err
+}
 func newCA(priv crypto.Signer) (*x509.Certificate, error) {
 	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
 	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
