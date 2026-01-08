@@ -39,22 +39,58 @@ type Handler struct {
 	MaxContentLength int64
 }
 
-func msgTypeFromPath(w http.ResponseWriter, r *http.Request) (uint8, bool) {
+// versionAndMsgFromPath parses the FDO version and message type from the URL path.
+// Expected path format: /fdo/{version}/msg/{msgType}
+// Returns version (101, 200), message type, and success flag.
+func versionAndMsgFromPath(w http.ResponseWriter, r *http.Request) (protocol.Version, uint8, bool) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
-		return 0, false
+		return 0, 0, false
 	}
-	path := strings.TrimPrefix(r.URL.Path, "/fdo/101/msg/")
-	if strings.Contains(path, "/") {
+
+	// Parse path: /fdo/{ver}/msg/{type}
+	path := strings.TrimPrefix(r.URL.Path, "/fdo/")
+	parts := strings.Split(path, "/")
+	if len(parts) != 3 || parts[1] != "msg" {
 		w.WriteHeader(http.StatusNotFound)
-		return 0, false
+		return 0, 0, false
 	}
-	typ, err := strconv.ParseUint(path, 10, 8)
+
+	// Parse version
+	ver, err := strconv.ParseUint(parts[0], 10, 16)
+	if err != nil {
+		writeErr(w, 0, fmt.Errorf("invalid FDO version"))
+		return 0, 0, false
+	}
+	version := protocol.Version(ver)
+	if !version.IsValid() {
+		writeErr(w, 0, fmt.Errorf("unsupported FDO version: %d", ver))
+		return 0, 0, false
+	}
+
+	// Parse message type
+	typ, err := strconv.ParseUint(parts[2], 10, 8)
 	if err != nil {
 		writeErr(w, 0, fmt.Errorf("invalid message type"))
-		return 0, false
+		return 0, 0, false
 	}
-	return uint8(typ), true
+
+	return version, uint8(typ), true
+}
+
+// isEncryptedTO2Message returns true if the message type requires encryption/decryption.
+// In FDO 1.01: messages 65-71 (after ProveDevice/64, key exchange complete)
+// In FDO 2.0: messages 86-91 (after OVNextEntry/85, key exchange complete)
+func isEncryptedTO2Message(msgType uint8) bool {
+	// 1.01: encrypted messages are 65-71
+	if protocol.TO2ProveDeviceMsgType < msgType && msgType <= protocol.TO2Done2MsgType {
+		return true
+	}
+	// 2.0: encrypted messages are 86-91
+	if protocol.TO2OVNextEntry20MsgType < msgType && msgType <= protocol.TO2DoneAck20MsgType {
+		return true
+	}
+	return false
 }
 
 func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -64,11 +100,15 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// Parse message type from request URL
-	msgType, ok := msgTypeFromPath(w, r)
+	// Parse version and message type from request URL
+	version, msgType, ok := versionAndMsgFromPath(w, r)
 	if !ok {
 		return
 	}
+
+	// Inject version into context for downstream handlers
+	ctx = protocol.ContextWithVersion(ctx, version)
+
 	proto := protocol.Of(msgType)
 
 	// Parse request headers
@@ -103,7 +143,8 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		isProtocolStart = msgType == 30
 	case protocol.TO2Protocol:
 		resp = h.TO2Responder
-		isProtocolStart = msgType == 60
+		// TO2 starts at msg 60 (1.01) or msg 80 (2.0)
+		isProtocolStart = msgType == protocol.TO2HelloDeviceMsgType || msgType == protocol.TO2HelloDeviceProbeMsgType
 	}
 	if resp == nil {
 		writeErr(w, msgType, fmt.Errorf("unsupported message type"))
@@ -189,8 +230,10 @@ func (h Handler) handleRequest(ctx context.Context, w http.ResponseWriter, r *ht
 		})
 	}
 
-	// Decrypt TO2 messages after 64
-	if protocol.TO2ProveDeviceMsgType < msgType && msgType < protocol.ErrorMsgType {
+	// Decrypt TO2 messages after key exchange is complete
+	// 1.01: messages 65-71 (after ProveDevice/64)
+	// 2.0: messages 86-91 (after OVNextEntry/85)
+	if isEncryptedTO2Message(msgType) {
 		sess, err := resp.(interface {
 			CryptSession(ctx context.Context) (kex.Session, error)
 		}).CryptSession(ctx)
@@ -229,8 +272,8 @@ func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, msgTy
 		}
 	}
 
-	// Encrypt TO2 messages beginning with 64
-	if protocol.TO2ProveDeviceMsgType < respType && respType < protocol.ErrorMsgType {
+	// Encrypt TO2 messages after key exchange is complete
+	if isEncryptedTO2Message(respType) {
 		sess, err := resp.(interface {
 			CryptSession(ctx context.Context) (kex.Session, error)
 		}).CryptSession(ctx)
@@ -255,8 +298,10 @@ func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, msgTy
 	}
 
 	// Invalidate token when finishing a protocol
+	// DI: 13, TO0: 23, TO1: 33, TO2 1.01: 71, TO2 2.0: 91
 	switch respType {
-	case 13, 23, 33, 71:
+	case protocol.DIDoneMsgType, protocol.TO0AcceptOwnerMsgType, protocol.TO1RVRedirectMsgType,
+		protocol.TO2Done2MsgType, protocol.TO2DoneAck20MsgType:
 		h.invalidateToken(ctx)
 	}
 

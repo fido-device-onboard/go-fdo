@@ -28,6 +28,12 @@ func TestClient(t *testing.T) {
 	fdotest.RunClientTestSuite(t, fdotest.Config{})
 }
 
+func TestClientV200(t *testing.T) {
+	fdotest.RunClientTestSuite(t, fdotest.Config{
+		Version: protocol.Version200,
+	})
+}
+
 func TestClientWithMockModule(t *testing.T) {
 	deviceModule := &fdotest.MockDeviceModule{
 		ReceiveFunc: func(ctx context.Context, messageName string, messageBody io.Reader, respond func(message string) io.Writer, yield func()) error {
