@@ -46,6 +46,10 @@ type Transport struct {
 	// MaxContentLength defaults to 65535. Negative values disable content
 	// length checking.
 	MaxContentLength int64
+
+	// FdoVersion specifies the FDO protocol version (101 for 1.01, 200 for 2.0).
+	// Defaults to 101 if not set.
+	FdoVersion protocol.Version
 }
 
 // Send sends a single message and receives a single response message.
@@ -68,8 +72,14 @@ func (t *Transport) Send(ctx context.Context, msgType uint8, msg any, sess kex.S
 		}
 	}
 
+	// Default to version 101 if not set
+	version := t.FdoVersion
+	if version == 0 {
+		version = protocol.Version101
+	}
+
 	// Create request with URL and body
-	uri, err := url.JoinPath(t.BaseURL, "fdo/101/msg", strconv.Itoa(int(msgType)))
+	uri, err := url.JoinPath(t.BaseURL, "fdo", version.String(), "msg", strconv.Itoa(int(msgType)))
 	if err != nil {
 		return 0, nil, fmt.Errorf("error parsing base URL: %w", err)
 	}

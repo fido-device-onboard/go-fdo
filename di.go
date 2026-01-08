@@ -124,10 +124,12 @@ func appStart(ctx context.Context, transport Transport, info any) (*VoucherHeade
 	// Define request structure
 	var msg struct {
 		DeviceMfgInfo *cbor.Bstr[any]
+		CapabilityFlags
 	}
 	if info != nil {
 		msg.DeviceMfgInfo = cbor.NewBstr(info)
 	}
+	msg.CapabilityFlags = GlobalCapabilityFlags
 
 	// Make request
 	typ, resp, err := transport.Send(ctx, protocol.DIAppStartMsgType, msg, nil)
@@ -169,6 +171,7 @@ func (s *DIServer[T]) setCredentials(ctx context.Context, msg io.Reader) (*setCr
 	// Decode proprietary device mfg info from app start
 	var appStart struct {
 		Info *cbor.Bstr[T]
+		CapabilityFlags
 	}
 	if err := cbor.NewDecoder(msg).Decode(&appStart); err != nil {
 		return nil, fmt.Errorf("error decoding device manufacturing info: %w", err)

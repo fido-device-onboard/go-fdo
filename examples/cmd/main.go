@@ -37,6 +37,11 @@ Client options:
 %s
 Server options:
 %s
+Delegate options:
+%s
+
+"delegate help" for more delegate commands
+
 Key types:
   - RSA2048RESTR
   - RSAPKCS
@@ -62,7 +67,7 @@ Key exchange suites:
   - ASYMKEX3072
   - ECDH256
   - ECDH384
-`, options(flags), options(clientFlags), options(serverFlags))
+`, options(flags), options(clientFlags), options(serverFlags), options(delegateFlags))
 }
 
 func options(flags *flag.FlagSet) string {
@@ -111,6 +116,15 @@ func main() {
 		}
 		if err := server(ctx); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "server error: %v\n", err)
+			os.Exit(2)
+		}
+	case "delegate", "d", "del":
+		if err := delegateFlags.Parse(args); err != nil {
+			usage()
+			os.Exit(1)
+		}
+		if err := delegate(delegateFlags.Args()); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "delegate error: %v\n", err)
 			os.Exit(2)
 		}
 	default:
