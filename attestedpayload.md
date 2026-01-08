@@ -58,9 +58,11 @@ openssl enc -aes-256-ctr -d -in ciphertext.bin -K "$KEYOUT" -iv "$IV"
 ## Quick RSA Attested Payload
 
 > **Warning:** This works ONLY if you created Ownership Voucher with RSA2048 key like with:
+>
 > ```bash
 > go run ./examples/cmd client -di http://127.0.0.1:9999 -di-key rsa2048
 > ```
+>
 > These will BREAK if more than one OV in database. If unsure, start with a clean DB.
 
 ```bash

@@ -28,6 +28,7 @@ go run ./examples/cmd delegate -db test.db create myDelegate onboard,redirect SE
 ```
 
 This creates a delegate chain named `myDelegate` with:
+
 - Permissions: `onboard` (TO2) and `redirect` (TO0)
 - Root: SECP384R1 owner key
 - Intermediate and leaf: ec384 keys
@@ -73,7 +74,6 @@ The equal-sign (`=`) character in Delegate Name will be substituted with the key
 
 This allows creation of chains like `rv_RSAPKCS` which would be automatically resolved by specifying a delegateName name `rv_=`.
 
-
 ## Permissions
 
 Delegate certs can be scoped to only be allowed to do specific things. Per the FDO 1.2 specification, permissions are encoded as discrete OIDs in the certificate's Extended Key Usage extension.
@@ -83,13 +83,14 @@ Delegate certs can be scoped to only be allowed to do specific things. Per the F
 All permission OIDs are under the base `1.3.6.1.4.1.45724.3.1` (PERM):
 
 | OID | Name | Description | Used In |
-|-----|------|-------------|---------|
+| --- | ---- | ----------- | ------- |
 | `PERM.1` | `permit-redirect` | Sign a redirect blob for RV server | TO0 |
 | `PERM.2` | `permit-onboard-new-cred` | Onboard with new credentials | TO2 |
 | `PERM.3` | `permit-onboard-reuse-cred` | Onboard with credential reuse | TO2 |
 | `PERM.4` | `permit-onboard-fdo-disable` | Onboard and disable FDO | TO2 |
 
 Full OIDs:
+
 - `1.3.6.1.4.1.45724.3.1.1` - fdo-ekt-permit-redirect
 - `1.3.6.1.4.1.45724.3.1.2` - fdo-ekt-permit-onboard-new-cred
 - `1.3.6.1.4.1.45724.3.1.3` - fdo-ekt-permit-onboard-reuse-cred
@@ -100,7 +101,7 @@ Full OIDs:
 When creating delegate chains via CLI, you can use these permission strings:
 
 | Permission | OIDs Added | Description |
-|------------|------------|-------------|
+| ---------- | ---------- | ----------- |
 | `onboard` | PERM.2, PERM.3, PERM.4 | Shortcut for all three onboard permissions |
 | `redirect` | PERM.1 | Redirect permission (TO0) |
 | `onboard-new-cred` | PERM.2 | Onboard with new credentials only |
@@ -116,6 +117,7 @@ Multiple permissions can be combined with commas, e.g., `onboard,redirect` or `o
 When a device requests credential reuse during TO2, the client verifies that the delegate certificate chain contains the `permit-onboard-reuse-cred` (PERM.3) OID. If this permission is missing, credential reuse is rejected even if the delegate is otherwise valid for onboarding.
 
 **Permission Rules:**
+
 - A delegate cert must contain a given OID to be granted that permission
 - A delegate cert must be signed (directly) by owner, or by another cert with that permission
 - ALL certs in the chain (from owner downward) MUST have the permission for it to be valid
@@ -137,8 +139,9 @@ go run ./examples/cmd delegate -db test.db create <chainName> <permissions> <own
 ```
 
 **Parameters:**
+
 - `chainName` - Name for this delegate chain
-- `permissions` - Comma-separated: `onboard`, `redirect`, or `onboard,redirect` (see [CLI Permission Shortcuts](#cli-permission-shortcuts))
+- `permissions` - Comma-separated: `onboard`, `redirect`, or `onboard,redirect` (see [CLI Permission Parameters](#cli-permission-parameters))
 - `ownerKeyType` - Root key type: `SECP384R1`, `SECP256R1`, `RSA2048RESTR`, `RSAPKCS`, `RSAPSS`
 - `keyType...` - Optional intermediate/leaf key types (e.g., `ec384`, `ec256`, `rsa2048`)
 
@@ -163,7 +166,7 @@ go run ./examples/cmd delegate -db test.db inspectVoucher <voucher.ov>
 ## Server Flags
 
 | Flag | Description |
-|------|-------------|
+| ---- | ----------- |
 | `-onboardDelegate <name>` | Use delegate chain for TO2 onboarding |
 | `-rvDelegate <name>` | Use delegate chain for TO0 RV blob signing |
 | `-owner-certs` | Generate owner certificates (required for delegates) |
@@ -204,7 +207,7 @@ go run ./examples/cmd client -fdo-version 200
 
 ### Delegate Chain Validation Error
 
-```
+```text
 Delegate Chain Validation error - 0 not signed by 1: x509: signature algorithm specifies an RSA public key, but have public key of type *ecdsa.PublicKey
 ```
 
@@ -214,7 +217,7 @@ Delegate Chain Validation error - 0 not signed by 1: x509: signature algorithm s
 
 ### Missing Owner Certificates
 
-```
+```text
 owner key type SECP384R1 not supported
 ```
 

@@ -7,7 +7,7 @@ This document describes how delegate certificate chains are validated in the FDO
 When a delegate certificate chain is validated, the following checks are performed:
 
 | Check | Status | Description |
-|-------|--------|-------------|
+| ----- | ------ | ----------- |
 | Signature chain | ✅ Implemented | Each certificate is verified to be signed by its issuer |
 | Expiration | ✅ Implemented | `NotBefore` and `NotAfter` are checked against current time |
 | Key usage | ✅ Implemented | Digital signature and cert signing permissions are verified |
@@ -20,6 +20,7 @@ When a delegate certificate chain is validated, the following checks are perform
 **The reference implementation does NOT check certificate revocation (CRL/OCSP).**
 
 Go's standard `crypto/x509` library does not provide built-in revocation checking. Implementing CRL or OCSP requires:
+
 - Network calls to fetch revocation data
 - Infrastructure-specific configuration
 - Caching and performance considerations
@@ -83,7 +84,7 @@ func main() {
 
 If no `CertificateChecker` is configured, the library will log a warning for each certificate validated:
 
-```
+```text
 WARN: No CertificateChecker configured - revocation checking (CRL/OCSP) is disabled
   cert_subject: CN=myDelegate_ec384_1
   hint: Call fdo.SetCertificateChecker() to enable custom certificate validation

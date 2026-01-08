@@ -23,16 +23,16 @@ It implements [FIDO Device Onboard Specification 1.1][fdo11] and [FIDO Device On
 
 A comprehensive test script is provided that demonstrates all major features of the FDO implementation. It serves as both a test suite and a self-documenting guide.
 
-```console
-$ go work init
-$ go work use -r .
-$ ./test_examples.sh all
+```bash
+go work init
+go work use -r .
+./test_examples.sh all
 ```
 
 **Available tests:**
 
 | Test | Description |
-|------|-------------|
+| ---- | ----------- |
 | `basic` | Basic device initialization (DI) and transfer of ownership (TO1/TO2) |
 | `basic-reuse` | Credential reuse protocol - multiple onboards without credential changes |
 | `rv-blob` | Rendezvous blob registration flow |
@@ -44,9 +44,9 @@ $ ./test_examples.sh all
 
 Run a specific test:
 
-```console
-$ ./test_examples.sh basic
-$ ./test_examples.sh delegate-fdo200
+```bash
+./test_examples.sh basic
+./test_examples.sh delegate-fdo200
 ```
 
 **Requirements:** `sqlite3` must be installed for GUID extraction.
@@ -414,7 +414,8 @@ For detailed documentation on creating and using delegate certificates, see [del
 > **Important:** The reference implementation validates certificate expiration but does **not** check certificate revocation (CRL/OCSP). Production deployments should implement revocation checking using the `CertificateChecker` interface.
 
 When running tests with delegates, you will see warnings like:
-```
+
+```text
 WARN: No CertificateChecker configured - revocation checking (CRL/OCSP) is disabled
 ```
 
