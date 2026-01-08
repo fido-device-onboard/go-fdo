@@ -302,7 +302,7 @@ func processDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey,
 				c.SignatureAlgorithm.String(), c.IsCA, KeyUsageToString(c.KeyUsage), permstr, KeyToString(c.PublicKey))
 		}
 
-		// Cheeck Signatures on each
+// Check Signatures on each
 		if i != len(chain)-1 {
 			err := chain[i].CheckSignatureFrom(chain[i+1])
 			if err != nil {
