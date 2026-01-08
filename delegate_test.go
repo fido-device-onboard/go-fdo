@@ -4,7 +4,6 @@
 package fdo_test
 
 import (
-	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -35,7 +34,7 @@ func TestGenerateDelegate(t *testing.T) {
 		delegateKey.Public(),
 		"TestDelegate",
 		"TestOwner",
-		[]asn1.ObjectIdentifier{fdo.OID_permitOnboardNewCred},
+		[]asn1.ObjectIdentifier{fdo.OIDPermitOnboardNewCred},
 		x509.ECDSAWithSHA384,
 	)
 	if err != nil {
@@ -78,7 +77,7 @@ func TestVerifyDelegateChain(t *testing.T) {
 		intermediateKey.Public(),
 		"Intermediate",
 		"Owner",
-		[]asn1.ObjectIdentifier{fdo.OID_permitRedirect},
+		[]asn1.ObjectIdentifier{fdo.OIDPermitRedirect},
 		x509.ECDSAWithSHA384,
 	)
 	if err != nil {
@@ -92,7 +91,7 @@ func TestVerifyDelegateChain(t *testing.T) {
 		leafKey.Public(),
 		"Leaf",
 		"Intermediate",
-		[]asn1.ObjectIdentifier{fdo.OID_permitRedirect},
+		[]asn1.ObjectIdentifier{fdo.OIDPermitRedirect},
 		x509.ECDSAWithSHA384,
 	)
 	if err != nil {
@@ -103,8 +102,8 @@ func TestVerifyDelegateChain(t *testing.T) {
 	chain := []*x509.Certificate{leafCert, intermediateCert}
 
 	// Verify chain with redirect permission
-	var ownerPubKey crypto.PublicKey = ownerKey.Public()
-	err = fdo.VerifyDelegateChain(chain, &ownerPubKey, &fdo.OID_permitRedirect)
+	ownerPubKey := ownerKey.Public()
+	err = fdo.VerifyDelegateChain(chain, &ownerPubKey, &fdo.OIDPermitRedirect)
 	if err != nil {
 		t.Errorf("delegate chain verification failed: %v", err)
 	}
@@ -136,7 +135,7 @@ func TestVerifyDelegateChainWrongOwner(t *testing.T) {
 		delegateKey.Public(),
 		"Delegate",
 		"Owner",
-		[]asn1.ObjectIdentifier{fdo.OID_permitOnboardNewCred},
+		[]asn1.ObjectIdentifier{fdo.OIDPermitOnboardNewCred},
 		x509.ECDSAWithSHA384,
 	)
 	if err != nil {
@@ -145,8 +144,8 @@ func TestVerifyDelegateChainWrongOwner(t *testing.T) {
 
 	// Verify chain with wrong owner - should fail
 	chain := []*x509.Certificate{cert}
-	var wrongPubKey crypto.PublicKey = wrongOwnerKey.Public()
-	err = fdo.VerifyDelegateChain(chain, &wrongPubKey, &fdo.OID_permitOnboardNewCred)
+	wrongPubKey := wrongOwnerKey.Public()
+	err = fdo.VerifyDelegateChain(chain, &wrongPubKey, &fdo.OIDPermitOnboardNewCred)
 	if err == nil {
 		t.Error("expected verification to fail with wrong owner key")
 	}

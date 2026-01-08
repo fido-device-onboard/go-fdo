@@ -56,6 +56,7 @@ func (typ KeyType) String() string {
 	}
 }
 
+// KeyString returns the FDO specification name for the key type (e.g., "SECP384R1").
 func (typ KeyType) KeyString() string {
 	switch typ {
 	case Rsa2048RestrKeyType:
@@ -163,6 +164,7 @@ type PublicKey struct {
 	chain []*x509.Certificate
 }
 
+// Key2String returns a human-readable description of a public key with its fingerprint.
 func Key2String(key any) string {
 	derBytes, err := x509.MarshalPKIXPublicKey(key)
 	var fingerprint string
@@ -173,11 +175,10 @@ func Key2String(key any) string {
 		fingerprint = hex.EncodeToString(hash[:])
 	}
 
-	switch key.(type) {
+	switch key := key.(type) {
 	case *ecdsa.PublicKey:
-		ec := key.(*ecdsa.PublicKey)
 		curve := ""
-		switch ec.Curve {
+		switch key.Curve {
 		case elliptic.P256():
 			curve = "NIST P-256 / secp256r1"
 		case elliptic.P384():
@@ -190,8 +191,7 @@ func Key2String(key any) string {
 		}
 		return fmt.Sprintf("ECDSA %s Fingerprint: %s", curve, fingerprint)
 	case *rsa.PublicKey:
-		rsa := key.(*rsa.PublicKey)
-		return fmt.Sprintf("RSA%d Fingerprint: %s", rsa.Size()*8, fingerprint)
+		return fmt.Sprintf("RSA%d Fingerprint: %s", key.Size()*8, fingerprint)
 	default:
 		return fmt.Sprintf("%T Fingerprint: %s", key, fingerprint)
 	}
@@ -204,6 +204,7 @@ func (pub PublicKey) String() string {
 	return Key2String(key)
 }
 
+// LongString returns a detailed multi-line string representation of the PublicKey.
 func (pub PublicKey) LongString() string {
 	s := fmt.Sprintf("protocol.PublicKey:\nType      (%d) %s\n", pub.Type, pub.Type)
 	s += fmt.Sprintf("Encoding  (%d) %s\n", pub.Encoding, pub.Encoding)
@@ -245,7 +246,7 @@ func NewPublicKey[T PublicKeyOrChain](typ KeyType, pub T, asCOSE bool) (*PublicK
 			return nil, fmt.Errorf("X5Chain encoding: %w", err)
 		}
 
-// Determining key type from leaf (first) entry of chain
+		// Determining key type from leaf (first) entry of chain
 		return &PublicKey{
 			Type:     typ,
 			Encoding: X5ChainKeyEnc,
@@ -350,14 +351,14 @@ func (pub *PublicKey) parseX509() error {
 	case Secp256r1KeyType, Secp384r1KeyType:
 		eckey, ok := key.(*ecdsa.PublicKey)
 		if !ok {
-			return errors.New(fmt.Sprintf("x509 public key must be an ECDSA public key (got %T)", key))
+			return fmt.Errorf("x509 public key must be an ECDSA public key (got %T)", key)
 		}
 		pub.key = eckey
 		return nil
 	case RsaPssKeyType, RsaPkcsKeyType, Rsa2048RestrKeyType:
 		rsakey, ok := key.(*rsa.PublicKey)
 		if !ok {
-			return errors.New(fmt.Sprintf("x509 public key must be an RSA public key (got %T)", key))
+			return fmt.Errorf("x509 public key must be an RSA public key (got %T)", key)
 		}
 		pub.key = rsakey
 		return nil
@@ -383,14 +384,14 @@ func (pub *PublicKey) parseX5Chain() error {
 	case Secp256r1KeyType, Secp384r1KeyType:
 		eckey, ok := certs[0].PublicKey.(*ecdsa.PublicKey)
 		if !ok {
-			return errors.New(fmt.Sprintf("X5Chain public key must be an ECDSA public key (got %T)", certs[0].PublicKey))
+			return fmt.Errorf("x5chain public key must be an ECDSA public key (got %T)", certs[0].PublicKey)
 		}
 		pub.key = eckey
 		return nil
 	case RsaPssKeyType, RsaPkcsKeyType, Rsa2048RestrKeyType:
 		rsakey, ok := certs[0].PublicKey.(*rsa.PublicKey)
 		if !ok {
-			return errors.New(fmt.Sprintf("X5Chain public key must be an RSA public key (got %T)", certs[0].PublicKey))
+			return fmt.Errorf("x5chain public key must be an RSA public key (got %T)", certs[0].PublicKey)
 		}
 		pub.key = rsakey
 		return nil

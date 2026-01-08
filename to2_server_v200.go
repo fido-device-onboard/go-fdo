@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
@@ -80,18 +81,20 @@ func (s *TO2Server) helloDeviceAck20(ctx context.Context, msg io.Reader) (*Hello
 	// Build response with supported crypto options
 	// For now, offer common suites - this could be made configurable
 	return &HelloDeviceAck20Msg{
-		CapabilityFlags:      GlobalCapabilityFlags,
-		GUID:                 probe.GUID,
-		MaxOwnerMessageSize:  65535,
-		KexSuites:            []kex.Suite{kex.ECDH384Suite, kex.ECDH256Suite},
-		CipherSuites:         []kex.CipherSuiteID{kex.A256GcmCipher, kex.A128GcmCipher},
-		NonceTO2ProveDV_Prep: proveDeviceNonce,
-		HashPrev:             probeHash,
+		CapabilityFlags:     GlobalCapabilityFlags,
+		GUID:                probe.GUID,
+		MaxOwnerMessageSize: 65535,
+		KexSuites:           []kex.Suite{kex.ECDH384Suite, kex.ECDH256Suite},
+		CipherSuites:        []kex.CipherSuiteID{kex.A256GcmCipher, kex.A128GcmCipher},
+		NonceTO2ProveDVPrep: proveDeviceNonce,
+		HashPrev:            probeHash,
 	}, nil
 }
 
 // proveOVHdr20 handles TO2.ProveDevice20 (82) -> TO2.ProveOVHdr20 (83)
 // In 2.0, device proves itself FIRST, then owner proves ownership
+//
+//nolint:gocyclo // Protocol implementation with device verification and key exchange
 func (s *TO2Server) proveOVHdr20(ctx context.Context, msg io.Reader) (*cose.Sign1Tag[ProveOVHdr20Payload, []byte], error) {
 	// Parse the EAT token from device
 	var proveDevice cose.Sign1Tag[ProveDevice20Payload, []byte]
@@ -133,9 +136,9 @@ func (s *TO2Server) proveOVHdr20(ctx context.Context, msg io.Reader) (*cose.Sign
 	if err != nil {
 		return nil, fmt.Errorf("error getting stored nonce: %w", err)
 	}
-	if proveDevice.Payload.Val.NonceTO2ProveOV_Prep != storedNonce {
+	if proveDevice.Payload.Val.NonceTO2ProveOVPrep != storedNonce {
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
-		return nil, fmt.Errorf("nonce mismatch in ProveDevice20: expected %x, got %x", storedNonce, proveDevice.Payload.Val.NonceTO2ProveOV_Prep)
+		return nil, fmt.Errorf("nonce mismatch in ProveDevice20: expected %x, got %x", storedNonce, proveDevice.Payload.Val.NonceTO2ProveOVPrep)
 	}
 
 	// Now that device is verified, proceed with owner proof (similar to 1.01 proveOVHdr)
@@ -161,7 +164,7 @@ func (s *TO2Server) proveOVHdr20(ctx context.Context, msg io.Reader) (*cose.Sign
 	var delegateChainProto *protocol.PublicKey
 	if s.OnboardDelegate != "" {
 		// Replace "=" with key type string for delegate name lookup
-		delegateName := strings.Replace(s.OnboardDelegate, "=", (*ownerPublicKeyProto).Type.KeyString(), -1)
+		delegateName := strings.ReplaceAll(s.OnboardDelegate, "=", (*ownerPublicKeyProto).Type.KeyString())
 		dk, chain, err := s.DelegateKeys.DelegateKey(delegateName)
 		if err != nil {
 			return nil, fmt.Errorf("delegate chain %q not found: %w", delegateName, err)
@@ -179,7 +182,7 @@ func (s *TO2Server) proveOVHdr20(ctx context.Context, msg io.Reader) (*cose.Sign
 		// Convert delegate chain to protocol.PublicKey for COSE header
 		delegateChainProto, err = protocol.NewPublicKey(keyType, chain, false)
 		if err != nil {
-			return nil, fmt.Errorf("error marshalling delegate chain: %w", err)
+			return nil, fmt.Errorf("error marshaling delegate chain: %w", err)
 		}
 
 		// Use delegate key for signing instead of owner key
@@ -203,18 +206,21 @@ func (s *TO2Server) proveOVHdr20(ctx context.Context, msg io.Reader) (*cose.Sign
 	}
 
 	// Store the nonce from device for later use
-	if err := s.Session.SetProveDeviceNonce(ctx, payload.NonceTO2ProveOV_Prep); err != nil {
+	if err := s.Session.SetProveDeviceNonce(ctx, payload.NonceTO2ProveOVPrep); err != nil {
 		return nil, fmt.Errorf("error storing ProveOV nonce: %w", err)
 	}
 
 	// Build ProveOVHdr20 response
-	numEntries := uint8(len(ov.Entries))
+	if len(ov.Entries) > math.MaxUint8 {
+		return nil, fmt.Errorf("voucher has %d entries, exceeds uint8 max of 255", len(ov.Entries))
+	}
+	numEntries := uint8(len(ov.Entries)) //#nosec G115 -- bounds checked above
 
 	proveOVHdrPayload := ProveOVHdr20Payload{
 		OVHeader:            ov.Header,
 		NumOVEntries:        numEntries,
 		HMac:                ov.Hmac,
-		NonceTO2ProveOV:     payload.NonceTO2ProveOV_Prep,
+		NonceTO2ProveOV:     payload.NonceTO2ProveOVPrep,
 		XBKeyExchange:       xB,
 		MaxOwnerMessageSize: 65535,
 	}
@@ -282,6 +288,8 @@ func (s *TO2Server) ovNextEntry20(ctx context.Context, msg io.Reader) (*OVNextEn
 
 // setupDevice20 handles TO2.DeviceSvcInfoRdy20 (86) -> TO2.SetupDevice20 (87)
 // Similar to 1.01 but message structures differ slightly
+//
+//nolint:gocyclo // Protocol implementation with credential handling
 func (s *TO2Server) setupDevice20(ctx context.Context, msg io.Reader) (*SetupDevice20Msg, error) {
 	var req DeviceSvcInfoRdy20Msg
 	if err := cbor.NewDecoder(msg).Decode(&req); err != nil {

@@ -135,6 +135,8 @@ type ownerSign struct {
 }
 
 // OwnerSign(22) -> AcceptOwner(23)
+//
+//nolint:gocyclo // Protocol implementation with multiple key type handling
 func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid protocol.GUID, ttl uint32, nonce protocol.Nonce, addrs []protocol.RvTO2Addr, delegateName string) (negotiatedTTL uint32, _ error) {
 	// Create and hash to0d
 	ov, err := c.Vouchers.Voucher(ctx, guid)
@@ -186,7 +188,7 @@ func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid pro
 	// Sign blob with OwnerKey - or Delegate, if requested
 	if delegateName != "" {
 		// Delegate must be X509 or X5CHAIN so it can prove that Owner signed it
-		delegateName = strings.Replace(delegateName, "=", keyType.KeyString(), -1)
+		delegateName = strings.ReplaceAll(delegateName, "=", keyType.KeyString())
 		delegateKey, ch, err := c.DelegateKeys.DelegateKey(delegateName)
 		if err != nil {
 			return 0, fmt.Errorf("error getting delegate key [type=%s]: %w", keyType, err)
@@ -201,6 +203,9 @@ func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid pro
 			return 0, fmt.Errorf("error determining signing options for TO0 Delegate: %w", err)
 		}
 		chain, err := protocol.NewPublicKey(delegateKeyType, ch, false)
+		if err != nil {
+			return 0, fmt.Errorf("error creating delegate public key: %w", err)
+		}
 		header.Unprotected[to2DelegateClaim] = chain
 
 		if err := to1d.Sign(delegateKey, nil, nil, delegateOpts); err != nil {

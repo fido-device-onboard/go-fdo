@@ -360,6 +360,7 @@ type helloDeviceMsg struct {
 	CapabilityFlags
 }
 
+// OvhValidationContext holds context for ownership voucher header validation.
 type OvhValidationContext struct {
 	OVH                 VoucherHeader
 	OVHHmac             protocol.Hmac
@@ -608,13 +609,13 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 		return nil, fmt.Errorf("error parsing owner public key from voucher: %w", err)
 	}
 	var delegateKey crypto.Signer
-	var delegateChain *protocol.PublicKey = nil
+	var delegateChain *protocol.PublicKey
 
 	if s.OnboardDelegate != "" {
-		OnboardDelegateName := strings.Replace(s.OnboardDelegate, "=", (*ownerPublicKey).Type.KeyString(), -1)
+		OnboardDelegateName := strings.ReplaceAll(s.OnboardDelegate, "=", (*ownerPublicKey).Type.KeyString())
 		dk, chain, err := s.DelegateKeys.DelegateKey(OnboardDelegateName)
 		if err != nil {
-			return nil, fmt.Errorf("Delegate chain \"%s\" not found: %w", OnboardDelegateName, err)
+			return nil, fmt.Errorf("delegate chain %q not found: %w", OnboardDelegateName, err)
 		}
 		// Get key type from the delegate certificate's public key (leaf cert)
 		delegateKeyType, err := protocol.KeyTypeFromPublicKey(chain[0].PublicKey)
@@ -623,14 +624,14 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 		}
 		delegateChain, err = protocol.NewPublicKey(delegateKeyType, chain, false)
 		if err != nil {
-			return nil, fmt.Errorf("Failed to marshall delegate chain in proveOVHdr: %w", err)
+			return nil, fmt.Errorf("failed to marshal delegate chain in proveOVHdr: %w", err)
 		}
 		//chain,err1 := delegatePublicKey.Chain()
 
 		// Verify delegate chain is signed by owner and has any onboard permission
 		err = VerifyDelegateChain(chain, &expectedCUPHOwnerKey, nil)
 		if err != nil {
-			return nil, fmt.Errorf("Cert Chain Verification Failed: %w", err)
+			return nil, fmt.Errorf("cert chain verification failed: %w", err)
 		}
 		// Check for any fdo-ekt-permit-onboard-* permission
 		if !DelegateCanOnboard(chain) {
@@ -1049,7 +1050,7 @@ func (s *TO2Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1
 	ownerKey, ownerPublicKey, err := s.ownerKey(ctx, keyType, ov.Header.Val.ManufacturerKey.Encoding, rsaBits)
 	sessionOwnerKey := ownerKey
 	if s.OnboardDelegate != "" {
-		OnboardDelegateName := strings.Replace(s.OnboardDelegate, "=", keyType.KeyString(), -1)
+		OnboardDelegateName := strings.ReplaceAll(s.OnboardDelegate, "=", keyType.KeyString())
 		sessionOwnerKey, _, err = s.DelegateKeys.DelegateKey(OnboardDelegateName)
 	}
 	if err != nil {

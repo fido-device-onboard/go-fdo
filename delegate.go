@@ -25,22 +25,35 @@ import (
 	"time"
 )
 
-// These OIDs are constants defined under "Delegate Protocol" in the specification
-// Per spec section on x509keytypes: PERM.x means OID 1.3.6.1.4.1.45724.3.1.x
+// OIDDelegateBase is the base OID for all FDO-specific extensions in delegate certificates (1.3.6.1.4.1.45724.3).
+// This covers all delegate-related fields specified in the FDO Delegate Protocol.
+var OIDDelegateBase = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 45724, 3}
 
-var OID_delegateBase asn1.ObjectIdentifier = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 45724, 3}
+// OIDDelegatePermBase is the base OID for FDO delegate permissions (PERM.x).
+// Permissions are binary: if an issuer has a permission OID, all certificates it issues
+// must also include that OID to inherit the permission.
+var OIDDelegatePermBase = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 45724, 3, 1}
 
-// Permission OIDs under 1.3.6.1.4.1.45724.3.1.x (PERM.x)
-var OID_delegatePermBase asn1.ObjectIdentifier = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 45724, 3, 1}
-var OID_permitRedirect asn1.ObjectIdentifier = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 45724, 3, 1, 1}          // fdo-ekt-permit-redirect (PERM.1)
-var OID_permitOnboardNewCred asn1.ObjectIdentifier = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 45724, 3, 1, 2}    // fdo-ekt-permit-onboard-new-cred (PERM.2)
-var OID_permitOnboardReuseCred asn1.ObjectIdentifier = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 45724, 3, 1, 3}  // fdo-ekt-permit-onboard-reuse-cred (PERM.3)
-var OID_permitOnboardFdoDisable asn1.ObjectIdentifier = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 45724, 3, 1, 4} // fdo-ekt-permit-onboard-fdo-disable (PERM.4)
+// OIDPermitRedirect is the fdo-ekt-permit-redirect permission OID (PERM.1).
+var OIDPermitRedirect = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 45724, 3, 1, 1}
 
-// Legacy OIDs (kept for backwards compatibility)
-var OID_delegateClaim asn1.ObjectIdentifier = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 45724, 3, 4}
-var OID_delegateProvision asn1.ObjectIdentifier = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 45724, 3, 5}
-var OID_ownershipCA asn1.ObjectIdentifier = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 45724, 3, 6}
+// OIDPermitOnboardNewCred is the fdo-ekt-permit-onboard-new-cred permission OID (PERM.2).
+var OIDPermitOnboardNewCred = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 45724, 3, 1, 2}
+
+// OIDPermitOnboardReuseCred is the fdo-ekt-permit-onboard-reuse-cred permission OID (PERM.3).
+var OIDPermitOnboardReuseCred = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 45724, 3, 1, 3}
+
+// OIDPermitOnboardFdoDisable is the fdo-ekt-permit-onboard-fdo-disable permission OID (PERM.4).
+var OIDPermitOnboardFdoDisable = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 45724, 3, 1, 4}
+
+// OIDDelegateClaim is a legacy delegate OID (kept for backwards compatibility).
+var OIDDelegateClaim = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 45724, 3, 4}
+
+// OIDDelegateProvision is a legacy delegate OID for provisioning operations.
+var OIDDelegateProvision = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 45724, 3, 5}
+
+// OIDOwnershipCA is a legacy delegate OID for ownership CA operations.
+var OIDOwnershipCA = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 45724, 3, 6}
 
 // CertificateChecker is an optional callback interface for custom certificate validation.
 // Implementations can use this to add revocation checking (CRL/OCSP) or other custom validation.
@@ -77,51 +90,53 @@ func SetCertificateChecker(checker CertificateChecker) {
 	})
 }
 
+// DelegateOIDtoString converts a delegate OID to its human-readable string name.
 func DelegateOIDtoString(oid asn1.ObjectIdentifier) string {
 	// New permission OIDs (PERM.x)
-	if oid.Equal(OID_permitRedirect) {
+	if oid.Equal(OIDPermitRedirect) {
 		return "permit-redirect"
 	}
-	if oid.Equal(OID_permitOnboardNewCred) {
+	if oid.Equal(OIDPermitOnboardNewCred) {
 		return "permit-onboard-new-cred"
 	}
-	if oid.Equal(OID_permitOnboardReuseCred) {
+	if oid.Equal(OIDPermitOnboardReuseCred) {
 		return "permit-onboard-reuse-cred"
 	}
-	if oid.Equal(OID_permitOnboardFdoDisable) {
+	if oid.Equal(OIDPermitOnboardFdoDisable) {
 		return "permit-onboard-fdo-disable"
 	}
 	// Legacy OIDs
-	if oid.Equal(OID_delegateClaim) {
+	if oid.Equal(OIDDelegateClaim) {
 		return "claim"
 	}
-	if oid.Equal(OID_delegateProvision) {
+	if oid.Equal(OIDDelegateProvision) {
 		return "provision"
 	}
-	if oid.Equal(OID_ownershipCA) {
+	if oid.Equal(OIDOwnershipCA) {
 		return "ownershipCA"
 	}
 	return fmt.Sprintf("Unknown: %s\n", oid.String())
 }
 
+// DelegateStringToOID converts a permission string name to its corresponding OID.
 func DelegateStringToOID(str string) (asn1.ObjectIdentifier, error) {
 	switch str {
 	// New permission OIDs
 	case "redirect", "permit-redirect":
-		return OID_permitRedirect, nil
+		return OIDPermitRedirect, nil
 	case "onboard-new-cred", "permit-onboard-new-cred":
-		return OID_permitOnboardNewCred, nil
+		return OIDPermitOnboardNewCred, nil
 	case "onboard-reuse-cred", "permit-onboard-reuse-cred":
-		return OID_permitOnboardReuseCred, nil
+		return OIDPermitOnboardReuseCred, nil
 	case "onboard-fdo-disable", "permit-onboard-fdo-disable":
-		return OID_permitOnboardFdoDisable, nil
+		return OIDPermitOnboardFdoDisable, nil
 	// Legacy OIDs
 	case "claim":
-		return OID_delegateClaim, nil
+		return OIDDelegateClaim, nil
 	case "provision":
-		return OID_delegateProvision, nil
+		return OIDDelegateProvision, nil
 	default:
-		return OID_delegateBase, fmt.Errorf("invalid delegate OID string: %s", str)
+		return OIDDelegateBase, fmt.Errorf("invalid delegate OID string: %s", str)
 	}
 }
 func certMissingOID(c *x509.Certificate, oid asn1.ObjectIdentifier) bool {
@@ -159,9 +174,9 @@ func DelegateHasPermission(chain []*x509.Certificate, oid asn1.ObjectIdentifier)
 // Per spec: Any of the three fdo-ekt-permit-onboard- permissions are REQUIRED
 // for a Delegate to be able to onboard a device via TO2.
 func DelegateCanOnboard(chain []*x509.Certificate) bool {
-	return DelegateHasPermission(chain, OID_permitOnboardNewCred) ||
-		DelegateHasPermission(chain, OID_permitOnboardReuseCred) ||
-		DelegateHasPermission(chain, OID_permitOnboardFdoDisable)
+	return DelegateHasPermission(chain, OIDPermitOnboardNewCred) ||
+		DelegateHasPermission(chain, OIDPermitOnboardReuseCred) ||
+		DelegateHasPermission(chain, OIDPermitOnboardFdoDisable)
 }
 
 // DelegateCanReuseCred checks if a delegate certificate chain has the
@@ -169,15 +184,16 @@ func DelegateCanOnboard(chain []*x509.Certificate) bool {
 // Per spec: Delegates MUST have fdo-ekt-permit-onboard-reuse-cred to instruct
 // endpoint to use reuse protocol.
 func DelegateCanReuseCred(chain []*x509.Certificate) bool {
-	return DelegateHasPermission(chain, OID_permitOnboardReuseCred)
+	return DelegateHasPermission(chain, OIDPermitOnboardReuseCred)
 }
 
 // DelegateCanRedirect checks if a delegate certificate chain has the
 // fdo-ekt-permit-redirect permission required for TO0/TO1.
 func DelegateCanRedirect(chain []*x509.Certificate) bool {
-	return DelegateHasPermission(chain, OID_permitRedirect)
+	return DelegateHasPermission(chain, OIDPermitRedirect)
 }
 
+// KeyUsageToString converts x509.KeyUsage flags to a human-readable string.
 func KeyUsageToString(keyUsage x509.KeyUsage) (s string) {
 	s = fmt.Sprintf("0x%x: ", keyUsage)
 	if (int(keyUsage) & int(x509.KeyUsageDigitalSignature)) != 0 {
@@ -217,8 +233,7 @@ const (
 	DelegateFlagRoot
 )
 
-// Helper functions for certificates and keys
-
+// CertToString encodes an X.509 certificate as a PEM-formatted string.
 func CertToString(cert *x509.Certificate, leader string) string {
 	var pemData bytes.Buffer
 	pemBlock := &pem.Block{
@@ -233,8 +248,7 @@ func CertToString(cert *x509.Certificate, leader string) string {
 	return (pemData.String())
 }
 
-// Take raw PEM encoded byte array and convert to a
-// human-readable certificate string
+// BytesToString encodes raw certificate bytes as a PEM-formatted string.
 func BytesToString(b []byte, leader string) string {
 	// This is just going to take raw certificate bytes and dump to base64
 	// inside BEGIN/END Certificate block
@@ -249,6 +263,8 @@ func BytesToString(b []byte, leader string) string {
 	}
 	return pemData.String()
 }
+
+// CertChainToString encodes a certificate chain as concatenated PEM blocks.
 func CertChainToString(leader string, chain []*x509.Certificate) string {
 	var result = ""
 	for _, cert := range chain {
@@ -258,6 +274,7 @@ func CertChainToString(leader string, chain []*x509.Certificate) string {
 	return result
 }
 
+// PrivKeyToString encodes a private key as a PEM-formatted string.
 func PrivKeyToString(key any) string {
 	var pemData bytes.Buffer
 	var pemBlock *pem.Block
@@ -291,6 +308,8 @@ func PrivKeyToString(key any) string {
 
 // Verify a delegate chain against an optional owner key,
 // optionally for a given function
+//
+//nolint:gocyclo // Protocol validation requires multiple checks
 func processDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey, oid *asn1.ObjectIdentifier, output bool) error {
 
 	oidArray := []asn1.ObjectIdentifier{}
@@ -310,7 +329,7 @@ func processDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey,
 		case *rsa.PublicKey:
 			rootPriv, err = rsa.GenerateKey(rand.Reader, 2048)
 		default:
-			return fmt.Errorf("Unknown key type %T", ownerKey)
+			return fmt.Errorf("unknown key type %T", ownerKey)
 		}
 		if err != nil {
 			return fmt.Errorf("VerifyDelegate Error making ephemeral root CA key: %v", err)
@@ -339,7 +358,7 @@ func processDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey,
 				c.SignatureAlgorithm.String(), c.IsCA, KeyUsageToString(c.KeyUsage), permstr, KeyToString(c.PublicKey))
 		}
 
-// Check Signatures on each
+		// Check Signatures on each
 		if i != len(chain)-1 {
 			err := chain[i].CheckSignatureFrom(chain[i+1])
 			if err != nil {
@@ -349,10 +368,10 @@ func processDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey,
 					fmt.Print("...WAS NOT SIGNED BY....\n")
 					fmt.Print(CertToString(chain[i+1], "CERTIFICATE"))
 				}
-				return fmt.Errorf("VerifyDelegate Chain Validation error - (#%d) %s not signed by (#%d) %s: %v\n", i, chain[i].Subject, i+1, chain[i+1].Subject, err)
+				return fmt.Errorf("verifyDelegate chain validation error - (#%d) %s not signed by (#%d) %s: %w", i, chain[i].Subject, i+1, chain[i+1].Subject, err)
 			}
 			if chain[i].Issuer.CommonName != chain[i+1].Subject.CommonName {
-				return fmt.Errorf("Subject %s Issued by Issuer=%s, expected %s", c.Subject, c.Issuer, chain[i+1].Issuer)
+				return fmt.Errorf("subject %s issued by issuer=%s, expected %s", c.Subject, c.Issuer, chain[i+1].Issuer)
 			}
 		}
 
@@ -378,18 +397,18 @@ func processDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey,
 		}
 
 		if (oid != nil) && (certMissingOID(c, *oid)) {
-			return fmt.Errorf("VerifyDelegate error - %s has no permission %v\n", c.Subject, DelegateOIDtoString(*oid))
+			return fmt.Errorf("verifyDelegate error - %s has no permission %v", c.Subject, DelegateOIDtoString(*oid))
 		}
 		if (c.KeyUsage & x509.KeyUsageDigitalSignature) == 0 {
 			return fmt.Errorf("VerifyDelegate cert %s: No Digital Signature Usage", c.Subject)
 		}
-		if c.BasicConstraintsValid == false {
+		if !c.BasicConstraintsValid {
 			return fmt.Errorf("VerifyDelegate cert %s: Basic Constraints not valid", c.Subject)
 		}
 
 		// Leaf cert does not need to be a CA, but others do
 		if i != 0 {
-			if c.IsCA == false {
+			if !c.IsCA {
 				return fmt.Errorf("VerifyDelegate cert %s: Not a CA", c.Subject)
 			}
 			if (c.KeyUsage & x509.KeyUsageCertSign) == 0 {
@@ -401,14 +420,17 @@ func processDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey,
 	return nil
 }
 
+// VerifyDelegateChain validates a delegate certificate chain against an owner key.
 func VerifyDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey, oid *asn1.ObjectIdentifier) error {
 	return processDelegateChain(chain, ownerKey, oid, false)
 }
 
+// PrintDelegateChain validates and prints details of a delegate certificate chain.
 func PrintDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey, oid *asn1.ObjectIdentifier) error {
 	return processDelegateChain(chain, ownerKey, oid, true)
 }
 
+// DelegateChainSummary returns a brief summary of certificate common names in the chain.
 func DelegateChainSummary(chain []*x509.Certificate) (s string) {
 	for _, c := range chain {
 		s += c.Subject.CommonName + "->"
@@ -416,24 +438,19 @@ func DelegateChainSummary(chain []*x509.Certificate) (s string) {
 	return
 }
 
-// This is a helper function, but also used in the verification process
-// Certificates generated are temporary and should not be used for production
-// Per spec, permissions should include the discrete OID_permit* OIDs:
-//   - OID_permitRedirect for TO0/TO1 redirect
-//   - OID_permitOnboardNewCred for onboarding with new credentials
-//   - OID_permitOnboardReuseCred for credential reuse
-//   - OID_permitOnboardFdoDisable for FDO disable after onboard
+// GenerateDelegate creates a delegate certificate signed by the given key.
+// Certificates generated are temporary and should not be used for production.
 func GenerateDelegate(key crypto.Signer, flags uint8, delegateKey crypto.PublicKey, subject string, issuer string,
 	permissions []asn1.ObjectIdentifier, sigAlg x509.SignatureAlgorithm) (*x509.Certificate, error) {
 	// Permissions should use discrete OIDs (OID_permit*) directly in UnknownExtKeyUsage.
-	// For backwards compatibility, if OID_delegatePermBase is passed, we expand it to all onboard permissions.
+	// For backwards compatibility, if OIDDelegatePermBase is passed, we expand it to all onboard permissions.
 	var expandedPermissions []asn1.ObjectIdentifier
 	for _, o := range permissions {
-		if o.Equal(OID_delegatePermBase) {
+		if o.Equal(OIDDelegatePermBase) {
 			// Expand legacy base OID to all three onboard permission OIDs
-			expandedPermissions = append(expandedPermissions, OID_permitOnboardNewCred)
-			expandedPermissions = append(expandedPermissions, OID_permitOnboardReuseCred)
-			expandedPermissions = append(expandedPermissions, OID_permitOnboardFdoDisable)
+			expandedPermissions = append(expandedPermissions, OIDPermitOnboardNewCred)
+			expandedPermissions = append(expandedPermissions, OIDPermitOnboardReuseCred)
+			expandedPermissions = append(expandedPermissions, OIDPermitOnboardFdoDisable)
 		} else {
 			expandedPermissions = append(expandedPermissions, o)
 		}
@@ -475,15 +492,21 @@ func GenerateDelegate(key crypto.Signer, flags uint8, delegateKey crypto.PublicK
 
 	// Let's Verify...
 	derParent, err := x509.CreateCertificate(rand.Reader, parent, parent, key.Public(), key)
-	certParent, err := x509.ParseCertificate(derParent)
-	err = cert.CheckSignatureFrom(certParent)
 	if err != nil {
-		fmt.Printf("Verify error is: %v\n", err)
+		return nil, fmt.Errorf("error creating parent certificate: %w", err)
+	}
+	certParent, err := x509.ParseCertificate(derParent)
+	if err != nil {
+		return nil, fmt.Errorf("error parsing parent certificate: %w", err)
+	}
+	if err := cert.CheckSignatureFrom(certParent); err != nil {
+		return nil, fmt.Errorf("signature verification failed: %w", err)
 	}
 
 	return cert, nil
 }
 
+// KeyToString returns a human-readable string representation of a public key.
 func KeyToString(key crypto.PublicKey) string {
 	derBytes, err := x509.MarshalPKIXPublicKey(key)
 	var fingerprint string

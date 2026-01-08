@@ -5,8 +5,8 @@ package protocol
 
 import (
 	"crypto"
-	"fmt"
 	"encoding/hex"
+	"fmt"
 )
 
 // Hash is a crypto hash, with length in bytes preceding. Hashes are computed
@@ -45,7 +45,7 @@ const (
 )
 
 func (h Hash) String() string {
-	return fmt.Sprintf("%s:%s",h.Algorithm,hex.EncodeToString(h.Value))
+	return fmt.Sprintf("%s:%s", h.Algorithm, hex.EncodeToString(h.Value))
 }
 
 func (alg HashAlg) String() string {

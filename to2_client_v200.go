@@ -28,6 +28,8 @@ import (
 
 // TO2v200 runs the FDO 2.0 TO2 protocol. It has the same interface as TO2 but
 // uses the 2.0 message flow where the device proves itself first.
+//
+//nolint:gocyclo // Protocol orchestration requires multiple steps and error paths
 func TO2v200(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1d, []byte], c TO2Config) (*DeviceCredential, error) {
 	ctx = contextWithErrMsg(ctx)
 
@@ -208,9 +210,11 @@ type OwnerInfo20 struct {
 
 // sendProveDevice20 sends TO2.ProveDevice20 (82) and receives TO2.ProveOVHdr20 (83)
 // This is where the device proves itself FIRST in 2.0
+//
+//nolint:gocyclo // Protocol implementation with key exchange and validation
 func sendProveDevice20(ctx context.Context, transport Transport, ack *HelloDeviceAck20Msg, c *TO2Config) (protocol.Nonce, *OwnerInfo20, kex.Session, error) {
 	// Use the nonce from the server's HelloDeviceAck20 (echo it back for anti-replay)
-	proveOVNonce := ack.NonceTO2ProveDV_Prep
+	proveOVNonce := ack.NonceTO2ProveDVPrep
 
 	// Select key exchange suite from server's offered options
 	var selectedKex kex.Suite
@@ -255,11 +259,11 @@ func sendProveDevice20(ctx context.Context, transport Transport, ack *HelloDevic
 
 	// Build ProveDevice20 payload
 	payload := ProveDevice20Payload{
-		KexSuiteName:         selectedKex,
-		CipherSuiteName:      selectedCipher,
-		XAKeyExchange:        xA,
-		NonceTO2ProveOV_Prep: proveOVNonce,
-		HashPrev2:            ackHash,
+		KexSuiteName:        selectedKex,
+		CipherSuiteName:     selectedCipher,
+		XAKeyExchange:       xA,
+		NonceTO2ProveOVPrep: proveOVNonce,
+		HashPrev2:           ackHash,
 	}
 
 	// Sign with device key (EAT token)
@@ -433,7 +437,10 @@ func verifyOwner20(ctx context.Context, transport Transport, to1d *cose.Sign1[pr
 
 // sendGetOVNextEntry20 sends TO2.GetOVNextEntry20 (84) and receives TO2.OVNextEntry20 (85)
 func sendGetOVNextEntry20(ctx context.Context, transport Transport, entryNum int) (*cose.Sign1Tag[VoucherEntryPayload, []byte], error) {
-	req := GetOVNextEntry20Msg{OVEntryNum: uint8(entryNum)}
+	if entryNum < 0 || entryNum > 255 {
+		return nil, fmt.Errorf("entry number %d out of uint8 range", entryNum)
+	}
+	req := GetOVNextEntry20Msg{OVEntryNum: uint8(entryNum)} //#nosec G115 -- bounds checked above
 
 	typ, resp, err := transport.Send(ctx, protocol.TO2GetOVNextEntry20MsgType, req, nil)
 	if err != nil {

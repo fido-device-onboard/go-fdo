@@ -288,6 +288,8 @@ func (s *TO2Server) Resell(ctx context.Context, guid protocol.GUID, nextOwner cr
 }
 
 // Respond validates a request and returns the appropriate response message.
+//
+//nolint:gocyclo // Protocol handler requires multiple message type cases
 func (s *TO2Server) Respond(ctx context.Context, msgType uint8, msg io.Reader) (respType uint8, resp any) {
 	// Inject a mutable error into the context for error info capturing without
 	// complex error wrapping or overburdened method signatures.

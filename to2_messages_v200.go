@@ -31,23 +31,23 @@ type HelloDeviceProbeMsg struct {
 // HelloDeviceAck20Msg is TO2.HelloDeviceAck20 (Type 81)
 // From Owner to Device - acknowledges probe and prepares for device attestation
 type HelloDeviceAck20Msg struct {
-	CapabilityFlags      CapabilityFlags
-	GUID                 protocol.GUID
-	MaxOwnerMessageSize  uint16
-	KexSuites            []kex.Suite         // Supported key exchange suites
-	CipherSuites         []kex.CipherSuiteID // Supported cipher suites
-	NonceTO2ProveDV_Prep protocol.Nonce      // Nonce for ProveDevice20
-	HashPrev             protocol.Hash       // Hash of HelloDeviceProbe
+	CapabilityFlags     CapabilityFlags
+	GUID                protocol.GUID
+	MaxOwnerMessageSize uint16
+	KexSuites           []kex.Suite         // Supported key exchange suites
+	CipherSuites        []kex.CipherSuiteID // Supported cipher suites
+	NonceTO2ProveDVPrep protocol.Nonce      // Nonce for ProveDevice20
+	HashPrev            protocol.Hash       // Hash of HelloDeviceProbe
 }
 
 // ProveDevice20Payload is the EAT payload for TO2.ProveDevice20 (Type 82)
 // From Device to Owner - Device proves itself FIRST (key 2.0 change)
 type ProveDevice20Payload struct {
-	KexSuiteName         kex.Suite         // Selected key exchange suite
-	CipherSuiteName      kex.CipherSuiteID // Selected cipher suite
-	XAKeyExchange        []byte            // Key exchange parameter A
-	NonceTO2ProveOV_Prep protocol.Nonce    // Nonce for ProveOVHdr20
-	HashPrev2            protocol.Hash     // Hash of HelloDeviceAck20
+	KexSuiteName        kex.Suite         // Selected key exchange suite
+	CipherSuiteName     kex.CipherSuiteID // Selected cipher suite
+	XAKeyExchange       []byte            // Key exchange parameter A
+	NonceTO2ProveOVPrep protocol.Nonce    // Nonce for ProveOVHdr20
+	HashPrev2           protocol.Hash     // Hash of HelloDeviceAck20
 }
 
 // ProveOVHdr20Payload is the COSE payload for TO2.ProveOVHdr20 (Type 83)

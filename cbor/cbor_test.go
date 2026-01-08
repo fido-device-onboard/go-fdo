@@ -6,18 +6,18 @@ package cbor_test
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"reflect"
 	"testing"
-	"crypto/x509"
-	"crypto/ecdsa"
-	"crypto/rand"
-	"crypto/x509/pkix"
-	"crypto/elliptic"
-	"math/big"
 	"time"
 
 	"github.com/fido-device-onboard/go-fdo"
@@ -563,20 +563,19 @@ func TestEncodeUntypedNull(t *testing.T) {
 
 func TestEncodeX5Chain(t *testing.T) {
 	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject: pkix.Name{CommonName: "TestSubject"},
-		NotBefore:    time.Now(),
-		NotAfter:     time.Now().Add(30 * 360 * 24 * time.Hour), // Matches Java impl
-		KeyUsage:     x509.KeyUsageDigitalSignature,
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "TestSubject"},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(30 * 360 * 24 * time.Hour), // Matches Java impl
+		KeyUsage:              x509.KeyUsageDigitalSignature,
 		BasicConstraintsValid: true,
-        	IsCA:                  true,
-
+		IsCA:                  true,
 	}
 	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-        if err != nil {
-            t.Errorf("Error creating ephemeral ECDSA key: %v", err)
+	if err != nil {
+		t.Errorf("Error creating ephemeral ECDSA key: %v", err)
 		return
-        }
+	}
 
 	der, err := x509.CreateCertificate(rand.Reader, template, template, &privKey.PublicKey, privKey)
 	if err != nil {
@@ -589,14 +588,18 @@ func TestEncodeX5Chain(t *testing.T) {
 		return
 	}
 	chain := []*x509.Certificate{cert}
-	pk,err := protocol.NewPublicKey(protocol.Secp256r1KeyType,chain,false)
-	t.Logf("KeyEncoding as %v\n",pk)
+	pk, err := protocol.NewPublicKey(protocol.Secp256r1KeyType, chain, false)
+	if err != nil {
+		t.Errorf("error creating public key: %v", err)
+		return
+	}
+	t.Logf("KeyEncoding as %v\n", pk)
 
 	var got []byte
 	if got, err = cbor.Marshal(&pk); err != nil {
 		t.Errorf("error marshaling x5chain: %v", err)
 		return
-	} 
+	}
 
 	// Now let's see if we can decode....
 	var decoded protocol.PublicKey
@@ -606,16 +609,15 @@ func TestEncodeX5Chain(t *testing.T) {
 
 	//t.Logf("X5Chain Body:  %+v", hex.EncodeToString(decoded.Body))
 	decodedChain, err := decoded.Chain()
-	if (err != nil) {
+	if err != nil {
 		t.Fatal(err)
 	}
 	for i, c := range decodedChain {
-		t.Logf("X5Chain %d Chain:  %+v", i,c.Subject)
-		if (c.Subject.CommonName != "TestSubject") {
-			t.Fatalf("Bad subject in decoded cert: \"%s\"",c.Subject.CommonName)
+		t.Logf("X5Chain %d Chain:  %+v", i, c.Subject)
+		if c.Subject.CommonName != "TestSubject" {
+			t.Fatalf("Bad subject in decoded cert: \"%s\"", c.Subject.CommonName)
 		}
 	}
-
 
 }
 func TestEncodeUndefined(_ *testing.T) {
@@ -2055,7 +2057,7 @@ func TestDecodeX5Chain(t *testing.T) {
 	if err := cbor.Unmarshal(body, &cert); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("Certificate: %T is %+v", cert,cert)
+	t.Logf("Certificate: %T is %+v", cert, cert)
 }
 
 func TestDecodeOVHeaderX5Chain(t *testing.T) {

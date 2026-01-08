@@ -37,6 +37,8 @@ type Transport struct {
 }
 
 // Send implements fdo.Transport.
+//
+//nolint:gocyclo // Transport handler requires multiple message type cases
 func (t *Transport) Send(ctx context.Context, msgType uint8, msg any, sess kex.Session) (uint8, io.ReadCloser, error) {
 	select {
 	case <-ctx.Done():

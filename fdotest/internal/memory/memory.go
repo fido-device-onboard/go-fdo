@@ -200,10 +200,16 @@ func newDelegateChain(owner crypto.Signer, getNewKey func() crypto.Signer) (cryp
 		IsCA:                  true,
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
-		UnknownExtKeyUsage:    []asn1.ObjectIdentifier{fdo.OID_permitOnboardNewCred, fdo.OID_permitOnboardReuseCred, fdo.OID_permitOnboardFdoDisable, fdo.OID_permitRedirect},
+		UnknownExtKeyUsage:    []asn1.ObjectIdentifier{fdo.OIDPermitOnboardNewCred, fdo.OIDPermitOnboardReuseCred, fdo.OIDPermitOnboardFdoDisable, fdo.OIDPermitRedirect},
 	}
 	der, err := x509.CreateCertificate(rand.Reader, rootTemplate, rootTemplate, owner.Public(), owner)
+	if err != nil {
+		return nil, nil, err
+	}
 	rootCert, err := x509.ParseCertificate(der)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	intermediateTemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(222),
@@ -213,11 +219,17 @@ func newDelegateChain(owner crypto.Signer, getNewKey func() crypto.Signer) (cryp
 		IsCA:                  true,
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
-		UnknownExtKeyUsage:    []asn1.ObjectIdentifier{fdo.OID_permitOnboardNewCred, fdo.OID_permitOnboardReuseCred, fdo.OID_permitOnboardFdoDisable, fdo.OID_permitRedirect},
+		UnknownExtKeyUsage:    []asn1.ObjectIdentifier{fdo.OIDPermitOnboardNewCred, fdo.OIDPermitOnboardReuseCred, fdo.OIDPermitOnboardFdoDisable, fdo.OIDPermitRedirect},
 	}
 	intermediateKey := getNewKey()
 	der, err = x509.CreateCertificate(rand.Reader, intermediateTemplate, rootTemplate, intermediateKey.Public(), owner)
+	if err != nil {
+		return nil, nil, err
+	}
 	intermediateCert, err := x509.ParseCertificate(der)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	delegateTemplate := &x509.Certificate{
 		SerialNumber: big.NewInt(333),
@@ -227,12 +239,18 @@ func newDelegateChain(owner crypto.Signer, getNewKey func() crypto.Signer) (cryp
 
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageDigitalSignature,
-		UnknownExtKeyUsage:    []asn1.ObjectIdentifier{fdo.OID_permitOnboardNewCred, fdo.OID_permitOnboardReuseCred, fdo.OID_permitOnboardFdoDisable, fdo.OID_permitRedirect},
+		UnknownExtKeyUsage:    []asn1.ObjectIdentifier{fdo.OIDPermitOnboardNewCred, fdo.OIDPermitOnboardReuseCred, fdo.OIDPermitOnboardFdoDisable, fdo.OIDPermitRedirect},
 	}
 	delegateKey := getNewKey()
 	der, err = x509.CreateCertificate(rand.Reader, delegateTemplate, intermediateTemplate, delegateKey.Public(), intermediateKey)
+	if err != nil {
+		return nil, nil, err
+	}
 	delegateCert, err := x509.ParseCertificate(der)
-	return delegateKey, []*x509.Certificate{delegateCert, intermediateCert, rootCert}, err
+	if err != nil {
+		return nil, nil, err
+	}
+	return delegateKey, []*x509.Certificate{delegateCert, intermediateCert, rootCert}, nil
 }
 func newCA(priv crypto.Signer) (*x509.Certificate, error) {
 	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)

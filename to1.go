@@ -74,8 +74,8 @@ func helloRv(ctx context.Context, transport Transport, cred DeviceCredential, ke
 
 	// Define request structure
 	msg := helloRV{
-		GUID:     cred.GUID,
-		ASigInfo: *eASigInfo,
+		GUID:            cred.GUID,
+		ASigInfo:        *eASigInfo,
 		CapabilityFlags: GlobalCapabilityFlags,
 	}
 
@@ -141,8 +141,8 @@ func (s *TO1Server) helloRVAck(ctx context.Context, msg io.Reader) (*rvAck, erro
 	}
 
 	return &rvAck{
-		NonceTO1Proof: nonce,
-		BSigInfo:      hello.ASigInfo,
+		NonceTO1Proof:   nonce,
+		BSigInfo:        hello.ASigInfo,
 		CapabilityFlags: GlobalCapabilityFlags,
 	}, nil
 }

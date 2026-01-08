@@ -131,7 +131,6 @@ func appStart(ctx context.Context, transport Transport, info any) (*VoucherHeade
 	}
 	msg.CapabilityFlags = GlobalCapabilityFlags
 
-
 	// Make request
 	typ, resp, err := transport.Send(ctx, protocol.DIAppStartMsgType, msg, nil)
 	if err != nil {

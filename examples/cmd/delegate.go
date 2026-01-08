@@ -112,9 +112,9 @@ func createDelegateCertificate(state *sqlite.DB, args []string) error {
 	for _, permStr := range permStrs {
 		// "onboard" is a shortcut for all three onboard permissions
 		if permStr == "onboard" {
-			permissions = append(permissions, fdo.OID_permitOnboardNewCred)
-			permissions = append(permissions, fdo.OID_permitOnboardReuseCred)
-			permissions = append(permissions, fdo.OID_permitOnboardFdoDisable)
+			permissions = append(permissions, fdo.OIDPermitOnboardNewCred)
+			permissions = append(permissions, fdo.OIDPermitOnboardReuseCred)
+			permissions = append(permissions, fdo.OIDPermitOnboardFdoDisable)
 			continue
 		}
 		oid, err := fdo.DelegateStringToOID(permStr)
@@ -288,7 +288,7 @@ func doAttestPayload(state *sqlite.DB, args []string) error {
 	// Do we need to validate against delegate chain??
 	if len(delegateChain) > 0 {
 		/* Delegates can only sign payloads when they have "Provision" permission */
-		err = fdo.VerifyDelegateChain(delegateChain, ownerKey, &fdo.OID_delegateProvision)
+		err = fdo.VerifyDelegateChain(delegateChain, ownerKey, &fdo.OIDDelegateProvision)
 		if err != nil {
 			return fmt.Errorf("VerifyDelegateChain failed: %w", err)
 		}
