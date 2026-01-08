@@ -253,7 +253,7 @@ func PrivKeyToString(key any) string {
 }
 
 // Verify a delegate chain against an optional owner key,
-// optionall for a given function
+// optionally for a given function
 func processDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey, oid *asn1.ObjectIdentifier, output bool) error {
 
 	oidArray := []asn1.ObjectIdentifier{}
