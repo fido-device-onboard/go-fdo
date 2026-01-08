@@ -196,8 +196,8 @@ func CertToString(cert *x509.Certificate, leader string) string {
 	return (pemData.String())
 }
 
-// Take raw PEM enclodes byte array and convert to a
-// human-readible certificate string
+// Take raw PEM encoded byte array and convert to a
+// human-readable certificate string
 func BytesToString(b []byte, leader string) string {
 	// This is just going to take raw certificate bytes and dump to base64
 	// inside BEGIN/END Certificate block
