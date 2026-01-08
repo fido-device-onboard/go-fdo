@@ -233,8 +233,8 @@ func CertToString(cert *x509.Certificate, leader string) string {
 	return (pemData.String())
 }
 
-// Take raw PEM enclodes byte array and convert to a
-// human-readible certificate string
+// Take raw PEM encoded byte array and convert to a
+// human-readable certificate string
 func BytesToString(b []byte, leader string) string {
 	// This is just going to take raw certificate bytes and dump to base64
 	// inside BEGIN/END Certificate block
@@ -290,7 +290,7 @@ func PrivKeyToString(key any) string {
 }
 
 // Verify a delegate chain against an optional owner key,
-// optionall for a given function
+// optionally for a given function
 func processDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey, oid *asn1.ObjectIdentifier, output bool) error {
 
 	oidArray := []asn1.ObjectIdentifier{}
@@ -339,7 +339,7 @@ func processDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey,
 				c.SignatureAlgorithm.String(), c.IsCA, KeyUsageToString(c.KeyUsage), permstr, KeyToString(c.PublicKey))
 		}
 
-		// Cheeck Signatures on each
+// Check Signatures on each
 		if i != len(chain)-1 {
 			err := chain[i].CheckSignatureFrom(chain[i+1])
 			if err != nil {

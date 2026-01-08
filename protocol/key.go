@@ -245,7 +245,7 @@ func NewPublicKey[T PublicKeyOrChain](typ KeyType, pub T, asCOSE bool) (*PublicK
 			return nil, fmt.Errorf("X5Chain encoding: %w", err)
 		}
 
-		// Determing key type from leaf (first) entry of chain
+// Determining key type from leaf (first) entry of chain
 		return &PublicKey{
 			Type:     typ,
 			Encoding: X5ChainKeyEnc,
