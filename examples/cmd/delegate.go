@@ -431,7 +431,8 @@ func InspectVoucher(state *sqlite.DB, voucherData []byte) (*crypto.PublicKey, er
 	}
 
 	// TODO Lets try to verify?
-	ownerKey, _, _ := state.OwnerKey(context.Background(), header.Val.ManufacturerKey.Type, 0)
+	// RsaBits() returns 0 for EC keys (ignored by OwnerKey) and actual size for RSA keys
+	ownerKey, _, _ := state.OwnerKey(context.Background(), header.Val.ManufacturerKey.Type, header.Val.ManufacturerKey.RsaBits())
 	info := fdo.OvhValidationContext{
 		PublicKeyToValidate: ownerKey.Public(),
 	}
