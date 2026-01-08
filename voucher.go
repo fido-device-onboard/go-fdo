@@ -246,7 +246,22 @@ func (v *Voucher) VerifyCrypto(o VerifyOptions) error {
 	// If the TO1.RVRedirect signature does not verify, the Device must assume
 	// that a man in the middle is monitoring its traffic, and fail TO2
 	// immediately with an error code message.
-	if ok, err := o.To1d.Verify(expectedOwnerPub, nil, nil); err != nil {
+	//
+	// When a delegate is used, the TO1d is signed by the delegate key, not the
+	// owner key. Check if a delegate chain is present in the TO1d unprotected
+	// header and verify against the delegate key if so.
+	verifyKey := expectedOwnerPub
+	var delegatePubKey protocol.PublicKey
+	if found, err := o.To1d.Unprotected.Parse(cose.Label{Int64: 258}, &delegatePubKey); found && err == nil {
+		// Delegate chain present - verify against delegate key
+		delegateKey, err := delegatePubKey.Public()
+		if err != nil {
+			return fmt.Errorf("error parsing delegate key from TO1d: %w", err)
+		}
+		verifyKey = delegateKey
+	}
+
+	if ok, err := o.To1d.Verify(verifyKey, nil, nil); err != nil {
 		return fmt.Errorf("error verifying to1d signature: %w", err)
 	} else if !ok {
 		return fmt.Errorf("%w: to1d signature verification failed", ErrCryptoVerifyFailed)

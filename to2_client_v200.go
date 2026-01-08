@@ -404,11 +404,27 @@ func verifyOwner20(ctx context.Context, transport Transport, to1d *cose.Sign1[pr
 		Entries: entries,
 	}
 
+	// Determine the expected owner key for validation:
+	// - If there are voucher entries, it's the last entry's public key
+	// - If no entries, it's the manufacturer key from the header
+	// When a delegate is used, OwnerPublicKey is the delegate key (used for signature
+	// verification), but voucher validation needs the actual owner from the chain.
+	var ownerKeyForValidation crypto.PublicKey
+	if len(entries) > 0 {
+		lastEntryKey, err := entries[len(entries)-1].Payload.Val.PublicKey.Public()
+		if err != nil {
+			return fmt.Errorf("error parsing last voucher entry public key: %w", err)
+		}
+		ownerKeyForValidation = lastEntryKey
+	} else {
+		ownerKeyForValidation = info.OriginalOwnerKey
+	}
+
 	if err := ov.VerifyCrypto(VerifyOptions{
 		HmacSha256:         c.HmacSha256,
 		HmacSha384:         c.HmacSha384,
 		MfgPubKeyHash:      c.Cred.PublicKeyHash,
-		OwnerPubToValidate: info.OwnerPublicKey,
+		OwnerPubToValidate: ownerKeyForValidation,
 		To1d:               to1d,
 	}); err != nil {
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")

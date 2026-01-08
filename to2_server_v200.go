@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto"
 	"crypto/rand"
-	"crypto/x509"
 	"fmt"
 	"io"
 	"strings"
@@ -157,7 +156,7 @@ func (s *TO2Server) proveOVHdr20(ctx context.Context, msg io.Reader) (*cose.Sign
 	}
 
 	// Handle delegate support
-	var delegateChain []*x509.Certificate
+	var delegateChainProto *protocol.PublicKey
 	if s.OnboardDelegate != "" {
 		// Replace "=" with key type string for delegate name lookup
 		delegateName := strings.Replace(s.OnboardDelegate, "=", (*ownerPublicKeyProto).Type.KeyString(), -1)
@@ -175,9 +174,14 @@ func (s *TO2Server) proveOVHdr20(ctx context.Context, msg io.Reader) (*cose.Sign
 			return nil, fmt.Errorf("delegate certificate does not have any fdo-ekt-permit-onboard-* permission")
 		}
 
+		// Convert delegate chain to protocol.PublicKey for COSE header
+		delegateChainProto, err = protocol.NewPublicKey(keyType, chain, false)
+		if err != nil {
+			return nil, fmt.Errorf("error marshalling delegate chain: %w", err)
+		}
+
 		// Use delegate key for signing instead of owner key
 		ownerKey = dk
-		delegateChain = chain
 	} else {
 		// Verify owner key matches voucher
 		if !ownerKey.Public().(interface{ Equal(crypto.PublicKey) bool }).Equal(expectedOwnerPubKey) {
@@ -219,8 +223,8 @@ func (s *TO2Server) proveOVHdr20(ctx context.Context, msg io.Reader) (*cose.Sign
 			to2OwnerPubKeyClaim: ownerPublicKeyProto,
 		},
 	}
-	if len(delegateChain) > 0 {
-		header.Unprotected[to2DelegateClaim] = delegateChain
+	if delegateChainProto != nil {
+		header.Unprotected[to2DelegateClaim] = delegateChainProto
 	}
 
 	// Sign with owner key

@@ -495,9 +495,13 @@ func sendHelloDevice(ctx context.Context, transport Transport, c *TO2Config) (pr
 		return protocol.Nonce{}, nil, nil, fmt.Errorf("error re-parsing owner public key to verify TO2.ProveOVHdr payload signature: %w", err)
 	}
 
+	// When a delegate is used, PublicKeyToValidate must be the original owner key
+	// (from the voucher chain), not the delegate key. The delegate key is only
+	// used for signature verification.
+	publicKeyToValidate := key
 	if delegateFound {
-		//PublicKeyToValidate needs to be real "owner", not delegate
 		DelegateChain = &delegatePubKey
+		publicKeyToValidate = originalOwnerKey
 	}
 
 	return cuphNonce,
@@ -505,7 +509,7 @@ func sendHelloDevice(ctx context.Context, transport Transport, c *TO2Config) (pr
 			OVH:                 proveOVHdr.Payload.Val.OVH.Val,
 			OVHHmac:             proveOVHdr.Payload.Val.OVHHmac,
 			NumVoucherEntries:   int(proveOVHdr.Payload.Val.NumOVEntries),
-			PublicKeyToValidate: key,
+			PublicKeyToValidate: publicKeyToValidate,
 			OriginalOwnerKey:    originalOwnerKey,
 			DelegateChain:       DelegateChain,
 		},
