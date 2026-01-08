@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (C) 2024 Intel Corperation & Dell Technologies
+// SPDX-FileCopyrightText: (C) 2024 Intel Corporation & Dell Technologies
 // SPDX-License-Identifier: Apache 2.0
 
 package fdo
