@@ -209,11 +209,8 @@ type OwnerInfo20 struct {
 // sendProveDevice20 sends TO2.ProveDevice20 (82) and receives TO2.ProveOVHdr20 (83)
 // This is where the device proves itself FIRST in 2.0
 func sendProveDevice20(ctx context.Context, transport Transport, ack *HelloDeviceAck20Msg, c *TO2Config) (protocol.Nonce, *OwnerInfo20, kex.Session, error) {
-	// Generate nonce for ProveOVHdr20
-	var proveOVNonce protocol.Nonce
-	if _, err := rand.Read(proveOVNonce[:]); err != nil {
-		return protocol.Nonce{}, nil, nil, fmt.Errorf("error generating nonce: %w", err)
-	}
+	// Use the nonce from the server's HelloDeviceAck20 (echo it back for anti-replay)
+	proveOVNonce := ack.NonceTO2ProveDV_Prep
 
 	// Select key exchange suite from server's offered options
 	var selectedKex kex.Suite

@@ -17,9 +17,11 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -39,6 +41,41 @@ var OID_permitOnboardFdoDisable asn1.ObjectIdentifier = asn1.ObjectIdentifier{1,
 var OID_delegateClaim asn1.ObjectIdentifier = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 45724, 3, 4}
 var OID_delegateProvision asn1.ObjectIdentifier = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 45724, 3, 5}
 var OID_ownershipCA asn1.ObjectIdentifier = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 45724, 3, 6}
+
+// CertificateChecker is an optional callback interface for custom certificate validation.
+// Implementations can use this to add revocation checking (CRL/OCSP) or other custom validation.
+// If CheckCertificate returns an error, the delegate chain validation will fail.
+type CertificateChecker interface {
+	// CheckCertificate performs custom validation on a certificate.
+	// It is called for each certificate in the delegate chain during validation.
+	// Return nil if the certificate is valid, or an error to reject it.
+	CheckCertificate(cert *x509.Certificate) error
+}
+
+var (
+	certificateChecker     CertificateChecker
+	certificateCheckerOnce sync.Once
+	certificateCheckerSet  bool
+)
+
+// SetCertificateChecker sets the global certificate checker for delegate chain validation.
+// This should be called once at application startup to enable custom certificate validation
+// such as revocation checking (CRL/OCSP).
+//
+// Example usage for OCSP checking:
+//
+//	type OCSPChecker struct{}
+//	func (c *OCSPChecker) CheckCertificate(cert *x509.Certificate) error {
+//	    // Implement OCSP checking here
+//	    return nil
+//	}
+//	fdo.SetCertificateChecker(&OCSPChecker{})
+func SetCertificateChecker(checker CertificateChecker) {
+	certificateCheckerOnce.Do(func() {
+		certificateChecker = checker
+		certificateCheckerSet = true
+	})
+}
 
 func DelegateOIDtoString(oid asn1.ObjectIdentifier) string {
 	// New permission OIDs (PERM.x)
@@ -319,7 +356,26 @@ func processDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey,
 			}
 		}
 
-		// TODO we do NOT check expiration or revocation
+		// Check certificate expiration
+		now := time.Now()
+		if now.Before(c.NotBefore) {
+			return fmt.Errorf("VerifyDelegate cert %s: not yet valid (NotBefore: %v)", c.Subject, c.NotBefore)
+		}
+		if now.After(c.NotAfter) {
+			return fmt.Errorf("VerifyDelegate cert %s: expired (NotAfter: %v)", c.Subject, c.NotAfter)
+		}
+
+		// Call custom certificate checker if configured (e.g., for revocation checking)
+		if certificateChecker != nil {
+			if err := certificateChecker.CheckCertificate(c); err != nil {
+				return fmt.Errorf("VerifyDelegate cert %s: custom check failed: %w", c.Subject, err)
+			}
+		} else if !certificateCheckerSet {
+			// Warn that no certificate checker is configured - revocation is not being checked
+			slog.Warn("No CertificateChecker configured - revocation checking (CRL/OCSP) is disabled",
+				"cert_subject", c.Subject.String(),
+				"hint", "Call fdo.SetCertificateChecker() to enable custom certificate validation")
+		}
 
 		if (oid != nil) && (certMissingOID(c, *oid)) {
 			return fmt.Errorf("VerifyDelegate error - %s has no permission %v\n", c.Subject, DelegateOIDtoString(*oid))

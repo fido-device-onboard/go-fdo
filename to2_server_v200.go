@@ -128,13 +128,15 @@ func (s *TO2Server) proveOVHdr20(ctx context.Context, msg io.Reader) (*cose.Sign
 		return nil, fmt.Errorf("device signature verification failed")
 	}
 
-	// Verify nonce matches what we sent
+	// Verify nonce matches what we sent (anti-replay protection)
 	storedNonce, err := s.Session.ProveDeviceNonce(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error getting stored nonce: %w", err)
 	}
-	// TODO: Extract nonce from EAT token and verify it matches storedNonce
-	_ = storedNonce
+	if proveDevice.Payload.Val.NonceTO2ProveOV_Prep != storedNonce {
+		captureErr(ctx, protocol.InvalidMessageErrCode, "")
+		return nil, fmt.Errorf("nonce mismatch in ProveDevice20: expected %x, got %x", storedNonce, proveDevice.Payload.Val.NonceTO2ProveOV_Prep)
+	}
 
 	// Now that device is verified, proceed with owner proof (similar to 1.01 proveOVHdr)
 	// Begin key exchange with device's selected suite

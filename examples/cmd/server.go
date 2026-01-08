@@ -397,7 +397,6 @@ func doPrintOwnerPrivKey(ctx context.Context, state *sqlite.DB) error {
 		return fmt.Errorf("%w: see usage", err)
 	}
 	key, _, err := state.OwnerKey(ctx, keyType, 3072)
-	fmt.Printf("Key is %T %v\n", key, key)
 	if err != nil {
 		return err
 	}

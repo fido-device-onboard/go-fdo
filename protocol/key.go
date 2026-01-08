@@ -211,6 +211,26 @@ func (pub PublicKey) LongString() string {
 	return s
 }
 
+// KeyTypeFromPublicKey returns the FDO KeyType for a given crypto.PublicKey.
+func KeyTypeFromPublicKey(pub crypto.PublicKey) (KeyType, error) {
+	switch key := pub.(type) {
+	case *ecdsa.PublicKey:
+		switch key.Curve {
+		case elliptic.P256():
+			return Secp256r1KeyType, nil
+		case elliptic.P384():
+			return Secp384r1KeyType, nil
+		default:
+			return 0, fmt.Errorf("unsupported ECDSA curve: %v", key.Curve)
+		}
+	case *rsa.PublicKey:
+		// Default to RSA PKCS for RSA keys
+		return RsaPkcsKeyType, nil
+	default:
+		return 0, fmt.Errorf("unsupported public key type: %T", pub)
+	}
+}
+
 // NewPublicKey creates a public key structure encoded as X509, X5Chain, or a
 // COSE Key, depending on the type of pub and the value of asCOSE.
 func NewPublicKey[T PublicKeyOrChain](typ KeyType, pub T, asCOSE bool) (*PublicKey, error) {

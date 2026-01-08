@@ -10,8 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"time"
 	"strings"
+	"time"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
@@ -60,7 +60,6 @@ func (c *TO0Client) RegisterBlob(ctx context.Context, transport Transport, guid 
 
 	return c.ownerSign(ctx, transport, guid, ttl, nonce, addrs, delegateName)
 }
-
 
 // Hello(20) -> HelloAck(21)
 func (c *TO0Client) hello(ctx context.Context, transport Transport) (protocol.Nonce, error) {
@@ -130,8 +129,8 @@ type to0d struct {
 }
 
 type ownerSign struct {
-	To0d cbor.Bstr[to0d]
-	To1d cose.Sign1Tag[protocol.To1d, []byte]
+	To0d          cbor.Bstr[to0d]
+	To1d          cose.Sign1Tag[protocol.To1d, []byte]
 	DelegateChain *[]*cbor.X509Certificate `cbor:",omitempty"`
 }
 
@@ -171,37 +170,39 @@ func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid pro
 	}
 
 	var header = cose.Header{
-			Unprotected: map[cose.Label]any{
-			},
-		}
-
+		Unprotected: map[cose.Label]any{},
+	}
 
 	to1d := cose.Sign1[protocol.To1d, []byte]{
 		Header: header,
 		Payload: cbor.NewByteWrap(protocol.To1d{
-		RV: addrs,
-		To0dHash: protocol.Hash{
-			Algorithm: alg,
-			Value:     to0dHash.Sum(nil),
-		},
-	})}
+			RV: addrs,
+			To0dHash: protocol.Hash{
+				Algorithm: alg,
+				Value:     to0dHash.Sum(nil),
+			},
+		})}
 
 	// Sign blob with OwnerKey - or Delegate, if requested
-	if (delegateName != "") {
-		// TODO This imples that Delegate Key type will always be the same as manufacture - which may not be true
+	if delegateName != "" {
 		// Delegate must be X509 or X5CHAIN so it can prove that Owner signed it
-		delegateName = strings.Replace(delegateName,"=",keyType.KeyString(),-1)
+		delegateName = strings.Replace(delegateName, "=", keyType.KeyString(), -1)
 		delegateKey, ch, err := c.DelegateKeys.DelegateKey(delegateName)
 		if err != nil {
 			return 0, fmt.Errorf("error getting delegate key [type=%s]: %w", keyType, err)
 		}
-		delegateOpts, err := signOptsFor(delegateKey, keyType == protocol.RsaPssKeyType)
+		// Get key type from the delegate certificate's public key (leaf cert)
+		delegateKeyType, err := protocol.KeyTypeFromPublicKey(ch[0].PublicKey)
 		if err != nil {
-			return 0, fmt.Errorf("error determining signing options for TO0 Delgate: %w", err)
+			return 0, fmt.Errorf("error determining delegate key type: %w", err)
 		}
-		chain, err := protocol.NewPublicKey(keyType,ch,false)
+		delegateOpts, err := signOptsFor(delegateKey, delegateKeyType == protocol.RsaPssKeyType)
+		if err != nil {
+			return 0, fmt.Errorf("error determining signing options for TO0 Delegate: %w", err)
+		}
+		chain, err := protocol.NewPublicKey(delegateKeyType, ch, false)
 		header.Unprotected[to2DelegateClaim] = chain
-		
+
 		if err := to1d.Sign(delegateKey, nil, nil, delegateOpts); err != nil {
 			return 0, fmt.Errorf("error signing To1d payload for w/ Delegate TO0.OwnerSign: %w", err)
 		}
@@ -212,10 +213,10 @@ func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid pro
 		// This will fail if the device has been DI'd with a key of one type,
 		// but the Delegate chain was rooted by a different key of a different type
 		p, err := chain.Public()
-		if (err != nil) {
-			return 0, fmt.Errorf("Error getting public key from delegate chain: %v",err)
+		if err != nil {
+			return 0, fmt.Errorf("Error getting public key from delegate chain: %v", err)
 		}
-		ok,err := to1d.Verify(p,nil,nil)
+		ok, err := to1d.Verify(p, nil, nil)
 		if err != nil {
 			return 0, fmt.Errorf("To1d verify failed: %w", err)
 		}
@@ -232,7 +233,6 @@ func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid pro
 		To0d: *cbor.NewBstr(to0d),
 		To1d: *to1d.Tag(),
 	}
-
 
 	// Make request
 	typ, resp, err := transport.Send(ctx, protocol.TO0OwnerSignMsgType, msg, nil)

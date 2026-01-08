@@ -628,7 +628,7 @@ func (d *Decoder) decodeArray(rv reflect.Value, additional []byte) error {
 		return d.decodeMap(rv, additional)
 	default:
 		return fmt.Errorf("%w: expected a slice, array, or struct type, got a %s",
-			ErrUnsupportedType{typeName: rv.Type().String()},kind)
+			ErrUnsupportedType{typeName: rv.Type().String()}, kind)
 	}
 }
 

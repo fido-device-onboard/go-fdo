@@ -409,6 +409,17 @@ The FDO Delegate Protocol allows a third party to act on behalf of the device ow
 
 For detailed documentation on creating and using delegate certificates, see [delegate.md](delegate.md).
 
+### Certificate Validation
+
+> **Important:** The reference implementation validates certificate expiration but does **not** check certificate revocation (CRL/OCSP). Production deployments should implement revocation checking using the `CertificateChecker` interface.
+
+When running tests with delegates, you will see warnings like:
+```
+WARN: No CertificateChecker configured - revocation checking (CRL/OCSP) is disabled
+```
+
+These warnings are expected during development. For production use, see [delegate-validation.md](delegate-validation.md) for details on implementing custom certificate validation.
+
 ## Attested Payloads
 
 Attested payloads combine data with cryptographic proof of authenticity, allowing devices to verify that payloads originated from their legitimate owner. See [attestedpayload.md](attestedpayload.md) for details.

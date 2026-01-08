@@ -4,17 +4,17 @@ An attested payload combines data—such as a configuration, command, or state d
 
 In some cases, the payload may not be signed directly by the owner. Instead, a Delegate Certificate—signed by the owner—can authorize a third party to sign on the owner's behalf. When delegation is used, the attested payload includes this certificate chain, allowing the device to verify both the delegate's authority and the payload's integrity.
 
-If an devices attestation key (DAK) is an RSA key, it can be used to encrypt the payload. This is useful for encrypting the payload to prevent eavesdropping.
+If a device's attestation key (DAK) is an RSA key, it can be used to encrypt the payload. This is useful for encrypting the payload to prevent eavesdropping.
 
 Thus, the attested payload may consist of the following parts:
 
 | Payload | What | When |
 | ---- | ---- | ---- |
 | Payload | Message (cleartext or encrypted) | Always |
-| Payload Signature | Onwner or Delegate signed | Always |
+| Payload Signature | Owner or Delegate signed | Always |
 | Owner Voucher | Device voucher, proving Ownership | Always |
 | Delegate Certificate Chain | Signed by owner if Delegate signed payload | Optional |
-|Encrypted Payload Key | If payload is encrypted, DAK-encrypted Symetric key and IV | Optional |
+| Encrypted Payload Key | If payload is encrypted, DAK-encrypted Symmetric key and IV | Optional |
 
 ## Setup
 

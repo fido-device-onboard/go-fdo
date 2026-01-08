@@ -33,11 +33,27 @@ import (
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
 
-// COSE claims for TO2ProveOVHdrUnprotectedHeaders
+// COSE unprotected header labels for TO2.ProveOVHdr
+// These are in the "Reserved for Private Use" space of COSE Header Parameters.
+//
+// TODO: There is an open debate about whether OwnerPubKey and DelegateChain
+// should remain in unprotected headers or be moved into the signed payload.
+// The spec (TO2ProveOVHdrPayload) shows them in the payload, but this
+// implementation keeps them in unprotected headers for consistency with FDO 1.x.
+// Security argument for unprotected headers: these provide verification materials,
+// so if tampered, signature verification fails anyway - the security properties
+// are equivalent whether signed or unsigned.
 var (
-	to2NonceClaim       = cose.Label{Int64: 256}
-	to2OwnerPubKeyClaim = cose.Label{Int64: 257}
-	to2DelegateClaim    = cose.Label{Int64: 258}
+	CUPHNonce         = cose.Label{Int64: 256} // FDO assigned
+	CUPHOwnerPubKey   = cose.Label{Int64: 257} // FDO assigned
+	CUPHDelegateChain = cose.Label{Int64: 258} // FDO assigned - delegate certificate chain
+)
+
+// Aliases for backward compatibility
+var (
+	to2NonceClaim       = CUPHNonce
+	to2OwnerPubKeyClaim = CUPHOwnerPubKey
+	to2DelegateClaim    = CUPHDelegateChain
 )
 
 // TO2Config contains the device credential, including secrets and keys,
@@ -600,8 +616,12 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 		if err != nil {
 			return nil, fmt.Errorf("Delegate chain \"%s\" not found: %w", OnboardDelegateName, err)
 		}
-		// TODO keyType here is probably wrong...?
-		delegateChain, err = protocol.NewPublicKey(keyType, chain, false)
+		// Get key type from the delegate certificate's public key (leaf cert)
+		delegateKeyType, err := protocol.KeyTypeFromPublicKey(chain[0].PublicKey)
+		if err != nil {
+			return nil, fmt.Errorf("error determining delegate key type: %w", err)
+		}
+		delegateChain, err = protocol.NewPublicKey(delegateKeyType, chain, false)
 		if err != nil {
 			return nil, fmt.Errorf("Failed to marshall delegate chain in proveOVHdr: %w", err)
 		}
