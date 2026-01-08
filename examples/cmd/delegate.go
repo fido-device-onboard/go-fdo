@@ -10,21 +10,16 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
-
-	//"crypto/sha256"
 	"crypto/sha512"
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/base64"
 	"encoding/hex"
-	_ "encoding/hex"
 	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log/slog"
-	_ "maps"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -38,8 +33,6 @@ import (
 
 var delegateFlags = flag.NewFlagSet("delegate", flag.ContinueOnError)
 
-var ()
-
 // Helper function - takes a hex byte string and
 // turns it into a certificate by base64 encoding
 // it and adding header/footer
@@ -52,7 +45,7 @@ func HexStringToCert(hexInput string) (string, error) {
 	// Decode the hex string to bytes
 	bytes, err := hex.DecodeString(hexString)
 	if err != nil {
-		return "", fmt.Errorf("Failed to decode hex string: %v", err)
+		return "", fmt.Errorf("failed to decode hex string: %v", err)
 	}
 
 	// Encode the bytes to base64
@@ -85,12 +78,14 @@ func init() {
 	delegateFlags.StringVar(&printDelegatePrivKey, "print-delegate-private", "", "Print delegate private key of `type` and exit")
 }
 
-// Create delegage chains. Each chane has a name and a persmission (e.g. Onboard or RV)
+// Create delegate chains. Each chain has a name and a permission (e.g. Onboard or RV)
 // Each cert in the chain has type - but the first ("leaf") one needs to be
 // signed by (a specific) Owner (of a given key type)
+//
+//nolint:gocyclo // CLI command with multiple validation steps
 func createDelegateCertificate(state *sqlite.DB, args []string) error {
 	if len(args) < 3 {
-		return fmt.Errorf("Usage: delegate create {chainName} {Permission[,Permission...]} {ownerKeyType} {keyType...}")
+		return fmt.Errorf("usage: delegate create {chainName} {Permission[,Permission...]} {ownerKeyType} {keyType...}")
 	}
 	name := args[0]
 
@@ -100,11 +95,11 @@ func createDelegateCertificate(state *sqlite.DB, args []string) error {
 	ownerKeyType := args[2]
 	keyType, err := protocol.ParseKeyType(ownerKeyType)
 	if err != nil {
-		return fmt.Errorf("Invalid owner key type: \"%s\"", ownerKeyType)
+		return fmt.Errorf("invalid owner key type: %q", ownerKeyType)
 	}
 	lastPriv, _, err := state.OwnerKey(context.Background(), keyType, 0)
 	if err != nil {
-		return fmt.Errorf("Owner Key of type %s does not exist", ownerKeyType)
+		return fmt.Errorf("owner key of type %s does not exist", ownerKeyType)
 	}
 
 	var permissions []asn1.ObjectIdentifier
@@ -119,7 +114,7 @@ func createDelegateCertificate(state *sqlite.DB, args []string) error {
 		}
 		oid, err := fdo.DelegateStringToOID(permStr)
 		if err != nil {
-			return fmt.Errorf("Bad Permission \"%s\": %v", permStr, err)
+			return fmt.Errorf("bad permission %q: %v", permStr, err)
 		}
 		permissions = append(permissions, oid)
 	}
@@ -145,7 +140,7 @@ func createDelegateCertificate(state *sqlite.DB, args []string) error {
 		}
 
 		if err != nil {
-			return fmt.Errorf("Failed to generate %s key: %v\n", keyType, err)
+			return fmt.Errorf("failed to generate %s key: %v", keyType, err)
 		}
 
 		var flags uint8
@@ -160,7 +155,7 @@ func createDelegateCertificate(state *sqlite.DB, args []string) error {
 		}
 		cert, err := fdo.GenerateDelegate(lastPriv, flags, priv.Public(), subject, issuer, permissions, sigAlg)
 		if err != nil {
-			return fmt.Errorf("Failed to generate Delegate: %v\n", err)
+			return fmt.Errorf("failed to generate delegate: %v", err)
 		}
 		lastPriv = priv
 		issuer = subject
@@ -170,26 +165,26 @@ func createDelegateCertificate(state *sqlite.DB, args []string) error {
 	// The last cert is the actual "delegate" cert
 	// used by the server, so save it's private key
 	if err := state.AddDelegateKey(name, lastPriv, chain); err != nil {
-		return fmt.Errorf("Failed to add Delegate: %v\n", err)
+		return fmt.Errorf("failed to add delegate: %v", err)
 	}
 	return nil
 }
 
-// Print and validate chain (optinally against an Owner Key)
+// Print and validate chain (optionally against an Owner Key)
 func doPrintDelegateChain(state *sqlite.DB, args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("No delegate chain name specified")
+		return fmt.Errorf("no delegate chain name specified")
 	}
 	var ownerPub *crypto.PublicKey
 	if len(args) >= 2 {
 		keyType, err := protocol.ParseKeyType(args[1])
 		if err != nil {
-			return fmt.Errorf("Invalid owner key type: %s", args[1])
+			return fmt.Errorf("invalid owner key type: %s", args[1])
 		}
 
 		ownerPriv, _, err := state.OwnerKey(context.Background(), keyType, 0)
 		if err != nil {
-			return fmt.Errorf("Owner Key of type %s does not exist", args[1])
+			return fmt.Errorf("owner key of type %s does not exist", args[1])
 		}
 		op := ownerPriv.Public()
 		ownerPub = &op
@@ -222,8 +217,9 @@ type ECDSASignature struct {
 	S *big.Int
 }
 
+//nolint:gocyclo // CLI command with multiple PEM block types and signature verification
 func doAttestPayload(state *sqlite.DB, args []string) error {
-	pemData, err := ioutil.ReadFile(filepath.Clean(args[0]))
+	pemData, err := os.ReadFile(filepath.Clean(args[0]))
 	if err != nil {
 		return fmt.Errorf("failed to read PEM file: %w", err)
 	}
@@ -281,7 +277,7 @@ func doAttestPayload(state *sqlite.DB, args []string) error {
 	}
 	fmt.Printf("Payload: \"%s\"\n", string(payload))
 	if ownerKey == nil {
-		return fmt.Errorf("No Owner Key")
+		return fmt.Errorf("no owner key")
 	}
 	hashed := sha512.Sum384(payload)
 
@@ -300,7 +296,7 @@ func doAttestPayload(state *sqlite.DB, args []string) error {
 			ownerKey = &temp
 			fmt.Printf("New Owner is %T %v+", ownerKey, ownerKey)
 		default:
-			return fmt.Errorf("Invalid delegate leaf key type %T", pub)
+			return fmt.Errorf("invalid delegate leaf key type %T", pub)
 		}
 	}
 
@@ -339,7 +335,7 @@ func doAttestPayload(state *sqlite.DB, args []string) error {
 			return fmt.Errorf("ECDSA Signature verification FAILED")
 		}
 	default:
-		return fmt.Errorf("Bad Owner Key Type %T", pub)
+		return fmt.Errorf("bad owner key type %T", pub)
 	}
 
 	fmt.Println(string(payload))
@@ -348,7 +344,7 @@ func doAttestPayload(state *sqlite.DB, args []string) error {
 
 func doInspectVoucher(state *sqlite.DB, args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("No filename specified")
+		return fmt.Errorf("no filename specified")
 	}
 	pemVoucher, err := os.ReadFile(filepath.Clean(args[0]))
 	if err != nil {
@@ -435,8 +431,8 @@ func InspectVoucher(state *sqlite.DB, voucherData []byte) (*crypto.PublicKey, er
 	}
 
 	// TODO Lets try to verify?
-	ownerKey, _, err := state.OwnerKey(context.Background(), header.Val.ManufacturerKey.Type, 0)
-	var info fdo.OvhValidationContext = fdo.OvhValidationContext{
+	ownerKey, _, _ := state.OwnerKey(context.Background(), header.Val.ManufacturerKey.Type, 0)
+	info := fdo.OvhValidationContext{
 		PublicKeyToValidate: ownerKey.Public(),
 	}
 	dc, hmacSha256, hmacSha384, privateKey, cleanup, err := readCred()
@@ -461,7 +457,7 @@ func InspectVoucher(state *sqlite.DB, voucherData []byte) (*crypto.PublicKey, er
 }
 func doPrintDelegatePrivKey(state *sqlite.DB, args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("No delegate chain name specified")
+		return fmt.Errorf("no delegate chain name specified")
 	}
 	var pemBlock *pem.Block
 	key, _, err := state.DelegateKey(args[0])
@@ -488,7 +484,7 @@ func doPrintDelegatePrivKey(state *sqlite.DB, args []string) error {
 		}
 
 	default:
-		err = fmt.Errorf("Unknown Owner key type %T", key)
+		err = fmt.Errorf("unknown owner key type %T", key)
 		return err
 	}
 
@@ -533,7 +529,7 @@ func delegate(args []string) error {
 	}
 
 	if len(args) < 1 {
-		return errors.New("command requried")
+		return errors.New("command required")
 	}
 
 	state, err := sqlite.Open(dbPath, dbPass)
@@ -557,6 +553,6 @@ func delegate(args []string) error {
 	case "help":
 		return doDelegateHelp(state, args[1:])
 	default:
-		return fmt.Errorf("Invalid command \"%s\"", args[0])
+		return fmt.Errorf("invalid command %q", args[0])
 	}
 }

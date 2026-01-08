@@ -388,7 +388,11 @@ TO1:
 	// Try TO2 on each address only once
 	for _, baseURL := range to2URLs {
 		// Use version-aware transport for TO2
-		version := protocol.Version(fdoVersion)
+		if fdoVersion < 0 || fdoVersion > 65535 {
+			slog.Error("invalid FDO version", "version", fdoVersion)
+			return nil
+		}
+		version := protocol.Version(fdoVersion) //#nosec G115 -- bounds checked above
 		transport := tlsTransportWithVersion(baseURL, nil, version)
 		newDC := transferOwnership2(ctx, transport, to1d, conf)
 		if newDC != nil {

@@ -4,7 +4,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto"
 	"crypto/ecdsa"
@@ -341,20 +340,6 @@ func serveHTTP(ctx context.Context, rvInfo [][]protocol.RvInstruction, state *sq
 		return serveTLS(lis, srv, state.DB())
 	}
 	return srv.Serve(lis)
-}
-
-func printCert(cert *x509.Certificate) {
-	var pemData bytes.Buffer
-	pemBlock := &pem.Block{
-		Type:  "CERTIFICATE",
-		Bytes: cert.Raw,
-	}
-	if err := pem.Encode(&pemData, pemBlock); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to encode certificate: %v\n", err)
-		return
-	}
-
-	fmt.Println(pemData.String())
 }
 
 func doPrintOwnerChain(ctx context.Context, state *sqlite.DB) error {
