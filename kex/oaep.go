@@ -122,7 +122,7 @@ func (s *OAEPSession) SetParameter(xB []byte, ownerKey *rsa.PrivateKey) (err err
 	// Decrypt xB
 	s.xB, err = rsa.DecryptOAEP(sha256.New(), nil, ownerKey, xB, nil)
 	if err != nil {
-		return fmt.Errorf("error decrypting device parameter: %w", err)
+		return fmt.Errorf("error decrypting OAEP device parameter: %w", err)
 	}
 
 	// Compute session key

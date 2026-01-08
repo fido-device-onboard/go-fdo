@@ -46,25 +46,33 @@ import (
 var serverFlags = flag.NewFlagSet("server", flag.ContinueOnError)
 
 var (
-	useTLS           bool
-	addr             string
-	dbPath           string
-	dbPass           string
-	extAddr          string
-	to0Addr          string
-	to0GUID          string
-	resaleGUID       string
-	resaleKey        string
-	reuseCred        bool
-	rvBypass         bool
-	rvDelay          int
-	printOwnerPubKey string
-	importVoucher    string
-	cmdDate          bool
-	downloads        stringList
-	uploadDir        string
-	uploadReqs       stringList
-	wgets            stringList
+	useTLS               bool
+	addr                 string
+	dbPath               string
+	dbPass               string
+	extAddr              string
+	to0Addr              string
+	to0GUID              string
+	rvDelegate           string
+	onboardDelegate      string
+	resaleGUID           string
+	resaleKey            string
+	reuseCred            bool
+	rvBypass             bool
+	rvDelay              int
+	printOwnerPubKey     string
+	printOwnerPrivKey    string
+	printOwnerChain      string
+	printDelegateChain   string
+	printDelegatePrivKey string
+	ownerCert            bool
+	importVoucher        string
+	cmdDate              bool
+	downloads            stringList
+	uploadDir            string
+	uploadReqs           stringList
+	wgets                stringList
+	initOnly             bool
 )
 
 type stringList []string
@@ -82,6 +90,8 @@ func init() {
 	serverFlags.StringVar(&dbPath, "db", "", "SQLite database file path")
 	serverFlags.StringVar(&dbPass, "db-pass", "", "SQLite database encryption-at-rest passphrase")
 	serverFlags.BoolVar(&debug, "debug", debug, "Print HTTP contents")
+	serverFlags.StringVar(&rvDelegate, "rvDelegate", "", "Use delegate cert (name) for RV blob signing")
+	serverFlags.StringVar(&onboardDelegate, "onboardDelegate", "", "Use delegate cert (name) for TO2")
 	serverFlags.StringVar(&to0Addr, "to0", "", "Rendezvous server `addr`ess to register RV blobs (disables self-registration)")
 	serverFlags.StringVar(&to0GUID, "to0-guid", "", "Device `guid` to immediately register an RV blob (requires to0 flag)")
 	serverFlags.StringVar(&extAddr, "ext-http", "", "External `addr`ess devices should connect to (default \"127.0.0.1:${LISTEN_PORT}\")")
@@ -90,15 +100,19 @@ func init() {
 	serverFlags.StringVar(&resaleKey, "resale-key", "", "The `path` to a PEM-encoded x.509 public key for the next owner")
 	serverFlags.BoolVar(&reuseCred, "reuse-cred", false, "Perform the Credential Reuse Protocol in TO2")
 	serverFlags.BoolVar(&insecureTLS, "insecure-tls", false, "Listen with a self-signed TLS certificate")
+	serverFlags.BoolVar(&ownerCert, "owner-certs", false, "Generate Owner Certificatats (in addition to keys)")
 	serverFlags.BoolVar(&rvBypass, "rv-bypass", false, "Skip TO1")
 	serverFlags.IntVar(&rvDelay, "rv-delay", 0, "Delay TO1 by N `seconds`")
 	serverFlags.StringVar(&printOwnerPubKey, "print-owner-public", "", "Print owner public key of `type` and exit")
+	serverFlags.StringVar(&printOwnerPrivKey, "print-owner-private", "", "Print owner private key of `type` and exit")
+	serverFlags.StringVar(&printOwnerChain, "print-owner-chain", "", "Print owner chain of `type` and exit")
 	serverFlags.StringVar(&importVoucher, "import-voucher", "", "Import a PEM encoded voucher file at `path`")
 	serverFlags.BoolVar(&cmdDate, "command-date", false, "Use fdo.command FSIM to have device run \"date +%s\"")
 	serverFlags.Var(&downloads, "download", "Use fdo.download FSIM for each `file` (flag may be used multiple times)")
 	serverFlags.StringVar(&uploadDir, "upload-dir", "uploads", "The directory `path` to put file uploads")
 	serverFlags.Var(&uploadReqs, "upload", "Use fdo.upload FSIM for each `file` (flag may be used multiple times)")
 	serverFlags.Var(&wgets, "wget", "Use fdo.wget FSIM for each `url` (flag may be used multiple times)")
+	serverFlags.BoolVar(&initOnly, "initOnly", false, "Initialize initialization (db/key/voucher creation)")
 }
 
 func server(ctx context.Context) error { //nolint:gocyclo
@@ -125,6 +139,14 @@ func server(ctx context.Context) error { //nolint:gocyclo
 	// If printing owner public key, do so and exit
 	if printOwnerPubKey != "" {
 		return doPrintOwnerPubKey(ctx, state)
+	}
+
+	if printOwnerPrivKey != "" {
+		return doPrintOwnerPrivKey(ctx, state)
+	}
+
+	if printOwnerChain != "" {
+		return doPrintOwnerChain(ctx, state)
 	}
 
 	// If importing a voucher, do so and exit
@@ -251,19 +273,41 @@ func generateKeys(state *sqlite.DB) error { //nolint:gocyclo
 	if err != nil {
 		return err
 	}
-	if err := state.AddOwnerKey(protocol.Rsa2048RestrKeyType, rsa2048OwnerKey, nil); err != nil {
+
+	// Generate owner certificates if requested
+	var rsa2048OwnerCert, rsa3072OwnerCert, ec256OwnerCert, ec384OwnerCert []*x509.Certificate
+	if ownerCert {
+		rsa2048OwnerCert, err = generateCA(rsa2048OwnerKey)
+		if err != nil {
+			return err
+		}
+		rsa3072OwnerCert, err = generateCA(rsa3072OwnerKey)
+		if err != nil {
+			return err
+		}
+		ec256OwnerCert, err = generateCA(ec256OwnerKey)
+		if err != nil {
+			return err
+		}
+		ec384OwnerCert, err = generateCA(ec384OwnerKey)
+		if err != nil {
+			return err
+		}
+	}
+
+	if err := state.AddOwnerKey(protocol.Rsa2048RestrKeyType, rsa2048OwnerKey, rsa2048OwnerCert); err != nil {
 		return err
 	}
-	if err := state.AddOwnerKey(protocol.RsaPkcsKeyType, rsa3072OwnerKey, nil); err != nil {
+	if err := state.AddOwnerKey(protocol.RsaPkcsKeyType, rsa3072OwnerKey, rsa3072OwnerCert); err != nil {
 		return err
 	}
-	if err := state.AddOwnerKey(protocol.RsaPssKeyType, rsa3072OwnerKey, nil); err != nil {
+	if err := state.AddOwnerKey(protocol.RsaPssKeyType, rsa3072OwnerKey, rsa3072OwnerCert); err != nil {
 		return err
 	}
-	if err := state.AddOwnerKey(protocol.Secp256r1KeyType, ec256OwnerKey, nil); err != nil {
+	if err := state.AddOwnerKey(protocol.Secp256r1KeyType, ec256OwnerKey, ec256OwnerCert); err != nil {
 		return err
 	}
-	if err := state.AddOwnerKey(protocol.Secp384r1KeyType, ec384OwnerKey, nil); err != nil {
+	if err := state.AddOwnerKey(protocol.Secp384r1KeyType, ec384OwnerKey, ec384OwnerCert); err != nil {
 		return err
 	}
 	return nil
@@ -278,7 +322,7 @@ func serveHTTP(ctx context.Context, rvInfo [][]protocol.RvInstruction, state *sq
 
 	// Handle messages
 	mux := http.NewServeMux()
-	mux.Handle("POST /fdo/101/msg/{msg}", handler)
+	mux.Handle("POST /fdo/{fdoVer}/msg/{msg}", handler)
 	srv := &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 3 * time.Second,
@@ -298,6 +342,19 @@ func serveHTTP(ctx context.Context, rvInfo [][]protocol.RvInstruction, state *sq
 	return srv.Serve(lis)
 }
 
+func doPrintOwnerChain(ctx context.Context, state *sqlite.DB) error {
+	keyType, err := protocol.ParseKeyType(printOwnerChain)
+	if err != nil {
+		return fmt.Errorf("%w: see usage", err)
+	}
+	_, chain, err := state.OwnerKey(ctx, keyType, 3072)
+	if err != nil {
+		return err
+	}
+	fmt.Println(fdo.CertChainToString("CERTIFICATE", chain))
+	return nil
+}
+
 func doPrintOwnerPubKey(ctx context.Context, state *sqlite.DB) error {
 	keyType, err := protocol.ParseKeyType(printOwnerPubKey)
 	if err != nil {
@@ -307,6 +364,7 @@ func doPrintOwnerPubKey(ctx context.Context, state *sqlite.DB) error {
 	if err != nil {
 		return err
 	}
+	fmt.Printf("%s\n", fdo.KeyToString(key.Public()))
 	der, err := x509.MarshalPKIXPublicKey(key.Public())
 	if err != nil {
 		return err
@@ -315,6 +373,40 @@ func doPrintOwnerPubKey(ctx context.Context, state *sqlite.DB) error {
 		Type:  "PUBLIC KEY",
 		Bytes: der,
 	})
+}
+
+func doPrintOwnerPrivKey(ctx context.Context, state *sqlite.DB) error {
+	var pemBlock *pem.Block
+	keyType, err := protocol.ParseKeyType(printOwnerPrivKey)
+	if err != nil {
+		return fmt.Errorf("%w: see usage", err)
+	}
+	key, _, err := state.OwnerKey(ctx, keyType, 3072)
+	if err != nil {
+		return err
+	}
+
+	switch k := key.(type) {
+	case *rsa.PrivateKey:
+		der := x509.MarshalPKCS1PrivateKey(k)
+		pemBlock = &pem.Block{
+			Type:  "PRIVATE KEY",
+			Bytes: der,
+		}
+	case *ecdsa.PrivateKey:
+		der, err := x509.MarshalECPrivateKey(k)
+		if err != nil {
+			return err
+		}
+		pemBlock = &pem.Block{
+			Type:  "EC PRIVATE KEY",
+			Bytes: der,
+		}
+	default:
+		return fmt.Errorf("unknown owner key type %T", key)
+	}
+
+	return pem.Encode(os.Stdout, pemBlock)
 }
 
 func doImportVoucher(ctx context.Context, state *sqlite.DB) error {
@@ -463,9 +555,10 @@ func registerRvBlob(ctx context.Context, state *sqlite.DB) error {
 
 	// Register RV blob with RV server
 	refresh, err := (&fdo.TO0Client{
-		Vouchers:  state,
-		OwnerKeys: state,
-	}).RegisterBlob(ctx, tlsTransport(to0Addr, nil), guid, to2Addrs)
+		Vouchers:     state,
+		OwnerKeys:    state,
+		DelegateKeys: state,
+	}).RegisterBlob(ctx, tlsTransport(to0Addr, nil), guid, to2Addrs, rvDelegate)
 	if err != nil {
 		return fmt.Errorf("error performing to0: %w", err)
 	}
@@ -505,8 +598,11 @@ func resell(ctx context.Context, state *sqlite.DB) error {
 
 	// Perform resale protocol
 	extended, err := (&fdo.TO2Server{
-		Vouchers:  state,
-		OwnerKeys: state,
+		Vouchers:        state,
+		OwnerKeys:       state,
+		DelegateKeys:    state,
+		OnboardDelegate: onboardDelegate,
+		RvDelegate:      rvDelegate,
 	}).Resell(ctx, guid, nextOwner, nil)
 	if err != nil {
 		// TODO: If extended != nil, then call AddVoucher to restore state
@@ -530,6 +626,7 @@ func mustMarshal(v any) []byte {
 	return data
 }
 
+//nolint:gocyclo
 func newHandler(ctx context.Context, rvInfo [][]protocol.RvInstruction, state *sqlite.DB) (*transport.Handler, error) {
 	aio := fdo.AllInOne{
 		DIAndOwner:         state,
@@ -588,7 +685,10 @@ func newHandler(ctx context.Context, rvInfo [][]protocol.RvInstruction, state *s
 			Modules:         moduleStateMachines{DB: state, states: make(map[string]*moduleStateMachineState)},
 			Vouchers:        state,
 			OwnerKeys:       state,
+			DelegateKeys:    state,
 			RvInfo:          func(context.Context, fdo.Voucher) ([][]protocol.RvInstruction, error) { return rvInfo, nil },
+			OnboardDelegate: onboardDelegate,
+			RvDelegate:      rvDelegate,
 			ReuseCredential: func(context.Context, fdo.Voucher) (bool, error) { return reuseCred, nil },
 		},
 	}, nil

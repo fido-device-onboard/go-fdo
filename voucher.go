@@ -193,6 +193,102 @@ func (v *Voucher) OwnerPublicKey() (crypto.PublicKey, error) {
 	return v.Entries[len(v.Entries)-1].Payload.Val.PublicKey.Public()
 }
 
+// VerifyCrypto checks that a voucher is valid cryptographically in its header
+// and extensions.
+//
+// A verified voucher is not inherently trustworthy to an owner service, which
+// should verify that it trusts the manufacturer (signer of first extension)
+// and the root CA of the device certificate chain.
+func (v *Voucher) VerifyCrypto(o VerifyOptions) error {
+	// Verify ownership voucher header
+	if err := v.VerifyHeader(o.HmacSha256, o.HmacSha384); err != nil {
+		return fmt.Errorf("bad ownership voucher header from TO2.ProveOVHdr: %w", err)
+	}
+
+	// Verify that the owner service corresponds to the most recent device
+	// initialization performed by checking that the voucher header has a GUID
+	// and/or manufacturer key corresponding to the stored device credentials.
+	if err := v.VerifyManufacturerKey(o.MfgPubKeyHash); err != nil {
+		return fmt.Errorf("bad ownership voucher header from TO2.ProveOVHdr: manufacturer key: %w", err)
+	}
+
+	// Verify each entry in the voucher's list by performing iterative
+	// signature and hash (header and GUID/devInfo) checks.
+	if err := v.VerifyEntries(); err != nil {
+		return fmt.Errorf("bad ownership voucher entries from TO2.ProveOVHdr: %w", err)
+	}
+
+	// Ensure that the voucher entry chain ends with given owner key.
+	//
+	// Note that this check is REQUIRED in this case, because the the owner public
+	// key from the ProveOVHdr message's unprotected headers is used to
+	// validate its COSE signature. If the public key were not to match the
+	// last entry of the voucher, then it would not be known that ProveOVHdr
+	// was signed by the intended owner service.
+	ownerPub := v.Header.Val.ManufacturerKey
+	if len(v.Entries) > 0 {
+		ownerPub = v.Entries[len(v.Entries)-1].Payload.Val.PublicKey
+	}
+	expectedOwnerPub, err := ownerPub.Public()
+	if err != nil {
+		return fmt.Errorf("error parsing last public key of ownership voucher: %w", err)
+	}
+	if !o.OwnerPubToValidate.(interface{ Equal(crypto.PublicKey) bool }).Equal(expectedOwnerPub) {
+		return fmt.Errorf("owner public key did not match last entry in ownership voucher")
+	}
+
+	// If no to1d blob was given, then immmediately return. This will be the
+	// case when RV bypass was used.
+	if o.To1d == nil {
+		return nil
+	}
+
+	// If the TO1.RVRedirect signature does not verify, the Device must assume
+	// that a man in the middle is monitoring its traffic, and fail TO2
+	// immediately with an error code message.
+	//
+	// When a delegate is used, the TO1d is signed by the delegate key, not the
+	// owner key. Check if a delegate chain is present in the TO1d unprotected
+	// header and verify against the delegate key if so.
+	verifyKey := expectedOwnerPub
+	var delegatePubKey protocol.PublicKey
+	if found, err := o.To1d.Unprotected.Parse(cose.Label{Int64: 258}, &delegatePubKey); found && err == nil {
+		// Delegate chain present - verify against delegate key
+		delegateKey, err := delegatePubKey.Public()
+		if err != nil {
+			return fmt.Errorf("error parsing delegate key from TO1d: %w", err)
+		}
+		verifyKey = delegateKey
+	}
+
+	if ok, err := o.To1d.Verify(verifyKey, nil, nil); err != nil {
+		return fmt.Errorf("error verifying to1d signature: %w", err)
+	} else if !ok {
+		return fmt.Errorf("%w: to1d signature verification failed", ErrCryptoVerifyFailed)
+	}
+
+	return nil
+}
+
+// VerifyOptions are used to verify the cryptographic signing of a voucher and
+// its extensions.
+type VerifyOptions struct {
+	// HMACs for verifying the voucher header
+	HmacSha256, HmacSha384 hash.Hash
+
+	// The expected hash of the first entry in the chain
+	MfgPubKeyHash protocol.Hash
+
+	// The public key presented in message 61 which was already used for
+	// signature verification but needs to match the end of the entry chain
+	OwnerPubToValidate crypto.PublicKey
+
+	// FUTURE: Optional delegate certificate chain
+
+	// May be nil in the case of RV bypass
+	To1d *cose.Sign1[protocol.To1d, []byte]
+}
+
 // VerifyHeader checks that the OVHeader was not modified by comparing the HMAC
 // generated using the secret from the device credentials.
 func (v *Voucher) VerifyHeader(hmacSha256, hmacSha384 hash.Hash) error {
