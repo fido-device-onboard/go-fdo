@@ -1165,12 +1165,13 @@ func (db *DB) AddDelegateKey(name string, key crypto.PrivateKey, chain []*x509.C
 	}, []string{"name"})
 }
 
+// ListDelegateKeys returns the names of all delegate key chains in the database.
 func (db *DB) ListDelegateKeys() (names []string, err error) {
 	rows, err := db.db.Query("SELECT name from delegate_keys;")
 	if err != nil {
 		return
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var name string
@@ -1220,7 +1221,7 @@ func (db *DB) OwnerKey(ctx context.Context, keyType protocol.KeyType, rsaBits in
 	return key.(crypto.Signer), chain, nil
 }
 
-// Get a delegate cert by name
+// DelegateKey returns the private key and certificate chain for a delegate by name.
 func (db *DB) DelegateKey(keyName string) (crypto.Signer, []*x509.Certificate, error) {
 	var keyDer, certChainDer []byte
 	if err := db.query(context.Background(), "delegate_keys", []string{"pkcs8", "x509_chain"}, map[string]any{

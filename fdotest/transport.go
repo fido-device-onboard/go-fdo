@@ -98,7 +98,7 @@ func (t *Transport) Send(ctx context.Context, msgType uint8, msg any, sess kex.S
 	}
 
 	switch respType {
-	case protocol.DISetCredentialsMsgType, protocol.TO0AcceptOwnerMsgType, protocol.TO1RVRedirectMsgType,
+	case protocol.DIDoneMsgType, protocol.TO0AcceptOwnerMsgType, protocol.TO1RVRedirectMsgType,
 		protocol.TO2Done2MsgType, protocol.TO2DoneAck20MsgType, protocol.ErrorMsgType:
 		if err := t.Tokens.InvalidateToken(t.Tokens.TokenContext(context.Background(), t.token)); err != nil {
 			t.T.Logf("error invalidating token: %v", err)
