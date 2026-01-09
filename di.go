@@ -121,18 +121,39 @@ func DI(ctx context.Context, transport Transport, info any, c DIConfig) (*Device
 
 // AppStart(10) -> SetCredentials(11)
 func appStart(ctx context.Context, transport Transport, info any) (*VoucherHeader, error) {
-	// Define request structure
-	var msg struct {
-		DeviceMfgInfo *cbor.Bstr[any]
-		CapabilityFlags
-	}
-	if info != nil {
-		msg.DeviceMfgInfo = cbor.NewBstr(info)
-	}
-	msg.CapabilityFlags = GlobalCapabilityFlags
+	// Check protocol version to determine message structure
+	// FDO 2.0 includes CapabilityFlags, FDO 1.1 does not
+	version := protocol.VersionFromContext(ctx)
 
-	// Make request
-	typ, resp, err := transport.Send(ctx, protocol.DIAppStartMsgType, msg, nil)
+	var typ uint8
+	var resp io.ReadCloser
+	var err error
+
+	if version == protocol.Version200 {
+		// FDO 2.0: Include CapabilityFlags
+		var msg struct {
+			DeviceMfgInfo *cbor.Bstr[any]
+			CapabilityFlags
+		}
+		if info != nil {
+			msg.DeviceMfgInfo = cbor.NewBstr(info)
+		}
+		msg.CapabilityFlags = GlobalCapabilityFlags
+
+		// Make request
+		typ, resp, err = transport.Send(ctx, protocol.DIAppStartMsgType, msg, nil)
+	} else {
+		// FDO 1.1: Only device info
+		var msg struct {
+			DeviceMfgInfo *cbor.Bstr[any]
+		}
+		if info != nil {
+			msg.DeviceMfgInfo = cbor.NewBstr(info)
+		}
+
+		// Make request
+		typ, resp, err = transport.Send(ctx, protocol.DIAppStartMsgType, msg, nil)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("DI.AppStart: %w", err)
 	}

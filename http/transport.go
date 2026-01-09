@@ -78,6 +78,9 @@ func (t *Transport) Send(ctx context.Context, msgType uint8, msg any, sess kex.S
 		version = protocol.Version101
 	}
 
+	// Inject version into context for protocol handlers
+	ctx = protocol.ContextWithVersion(ctx, version)
+
 	// Create request with URL and body
 	uri, err := url.JoinPath(t.BaseURL, "fdo", version.String(), "msg", strconv.Itoa(int(msgType)))
 	if err != nil {
