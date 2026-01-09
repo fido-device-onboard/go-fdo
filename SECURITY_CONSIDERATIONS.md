@@ -33,6 +33,22 @@ func (c *OCSPChecker) CheckCertificate(cert *x509.Certificate) error {
 fdo.SetCertificateChecker(&OCSPChecker{})
 ```
 
+#### Revocation for Offline/Dark Sites
+
+Standard revocation methods (CRL/OCSP) require internet connectivity to certificate authorities. For devices operating in:
+
+- **Dark sites** (air-gapped networks)
+- **Offline environments** (limited or no internet access)
+- **Remote locations** (intermittent connectivity)
+
+Additional revocation strategies may be warranted:
+
+- **Local CRL distribution**: Periodically download and cache CRLs during connectivity windows
+- **Push-based revocation**: Use out-of-band channels (e.g., satellite, cellular) to push revocation lists
+- **Short-lived certificates**: Use very short validity periods (hours/days) to minimize exposure
+- **Device-specific revocation lists**: Maintain device-local revocation status updated during maintenance windows
+- **Multi-factor validation**: Require additional verification when connectivity is unavailable
+
 ### Test-Only Certificate Practices
 
 The following issues are present in the test certificate generation code:
@@ -67,6 +83,7 @@ SerialNumber: big.NewInt(2), // Parent
 - Sign certificates with externally-managed Hardware Security Modules (HSMs)
 - Implement proper PKI practices and enterprise certificate management systems
 - **Always configure CertificateChecker with CRL/OCSP validation**
+- Consider additional revocation strategies for offline/dark sites (local CRL caching, push-based revocation, short-lived certs)
 - Add certificate transparency logging
 - Regularly rotate certificates and private keys
 

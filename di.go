@@ -169,16 +169,33 @@ type setCredentialsMsg struct {
 // AppStart(10) -> SetCredentials(11)
 func (s *DIServer[T]) setCredentials(ctx context.Context, msg io.Reader) (*setCredentialsMsg, error) {
 	// Decode proprietary device mfg info from app start
-	var appStart struct {
-		Info *cbor.Bstr[T]
-		CapabilityFlags
-	}
-	if err := cbor.NewDecoder(msg).Decode(&appStart); err != nil {
-		return nil, fmt.Errorf("error decoding device manufacturing info: %w", err)
-	}
+	// FDO 2.0 includes CapabilityFlags, FDO 1.1 does not
+	version := protocol.VersionFromContext(ctx)
+
 	var info *T // Null info is valid
-	if appStart.Info != nil {
-		info = &appStart.Info.Val
+	if version == protocol.Version200 {
+		// FDO 2.0: AppStart includes CapabilityFlags
+		var appStart struct {
+			Info *cbor.Bstr[T]
+			CapabilityFlags
+		}
+		if err := cbor.NewDecoder(msg).Decode(&appStart); err != nil {
+			return nil, fmt.Errorf("error decoding device manufacturing info: %w", err)
+		}
+		if appStart.Info != nil {
+			info = &appStart.Info.Val
+		}
+	} else {
+		// FDO 1.1: AppStart only includes device info
+		var appStart struct {
+			Info *cbor.Bstr[T]
+		}
+		if err := cbor.NewDecoder(msg).Decode(&appStart); err != nil {
+			return nil, fmt.Errorf("error decoding device manufacturing info: %w", err)
+		}
+		if appStart.Info != nil {
+			info = &appStart.Info.Val
+		}
 	}
 
 	// Create and store a new device certificate chain
