@@ -19,6 +19,14 @@ It implements [FIDO Device Onboard Specification 1.1][fdo11] and [FIDO Device On
 [cbor]: https://www.rfc-editor.org/rfc/rfc8949.html
 [cose]: https://datatracker.ietf.org/doc/html/rfc8152
 
+## Security Notice
+
+⚠️ **IMPORTANT**: This library is intended for development and testing. For production deployments, you MUST follow proper security practices. See [SECURITY_CONSIDERATIONS.md](SECURITY_CONSIDERATIONS.md) for detailed security considerations including:
+- Certificate validation and revocation checking
+- Key management best practices
+- Transport security requirements
+- Operational security guidelines
+
 ## Quick Start
 
 A comprehensive test script is provided that demonstrates all major features of the FDO implementation. It serves as both a test suite and a self-documenting guide.
@@ -411,7 +419,7 @@ For detailed documentation on creating and using delegate certificates, see [del
 
 ### Certificate Validation
 
-> **Important:** The reference implementation validates certificate expiration but does **not** check certificate revocation (CRL/OCSP). Production deployments should implement revocation checking using the `CertificateChecker` interface.
+> **Important:** The reference implementation validates certificate expiration but does **not** check certificate revocation (CRL/OCSP) by default. Production deployments MUST implement revocation checking using the `CertificateChecker` interface.
 
 When running tests with delegates, you will see warnings like:
 
@@ -419,7 +427,11 @@ When running tests with delegates, you will see warnings like:
 WARN: No CertificateChecker configured - revocation checking (CRL/OCSP) is disabled
 ```
 
-These warnings are expected during development. For production use, see [delegate-validation.md](delegate-validation.md) for details on implementing custom certificate validation.
+These warnings are expected during development. For production use, see [SECURITY_CONSIDERATIONS.md](SECURITY_CONSIDERATIONS.md) for detailed security requirements including:
+- Mandatory certificate revocation checking
+- Key management best practices
+- Transport security requirements
+- Operational security guidelines
 
 ## Attested Payloads
 
