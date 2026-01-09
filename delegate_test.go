@@ -168,3 +168,91 @@ func TestDelegateChainSummary(t *testing.T) {
 		t.Errorf("expected summary %q, got %q", expected, summary)
 	}
 }
+
+// TestSelfSignedDelegateRejected verifies that a self-signed delegate certificate
+// (not signed by the legitimate owner) is rejected during verification.
+// This is a critical security test - without this check, an attacker could
+// create their own delegate certificate and impersonate the owner.
+func TestSelfSignedDelegateRejected(t *testing.T) {
+	// Generate the legitimate owner key
+	legitimateOwnerKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("failed to generate legitimate owner key: %v", err)
+	}
+
+	// Generate an attacker's key (used to self-sign a fake delegate)
+	attackerKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("failed to generate attacker key: %v", err)
+	}
+
+	// Attacker creates a self-signed delegate certificate
+	// (signed by attacker, NOT by the legitimate owner)
+	selfSignedCert, err := fdo.GenerateDelegate(
+		attackerKey, // Attacker signs with their own key
+		fdo.DelegateFlagRoot,
+		attackerKey.Public(), // Delegate key is also attacker's key
+		"FakeDelegate",
+		"FakeOwner",
+		[]asn1.ObjectIdentifier{fdo.OIDPermitOnboardNewCred, fdo.OIDPermitOnboardReuseCred},
+		x509.ECDSAWithSHA384,
+	)
+	if err != nil {
+		t.Fatalf("failed to generate self-signed cert: %v", err)
+	}
+
+	// Attempt to verify the self-signed delegate against the legitimate owner
+	// This MUST fail - the delegate was not signed by the legitimate owner
+	chain := []*x509.Certificate{selfSignedCert}
+	legitimatePubKey := legitimateOwnerKey.Public()
+	err = fdo.VerifyDelegateChain(chain, &legitimatePubKey, nil)
+	if err == nil {
+		t.Fatal("SECURITY FAILURE: self-signed delegate was accepted as valid for legitimate owner")
+	}
+	t.Logf("Correctly rejected self-signed delegate: %v", err)
+}
+
+// TestDelegateChainMissingPermission verifies that a delegate without the
+// required permission OID is rejected.
+func TestDelegateChainMissingPermission(t *testing.T) {
+	// Generate owner key
+	ownerKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("failed to generate owner key: %v", err)
+	}
+
+	// Generate delegate key
+	delegateKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("failed to generate delegate key: %v", err)
+	}
+
+	// Generate delegate certificate with ONLY redirect permission (no onboard)
+	cert, err := fdo.GenerateDelegate(
+		ownerKey,
+		fdo.DelegateFlagRoot,
+		delegateKey.Public(),
+		"RedirectOnlyDelegate",
+		"Owner",
+		[]asn1.ObjectIdentifier{fdo.OIDPermitRedirect}, // Only redirect, no onboard
+		x509.ECDSAWithSHA384,
+	)
+	if err != nil {
+		t.Fatalf("failed to generate delegate cert: %v", err)
+	}
+
+	chain := []*x509.Certificate{cert}
+	ownerPubKey := ownerKey.Public()
+
+	// Verification with redirect permission should succeed
+	err = fdo.VerifyDelegateChain(chain, &ownerPubKey, &fdo.OIDPermitRedirect)
+	if err != nil {
+		t.Errorf("delegate with redirect permission should pass redirect check: %v", err)
+	}
+
+	// Verification requiring onboard permission should fail
+	err = fdo.VerifyDelegateChain(chain, &ownerPubKey, &fdo.OIDPermitOnboardNewCred)
+	if err == nil {
+		t.Error("delegate without onboard permission should fail onboard check")
+	}
+}

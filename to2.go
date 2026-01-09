@@ -321,6 +321,21 @@ func verifyOwner(ctx context.Context, transport Transport, to1d *cose.Sign1[prot
 
 // Verify Voucher - using Transport to get entries
 func verifyVoucher(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1d, []byte], info *OvhValidationContext, c *TO2Config) error {
+	// If a delegate is used, verify the delegate chain is signed by the original owner.
+	// This is critical security: without this check, an attacker could present a
+	// self-signed delegate certificate and the client would trust it.
+	if info.DelegateChain != nil {
+		chain, err := info.DelegateChain.Chain()
+		if err != nil {
+			captureErr(ctx, protocol.InvalidMessageErrCode, "")
+			return fmt.Errorf("error parsing delegate chain: %w", err)
+		}
+		if err := VerifyDelegateChain(chain, &info.OriginalOwnerKey, nil); err != nil {
+			captureErr(ctx, protocol.InvalidMessageErrCode, "")
+			return fmt.Errorf("delegate chain verification failed: %w", err)
+		}
+	}
+
 	// Construct ownership voucher from parts received from the owner service
 	var entries []cose.Sign1Tag[VoucherEntryPayload, []byte]
 	for i := range info.NumVoucherEntries {

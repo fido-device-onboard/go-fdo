@@ -295,6 +295,50 @@ test_delegate_fdo200() {
 	log_success "Delegate Support (FDO 2.0) test PASSED"
 }
 
+# Test: Bad Delegate Rejection (Security Test)
+# This test verifies that a delegate chain created with a DIFFERENT owner key
+# (simulating an attacker) cannot be used for onboarding.
+# Note: Full end-to-end bad delegate injection requires Go-level testing
+# (see delegate_test.go:TestSelfSignedDelegateRejected)
+test_bad_delegate() {
+	log_section "TEST: Bad Delegate Rejection (Security)"
+
+	rm -f "$DB_FILE" "$CRED_FILE"
+
+	log_step "Creating database with owner certs"
+	start_server "-owner-certs"
+	stop_server
+
+	log_step "Creating legitimate delegate chain (SECP384R1 owner)"
+	run_cmd go run ./cmd delegate -db "../$DB_FILE" create goodDelegate onboard,redirect SECP384R1 ec384
+
+	# Now try to create a delegate with a DIFFERENT owner key type
+	# This simulates an attacker trying to use their own key
+	log_step "Attempting to create delegate with wrong owner key (should fail or be rejected)"
+	
+	# Create a delegate rooted to SECP256R1 owner (different from SECP384R1 used for voucher)
+	run_cmd go run ./cmd delegate -db "../$DB_FILE" create badDelegate onboard,redirect SECP256R1 ec256
+
+	# Start server with the GOOD delegate first to do DI
+	start_server "-owner-certs -onboardDelegate goodDelegate"
+
+	log_step "Running DI (creates voucher with SECP384R1 owner)"
+	run_cmd go run ./cmd client -di "$SERVER_URL"
+	log_success "DI completed"
+
+	stop_server
+
+	# Now try to onboard with the BAD delegate (rooted to wrong owner)
+	# The server should reject this because the delegate chain doesn't match the voucher's owner
+	start_server "-owner-certs -onboardDelegate badDelegate"
+
+	log_step "Attempting TO2 with mismatched delegate (should fail)"
+	run_expect_fail "TO2 with wrong delegate owner" go run ./cmd client
+
+	stop_server
+	log_success "Bad Delegate Rejection test PASSED"
+}
+
 # Run all tests
 test_all() {
 	local failed=0
@@ -306,6 +350,7 @@ test_all() {
 	test_fdo200 || failed=1
 	test_delegate || failed=1
 	test_delegate_fdo200 || failed=1
+	test_bad_delegate || failed=1
 
 	echo ""
 	if [ $failed -eq 0 ]; then
@@ -358,12 +403,15 @@ main() {
 	delegate-fdo200)
 		test_delegate_fdo200
 		;;
+	bad-delegate)
+		test_bad_delegate
+		;;
 	all)
 		test_all
 		;;
 	*)
 		echo "Unknown test: $test_name"
-		echo "Available tests: basic, basic-reuse, rv-blob, kex, fdo200, delegate, delegate-fdo200, all"
+		echo "Available tests: basic, basic-reuse, rv-blob, kex, fdo200, delegate, delegate-fdo200, bad-delegate, all"
 		exit 1
 		;;
 	esac
