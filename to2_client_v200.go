@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"hash"
+	"log/slog"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
@@ -182,6 +183,25 @@ func sendHelloDeviceProbe(ctx context.Context, transport Transport, c *TO2Config
 			captureErr(ctx, protocol.MessageBodyErrCode, "")
 			return nil, fmt.Errorf("error parsing TO2.HelloDeviceAck20: %w", err)
 		}
+
+		// Check server's capability flags for version negotiation (FDO 2.0 spec)
+		if len(ack.CapabilityFlags.Flags) > 0 {
+			serverFlags := ack.CapabilityFlags.Flags[0]
+			// Check if server supports FDO 1.2 (FDO 2.0)
+			if serverFlags&Capb0SupFDO12 == 0 {
+				// Server doesn't support FDO 2.0, check for FDO 1.1
+				if serverFlags&Capb0SupFDO11 != 0 {
+					// Server supports FDO 1.1, we should switch version
+					// For now, we'll continue with FDO 2.0 since that's what was requested
+					// In a full implementation, we would restart with FDO 1.1
+					slog.Info("Server doesn't support FDO 2.0, but supports FDO 1.1")
+				} else if serverFlags&Capb0SupFDO10 != 0 {
+					// Server only supports FDO 1.0
+					slog.Info("Server only supports FDO 1.0")
+				}
+			}
+		}
+
 		return &ack, nil
 
 	case protocol.ErrorMsgType:
