@@ -10,7 +10,6 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha512"
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/base64"
@@ -236,131 +235,6 @@ type ECDSASignature struct {
 	S *big.Int
 }
 
-//nolint:gocyclo // CLI command with multiple PEM block types and signature verification
-func doAttestPayload(state *sqlite.DB, args []string) error {
-	pemData, err := os.ReadFile(filepath.Clean(args[0]))
-	if err != nil {
-		return fmt.Errorf("failed to read PEM file: %w", err)
-	}
-
-	//var blocks []*pem.Block
-	voucherError := fmt.Errorf("NoVoucher")
-	var payload []byte
-	var ownerKey *crypto.PublicKey
-	var sigbytes []byte
-	var delegateChain []*x509.Certificate
-	for {
-		block, rest := pem.Decode(pemData)
-		if block == nil {
-			break // No more PEM blocks found
-		}
-		fmt.Printf("Block \"%s\"  -  %d bytes\n", block.Type, len(block.Bytes))
-		switch block.Type {
-		case "OWNERSHIP VOUCHER":
-			var oKey *crypto.PublicKey
-			oKey, voucherError = InspectVoucher(state, block.Bytes)
-			if voucherError != nil {
-				return fmt.Errorf("InspectVoucher failed: %w", voucherError)
-			}
-			ownerKey = oKey
-
-		case "IV":
-			fmt.Printf("IV Data %x\n", block.Bytes)
-		case "CIPHERTEXT":
-			fmt.Printf("Cyphertext Data %x\n", block.Bytes)
-		case "WRAPPED ENCRYPTION KEY":
-			fmt.Printf("Wrapped Encryption Key %x\n", block.Bytes)
-
-		case "PAYLOAD":
-			payload = block.Bytes
-
-		case "SIGNATURE":
-			sigbytes = block.Bytes
-
-		case "CERTIFICATE":
-			cert, err := x509.ParseCertificate(block.Bytes)
-			if err != nil {
-				return err
-			}
-			fmt.Printf("DELEGATE CERT \"%s\"  -  %d bytes\n", block.Type, len(block.Bytes))
-			delegateChain = append(delegateChain, cert)
-		default:
-			fmt.Printf("Unknown Block %s\n", block.Type)
-		}
-		pemData = rest
-	}
-	fmt.Printf("VoucherError: %v\n", voucherError)
-	fmt.Printf("OwnerKey: %v\n", ownerKey)
-	if voucherError != nil {
-		return voucherError
-	}
-	fmt.Printf("Payload: \"%s\"\n", string(payload))
-	if ownerKey == nil {
-		return fmt.Errorf("no owner key")
-	}
-	hashed := sha512.Sum384(payload)
-
-	// Do we need to validate against delegate chain??
-	if len(delegateChain) > 0 {
-		/* Delegates can only sign payloads when they have "Provision" permission */
-		err = fdo.VerifyDelegateChain(delegateChain, ownerKey, &fdo.OIDDelegateProvision)
-		if err != nil {
-			return fmt.Errorf("VerifyDelegateChain failed: %w", err)
-		}
-		//ownerKey = delegagateLeaf....
-		fmt.Printf("Delegate Leaf is %T\n", delegateChain[0].PublicKey)
-		switch pub := delegateChain[0].PublicKey.(type) {
-		case *ecdsa.PublicKey:
-			var temp crypto.PublicKey = *pub
-			ownerKey = &temp
-			fmt.Printf("New Owner is %T %v+", ownerKey, ownerKey)
-		default:
-			return fmt.Errorf("invalid delegate leaf key type %T", pub)
-		}
-	}
-
-	/* TODO - supports sha384/ecdsa384 only */
-	fmt.Printf("OwnerKey type is %T\n", ownerKey)
-	switch pub := (*ownerKey).(type) {
-	case *rsa.PublicKey:
-		//h := sha512.Sum384(payload)
-		err := rsa.VerifyPKCS1v15(pub, crypto.SHA384, hashed[:], sigbytes)
-		if err != nil {
-			return fmt.Errorf("RSA Signature verify failed %w", err)
-		}
-		//fmt.Printf("RSA Sig Verify of %v+ sig %v returns %w\n",h,sigbytes,err)
-	case *ecdsa.PublicKey:
-		sig := new(ECDSASignature)
-		_, err := asn1.Unmarshal(sigbytes, sig)
-		if err != nil {
-			return fmt.Errorf("failed to unmarshal ASN.1 ECDSA signature: %w", err)
-		}
-		fmt.Printf("Signature is %v+\n", sig)
-		verified := ecdsa.Verify(pub, hashed[:], sig.R, sig.S)
-		fmt.Printf("ECDSA ptr Verify returned %v\n", verified)
-		if !verified {
-			return fmt.Errorf("ECDSA Signature verification FAILED")
-		}
-	case ecdsa.PublicKey:
-		sig := new(ECDSASignature)
-		_, err := asn1.Unmarshal(sigbytes, sig)
-		if err != nil {
-			return fmt.Errorf("failed to unmarshal ASN.1 ECDSA signature: %w", err)
-		}
-		fmt.Printf("Signature is %v+\n", sig)
-		verified := ecdsa.Verify(&pub, hashed[:], sig.R, sig.S)
-		fmt.Printf("ECDSA Verify returned %v\n", verified)
-		if !verified {
-			return fmt.Errorf("ECDSA Signature verification FAILED")
-		}
-	default:
-		return fmt.Errorf("bad owner key type %T", pub)
-	}
-
-	fmt.Println(string(payload))
-	return nil
-}
-
 func doInspectVoucher(state *sqlite.DB, args []string) error {
 	if len(args) < 1 {
 		return fmt.Errorf("no filename specified")
@@ -380,7 +254,21 @@ func doInspectVoucher(state *sqlite.DB, args []string) error {
 	return err
 }
 
+// InspectVoucherResult contains the results of voucher inspection
+type InspectVoucherResult struct {
+	OwnerKey   *crypto.PublicKey
+	PrivateKey crypto.Signer // Device's private key for decryption
+}
+
 func InspectVoucher(state *sqlite.DB, voucherData []byte) (*crypto.PublicKey, error) {
+	result, err := InspectVoucherFull(state, voucherData)
+	if err != nil {
+		return nil, err
+	}
+	return result.OwnerKey, nil
+}
+
+func InspectVoucherFull(state *sqlite.DB, voucherData []byte) (*InspectVoucherResult, error) {
 	var ov fdo.Voucher
 	if err := cbor.Unmarshal(voucherData, &ov); err != nil {
 		return nil, fmt.Errorf("error parsing voucher: %w", err)
@@ -460,7 +348,6 @@ func InspectVoucher(state *sqlite.DB, voucherData []byte) (*crypto.PublicKey, er
 		defer func() { _ = cleanup() }()
 	}
 
-	_ = privateKey // TODO BKG FIX We will need to decrypt attested Payload
 	err = ov.VerifyCrypto(fdo.VerifyOptions{
 		HmacSha256:         hmacSha256,
 		HmacSha384:         hmacSha384,
@@ -471,9 +358,11 @@ func InspectVoucher(state *sqlite.DB, voucherData []byte) (*crypto.PublicKey, er
 	if err != nil {
 		return nil, fmt.Errorf("failed to validate voucher: %w", err)
 	}
-	//fmt.Printf("%+v\n",ov)
 	ownerPublic := ownerKey.Public()
-	return &ownerPublic, err
+	return &InspectVoucherResult{
+		OwnerKey:   &ownerPublic,
+		PrivateKey: privateKey,
+	}, nil
 }
 func doPrintDelegatePrivKey(state *sqlite.DB, args []string) error {
 	if len(args) < 1 {
@@ -519,7 +408,6 @@ delegate print {chainname} [ownerKeyType]
 delegate list
 delegate key {chainname} 
 delegate inspectVoucher {filename} 
-delegate attestPayload {filename} 
 delegate create {chainName} {Permission[,Permission...]} {ownerKeyType} {keyType} [keyType...]
 
 Permissions:
@@ -568,8 +456,6 @@ func delegate(args []string) error {
 		return createDelegateCertificate(state, args[1:])
 	case "inspectVoucher":
 		return doInspectVoucher(state, args[1:])
-	case "attestPayload":
-		return doAttestPayload(state, args[1:])
 	case "help":
 		return doDelegateHelp(state, args[1:])
 	default:

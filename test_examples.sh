@@ -4,7 +4,7 @@
 # Runs through the examples from README.md and delegate.md
 #
 # Usage: ./test_examples.sh [test_name]
-#   test_name: basic, rv-blob, kex, delegate, delegate-fdo200, all (default: all)
+#   test_name: basic, rv-blob, kex, delegate, delegate-fdo200, attested-payload, all (default: all)
 #
 
 set -e
@@ -295,6 +295,103 @@ test_delegate_fdo200() {
 	log_success "Delegate Support (FDO 2.0) test PASSED"
 }
 
+# Test: Attested Payload (plaintext)
+test_attested_payload() {
+	log_section "TEST: Attested Payload (Plaintext)"
+
+	rm -f "$DB_FILE" "$CRED_FILE" voucher.pem payload.fdo
+
+	log_step "Creating database with owner certs"
+	start_server "-owner-certs"
+
+	log_step "Running DI"
+	run_cmd go run ./cmd client -di "$SERVER_URL"
+	log_success "DI completed"
+
+	stop_server
+
+	log_step "Exporting voucher to PEM"
+	(echo '-----BEGIN OWNERSHIP VOUCHER-----' ; sqlite3 "$DB_FILE" 'select hex(cbor) from vouchers;' | xxd -r -p | base64 ; echo '-----END OWNERSHIP VOUCHER-----') > voucher.pem
+	log_success "Voucher exported"
+
+	log_step "Creating plaintext attested payload"
+	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../voucher.pem -payload "Hello from attested payload test" -output ../payload.fdo
+	log_success "Attested payload created"
+
+	log_step "Verifying attested payload"
+	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../payload.fdo
+	log_success "Attested payload verified"
+
+	rm -f voucher.pem payload.fdo
+	log_success "Attested Payload (Plaintext) test PASSED"
+}
+
+# Test: Attested Payload with Encryption (RSA)
+test_attested_payload_encrypted() {
+	log_section "TEST: Attested Payload (Encrypted)"
+
+	rm -f "$DB_FILE" "$CRED_FILE" voucher.pem encrypted.fdo
+
+	log_step "Creating database with owner certs"
+	start_server "-owner-certs"
+
+	log_step "Running DI with RSA2048 key (required for encryption)"
+	run_cmd go run ./cmd client -di "$SERVER_URL" -di-key rsa2048
+	log_success "DI completed with RSA key"
+
+	stop_server
+
+	log_step "Exporting voucher to PEM"
+	(echo '-----BEGIN OWNERSHIP VOUCHER-----' ; sqlite3 "$DB_FILE" 'select hex(cbor) from vouchers;' | xxd -r -p | base64 ; echo '-----END OWNERSHIP VOUCHER-----') > voucher.pem
+	log_success "Voucher exported"
+
+	log_step "Creating encrypted attested payload"
+	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../voucher.pem -payload "Secret encrypted message" -encrypt -output ../encrypted.fdo
+	log_success "Encrypted attested payload created"
+
+	log_step "Verifying and decrypting attested payload"
+	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../encrypted.fdo
+	log_success "Encrypted attested payload verified and decrypted"
+
+	rm -f voucher.pem encrypted.fdo
+	log_success "Attested Payload (Encrypted) test PASSED"
+}
+
+# Test: Attested Payload with Delegate Signing
+test_attested_payload_delegate() {
+	log_section "TEST: Attested Payload (Delegate Signed)"
+
+	rm -f "$DB_FILE" "$CRED_FILE" voucher.pem delegated.fdo
+
+	log_step "Creating database with owner certs"
+	start_server "-owner-certs"
+
+	log_step "Running DI"
+	run_cmd go run ./cmd client -di "$SERVER_URL"
+	log_success "DI completed"
+
+	stop_server
+
+	log_step "Creating delegate chain with provision permission"
+	run_cmd go run ./cmd delegate -db "../$DB_FILE" create provisionDelegate provision SECP384R1 ec384
+	log_success "Delegate chain created"
+
+	log_step "Exporting voucher to PEM"
+	(echo '-----BEGIN OWNERSHIP VOUCHER-----' ; sqlite3 "$DB_FILE" 'select hex(cbor) from vouchers;' | xxd -r -p | base64 ; echo '-----END OWNERSHIP VOUCHER-----') > voucher.pem
+	log_success "Voucher exported"
+
+	log_step "Creating delegate-signed attested payload"
+	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../voucher.pem -payload "Delegate signed payload" -delegate provisionDelegate -output ../delegated.fdo
+	log_success "Delegate-signed attested payload created"
+
+	log_step "Verifying delegate-signed attested payload"
+	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../delegated.fdo
+	log_success "Delegate-signed attested payload verified"
+
+	rm -f voucher.pem delegated.fdo
+	log_success "Attested Payload (Delegate Signed) test PASSED"
+}
+
 # Test: Bad Delegate Rejection (Security Test)
 # This test verifies that a delegate chain created with a DIFFERENT owner key
 # (simulating an attacker) cannot be used for onboarding.
@@ -350,6 +447,9 @@ test_all() {
 	test_fdo200 || failed=1
 	test_delegate || failed=1
 	test_delegate_fdo200 || failed=1
+	test_attested_payload || failed=1
+	test_attested_payload_encrypted || failed=1
+	test_attested_payload_delegate || failed=1
 	test_bad_delegate || failed=1
 
 	echo ""
@@ -406,12 +506,21 @@ main() {
 	bad-delegate)
 		test_bad_delegate
 		;;
+	attested-payload)
+		test_attested_payload
+		;;
+	attested-payload-encrypted)
+		test_attested_payload_encrypted
+		;;
+	attested-payload-delegate)
+		test_attested_payload_delegate
+		;;
 	all)
 		test_all
 		;;
 	*)
 		echo "Unknown test: $test_name"
-		echo "Available tests: basic, basic-reuse, rv-blob, kex, fdo200, delegate, delegate-fdo200, bad-delegate, all"
+		echo "Available tests: basic, basic-reuse, rv-blob, kex, fdo200, delegate, delegate-fdo200, bad-delegate, attested-payload, attested-payload-encrypted, attested-payload-delegate, all"
 		exit 1
 		;;
 	esac

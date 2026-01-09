@@ -29,7 +29,7 @@ func init() {
 func usage() {
 	_, _ = fmt.Fprintf(os.Stderr, `
 Usage:
-  fdo [global_options] [client|server] [--] [options]
+  fdo [global_options] [client|server|delegate|attestpayload] [--] [options]
 
 Global options:
 %s
@@ -39,8 +39,11 @@ Server options:
 %s
 Delegate options:
 %s
+Attested Payload options:
+%s
 
 "delegate help" for more delegate commands
+"attestpayload help" for attested payload commands
 
 Key types:
   - RSA2048RESTR
@@ -67,7 +70,7 @@ Key exchange suites:
   - ASYMKEX3072
   - ECDH256
   - ECDH384
-`, options(flags), options(clientFlags), options(serverFlags), options(delegateFlags))
+`, options(flags), options(clientFlags), options(serverFlags), options(delegateFlags), options(attestPayloadFlags))
 }
 
 func options(flags *flag.FlagSet) string {
@@ -125,6 +128,11 @@ func main() {
 		}
 		if err := delegate(delegateFlags.Args()); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "delegate error: %v\n", err)
+			os.Exit(2)
+		}
+	case "attestpayload", "ap":
+		if err := attestPayload(args); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "attestpayload error: %v\n", err)
 			os.Exit(2)
 		}
 	default:

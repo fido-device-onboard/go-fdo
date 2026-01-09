@@ -178,7 +178,7 @@ func client(ctx context.Context) error {
 	if !ok {
 		return fmt.Errorf("invalid key exchange cipher suite: %s", cipherSuite)
 	}
-	newDC := transferOwnership(ctx, dc.RvInfo, fdo.TO2Config{
+	newDC, err := transferOwnership(ctx, dc.RvInfo, fdo.TO2Config{
 		Cred:       *dc,
 		HmacSha256: hmacSha256,
 		HmacSha384: hmacSha384,
@@ -198,8 +198,12 @@ func client(ctx context.Context) error {
 	if rvOnly {
 		return nil
 	}
+	if err != nil {
+		return fmt.Errorf("transfer ownership failed: %w", err)
+	}
 	if newDC == nil {
-		fmt.Println("Credential not updated (either due to failure of TO2 or the Credential Reuse Protocol")
+		// Credential reuse - this is a success case
+		fmt.Println("Credential reuse - credential not updated")
 		return nil
 	}
 
@@ -308,7 +312,7 @@ func di(ctx context.Context) (err error) { //nolint:gocyclo
 	})
 }
 
-func transferOwnership(ctx context.Context, rvInfo [][]protocol.RvInstruction, conf fdo.TO2Config) *fdo.DeviceCredential { //nolint:gocyclo
+func transferOwnership(ctx context.Context, rvInfo [][]protocol.RvInstruction, conf fdo.TO2Config) (*fdo.DeviceCredential, error) { //nolint:gocyclo
 	var to2URLs []string
 	directives := protocol.ParseDeviceRvInfo(rvInfo)
 	for _, directive := range directives {
@@ -342,7 +346,7 @@ TO1:
 			// A 25% plus or minus jitter is allowed by spec
 			select {
 			case <-ctx.Done():
-				return nil
+				return nil, ctx.Err()
 			case <-time.After(directive.Delay):
 			}
 		}
@@ -382,7 +386,7 @@ TO1:
 		if to1d != nil {
 			fmt.Printf("TO1 Blob: %+v\n", to1d.Payload.Val)
 		}
-		return nil
+		return nil, nil
 	}
 
 	// Try TO2 on each address only once
@@ -390,20 +394,26 @@ TO1:
 		// Use version-aware transport for TO2
 		if fdoVersion < 0 || fdoVersion > 65535 {
 			slog.Error("invalid FDO version", "version", fdoVersion)
-			return nil
+			return nil, fmt.Errorf("invalid FDO version: %d", fdoVersion)
 		}
 		version := protocol.Version(fdoVersion) //#nosec G115 -- bounds checked above
 		transport := tlsTransportWithVersion(baseURL, nil, version)
-		newDC := transferOwnership2(ctx, transport, to1d, conf)
-		if newDC != nil {
-			return newDC
+		newDC, err := transferOwnership2(ctx, transport, to1d, conf)
+		if err != nil {
+			// TO2 failed - continue to next URL, but remember the error
+			continue
 		}
+		if newDC != nil {
+			return newDC, nil
+		}
+		// newDC == nil && err == nil means credential reuse
+		return nil, nil
 	}
 
-	return nil
+	return nil, fmt.Errorf("TO2 failed on all addresses")
 }
 
-func transferOwnership2(ctx context.Context, transport fdo.Transport, to1d *cose.Sign1[protocol.To1d, []byte], conf fdo.TO2Config) *fdo.DeviceCredential {
+func transferOwnership2(ctx context.Context, transport fdo.Transport, to1d *cose.Sign1[protocol.To1d, []byte], conf fdo.TO2Config) (*fdo.DeviceCredential, error) {
 	fsims := map[string]serviceinfo.DeviceModule{
 		"fido_alliance": &fsim.Interop{},
 	}
@@ -462,7 +472,7 @@ func transferOwnership2(ctx context.Context, transport fdo.Transport, to1d *cose
 	}
 	if err != nil {
 		slog.Error("TO2 failed", "error", err)
-		return nil
+		return nil, err
 	}
-	return cred
+	return cred, nil
 }
