@@ -455,3 +455,185 @@ func TestDelegateChainRootMissingPermission(t *testing.T) {
 		t.Logf("Correctly rejected chain with root missing permission: %v", err)
 	}
 }
+
+// TestDelegateCannotReuseCred verifies that a delegate with onboard-new-cred
+// permission but NOT onboard-reuse-cred cannot use the credential reuse protocol.
+func TestDelegateCannotReuseCred(t *testing.T) {
+	// Generate owner key
+	ownerKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("failed to generate owner key: %v", err)
+	}
+
+	// Generate delegate key
+	delegateKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("failed to generate delegate key: %v", err)
+	}
+
+	// Generate delegate certificate with onboard-new-cred but NOT onboard-reuse-cred
+	cert, err := fdo.GenerateDelegate(
+		ownerKey,
+		fdo.DelegateFlagRoot,
+		delegateKey.Public(),
+		"NewCredOnlyDelegate",
+		"Owner",
+		[]asn1.ObjectIdentifier{fdo.OIDPermitOnboardNewCred}, // Only new-cred, not reuse-cred
+		x509.ECDSAWithSHA384,
+	)
+	if err != nil {
+		t.Fatalf("failed to generate delegate cert: %v", err)
+	}
+
+	chain := []*x509.Certificate{cert}
+
+	// DelegateCanOnboard should return true (has onboard-new-cred)
+	if !fdo.DelegateCanOnboard(chain) {
+		t.Error("DelegateCanOnboard should return true for new-cred delegate")
+	}
+
+	// DelegateCanReuseCred should return false
+	if fdo.DelegateCanReuseCred(chain) {
+		t.Error("SECURITY FAILURE: DelegateCanReuseCred returned true for delegate without reuse-cred permission")
+	}
+
+	t.Log("Correctly rejected delegate without reuse-cred permission for credential reuse")
+}
+
+// TestDelegateWithReuseCred verifies that a delegate with onboard-reuse-cred
+// permission can use the credential reuse protocol.
+func TestDelegateWithReuseCred(t *testing.T) {
+	// Generate owner key
+	ownerKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("failed to generate owner key: %v", err)
+	}
+
+	// Generate delegate key
+	delegateKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("failed to generate delegate key: %v", err)
+	}
+
+	// Generate delegate certificate with onboard-reuse-cred
+	cert, err := fdo.GenerateDelegate(
+		ownerKey,
+		fdo.DelegateFlagRoot,
+		delegateKey.Public(),
+		"ReuseCredDelegate",
+		"Owner",
+		[]asn1.ObjectIdentifier{fdo.OIDPermitOnboardReuseCred},
+		x509.ECDSAWithSHA384,
+	)
+	if err != nil {
+		t.Fatalf("failed to generate delegate cert: %v", err)
+	}
+
+	chain := []*x509.Certificate{cert}
+
+	// DelegateCanOnboard should return true (reuse-cred implies onboard capability)
+	if !fdo.DelegateCanOnboard(chain) {
+		t.Error("DelegateCanOnboard should return true for reuse-cred delegate")
+	}
+
+	// DelegateCanReuseCred should return true
+	if !fdo.DelegateCanReuseCred(chain) {
+		t.Error("DelegateCanReuseCred should return true for delegate with reuse-cred permission")
+	}
+
+	t.Log("Correctly allowed delegate with reuse-cred permission")
+}
+
+// TestDelegateCannotRedirectWithOnboardOnly verifies that a delegate with
+// onboard permission but NOT redirect permission cannot perform TO0/TO1.
+func TestDelegateCannotRedirectWithOnboardOnly(t *testing.T) {
+	// Generate owner key
+	ownerKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("failed to generate owner key: %v", err)
+	}
+
+	// Generate delegate key
+	delegateKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("failed to generate delegate key: %v", err)
+	}
+
+	// Generate delegate certificate with onboard permissions but NOT redirect
+	cert, err := fdo.GenerateDelegate(
+		ownerKey,
+		fdo.DelegateFlagRoot,
+		delegateKey.Public(),
+		"OnboardOnlyDelegate",
+		"Owner",
+		[]asn1.ObjectIdentifier{fdo.OIDPermitOnboardNewCred, fdo.OIDPermitOnboardReuseCred},
+		x509.ECDSAWithSHA384,
+	)
+	if err != nil {
+		t.Fatalf("failed to generate delegate cert: %v", err)
+	}
+
+	chain := []*x509.Certificate{cert}
+
+	// DelegateCanOnboard should return true
+	if !fdo.DelegateCanOnboard(chain) {
+		t.Error("DelegateCanOnboard should return true for onboard delegate")
+	}
+
+	// DelegateCanRedirect should return false
+	if fdo.DelegateCanRedirect(chain) {
+		t.Error("SECURITY FAILURE: DelegateCanRedirect returned true for delegate without redirect permission")
+	}
+
+	t.Log("Correctly rejected delegate without redirect permission for TO0/TO1")
+}
+
+// TestDelegateWithAllPermissions verifies that a delegate with all permissions
+// can perform all operations.
+func TestDelegateWithAllPermissions(t *testing.T) {
+	// Generate owner key
+	ownerKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("failed to generate owner key: %v", err)
+	}
+
+	// Generate delegate key
+	delegateKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("failed to generate delegate key: %v", err)
+	}
+
+	// Generate delegate certificate with all permissions
+	cert, err := fdo.GenerateDelegate(
+		ownerKey,
+		fdo.DelegateFlagRoot,
+		delegateKey.Public(),
+		"FullPermissionDelegate",
+		"Owner",
+		[]asn1.ObjectIdentifier{
+			fdo.OIDPermitRedirect,
+			fdo.OIDPermitOnboardNewCred,
+			fdo.OIDPermitOnboardReuseCred,
+			fdo.OIDPermitOnboardFdoDisable,
+		},
+		x509.ECDSAWithSHA384,
+	)
+	if err != nil {
+		t.Fatalf("failed to generate delegate cert: %v", err)
+	}
+
+	chain := []*x509.Certificate{cert}
+
+	// All permission checks should pass
+	if !fdo.DelegateCanOnboard(chain) {
+		t.Error("DelegateCanOnboard should return true")
+	}
+	if !fdo.DelegateCanReuseCred(chain) {
+		t.Error("DelegateCanReuseCred should return true")
+	}
+	if !fdo.DelegateCanRedirect(chain) {
+		t.Error("DelegateCanRedirect should return true")
+	}
+
+	t.Log("Delegate with all permissions correctly allowed all operations")
+}
