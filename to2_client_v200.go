@@ -187,8 +187,8 @@ func sendHelloDeviceProbe(ctx context.Context, transport Transport, c *TO2Config
 		// Check server's capability flags for version negotiation (FDO 2.0 spec)
 		if len(ack.CapabilityFlags.Flags) > 0 {
 			serverFlags := ack.CapabilityFlags.Flags[0]
-			// Check if server supports FDO 1.2 (FDO 2.0)
-			if serverFlags&Capb0SupFDO12 == 0 {
+			// Check if server supports FDO 2.0
+			if serverFlags&Capb0SupFDO20 == 0 {
 				// Server doesn't support FDO 2.0, check for FDO 1.1
 				if serverFlags&Capb0SupFDO11 != 0 {
 					// Server supports FDO 1.1, we should switch version

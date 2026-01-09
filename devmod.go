@@ -58,7 +58,7 @@ func (d *devmodOwnerModule) parseModules(messageBody io.Reader) error {
 		} else if err != nil {
 			return err
 		}
-		// If the FDO 1.2 spec is made more clear, validate that start plus len
+		// If the FDO 2.0 spec is made more clear, validate that start plus len
 		// is less than or equal to numModules.
 		if chunk.Start < 0 || chunk.Start > len(d.Modules) || chunk.Len < 0 || len(chunk.Modules) != chunk.Len {
 			return fmt.Errorf("invalid devmod module chunk")

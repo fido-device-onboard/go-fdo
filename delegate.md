@@ -76,7 +76,7 @@ This allows creation of chains like `rv_RSAPKCS` which would be automatically re
 
 ## Permissions
 
-Delegate certs can be scoped to only be allowed to do specific things. Per the FDO 1.2 specification, permissions are encoded as discrete OIDs in the certificate's Extended Key Usage extension.
+Delegate certs can be scoped to only be allowed to do specific things. Per the FDO 2.0 specification, permissions are encoded as discrete OIDs in the certificate's Extended Key Usage extension.
 
 ### Permission OIDs
 
