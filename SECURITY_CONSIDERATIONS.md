@@ -49,6 +49,8 @@ Additional revocation strategies may be warranted:
 - **Device-specific revocation lists**: Maintain device-local revocation status updated during maintenance windows
 - **Multi-factor validation**: Require additional verification when connectivity is unavailable
 
+**Note**: Attested Payload (also known as "Offline FDO") is a prime example where traditional network-based certificate revocation mechanisms cannot be relied upon. In these cases, alternative revocation strategies become critical for maintaining security.
+
 ### Test-Only Certificate Practices
 
 The following issues are present in the test certificate generation code:
@@ -99,8 +101,29 @@ SerialNumber: big.NewInt(2), // Parent
 
 ## Protocol Security Features
 
-- FDO 2.0 includes anti-DoS protection where the device proves itself first
+### Attested Payload ("Offline FDO")
+
+Attested Payload is used in scenarios where devices are offline or not responding to the network. It enables:
+
+- Local users to perform authorized operations (installation, diagnostics, recovery)
+- Proof of authorization for specific operations without network connectivity
+- Owner-authorized work to be performed offline with cryptographic verification
+
+This is particularly valuable for:
+- Emergency maintenance or recovery
+- Diagnostic operations in air-gapped environments
+- Field service operations without network access
+
+### Anti-DoS Protection
+
+- FDO 2.0 includes anti-DoS protection where the device proves itself first before the owner proves ownership. This prevents resource exhaustion attacks on the owner service.
+
+### Version Negotiation
+
 - Version negotiation via capability flags prevents downgrade attacks
+
+### Message Authentication
+
 - All protocol messages are authenticated using HMAC
 
 ---
