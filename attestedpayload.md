@@ -11,6 +11,7 @@ Thus, the attested payload may consist of the following parts:
 | Payload | What | When |
 | ---- | ---- | ---- |
 | Payload | Message (cleartext or encrypted) | Always |
+| Payload Type | MIME type indicating content type | Optional |
 | Payload Signature | Owner or Delegate signed | Always |
 | Owner Voucher | Device voucher, proving Ownership | Always |
 | Delegate Certificate Chain | Signed by owner if Delegate signed payload | Optional |
@@ -36,6 +37,10 @@ go run ./examples/cmd attestpayload verify [options] <file.fdo>
 | `-voucher` | PEM-encoded voucher file (required) |
 | `-payload` | Payload text to sign |
 | `-file` | Payload file to sign (alternative to -payload) |
+| `-type` | MIME type of payload (e.g., text/x-shellscript) |
+| `-expires` | Expiration datetime in ISO 8601 format (e.g., 2025-12-31T23:59:59Z) |
+| `-id` | Identifier for grouping/ordering payloads |
+| `-gen` | Generation number for supersession (higher supersedes lower) |
 | `-output` | Output file (default: stdout) |
 | `-encrypt` | Encrypt the payload (requires RSA device key) |
 | `-delegate` | Sign with delegate chain (chain name from database) |
@@ -46,15 +51,60 @@ go run ./examples/cmd attestpayload verify [options] <file.fdo>
 # Create plaintext attested payload
 go run ./examples/cmd attestpayload create -db test.db -voucher voucher.pem -payload "Hello World" -output payload.fdo
 
+# Create attested payload with MIME type (for shell script)
+go run ./examples/cmd attestpayload create -db test.db -voucher voucher.pem -payload '#!/bin/bash\necho hello' -type "text/x-shellscript" -output script.fdo
+
+# Create attested payload with cloud-init config type
+go run ./examples/cmd attestpayload create -db test.db -voucher voucher.pem -file cloud-config.yaml -type "text/cloud-config" -output config.fdo
+
 # Create encrypted attested payload
 go run ./examples/cmd attestpayload create -db test.db -voucher voucher.pem -payload "Secret data" -encrypt -output encrypted.fdo
+
+# Create encrypted attested payload with JSON type
+go run ./examples/cmd attestpayload create -db test.db -voucher voucher.pem -payload '{"secret": "value"}' -type "application/json" -encrypt -output secret.fdo
 
 # Create delegate-signed attested payload
 go run ./examples/cmd attestpayload create -db test.db -voucher voucher.pem -payload "Delegated" -delegate mychain -output delegated.fdo
 
+# Create attested payload with validity (id and generation for supersession)
+go run ./examples/cmd attestpayload create -db test.db -voucher voucher.pem -payload "Config v1" -id "network-config" -gen 1 -output config-v1.fdo
+
+# Create newer generation to supersede previous
+go run ./examples/cmd attestpayload create -db test.db -voucher voucher.pem -payload "Config v2" -id "network-config" -gen 2 -output config-v2.fdo
+
+# Create time-limited command with expiration
+go run ./examples/cmd attestpayload create -db test.db -voucher voucher.pem -payload '#!/bin/bash\nreboot' -type "text/x-shellscript" -expires "2025-06-15T12:00:00Z" -output reboot-cmd.fdo
+
 # Verify and decrypt attested payload
 go run ./examples/cmd attestpayload verify -db test.db payload.fdo
 ```
+
+### Validity Options
+
+The validity block provides lifecycle and ordering controls:
+
+| Field | Purpose |
+|-------|--------|
+| `-expires` | Time-limited commands expire after this datetime |
+| `-id` | Group related payloads; enables supersession and ordering |
+| `-gen` | Higher generation supersedes lower for same id |
+
+**Use cases:**
+- **Declarative payloads** (configs): Use `-id` and `-gen` for versioning
+- **Imperative payloads** (commands): Use `-expires` to limit execution window
+- **Ordered execution**: Use `-id` with naming convention (e.g., "step-001", "step-002")
+
+### Common MIME Types
+
+| MIME Type | Description |
+|-----------|-------------|
+| `text/x-shellscript` | Shell script (cloud-init compatible) |
+| `text/cloud-config` | Cloud-init YAML configuration |
+| `text/cloud-boothook` | Cloud-init boot hook |
+| `application/json` | JSON configuration |
+| `application/x-yaml` | YAML configuration |
+| `application/octet-stream` | Binary data (firmware, disk image) |
+| `text/plain` | Plain text |
 
 ## Setup
 

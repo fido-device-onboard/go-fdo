@@ -14,9 +14,12 @@ import (
 	"crypto/sha512"
 	"crypto/x509"
 	"encoding/asn1"
+	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"reflect"
+	"time"
 )
 
 // DecryptPayload decrypts an encrypted attested payload using the device's RSA private key.
@@ -105,6 +108,91 @@ func EncryptPayload(devicePubKey *rsa.PublicKey, payload []byte) (wrappedKey, iv
 	return wrappedKey, iv, ciphertext, nil
 }
 
+// PayloadValidity represents optional validity constraints for an attested payload
+type PayloadValidity struct {
+	// Expires is the ISO 8601 datetime after which the payload is no longer valid
+	Expires string `json:"expires,omitempty"`
+	// ID is an identifier for grouping related payloads
+	ID string `json:"id,omitempty"`
+	// Gen is the generation number for supersession (higher supersedes lower)
+	Gen int `json:"gen,omitempty"`
+}
+
+// IsEmpty returns true if no validity fields are set
+func (v *PayloadValidity) IsEmpty() bool {
+	return v == nil || (v.Expires == "" && v.ID == "" && v.Gen == 0)
+}
+
+// ToJSON returns the JSON representation of the validity, or empty string if empty
+func (v *PayloadValidity) ToJSON() string {
+	if v.IsEmpty() {
+		return ""
+	}
+	data, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+// ParseValidity parses a JSON string into a PayloadValidity
+func ParseValidity(jsonStr string) (*PayloadValidity, error) {
+	if jsonStr == "" {
+		return nil, nil
+	}
+	var v PayloadValidity
+	if err := json.Unmarshal([]byte(jsonStr), &v); err != nil {
+		return nil, fmt.Errorf("invalid validity JSON: %w", err)
+	}
+	return &v, nil
+}
+
+// CheckExpiration returns an error if the payload has expired
+func (v *PayloadValidity) CheckExpiration() error {
+	if v == nil || v.Expires == "" {
+		return nil
+	}
+	expTime, err := time.Parse(time.RFC3339, v.Expires)
+	if err != nil {
+		return fmt.Errorf("invalid expiration format: %w", err)
+	}
+	if time.Now().After(expTime) {
+		return fmt.Errorf("payload expired at %s", v.Expires)
+	}
+	return nil
+}
+
+// BuildSignedData constructs the length-prefixed signed data for signature
+// computation and verification. The format is:
+// len(PayloadType) || PayloadType || len(Validity) || Validity || PayloadData
+//
+// Length prefixes are 4-byte big-endian unsigned integers. This format prevents
+// type confusion attacks where an attacker might shift bytes between fields.
+func BuildSignedData(payloadType string, validity *PayloadValidity, payloadData []byte) []byte {
+	var result []byte
+
+	// PayloadType length prefix (4 bytes big-endian)
+	typeBytes := []byte(payloadType)
+	lenBuf := make([]byte, 4)
+	binary.BigEndian.PutUint32(lenBuf, uint32(len(typeBytes)))
+	result = append(result, lenBuf...)
+	result = append(result, typeBytes...)
+
+	// Validity length prefix (4 bytes big-endian)
+	var validityBytes []byte
+	if validity != nil && !validity.IsEmpty() {
+		validityBytes = []byte(validity.ToJSON())
+	}
+	binary.BigEndian.PutUint32(lenBuf, uint32(len(validityBytes)))
+	result = append(result, lenBuf...)
+	result = append(result, validityBytes...)
+
+	// PayloadData (no length prefix - remainder of data)
+	result = append(result, payloadData...)
+
+	return result
+}
+
 // AttestedPayload represents the components of an attested payload
 type AttestedPayload struct {
 	// Payload is the plaintext payload (or ciphertext if encrypted)
@@ -119,6 +207,10 @@ type AttestedPayload struct {
 	Ciphertext []byte
 	// WrappedKey is the RSA-OAEP wrapped symmetric key for encrypted payloads
 	WrappedKey []byte
+	// PayloadType is the optional MIME type indicating payload content type
+	PayloadType string
+	// Validity is the optional validity constraints (expiration, id, generation)
+	Validity *PayloadValidity
 }
 
 // IsEncrypted returns true if the payload is encrypted
@@ -153,19 +245,22 @@ func VerifyAttestedPayload(ap *AttestedPayload, ownerKey crypto.PublicKey, devic
 	}
 
 	// Determine what data was signed (ciphertext if encrypted, payload otherwise)
-	var signedData []byte
+	var payloadData []byte
 	if ap.IsEncrypted() {
-		signedData = ap.Ciphertext
+		payloadData = ap.Ciphertext
 	} else {
-		signedData = ap.Payload
+		payloadData = ap.Payload
 	}
 
-	if len(signedData) == 0 {
+	if len(payloadData) == 0 {
 		return nil, fmt.Errorf("no payload data to verify")
 	}
 	if len(ap.Signature) == 0 {
 		return nil, fmt.Errorf("signature is required")
 	}
+
+	// Build signed data with length prefixes: len(PayloadType) || PayloadType || len(Validity) || Validity || PayloadData
+	signedData := BuildSignedData(ap.PayloadType, ap.Validity, payloadData)
 
 	// Determine the signing key (delegate leaf or owner)
 	signingKey := ownerKey
@@ -183,6 +278,13 @@ func VerifyAttestedPayload(ap *AttestedPayload, ownerKey crypto.PublicKey, devic
 	hashed := sha512.Sum384(signedData)
 	if err := verifySignature(signingKey, hashed[:], ap.Signature); err != nil {
 		return nil, fmt.Errorf("signature verification failed: %w", err)
+	}
+
+	// Check expiration if validity is present
+	if ap.Validity != nil {
+		if err := ap.Validity.CheckExpiration(); err != nil {
+			return nil, err
+		}
 	}
 
 	// If encrypted, decrypt the payload

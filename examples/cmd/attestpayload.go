@@ -31,7 +31,12 @@ var (
 	apOutput      string
 	apPayloadFile string
 	apPayloadText string
+	apPayloadType string
 	apVoucher     string
+	// Validity fields
+	apExpires string
+	apID      string
+	apGen     int
 )
 
 func init() {
@@ -42,7 +47,12 @@ func init() {
 	attestPayloadFlags.StringVar(&apOutput, "output", "", "Output file (default: stdout)")
 	attestPayloadFlags.StringVar(&apPayloadFile, "file", "", "Payload file to sign")
 	attestPayloadFlags.StringVar(&apPayloadText, "payload", "", "Payload text to sign (alternative to -file)")
+	attestPayloadFlags.StringVar(&apPayloadType, "type", "", "MIME type of payload (e.g., text/x-shellscript)")
 	attestPayloadFlags.StringVar(&apVoucher, "voucher", "", "PEM-encoded voucher file (required for create)")
+	// Validity flags
+	attestPayloadFlags.StringVar(&apExpires, "expires", "", "Expiration datetime in ISO 8601 format (e.g., 2025-12-31T23:59:59Z)")
+	attestPayloadFlags.StringVar(&apID, "id", "", "Identifier for grouping/ordering payloads")
+	attestPayloadFlags.IntVar(&apGen, "gen", 0, "Generation number for supersession (higher supersedes lower)")
 	attestPayloadFlags.Usage = attestPayloadUsage
 }
 
@@ -168,7 +178,7 @@ func attestPayloadCreate(args []string) error {
 	}
 
 	// Prepare data to sign and optional encryption
-	var dataToSign []byte
+	var payloadData []byte
 	var iv, ciphertext, wrappedKey []byte
 
 	if apEncrypt {
@@ -183,11 +193,30 @@ func attestPayloadCreate(args []string) error {
 		if err != nil {
 			return fmt.Errorf("failed to encrypt payload: %w", err)
 		}
-		dataToSign = ciphertext
+		payloadData = ciphertext
 		fmt.Println("Payload encrypted")
 	} else {
-		dataToSign = payload
+		payloadData = payload
 	}
+
+	// Build validity if any fields are set
+	var validity *fdo.PayloadValidity
+	if apExpires != "" || apID != "" || apGen != 0 {
+		validity = &fdo.PayloadValidity{
+			Expires: apExpires,
+			ID:      apID,
+			Gen:     apGen,
+		}
+	}
+
+	// Build data to sign with length prefixes: len(PayloadType) || PayloadType || len(Validity) || Validity || PayloadData
+	if apPayloadType != "" {
+		fmt.Printf("Payload type: %s\n", apPayloadType)
+	}
+	if validity != nil {
+		fmt.Printf("Validity: %s\n", validity.ToJSON())
+	}
+	dataToSign := fdo.BuildSignedData(apPayloadType, validity, payloadData)
 
 	// Sign the data
 	signature, err := signData(signingKey, dataToSign)
@@ -196,7 +225,7 @@ func attestPayloadCreate(args []string) error {
 	}
 
 	// Build output
-	output, err := buildAttestedPayloadPEM(&ov, payload, signature, delegateChain, iv, ciphertext, wrappedKey, apEncrypt)
+	output, err := buildAttestedPayloadPEM(&ov, payload, signature, delegateChain, iv, ciphertext, wrappedKey, apEncrypt, apPayloadType, validity)
 	if err != nil {
 		return fmt.Errorf("failed to build output: %w", err)
 	}
@@ -281,7 +310,7 @@ func signData(key crypto.Signer, data []byte) ([]byte, error) {
 }
 
 // buildAttestedPayloadPEM builds the PEM-encoded attested payload
-func buildAttestedPayloadPEM(ov *fdo.Voucher, payload, signature []byte, delegateChain []*x509.Certificate, iv, ciphertext, wrappedKey []byte, encrypted bool) ([]byte, error) {
+func buildAttestedPayloadPEM(ov *fdo.Voucher, payload, signature []byte, delegateChain []*x509.Certificate, iv, ciphertext, wrappedKey []byte, encrypted bool, payloadType string, validity *fdo.PayloadValidity) ([]byte, error) {
 	var output []byte
 
 	// Voucher
@@ -299,6 +328,22 @@ func buildAttestedPayloadPEM(ov *fdo.Voucher, payload, signature []byte, delegat
 		output = append(output, pem.EncodeToMemory(&pem.Block{
 			Type:  "CERTIFICATE",
 			Bytes: cert.Raw,
+		})...)
+	}
+
+	// Payload type (if specified)
+	if payloadType != "" {
+		output = append(output, pem.EncodeToMemory(&pem.Block{
+			Type:  "PAYLOAD TYPE",
+			Bytes: []byte(payloadType),
+		})...)
+	}
+
+	// Validity (if specified)
+	if validity != nil && !validity.IsEmpty() {
+		output = append(output, pem.EncodeToMemory(&pem.Block{
+			Type:  "VALIDITY",
+			Bytes: []byte(validity.ToJSON()),
 		})...)
 	}
 
@@ -382,6 +427,18 @@ func parseAttestedPayloadPEMForVerify(state *sqlite.DB, pemData []byte) (*fdo.At
 
 		case "PAYLOAD":
 			ap.Payload = block.Bytes
+
+		case "PAYLOAD TYPE":
+			ap.PayloadType = string(block.Bytes)
+			fmt.Printf("Payload Type: %s\n", ap.PayloadType)
+
+		case "VALIDITY":
+			validity, err := fdo.ParseValidity(string(block.Bytes))
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("failed to parse validity: %w", err)
+			}
+			ap.Validity = validity
+			fmt.Printf("Validity: %s\n", string(block.Bytes))
 
 		case "SIGNATURE":
 			ap.Signature = block.Bytes

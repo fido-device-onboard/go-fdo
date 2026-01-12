@@ -1080,3 +1080,92 @@ func TestVerifyAttestedPayloadUnauthorizedDelegate(t *testing.T) {
 		t.Logf("Correctly rejected unauthorized delegate: %v", err)
 	}
 }
+
+// TestBuildSignedDataLengthPrefix verifies that BuildSignedData uses length prefixes
+// to prevent type confusion attacks where bytes could shift between fields.
+func TestBuildSignedDataLengthPrefix(t *testing.T) {
+	// Test case 1: Verify length prefixes are present
+	payloadType := "text/plain"
+	validity := &fdo.PayloadValidity{ID: "test", Gen: 1}
+	payloadData := []byte("hello")
+
+	result := fdo.BuildSignedData(payloadType, validity, payloadData)
+
+	// First 4 bytes should be length of payloadType (10 = 0x0000000A)
+	if len(result) < 4 {
+		t.Fatal("result too short")
+	}
+	typeLen := uint32(result[0])<<24 | uint32(result[1])<<16 | uint32(result[2])<<8 | uint32(result[3])
+	if typeLen != 10 {
+		t.Errorf("expected type length 10, got %d", typeLen)
+	}
+
+	// Bytes 4-13 should be "text/plain"
+	if string(result[4:14]) != "text/plain" {
+		t.Errorf("expected 'text/plain', got %q", string(result[4:14]))
+	}
+
+	// Bytes 14-17 should be length of validity JSON
+	validityLen := uint32(result[14])<<24 | uint32(result[15])<<16 | uint32(result[16])<<8 | uint32(result[17])
+	validityJSON := validity.ToJSON()
+	if validityLen != uint32(len(validityJSON)) {
+		t.Errorf("expected validity length %d, got %d", len(validityJSON), validityLen)
+	}
+
+	t.Logf("BuildSignedData correctly uses length prefixes")
+}
+
+// TestTypeConfusionAttackPrevention verifies that the length-prefix format
+// prevents type confusion attacks where an attacker tries to shift bytes
+// between PayloadType and Validity fields.
+func TestTypeConfusionAttackPrevention(t *testing.T) {
+	// Scenario: Attacker tries to create two different interpretations
+	// that would hash to the same value without length prefixes.
+	//
+	// Legitimate: PayloadType="text/plain" + Validity={"gen":1} + Payload="data"
+	// Attack:     PayloadType="text/plain{\"gen\":1}" + no Validity + Payload="data"
+	//
+	// Without length prefixes, both would concatenate to the same bytes.
+	// With length prefixes, they produce different hashes.
+
+	payloadData := []byte("data")
+
+	// Legitimate case
+	legitimateType := "text/plain"
+	legitimateValidity := &fdo.PayloadValidity{Gen: 1}
+	legitimateResult := fdo.BuildSignedData(legitimateType, legitimateValidity, payloadData)
+
+	// Attack case: try to absorb validity into type
+	attackType := "text/plain" + legitimateValidity.ToJSON()
+	attackResult := fdo.BuildSignedData(attackType, nil, payloadData)
+
+	// These MUST be different due to length prefixes
+	if bytes.Equal(legitimateResult, attackResult) {
+		t.Error("SECURITY FAILURE: Type confusion attack possible - legitimate and attack payloads produce same signed data")
+	} else {
+		t.Logf("Type confusion attack correctly prevented")
+		t.Logf("Legitimate signed data length: %d", len(legitimateResult))
+		t.Logf("Attack signed data length: %d", len(attackResult))
+	}
+}
+
+// TestBuildSignedDataEmptyFields verifies correct handling of empty optional fields
+func TestBuildSignedDataEmptyFields(t *testing.T) {
+	payloadData := []byte("test payload")
+
+	// No optional fields - should have two 4-byte zero length prefixes
+	result := fdo.BuildSignedData("", nil, payloadData)
+
+	// First 8 bytes should be zeros (two length prefixes of 0)
+	expectedPrefix := []byte{0, 0, 0, 0, 0, 0, 0, 0}
+	if !bytes.Equal(result[:8], expectedPrefix) {
+		t.Errorf("expected 8 zero bytes prefix, got %v", result[:8])
+	}
+
+	// Remaining bytes should be payload
+	if !bytes.Equal(result[8:], payloadData) {
+		t.Errorf("payload data mismatch")
+	}
+
+	t.Logf("Empty fields correctly produce zero-length prefixes")
+}

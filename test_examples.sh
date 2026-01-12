@@ -299,7 +299,7 @@ test_delegate_fdo200() {
 test_attested_payload() {
 	log_section "TEST: Attested Payload (Plaintext)"
 
-	rm -f "$DB_FILE" "$CRED_FILE" voucher.pem payload.fdo
+	rm -f "$DB_FILE" "$CRED_FILE" voucher.pem payload.fdo payload-typed.fdo
 
 	log_step "Creating database with owner certs"
 	start_server "-owner-certs"
@@ -322,7 +322,31 @@ test_attested_payload() {
 	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../payload.fdo
 	log_success "Attested payload verified"
 
-	rm -f voucher.pem payload.fdo
+	log_step "Creating attested payload with MIME type (text/x-shellscript)"
+	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../voucher.pem -payload '#!/bin/bash\necho "Hello from script"' -type "text/x-shellscript" -output ../payload-typed.fdo
+	log_success "Typed attested payload created"
+
+	log_step "Verifying typed attested payload"
+	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../payload-typed.fdo
+	log_success "Typed attested payload verified"
+
+	log_step "Creating attested payload with validity (id and generation)"
+	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../voucher.pem -payload "Config v1" -id "network-config" -gen 1 -output ../payload-validity.fdo
+	log_success "Attested payload with validity created"
+
+	log_step "Verifying attested payload with validity"
+	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../payload-validity.fdo
+	log_success "Attested payload with validity verified"
+
+	log_step "Creating attested payload with expiration (future date)"
+	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../voucher.pem -payload "Time-limited command" -type "text/x-shellscript" -expires "2030-12-31T23:59:59Z" -output ../payload-expires.fdo
+	log_success "Attested payload with expiration created"
+
+	log_step "Verifying attested payload with expiration"
+	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../payload-expires.fdo
+	log_success "Attested payload with expiration verified"
+
+	rm -f voucher.pem payload.fdo payload-typed.fdo payload-validity.fdo payload-expires.fdo
 	log_success "Attested Payload (Plaintext) test PASSED"
 }
 
@@ -330,7 +354,7 @@ test_attested_payload() {
 test_attested_payload_encrypted() {
 	log_section "TEST: Attested Payload (Encrypted)"
 
-	rm -f "$DB_FILE" "$CRED_FILE" voucher.pem encrypted.fdo
+	rm -f "$DB_FILE" "$CRED_FILE" voucher.pem encrypted.fdo encrypted-typed.fdo
 
 	log_step "Creating database with owner certs"
 	start_server "-owner-certs"
@@ -353,7 +377,15 @@ test_attested_payload_encrypted() {
 	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../encrypted.fdo
 	log_success "Encrypted attested payload verified and decrypted"
 
-	rm -f voucher.pem encrypted.fdo
+	log_step "Creating encrypted attested payload with MIME type (application/json)"
+	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../voucher.pem -payload '{"config": "secret"}' -type "application/json" -encrypt -output ../encrypted-typed.fdo
+	log_success "Encrypted typed attested payload created"
+
+	log_step "Verifying encrypted typed attested payload"
+	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../encrypted-typed.fdo
+	log_success "Encrypted typed attested payload verified"
+
+	rm -f voucher.pem encrypted.fdo encrypted-typed.fdo
 	log_success "Attested Payload (Encrypted) test PASSED"
 }
 
