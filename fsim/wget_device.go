@@ -89,7 +89,7 @@ func (d *Wget) receive(ctx context.Context, messageName string, messageBody io.R
 
 		timeout := d.Timeout
 		if timeout <= 0 {
-			d.Timeout = defaultWgetTimeout
+			timeout = defaultWgetTimeout
 		}
 		ctx, d.cancel = context.WithTimeout(ctx, timeout)
 
