@@ -9,6 +9,7 @@ This document outlines specific security concerns and recommendations for using 
 **⚠️ IMPORTANT**: The certificate generation code in this library is intended **ONLY for testing and development purposes**. It uses simplified practices that are NOT suitable for production deployments.
 
 For production use, certificates should be:
+
 - Created by external Certificate Authorities (CAs) or third-party services
 - Signed by externally-managed Hardware Security Modules (HSMs)
 - Generated using proper PKI practices and enterprise certificate management systems
@@ -56,31 +57,38 @@ Additional revocation strategies may be warranted:
 The following issues are present in the test certificate generation code:
 
 #### Weak Certificate Validity Period
+
 ```go
 NotAfter: time.Now().Add(30 * 24 * time.Hour), // Only 30 days
 ```
+
 - **Purpose**: Super-short validity limits exposure during testing
 - **Production**: Use appropriate validity periods (typically 1-3 years) with proper revocation
 
 #### Deterministic Serial Numbers
+
 ```go
 SerialNumber: big.NewInt(1), // Leaf
 SerialNumber: big.NewInt(2), // Parent
 ```
+
 - **Purpose**: Predictable serial numbers simplify test debugging
 - **Production**: Use cryptographically secure random serial numbers to prevent attacks
 
 #### No Certificate Transparency Logging
+
 - **Purpose**: CT logging unnecessary for test certificates
 - **Production**: Implement certificate transparency logging for detecting misissued certificates
 
 #### Simplified Random Number Generation
+
 - **Purpose**: Basic `rand.Reader` sufficient for test environments
 - **Production**: Ensure proper entropy sources and validated random number generation
 
 ## 🔒 Production Recommendations
 
 ### Certificate Management
+
 - Use external Certificate Authorities (CAs) or third-party certificate services
 - Sign certificates with externally-managed Hardware Security Modules (HSMs)
 - Implement proper PKI practices and enterprise certificate management systems
@@ -90,12 +98,14 @@ SerialNumber: big.NewInt(2), // Parent
 - Regularly rotate certificates and private keys
 
 ### Key Management
+
 - Store private keys securely (TPM, HSM, or encrypted storage)
 - Use cryptographically secure random serial numbers
 - Consider longer validity periods with proper revocation
 - Ensure proper entropy sources for random number generation
 
 ### Operational Security
+
 - Enable security-relevant logging and monitoring
 - Monitor for failed authentication attempts and certificate validation failures
 
@@ -110,6 +120,7 @@ Attested Payload is used in scenarios where devices are offline or not respondin
 - Owner-authorized work to be performed offline with cryptographic verification
 
 This is particularly valuable for:
+
 - Emergency maintenance or recovery
 - Diagnostic operations in air-gapped environments
 - Field service operations without network access

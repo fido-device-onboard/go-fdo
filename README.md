@@ -22,6 +22,7 @@ It implements [FIDO Device Onboard Specification 1.1][fdo11] and [FIDO Device On
 ## Security Notice
 
 ⚠️ **IMPORTANT**: This library is intended for development and testing. For production deployments, you MUST follow proper security practices. See [SECURITY_CONSIDERATIONS.md](SECURITY_CONSIDERATIONS.md) for detailed security considerations including:
+
 - Certificate validation and revocation checking
 - Key management best practices
 - Transport security requirements
@@ -428,6 +429,7 @@ WARN: No CertificateChecker configured - revocation checking (CRL/OCSP) is disab
 ```
 
 These warnings are expected during development. For production use, see [SECURITY_CONSIDERATIONS.md](SECURITY_CONSIDERATIONS.md) for detailed security requirements including:
+
 - Mandatory certificate revocation checking
 - Key management best practices
 - Transport security requirements
@@ -436,6 +438,17 @@ These warnings are expected during development. For production use, see [SECURIT
 ## Attested Payloads
 
 Attested payloads combine data with cryptographic proof of authenticity, allowing devices to verify that payloads originated from their legitimate owner. See [attestedpayload.md](attestedpayload.md) for details.
+
+## Development
+
+A `Makefile` is provided for convenience during development:
+
+```bash
+make setup    # Initialize Go workspace (run once after clone)
+make lint     # Run golangci-lint and shellcheck
+make test     # Run unit and integration tests
+make          # Run lint + test (useful before commits)
+```
 
 ## FIPS Compliance
 

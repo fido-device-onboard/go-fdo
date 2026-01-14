@@ -1,0 +1,71 @@
+.PHONY: all setup build test test-unit test-integration lint lint-go lint-shell clean help
+
+# Default target
+all: lint test
+
+# Initialize Go workspace (run once after clone)
+setup:
+	@if [ ! -f go.work ]; then \
+		echo "Initializing Go workspace..."; \
+		go work init; \
+		go work use -r .; \
+	else \
+		echo "Go workspace already initialized (go.work exists)"; \
+	fi
+
+# Build the project
+build:
+	go build ./...
+
+# Run all tests
+test: test-unit test-integration
+
+# Run Go unit tests
+test-unit:
+	go test ./...
+
+# Run integration/example tests
+test-integration:
+	./test_examples.sh
+
+# Run all linters
+lint: lint-go lint-shell
+
+# Run Go linter
+lint-go:
+	golangci-lint run
+
+# Run shell script linters (format + static analysis)
+lint-shell:
+	find . -name '*.sh' -o -name '*.bash' | xargs shfmt -d
+	@if command -v shellcheck >/dev/null 2>&1; then \
+		find . -name '*.sh' -o -name '*.bash' | xargs shellcheck; \
+	else \
+		echo "Warning: shellcheck not installed, skipping"; \
+	fi
+
+# Fix shell script formatting
+lint-shell-fix:
+	find . -name '*.sh' -o -name '*.bash' | xargs shfmt -w
+
+# Clean test artifacts
+clean:
+	rm -f test.db cred.bin voucher.pem
+	rm -f *.fdo *.key *.bin
+	rm -rf fdo.download_*
+
+# Show help
+help:
+	@echo "Available targets:"
+	@echo "  setup            - Initialize Go workspace (run once after clone)"
+	@echo "  all              - Run lint and test (default)"
+	@echo "  build            - Build the project"
+	@echo "  test             - Run all tests (unit + integration)"
+	@echo "  test-unit        - Run Go unit tests"
+	@echo "  test-integration - Run integration tests (test_examples.sh)"
+	@echo "  lint             - Run all linters (Go + shell)"
+	@echo "  lint-go          - Run golangci-lint"
+	@echo "  lint-shell       - Check shell script formatting"
+	@echo "  lint-shell-fix   - Fix shell script formatting"
+	@echo "  clean            - Remove test artifacts"
+	@echo "  help             - Show this help"

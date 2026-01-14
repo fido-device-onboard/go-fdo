@@ -311,7 +311,11 @@ test_attested_payload() {
 	stop_server
 
 	log_step "Exporting voucher to PEM"
-	(echo '-----BEGIN OWNERSHIP VOUCHER-----' ; sqlite3 "$DB_FILE" 'select hex(cbor) from vouchers;' | xxd -r -p | base64 ; echo '-----END OWNERSHIP VOUCHER-----') > voucher.pem
+	(
+		echo '-----BEGIN OWNERSHIP VOUCHER-----'
+		sqlite3 "$DB_FILE" 'select hex(cbor) from vouchers;' | xxd -r -p | base64
+		echo '-----END OWNERSHIP VOUCHER-----'
+	) >voucher.pem
 	log_success "Voucher exported"
 
 	log_step "Creating plaintext attested payload"
@@ -366,7 +370,11 @@ test_attested_payload_encrypted() {
 	stop_server
 
 	log_step "Exporting voucher to PEM"
-	(echo '-----BEGIN OWNERSHIP VOUCHER-----' ; sqlite3 "$DB_FILE" 'select hex(cbor) from vouchers;' | xxd -r -p | base64 ; echo '-----END OWNERSHIP VOUCHER-----') > voucher.pem
+	(
+		echo '-----BEGIN OWNERSHIP VOUCHER-----'
+		sqlite3 "$DB_FILE" 'select hex(cbor) from vouchers;' | xxd -r -p | base64
+		echo '-----END OWNERSHIP VOUCHER-----'
+	) >voucher.pem
 	log_success "Voucher exported"
 
 	log_step "Creating encrypted attested payload"
@@ -409,7 +417,11 @@ test_attested_payload_delegate() {
 	log_success "Delegate chain created"
 
 	log_step "Exporting voucher to PEM"
-	(echo '-----BEGIN OWNERSHIP VOUCHER-----' ; sqlite3 "$DB_FILE" 'select hex(cbor) from vouchers;' | xxd -r -p | base64 ; echo '-----END OWNERSHIP VOUCHER-----') > voucher.pem
+	(
+		echo '-----BEGIN OWNERSHIP VOUCHER-----'
+		sqlite3 "$DB_FILE" 'select hex(cbor) from vouchers;' | xxd -r -p | base64
+		echo '-----END OWNERSHIP VOUCHER-----'
+	) >voucher.pem
 	log_success "Voucher exported"
 
 	log_step "Creating delegate-signed attested payload"
@@ -444,29 +456,48 @@ test_attested_payload_shell() {
 	stop_server
 
 	log_step "Exporting voucher to PEM"
-	(echo '-----BEGIN OWNERSHIP VOUCHER-----' ; sqlite3 "$DB_FILE" 'select hex(cbor) from vouchers;' | xxd -r -p | base64 ; echo '-----END OWNERSHIP VOUCHER-----') > voucher.pem
+	(
+		echo '-----BEGIN OWNERSHIP VOUCHER-----'
+		sqlite3 "$DB_FILE" 'select hex(cbor) from vouchers;' | xxd -r -p | base64
+		echo '-----END OWNERSHIP VOUCHER-----'
+	) >voucher.pem
 	log_success "Voucher exported"
 
 	log_step "Extracting owner EC key"
-	(echo '-----BEGIN PRIVATE KEY-----' ; sqlite3 "$DB_FILE" 'select hex(pkcs8) from owner_keys where type=11;' | xxd -r -p | base64 ; echo '-----END PRIVATE KEY-----') > owner_ec_pvt.key
-	openssl pkey -in owner_ec_pvt.key -pubout > owner_ec_pub.key
+	(
+		echo '-----BEGIN PRIVATE KEY-----'
+		sqlite3 "$DB_FILE" 'select hex(pkcs8) from owner_keys where type=11;' | xxd -r -p | base64
+		echo '-----END PRIVATE KEY-----'
+	) >owner_ec_pvt.key
+	openssl pkey -in owner_ec_pvt.key -pubout >owner_ec_pub.key
 	log_success "Owner EC key extracted"
 
 	# Test 1: Create payload with shell, verify with Go CLI
 	log_step "Creating attested payload with shell/openssl"
 	PAYLOAD='Hello from shell-created attested payload'
-	
+
 	# Build length-prefixed signed data (no type, no validity)
 	# Format: 4-byte type_len (0) + 4-byte validity_len (0) + payload
-	(printf '\x00\x00\x00\x00\x00\x00\x00\x00' ; printf '%s' "$PAYLOAD") > signed_data.bin
-	
+	(
+		printf '\x00\x00\x00\x00\x00\x00\x00\x00'
+		printf '%s' "$PAYLOAD"
+	) >signed_data.bin
+
 	# Sign with openssl
 	openssl dgst -sha384 -sign owner_ec_pvt.key -out sig.bin signed_data.bin
-	
+
 	# Assemble the .fdo file
 	cp voucher.pem payload_shell.fdo
-	(echo '-----BEGIN PAYLOAD-----' ; printf '%s' "$PAYLOAD" | base64 ; echo '-----END PAYLOAD-----') >> payload_shell.fdo
-	(echo '-----BEGIN SIGNATURE-----' ; base64 sig.bin ; echo '-----END SIGNATURE-----') >> payload_shell.fdo
+	(
+		echo '-----BEGIN PAYLOAD-----'
+		printf '%s' "$PAYLOAD" | base64
+		echo '-----END PAYLOAD-----'
+	) >>payload_shell.fdo
+	(
+		echo '-----BEGIN SIGNATURE-----'
+		base64 sig.bin
+		echo '-----END SIGNATURE-----'
+	) >>payload_shell.fdo
 	log_success "Shell-created attested payload assembled"
 
 	log_step "Verifying shell-created payload with Go CLI"
@@ -480,14 +511,17 @@ test_attested_payload_shell() {
 
 	log_step "Extracting components from Go CLI payload"
 	# Extract payload
-	sed -n '/-----BEGIN PAYLOAD-----/,/-----END PAYLOAD-----/p' payload_cli.fdo | grep -v '^-----' | base64 -d > extracted_payload.bin
+	sed -n '/-----BEGIN PAYLOAD-----/,/-----END PAYLOAD-----/p' payload_cli.fdo | grep -v '^-----' | base64 -d >extracted_payload.bin
 	# Extract signature
-	sed -n '/-----BEGIN SIGNATURE-----/,/-----END SIGNATURE-----/p' payload_cli.fdo | grep -v '^-----' | base64 -d > extracted_sig.bin
+	sed -n '/-----BEGIN SIGNATURE-----/,/-----END SIGNATURE-----/p' payload_cli.fdo | grep -v '^-----' | base64 -d >extracted_sig.bin
 	log_success "Components extracted"
 
 	log_step "Verifying Go CLI payload with openssl"
 	# Build length-prefixed signed data (no type, no validity for this payload)
-	(printf '\x00\x00\x00\x00\x00\x00\x00\x00' ; cat extracted_payload.bin) > signed_data.bin
+	(
+		printf '\x00\x00\x00\x00\x00\x00\x00\x00'
+		cat extracted_payload.bin
+	) >signed_data.bin
 	# Verify signature
 	openssl dgst -sha384 -verify owner_ec_pub.key -signature extracted_sig.bin signed_data.bin
 	log_success "Go CLI payload verified by openssl"
@@ -498,18 +532,31 @@ test_attested_payload_shell() {
 echo "Hello from typed shell payload"'
 	PAYLOAD_TYPE='text/x-shellscript'
 	TYPE_LEN=${#PAYLOAD_TYPE}
-	
+
 	# Build length-prefixed signed data WITH type
-	(printf '%08x' "$TYPE_LEN" | xxd -r -p ; printf '%s' "$PAYLOAD_TYPE" ; printf '\x00\x00\x00\x00' ; printf '%s' "$PAYLOAD_TYPED") > signed_data.bin
-	
+	(
+		printf '%08x' "$TYPE_LEN" | xxd -r -p
+		printf '%s' "$PAYLOAD_TYPE"
+		printf '\x00\x00\x00\x00'
+		printf '%s' "$PAYLOAD_TYPED"
+	) >signed_data.bin
+
 	# Sign
 	openssl dgst -sha384 -sign owner_ec_pvt.key -out sig.bin signed_data.bin
-	
+
 	# Assemble - PEM blocks use base64 encoding for the content
 	cp voucher.pem payload_shell_typed.fdo
-	(echo '-----BEGIN PAYLOAD TYPE-----' ; printf '%s' "$PAYLOAD_TYPE" | base64 ; echo '-----END PAYLOAD TYPE-----') >> payload_shell_typed.fdo
-	(echo '-----BEGIN PAYLOAD-----' ; printf '%s' "$PAYLOAD_TYPED" | base64 ; echo '-----END PAYLOAD-----') >> payload_shell_typed.fdo
-	(echo '-----BEGIN SIGNATURE-----' ; base64 sig.bin ; echo '-----END SIGNATURE-----') >> payload_shell_typed.fdo
+	{
+		echo '-----BEGIN PAYLOAD TYPE-----'
+		printf '%s' "$PAYLOAD_TYPE" | base64
+		echo '-----END PAYLOAD TYPE-----'
+		echo '-----BEGIN PAYLOAD-----'
+		printf '%s' "$PAYLOAD_TYPED" | base64
+		echo '-----END PAYLOAD-----'
+		echo '-----BEGIN SIGNATURE-----'
+		base64 sig.bin
+		echo '-----END SIGNATURE-----'
+	} >>payload_shell_typed.fdo
 	log_success "Shell-created typed attested payload assembled"
 
 	log_step "Verifying shell-created typed payload with Go CLI"
@@ -541,7 +588,7 @@ test_bad_delegate() {
 	# Now try to create a delegate with a DIFFERENT owner key type
 	# This simulates an attacker trying to use their own key
 	log_step "Attempting to create delegate with wrong owner key (should fail or be rejected)"
-	
+
 	# Create a delegate rooted to SECP256R1 owner (different from SECP384R1 used for voucher)
 	run_cmd go run ./cmd delegate -db "../$DB_FILE" create badDelegate onboard,redirect SECP256R1 ec256
 

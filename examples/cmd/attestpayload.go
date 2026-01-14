@@ -4,12 +4,14 @@
 package main
 
 import (
+	"context"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha512"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/pem"
 	"flag"
 	"fmt"
@@ -169,7 +171,7 @@ func attestPayloadCreate(args []string) error {
 		fmt.Printf("Signing with delegate: %s\n", apDelegate)
 	} else {
 		// Use owner key
-		ownerKey, _, err := state.OwnerKey(nil, ov.Header.Val.ManufacturerKey.Type, ov.Header.Val.ManufacturerKey.RsaBits())
+		ownerKey, _, err := state.OwnerKey(context.Background(), ov.Header.Val.ManufacturerKey.Type, ov.Header.Val.ManufacturerKey.RsaBits())
 		if err != nil {
 			return fmt.Errorf("failed to get owner key: %w", err)
 		}
@@ -214,9 +216,16 @@ func attestPayloadCreate(args []string) error {
 		fmt.Printf("Payload type: %s\n", apPayloadType)
 	}
 	if validity != nil {
-		fmt.Printf("Validity: %s\n", validity.ToJSON())
+		validityJSON, err := validity.ToJSON()
+		if err != nil {
+			return fmt.Errorf("failed to serialize validity: %w", err)
+		}
+		fmt.Printf("Validity: %s\n", validityJSON)
 	}
-	dataToSign := fdo.BuildSignedData(apPayloadType, validity, payloadData)
+	dataToSign, err := fdo.BuildSignedData(apPayloadType, validity, payloadData)
+	if err != nil {
+		return fmt.Errorf("failed to build signed data: %w", err)
+	}
 
 	// Sign the data
 	signature, err := signData(signingKey, dataToSign)
@@ -341,9 +350,13 @@ func buildAttestedPayloadPEM(ov *fdo.Voucher, payload, signature []byte, delegat
 
 	// Validity (if specified)
 	if validity != nil && !validity.IsEmpty() {
+		validityJSON, err := validity.ToJSON()
+		if err != nil {
+			return nil, fmt.Errorf("failed to serialize validity: %w", err)
+		}
 		output = append(output, pem.EncodeToMemory(&pem.Block{
 			Type:  "VALIDITY",
-			Bytes: []byte(validity.ToJSON()),
+			Bytes: []byte(validityJSON),
 		})...)
 	}
 
@@ -405,16 +418,12 @@ func parseAttestedPayloadPEMForVerify(state *sqlite.DB, pemData []byte) (*fdo.At
 			devicePrivateKey = result.PrivateKey
 
 		case "IV":
-			// IV might be hex-encoded or raw bytes
-			if len(block.Bytes) == 32 {
-				// Hex string
-				_, err := fmt.Sscanf(string(block.Bytes), "%x", &ap.IV)
-				if err != nil {
-					ap.IV = block.Bytes
-				}
-			} else {
-				ap.IV = block.Bytes
+			// IV is hex-encoded when written by buildAttestedPayloadPEM
+			decodedIV, err := hex.DecodeString(string(block.Bytes))
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("failed to decode IV from hex: %w", err)
 			}
+			ap.IV = decodedIV
 			fmt.Printf("IV Data %x\n", ap.IV)
 
 		case "CIPHERTEXT":
@@ -473,7 +482,7 @@ func encodeBase64(data []byte) string {
 func getOwnerKeyForSigning(state *sqlite.DB, ov *fdo.Voucher) (crypto.Signer, error) {
 	keyType := ov.Header.Val.ManufacturerKey.Type
 	rsaBits := ov.Header.Val.ManufacturerKey.RsaBits()
-	key, _, err := state.OwnerKey(nil, keyType, rsaBits)
+	key, _, err := state.OwnerKey(context.Background(), keyType, rsaBits)
 	if err != nil {
 		return nil, err
 	}

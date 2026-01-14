@@ -31,14 +31,20 @@ type ecdsaSignature struct {
 
 // signPayload signs a payload with the given key using SHA-384 and length-prefixed format
 func signPayload(key crypto.Signer, payload []byte) ([]byte, error) {
-	signedData := fdo.BuildSignedData("", nil, payload)
+	signedData, err := fdo.BuildSignedData("", nil, payload)
+	if err != nil {
+		return nil, err
+	}
 	hashed := sha512.Sum384(signedData)
 	return key.Sign(rand.Reader, hashed[:], crypto.SHA384)
 }
 
 // verifyECDSASignature verifies an ECDSA signature on a payload using length-prefixed format
 func verifyECDSASignature(pubKey *ecdsa.PublicKey, payload, sigBytes []byte) bool {
-	signedData := fdo.BuildSignedData("", nil, payload)
+	signedData, err := fdo.BuildSignedData("", nil, payload)
+	if err != nil {
+		return false
+	}
 	hashed := sha512.Sum384(signedData)
 	sig := new(ecdsaSignature)
 	if _, err := asn1.Unmarshal(sigBytes, sig); err != nil {
@@ -1095,7 +1101,10 @@ func TestBuildSignedDataLengthPrefix(t *testing.T) {
 	validity := &fdo.PayloadValidity{ID: "test", Gen: 1}
 	payloadData := []byte("hello")
 
-	result := fdo.BuildSignedData(payloadType, validity, payloadData)
+	result, err := fdo.BuildSignedData(payloadType, validity, payloadData)
+	if err != nil {
+		t.Fatalf("BuildSignedData failed: %v", err)
+	}
 
 	// First 4 bytes should be length of payloadType (10 = 0x0000000A)
 	if len(result) < 4 {
@@ -1113,7 +1122,10 @@ func TestBuildSignedDataLengthPrefix(t *testing.T) {
 
 	// Bytes 14-17 should be length of validity JSON
 	validityLen := uint32(result[14])<<24 | uint32(result[15])<<16 | uint32(result[16])<<8 | uint32(result[17])
-	validityJSON := validity.ToJSON()
+	validityJSON, err := validity.ToJSON()
+	if err != nil {
+		t.Fatalf("ToJSON failed: %v", err)
+	}
 	if validityLen != uint32(len(validityJSON)) {
 		t.Errorf("expected validity length %d, got %d", len(validityJSON), validityLen)
 	}
@@ -1139,11 +1151,21 @@ func TestTypeConfusionAttackPrevention(t *testing.T) {
 	// Legitimate case
 	legitimateType := "text/plain"
 	legitimateValidity := &fdo.PayloadValidity{Gen: 1}
-	legitimateResult := fdo.BuildSignedData(legitimateType, legitimateValidity, payloadData)
+	legitimateResult, err := fdo.BuildSignedData(legitimateType, legitimateValidity, payloadData)
+	if err != nil {
+		t.Fatalf("BuildSignedData failed: %v", err)
+	}
 
 	// Attack case: try to absorb validity into type
-	attackType := "text/plain" + legitimateValidity.ToJSON()
-	attackResult := fdo.BuildSignedData(attackType, nil, payloadData)
+	legitimateValidityJSON, err := legitimateValidity.ToJSON()
+	if err != nil {
+		t.Fatalf("ToJSON failed: %v", err)
+	}
+	attackType := "text/plain" + legitimateValidityJSON
+	attackResult, err := fdo.BuildSignedData(attackType, nil, payloadData)
+	if err != nil {
+		t.Fatalf("BuildSignedData failed: %v", err)
+	}
 
 	// These MUST be different due to length prefixes
 	if bytes.Equal(legitimateResult, attackResult) {
@@ -1160,7 +1182,10 @@ func TestBuildSignedDataEmptyFields(t *testing.T) {
 	payloadData := []byte("test payload")
 
 	// No optional fields - should have two 4-byte zero length prefixes
-	result := fdo.BuildSignedData("", nil, payloadData)
+	result, err := fdo.BuildSignedData("", nil, payloadData)
+	if err != nil {
+		t.Fatalf("BuildSignedData failed: %v", err)
+	}
 
 	// First 8 bytes should be zeros (two length prefixes of 0)
 	expectedPrefix := []byte{0, 0, 0, 0, 0, 0, 0, 0}

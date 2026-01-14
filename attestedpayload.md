@@ -32,7 +32,7 @@ go run ./examples/cmd attestpayload verify [options] <file.fdo>
 ### Create Options
 
 | Option | Description |
-|--------|-------------|
+| ------ | ----------- |
 | `-db` | SQLite database path (default: fdo.db) |
 | `-voucher` | PEM-encoded voucher file (required) |
 | `-payload` | Payload text to sign |
@@ -84,12 +84,13 @@ go run ./examples/cmd attestpayload verify -db test.db payload.fdo
 The validity block provides lifecycle and ordering controls:
 
 | Field | Purpose |
-|-------|--------|
+| ----- | ------- |
 | `-expires` | Time-limited commands expire after this datetime |
 | `-id` | Group related payloads; enables supersession and ordering |
 | `-gen` | Higher generation supersedes lower for same id |
 
 **Use cases:**
+
 - **Declarative payloads** (configs): Use `-id` and `-gen` for versioning
 - **Imperative payloads** (commands): Use `-expires` to limit execution window
 - **Ordered execution**: Use `-id` with naming convention (e.g., "step-001", "step-002")
@@ -97,7 +98,7 @@ The validity block provides lifecycle and ordering controls:
 ### Common MIME Types
 
 | MIME Type | Description |
-|-----------|-------------|
+| --------- | ----------- |
 | `text/x-shellscript` | Shell script (cloud-init compatible) |
 | `text/cloud-config` | Cloud-init YAML configuration |
 | `text/cloud-boothook` | Cloud-init boot hook |
@@ -157,18 +158,20 @@ openssl enc -aes-256-ctr -d -in ciphertext.bin -K "$KEYOUT" -iv "$IV"
 
 The signature is computed over a **length-prefixed** data structure to prevent type confusion attacks:
 
-```
+```text
 len(PayloadType) || PayloadType || len(Validity) || Validity || PayloadData
 ```
 
 Where:
+
 - Length prefixes are **4-byte big-endian unsigned integers**
 - PayloadType is the MIME type string (empty string if not specified)
 - Validity is JSON-encoded validity block (empty if not specified)
 - PayloadData is the raw payload bytes (or ciphertext if encrypted)
 
 For a simple payload with no type or validity, the signed data is:
-```
+
+```text
 00 00 00 00  (type length = 0)
 00 00 00 00  (validity length = 0)
 <payload bytes>
@@ -378,7 +381,8 @@ go run ./examples/cmd attestpayload verify -db test.db encrypted_payload.fdo
 ```
 
 Expected output:
-```
+
+```text
 Block "OWNERSHIP VOUCHER"  -  XXX bytes
 ...
 Block "IV"  -  32 bytes

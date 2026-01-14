@@ -122,16 +122,17 @@ func (v *PayloadValidity) IsEmpty() bool {
 	return v == nil || (v.Expires == "" && v.ID == "" && v.Gen == 0)
 }
 
-// ToJSON returns the JSON representation of the validity, or empty string if empty
-func (v *PayloadValidity) ToJSON() string {
+// ToJSON returns the JSON representation of the validity, or empty string if empty.
+// Returns an error if marshaling fails.
+func (v *PayloadValidity) ToJSON() (string, error) {
 	if v.IsEmpty() {
-		return ""
+		return "", nil
 	}
 	data, err := json.Marshal(v)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("failed to marshal validity: %w", err)
 	}
-	return string(data)
+	return string(data), nil
 }
 
 // ParseValidity parses a JSON string into a PayloadValidity
@@ -167,7 +168,7 @@ func (v *PayloadValidity) CheckExpiration() error {
 //
 // Length prefixes are 4-byte big-endian unsigned integers. This format prevents
 // type confusion attacks where an attacker might shift bytes between fields.
-func BuildSignedData(payloadType string, validity *PayloadValidity, payloadData []byte) []byte {
+func BuildSignedData(payloadType string, validity *PayloadValidity, payloadData []byte) ([]byte, error) {
 	var result []byte
 
 	// PayloadType length prefix (4 bytes big-endian)
@@ -181,7 +182,11 @@ func BuildSignedData(payloadType string, validity *PayloadValidity, payloadData 
 	// Validity length prefix (4 bytes big-endian)
 	var validityBytes []byte
 	if validity != nil && !validity.IsEmpty() {
-		validityBytes = []byte(validity.ToJSON())
+		validityJSON, err := validity.ToJSON()
+		if err != nil {
+			return nil, fmt.Errorf("failed to serialize validity: %w", err)
+		}
+		validityBytes = []byte(validityJSON)
 	}
 	// #nosec G115 - validityBytes length is bounded by small JSON struct (always < 1KB)
 	binary.BigEndian.PutUint32(lenBuf, uint32(len(validityBytes)))
@@ -191,7 +196,7 @@ func BuildSignedData(payloadType string, validity *PayloadValidity, payloadData 
 	// PayloadData (no length prefix - remainder of data)
 	result = append(result, payloadData...)
 
-	return result
+	return result, nil
 }
 
 // AttestedPayload represents the components of an attested payload
@@ -261,7 +266,10 @@ func VerifyAttestedPayload(ap *AttestedPayload, ownerKey crypto.PublicKey, devic
 	}
 
 	// Build signed data with length prefixes: len(PayloadType) || PayloadType || len(Validity) || Validity || PayloadData
-	signedData := BuildSignedData(ap.PayloadType, ap.Validity, payloadData)
+	signedData, err := BuildSignedData(ap.PayloadType, ap.Validity, payloadData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build signed data: %w", err)
+	}
 
 	// Determine the signing key (delegate leaf or owner)
 	signingKey := ownerKey
