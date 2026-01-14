@@ -84,6 +84,7 @@ func options(flags *flag.FlagSet) string {
 	return buf.String()
 }
 
+//nolint:gocyclo
 func main() {
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		usage()

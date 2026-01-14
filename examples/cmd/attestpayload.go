@@ -10,7 +10,6 @@ import (
 	"crypto/rsa"
 	"crypto/sha512"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/pem"
 	"flag"
@@ -111,6 +110,7 @@ func attestPayload(args []string) error {
 	}
 }
 
+//nolint:gocyclo
 func attestPayloadCreate(args []string) error {
 	if err := attestPayloadFlags.Parse(args); err != nil {
 		return err
@@ -396,6 +396,8 @@ func buildAttestedPayloadPEM(ov *fdo.Voucher, payload, signature []byte, delegat
 }
 
 // parseAttestedPayloadPEM parses PEM-encoded attested payload (reused from delegate.go)
+//
+//nolint:gocyclo
 func parseAttestedPayloadPEMForVerify(state *sqlite.DB, pemData []byte) (*fdo.AttestedPayload, *crypto.PublicKey, crypto.Signer, error) {
 	var ownerKey *crypto.PublicKey
 	var devicePrivateKey crypto.Signer
@@ -471,20 +473,4 @@ func parseAttestedPayloadPEMForVerify(state *sqlite.DB, pemData []byte) (*fdo.At
 	}
 
 	return ap, ownerKey, devicePrivateKey, nil
-}
-
-// Helper to encode bytes as base64 for text output
-func encodeBase64(data []byte) string {
-	return base64.StdEncoding.EncodeToString(data)
-}
-
-// Helper to get owner key type for signing
-func getOwnerKeyForSigning(state *sqlite.DB, ov *fdo.Voucher) (crypto.Signer, error) {
-	keyType := ov.Header.Val.ManufacturerKey.Type
-	rsaBits := ov.Header.Val.ManufacturerKey.RsaBits()
-	key, _, err := state.OwnerKey(context.Background(), keyType, rsaBits)
-	if err != nil {
-		return nil, err
-	}
-	return key, nil
 }
