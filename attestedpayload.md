@@ -153,6 +153,58 @@ KEYOUT=$(openssl pkeyutl -decrypt -in encrypted_key.bin -inkey ownerkey_rsa.key 
 openssl enc -aes-256-ctr -d -in ciphertext.bin -K "$KEYOUT" -iv "$IV"
 ```
 
+## Signature Format
+
+The signature is computed over a **length-prefixed** data structure to prevent type confusion attacks:
+
+```
+len(PayloadType) || PayloadType || len(Validity) || Validity || PayloadData
+```
+
+Where:
+- Length prefixes are **4-byte big-endian unsigned integers**
+- PayloadType is the MIME type string (empty string if not specified)
+- Validity is JSON-encoded validity block (empty if not specified)
+- PayloadData is the raw payload bytes (or ciphertext if encrypted)
+
+For a simple payload with no type or validity, the signed data is:
+```
+00 00 00 00  (type length = 0)
+00 00 00 00  (validity length = 0)
+<payload bytes>
+```
+
+### Helper Function for Shell Scripts
+
+To build the length-prefixed signed data in shell:
+
+```bash
+# Build signed data with length prefixes
+# Usage: build_signed_data <payload_type> <validity_json> <payload_data>
+build_signed_data() {
+    local payload_type="$1"
+    local validity="$2"
+    local payload="$3"
+    
+    # Type length (4 bytes big-endian)
+    local type_len=${#payload_type}
+    printf '%08x' "$type_len" | xxd -r -p
+    printf '%s' "$payload_type"
+    
+    # Validity length (4 bytes big-endian)
+    local validity_len=${#validity}
+    printf '%08x' "$validity_len" | xxd -r -p
+    printf '%s' "$validity"
+    
+    # Payload data
+    printf '%s' "$payload"
+}
+
+# Example: Sign a simple payload (no type, no validity)
+PAYLOAD='Hello World'
+build_signed_data "" "" "$PAYLOAD" | openssl dgst -sha384 -sign owner.key -out sig.bin
+```
+
 ## Quick RSA Attested Payload
 
 > **Warning:** This works ONLY if you created Ownership Voucher with RSA2048 key like with:
@@ -165,26 +217,88 @@ openssl enc -aes-256-ctr -d -in ciphertext.bin -K "$KEYOUT" -iv "$IV"
 
 ```bash
 PAYLOAD='This is a test of the emergency broadcasting system'
+
+# Extract owner RSA key
 (echo '-----BEGIN PRIVATE KEY-----' ; sqlite3 test.db 'select hex(pkcs8) from owner_keys where type=1;' | xxd -r -p | base64 ; echo '-----END PRIVATE KEY-----') > owner_rsa_pvt.key
 openssl pkey -in owner_rsa_pvt.key -pubout > owner_rsa_pub.key
-echo $PAYLOAD | openssl dgst -sha384 -sign owner_rsa_pvt.key -out sig.bin
-(echo '-----BEGIN OWNERSHIP VOUCHER-----' ; sqlite3 test.db 'select hex(cbor) from vouchers;' | xxd -r -p | base64 ; echo '-----END OWNERSHIP VOUCHER-----') > payload_rsa3.fdo
-(echo -----BEGIN PAYLOAD----- ; echo $PAYLOAD | base64 ; echo -----END PAYLOAD-----) >> payload_rsa3.fdo
-(echo -----BEGIN SIGNATURE----- ; base64 sig.bin; echo -----END SIGNATURE-----) >> payload_rsa3.fdo
-go run ./examples/cmd attestpayload verify -db test.db payload_rsa3.fdo
+
+# Build length-prefixed signed data (no type, no validity)
+# Format: 4-byte type_len (0) + 4-byte validity_len (0) + payload
+(printf '\x00\x00\x00\x00\x00\x00\x00\x00' ; printf '%s' "$PAYLOAD") > signed_data.bin
+
+# Sign the length-prefixed data
+openssl dgst -sha384 -sign owner_rsa_pvt.key -out sig.bin signed_data.bin
+
+# Assemble the attested payload
+(echo '-----BEGIN OWNERSHIP VOUCHER-----' ; sqlite3 test.db 'select hex(cbor) from vouchers;' | xxd -r -p | base64 ; echo '-----END OWNERSHIP VOUCHER-----') > payload_rsa.fdo
+(echo '-----BEGIN PAYLOAD-----' ; printf '%s' "$PAYLOAD" | base64 ; echo '-----END PAYLOAD-----') >> payload_rsa.fdo
+(echo '-----BEGIN SIGNATURE-----' ; base64 sig.bin; echo '-----END SIGNATURE-----') >> payload_rsa.fdo
+
+# Verify
+go run ./examples/cmd attestpayload verify -db test.db payload_rsa.fdo
+
+# Cleanup
+rm -f signed_data.bin sig.bin owner_rsa_pvt.key owner_rsa_pub.key
 ```
 
 ## Quick EC Attested Payload
 
 ```bash
 PAYLOAD='This is a test of the emergency broadcasting system'
+
+# Extract owner EC key
 (echo '-----BEGIN PRIVATE KEY-----' ; sqlite3 test.db 'select hex(pkcs8) from owner_keys where type=11;' | xxd -r -p | base64 ; echo '-----END PRIVATE KEY-----') > owner_ec_pvt.key
 openssl pkey -in owner_ec_pvt.key -pubout > owner_ec_pub.key
-echo $PAYLOAD | openssl dgst -sha384 -sign owner_ec_pvt.key -out sig.bin
-(echo '-----BEGIN OWNERSHIP VOUCHER-----' ; sqlite3 test.db 'select hex(cbor) from vouchers;' | xxd -r -p | base64 ; echo '-----END OWNERSHIP VOUCHER-----') > payload_ec3.fdo
-(echo -----BEGIN PAYLOAD----- ; echo $PAYLOAD | base64 ; echo -----END PAYLOAD-----) >> payload_ec3.fdo
-(echo -----BEGIN SIGNATURE----- ; base64 sig.bin; echo -----END SIGNATURE-----) >> payload_ec3.fdo
-go run ./examples/cmd attestpayload verify -db test.db payload_ec3.fdo
+
+# Build length-prefixed signed data (no type, no validity)
+(printf '\x00\x00\x00\x00\x00\x00\x00\x00' ; printf '%s' "$PAYLOAD") > signed_data.bin
+
+# Sign the length-prefixed data
+openssl dgst -sha384 -sign owner_ec_pvt.key -out sig.bin signed_data.bin
+
+# Assemble the attested payload
+(echo '-----BEGIN OWNERSHIP VOUCHER-----' ; sqlite3 test.db 'select hex(cbor) from vouchers;' | xxd -r -p | base64 ; echo '-----END OWNERSHIP VOUCHER-----') > payload_ec.fdo
+(echo '-----BEGIN PAYLOAD-----' ; printf '%s' "$PAYLOAD" | base64 ; echo '-----END PAYLOAD-----') >> payload_ec.fdo
+(echo '-----BEGIN SIGNATURE-----' ; base64 sig.bin; echo '-----END SIGNATURE-----') >> payload_ec.fdo
+
+# Verify
+go run ./examples/cmd attestpayload verify -db test.db payload_ec.fdo
+
+# Cleanup
+rm -f signed_data.bin sig.bin owner_ec_pvt.key owner_ec_pub.key
+```
+
+## Quick EC Attested Payload with Type
+
+This example shows how to create a typed payload (with MIME type):
+
+```bash
+PAYLOAD='#!/bin/bash
+echo "Hello from attested script"'
+PAYLOAD_TYPE='text/x-shellscript'
+
+# Extract owner EC key
+(echo '-----BEGIN PRIVATE KEY-----' ; sqlite3 test.db 'select hex(pkcs8) from owner_keys where type=11;' | xxd -r -p | base64 ; echo '-----END PRIVATE KEY-----') > owner_ec_pvt.key
+
+# Build length-prefixed signed data WITH type
+# Format: 4-byte type_len + type + 4-byte validity_len (0) + payload
+TYPE_LEN=$(printf '%s' "$PAYLOAD_TYPE" | wc -c)
+(printf '%08x' "$TYPE_LEN" | xxd -r -p ; printf '%s' "$PAYLOAD_TYPE" ; printf '\x00\x00\x00\x00' ; printf '%s' "$PAYLOAD") > signed_data.bin
+
+# Sign
+openssl dgst -sha384 -sign owner_ec_pvt.key -out sig.bin signed_data.bin
+
+# Assemble
+(echo '-----BEGIN OWNERSHIP VOUCHER-----' ; sqlite3 test.db 'select hex(cbor) from vouchers;' | xxd -r -p | base64 ; echo '-----END OWNERSHIP VOUCHER-----') > payload_typed.fdo
+(echo '-----BEGIN PAYLOAD TYPE-----' ; echo "$PAYLOAD_TYPE" ; echo '-----END PAYLOAD TYPE-----') >> payload_typed.fdo
+(echo '-----BEGIN PAYLOAD-----' ; printf '%s' "$PAYLOAD" | base64 ; echo '-----END PAYLOAD-----') >> payload_typed.fdo
+(echo '-----BEGIN SIGNATURE-----' ; base64 sig.bin; echo '-----END SIGNATURE-----') >> payload_typed.fdo
+
+# Verify
+go run ./examples/cmd attestpayload verify -db test.db payload_typed.fdo
+
+# Cleanup
+rm -f signed_data.bin sig.bin owner_ec_pvt.key
 ```
 
 ## Quick RSA Encrypted Attested Payload
@@ -225,11 +339,16 @@ WEK=$(echo -n "$KEY" | xxd -r -p | openssl pkeyutl -encrypt -pubin -inkey owner_
 
 ### Step 3: Sign the Ciphertext
 
-The signature is computed over the **ciphertext**, not the plaintext. This proves the owner created this specific encrypted payload.
+The signature is computed over the **length-prefixed ciphertext**, not the plaintext. This proves the owner created this specific encrypted payload.
 
 ```bash
-# Sign the ciphertext (not the plaintext!)
-echo -n "$PAYLOAD" | openssl enc -aes-256-ctr -K "$KEY" -iv "$IV" | openssl dgst -sha384 -sign owner_rsa_pvt.key -out sig.bin
+# Build length-prefixed signed data (no type, no validity) with CIPHERTEXT
+# Format: 4-byte type_len (0) + 4-byte validity_len (0) + ciphertext
+echo -n "$PAYLOAD" | openssl enc -aes-256-ctr -K "$KEY" -iv "$IV" > ciphertext.bin
+(printf '\x00\x00\x00\x00\x00\x00\x00\x00' ; cat ciphertext.bin) > signed_data.bin
+
+# Sign the length-prefixed data
+openssl dgst -sha384 -sign owner_rsa_pvt.key -out sig.bin signed_data.bin
 ```
 
 ### Step 4: Assemble the Encrypted Attested Payload
@@ -286,9 +405,57 @@ KEYOUT=$(echo "$WEK" | base64 -d | openssl pkeyutl -decrypt -inkey owner_rsa_pvt
 echo "$CIPHERTEXT" | base64 -d | openssl enc -aes-256-ctr -d -K "$KEYOUT" -iv "$IV"
 ```
 
+## Verifying Go CLI-Created Payloads with OpenSSL
+
+You can verify payloads created by the Go CLI using standard OpenSSL commands. This demonstrates interoperability.
+
+### Extract Components from .fdo File
+
+```bash
+# Parse the .fdo file to extract components
+# Assuming payload.fdo was created by: go run ./cmd attestpayload create ...
+
+# Extract payload (base64 decode the PAYLOAD block)
+sed -n '/-----BEGIN PAYLOAD-----/,/-----END PAYLOAD-----/p' payload.fdo | grep -v '^-----' | base64 -d > extracted_payload.bin
+
+# Extract signature
+sed -n '/-----BEGIN SIGNATURE-----/,/-----END SIGNATURE-----/p' payload.fdo | grep -v '^-----' | base64 -d > extracted_sig.bin
+
+# Extract payload type (if present)
+PAYLOAD_TYPE=$(sed -n '/-----BEGIN PAYLOAD TYPE-----/,/-----END PAYLOAD TYPE-----/p' payload.fdo | grep -v '^-----' | tr -d '\n')
+
+# Extract validity (if present)
+VALIDITY=$(sed -n '/-----BEGIN VALIDITY-----/,/-----END VALIDITY-----/p' payload.fdo | grep -v '^-----' | tr -d '\n')
+```
+
+### Verify Signature with OpenSSL
+
+```bash
+# Extract owner public key from database
+(echo '-----BEGIN PRIVATE KEY-----' ; sqlite3 test.db 'select hex(pkcs8) from owner_keys where type=11;' | xxd -r -p | base64 ; echo '-----END PRIVATE KEY-----') > owner_ec_pvt.key
+openssl pkey -in owner_ec_pvt.key -pubout > owner_ec_pub.key
+
+# Build the length-prefixed signed data
+TYPE_LEN=${#PAYLOAD_TYPE}
+VALIDITY_LEN=${#VALIDITY}
+
+# Create signed_data.bin with length prefixes
+(
+    printf '%08x' "$TYPE_LEN" | xxd -r -p
+    printf '%s' "$PAYLOAD_TYPE"
+    printf '%08x' "$VALIDITY_LEN" | xxd -r -p
+    printf '%s' "$VALIDITY"
+    cat extracted_payload.bin
+) > signed_data.bin
+
+# Verify the signature
+openssl dgst -sha384 -verify owner_ec_pub.key -signature extracted_sig.bin signed_data.bin
+# Should output: "Verified OK"
+```
+
 ## Complete Test Script
 
-Here's a complete script that tests the entire encrypted attested payload workflow:
+Here's a complete script that tests the entire encrypted attested payload workflow with the new length-prefixed format:
 
 ```bash
 #!/bin/bash
@@ -297,7 +464,7 @@ set -e
 echo "=== Encrypted Attested Payload Test ==="
 
 # Cleanup
-rm -f test.db owner_rsa_pvt.key owner_rsa_pub.key sig.bin encrypted_payload.fdo
+rm -f test.db owner_rsa_pvt.key owner_rsa_pub.key sig.bin signed_data.bin ciphertext.bin encrypted_payload.fdo
 
 # Start server in background
 go run ./examples/cmd server -http 127.0.0.1:9999 -db ./test.db -owner-certs &
@@ -320,11 +487,13 @@ KEY=$(openssl rand -hex 32)
 IV=$(openssl rand -hex 16)
 
 # Encrypt
-CIPHERTEXT=$(echo -n "$PAYLOAD" | openssl enc -aes-256-ctr -K "$KEY" -iv "$IV" | base64)
+echo -n "$PAYLOAD" | openssl enc -aes-256-ctr -K "$KEY" -iv "$IV" > ciphertext.bin
+CIPHERTEXT=$(base64 ciphertext.bin)
 WEK=$(echo -n "$KEY" | xxd -r -p | openssl pkeyutl -encrypt -pubin -inkey owner_rsa_pub.key -pkeyopt rsa_padding_mode:oaep | base64)
 
-# Sign ciphertext
-echo -n "$PAYLOAD" | openssl enc -aes-256-ctr -K "$KEY" -iv "$IV" | openssl dgst -sha384 -sign owner_rsa_pvt.key -out sig.bin
+# Build length-prefixed signed data and sign
+(printf '\x00\x00\x00\x00\x00\x00\x00\x00' ; cat ciphertext.bin) > signed_data.bin
+openssl dgst -sha384 -sign owner_rsa_pvt.key -out sig.bin signed_data.bin
 
 # Assemble
 (echo '-----BEGIN OWNERSHIP VOUCHER-----' ; sqlite3 test.db 'select hex(cbor) from vouchers;' | xxd -r -p | base64 ; echo '-----END OWNERSHIP VOUCHER-----') > encrypted_payload.fdo

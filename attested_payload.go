@@ -18,7 +18,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
-	"reflect"
 	"time"
 )
 
@@ -174,6 +173,7 @@ func BuildSignedData(payloadType string, validity *PayloadValidity, payloadData 
 	// PayloadType length prefix (4 bytes big-endian)
 	typeBytes := []byte(payloadType)
 	lenBuf := make([]byte, 4)
+	// #nosec G115 - typeBytes length is bounded by MIME type string (always < 256 bytes)
 	binary.BigEndian.PutUint32(lenBuf, uint32(len(typeBytes)))
 	result = append(result, lenBuf...)
 	result = append(result, typeBytes...)
@@ -183,6 +183,7 @@ func BuildSignedData(payloadType string, validity *PayloadValidity, payloadData 
 	if validity != nil && !validity.IsEmpty() {
 		validityBytes = []byte(validity.ToJSON())
 	}
+	// #nosec G115 - validityBytes length is bounded by small JSON struct (always < 1KB)
 	binary.BigEndian.PutUint32(lenBuf, uint32(len(validityBytes)))
 	result = append(result, lenBuf...)
 	result = append(result, validityBytes...)
@@ -305,7 +306,24 @@ func VerifyAttestedPayload(ap *AttestedPayload, ownerKey crypto.PublicKey, devic
 	return ap.Payload, nil
 }
 
-// extractRSAPrivateKey extracts an *rsa.PrivateKey from various wrapper types
+// RSAPrivateKeyProvider is an interface for types that can provide an RSA private key.
+// Wrapper types (like blob.Pkcs8Key) can implement this interface to expose their
+// underlying RSA key for decryption operations.
+type RSAPrivateKeyProvider interface {
+	RSAPrivateKey() *rsa.PrivateKey
+}
+
+// SignerUnwrapper is an interface for types that wrap a crypto.Signer.
+// This provides a cleaner contract than reflection for extracting wrapped keys.
+type SignerUnwrapper interface {
+	UnwrapSigner() crypto.Signer
+}
+
+// extractRSAPrivateKey extracts an *rsa.PrivateKey from various key types.
+// It checks for:
+// 1. Direct *rsa.PrivateKey
+// 2. RSAPrivateKeyProvider interface (explicit RSA key access)
+// 3. SignerUnwrapper interface (generic signer unwrapping)
 func extractRSAPrivateKey(key crypto.Signer) *rsa.PrivateKey {
 	if key == nil {
 		return nil
@@ -314,38 +332,19 @@ func extractRSAPrivateKey(key crypto.Signer) *rsa.PrivateKey {
 	if rsaKey, ok := key.(*rsa.PrivateKey); ok {
 		return rsaKey
 	}
-	// Use reflection to extract embedded Signer field (for blob.Pkcs8Key and similar)
-	v := reflect.ValueOf(key)
-	if v.Kind() == reflect.Struct {
-		// Look for embedded crypto.Signer field
-		signerField := v.FieldByName("Signer")
-		if signerField.IsValid() && !signerField.IsNil() {
-			if signer, ok := signerField.Interface().(crypto.Signer); ok {
-				if rsaKey, ok := signer.(*rsa.PrivateKey); ok {
-					return rsaKey
-				}
+	// Check if key implements RSAPrivateKeyProvider
+	if provider, ok := key.(RSAPrivateKeyProvider); ok {
+		return provider.RSAPrivateKey()
+	}
+	// Check if key implements SignerUnwrapper
+	if unwrapper, ok := key.(SignerUnwrapper); ok {
+		if inner := unwrapper.UnwrapSigner(); inner != nil {
+			if rsaKey, ok := inner.(*rsa.PrivateKey); ok {
+				return rsaKey
 			}
 		}
 	}
 	return nil
-}
-
-// decryptWithKey decrypts ciphertext using a raw symmetric key and IV
-func decryptWithKey(key, iv, ciphertext []byte) ([]byte, error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create AES cipher: %w", err)
-	}
-
-	if len(iv) != aes.BlockSize {
-		return nil, fmt.Errorf("invalid IV size: expected %d, got %d", aes.BlockSize, len(iv))
-	}
-
-	plaintext := make([]byte, len(ciphertext))
-	stream := cipher.NewCTR(block, iv)
-	stream.XORKeyStream(plaintext, ciphertext)
-
-	return plaintext, nil
 }
 
 // verifySignature verifies a signature using the appropriate algorithm based on key type

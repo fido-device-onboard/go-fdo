@@ -31,9 +31,11 @@ test.db
 # Test artifacts
 fdo.download_*
 testvoucher*.ov
+**/*.key
 
 # Nix artifacts
 /result
 
 # Retain spec for reference
 FIDO-IoT-spec.bs
+attested-payload-spec.bs

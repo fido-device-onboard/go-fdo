@@ -184,10 +184,10 @@ func (m *MaliciousTransport) injectBadDelegateChain(s1 *cose.Sign1Tag[cbor.RawBy
 	}
 
 	// Inject into unprotected header (label 258 = CUPHDelegateChain)
-	if s1.Sign1.Header.Unprotected == nil {
-		s1.Sign1.Header.Unprotected = make(map[cose.Label]any)
+	if s1.Unprotected == nil {
+		s1.Unprotected = make(map[cose.Label]any)
 	}
-	s1.Sign1.Header.Unprotected[cose.Label{Int64: 258}] = delegateChain
+	s1.Unprotected[cose.Label{Int64: 258}] = delegateChain
 
 	// Re-sign with attacker's key (the signature will be valid for attacker's key,
 	// but the delegate chain won't be signed by the owner)
@@ -207,10 +207,10 @@ func (m *MaliciousTransport) injectBadNonce(s1 *cose.Sign1Tag[cbor.RawBytes, []b
 	}
 
 	// Replace nonce in unprotected header (label 256 = CUPHNonce)
-	if s1.Sign1.Header.Unprotected == nil {
-		s1.Sign1.Header.Unprotected = make(map[cose.Label]any)
+	if s1.Unprotected == nil {
+		s1.Unprotected = make(map[cose.Label]any)
 	}
-	s1.Sign1.Header.Unprotected[cose.Label{Int64: 256}] = badNonce
+	s1.Unprotected[cose.Label{Int64: 256}] = badNonce
 
 	// Re-sign to make the signature valid (but nonce won't match what client sent)
 	if err := m.resignWithAttackerKey(s1); err != nil {
@@ -233,10 +233,10 @@ func (m *MaliciousTransport) injectWrongOwnerKey(s1 *cose.Sign1Tag[cbor.RawBytes
 	}
 
 	// Replace owner key in unprotected header (label 257 = CUPHOwnerPubKey)
-	if s1.Sign1.Header.Unprotected == nil {
-		s1.Sign1.Header.Unprotected = make(map[cose.Label]any)
+	if s1.Unprotected == nil {
+		s1.Unprotected = make(map[cose.Label]any)
 	}
-	s1.Sign1.Header.Unprotected[cose.Label{Int64: 257}] = attackerPubKey
+	s1.Unprotected[cose.Label{Int64: 257}] = attackerPubKey
 
 	// Re-sign with attacker's key
 	if err := m.resignWithAttackerKey(s1); err != nil {
@@ -248,10 +248,10 @@ func (m *MaliciousTransport) injectWrongOwnerKey(s1 *cose.Sign1Tag[cbor.RawBytes
 
 // corruptSignature flips bits in the signature to make it invalid
 func (m *MaliciousTransport) corruptSignature(s1 *cose.Sign1Tag[cbor.RawBytes, []byte]) (*cose.Sign1Tag[cbor.RawBytes, []byte], error) {
-	if len(s1.Sign1.Signature) > 0 {
+	if len(s1.Signature) > 0 {
 		// Flip some bits in the signature
-		s1.Sign1.Signature[0] ^= 0xFF
-		s1.Sign1.Signature[len(s1.Sign1.Signature)-1] ^= 0xFF
+		s1.Signature[0] ^= 0xFF
+		s1.Signature[len(s1.Signature)-1] ^= 0xFF
 	}
 	return s1, nil
 }
@@ -259,10 +259,10 @@ func (m *MaliciousTransport) corruptSignature(s1 *cose.Sign1Tag[cbor.RawBytes, [
 // corruptHMAC corrupts the HMAC in the response by modifying raw bytes
 func (m *MaliciousTransport) corruptHMAC(s1 *cose.Sign1Tag[cbor.RawBytes, []byte]) (*cose.Sign1Tag[cbor.RawBytes, []byte], error) {
 	// Get the payload bytes
-	if s1.Sign1.Payload == nil {
+	if s1.Payload == nil {
 		return nil, fmt.Errorf("no payload to corrupt")
 	}
-	payloadBytes := []byte(s1.Sign1.Payload.Val)
+	payloadBytes := []byte(s1.Payload.Val)
 
 	// Find and corrupt bytes in the HMAC section (it's after the first few fields)
 	// This is a simple corruption - flip some bytes in the middle of the payload
@@ -272,11 +272,11 @@ func (m *MaliciousTransport) corruptHMAC(s1 *cose.Sign1Tag[cbor.RawBytes, []byte
 	}
 
 	// Update the payload
-	s1.Sign1.Payload.Val = cbor.RawBytes(payloadBytes)
+	s1.Payload.Val = cbor.RawBytes(payloadBytes)
 
 	// Corrupt signature too since payload changed
-	if len(s1.Sign1.Signature) > 0 {
-		s1.Sign1.Signature[0] ^= 0xFF
+	if len(s1.Signature) > 0 {
+		s1.Signature[0] ^= 0xFF
 	}
 
 	return s1, nil
@@ -293,8 +293,8 @@ func (m *MaliciousTransport) resignWithAttackerKey(s1 *cose.Sign1Tag[cbor.RawByt
 	// which simulates a replay attack with modified headers.
 
 	// Flip signature bits to invalidate it after header changes
-	if len(s1.Sign1.Signature) > 0 {
-		s1.Sign1.Signature[len(s1.Sign1.Signature)/2] ^= 0x01
+	if len(s1.Signature) > 0 {
+		s1.Signature[len(s1.Signature)/2] ^= 0x01
 	}
 	return nil
 }
@@ -355,6 +355,8 @@ type securityTestState struct {
 // 2. Runs DI to get device credentials
 // 3. Runs TO2 with a malicious transport that injects the attack
 // 4. Verifies TO2 fails (security check works)
+//
+//nolint:gocyclo // Test dispatch function requires multiple attack type branches
 func RunSecurityTest(t *testing.T, attack AttackType) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

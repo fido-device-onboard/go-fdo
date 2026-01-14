@@ -188,6 +188,8 @@ type setCredentialsMsg struct {
 }
 
 // AppStart(10) -> SetCredentials(11)
+//
+//nolint:gocyclo // Protocol handling requires multiple conditional branches
 func (s *DIServer[T]) setCredentials(ctx context.Context, msg io.Reader) (*setCredentialsMsg, error) {
 	// Decode proprietary device mfg info from app start
 	// FDO 2.0 includes CapabilityFlags, FDO 1.1 does not

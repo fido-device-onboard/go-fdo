@@ -370,8 +370,8 @@ func processDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey,
 				}
 				return fmt.Errorf("verifyDelegate chain validation error - (#%d) %s not signed by (#%d) %s: %w", i, chain[i].Subject, i+1, chain[i+1].Subject, err)
 			}
-			if chain[i].Issuer.CommonName != chain[i+1].Subject.CommonName {
-				return fmt.Errorf("subject %s issued by issuer=%s, expected %s", c.Subject, c.Issuer, chain[i+1].Issuer)
+			if !bytes.Equal(chain[i].RawIssuer, chain[i+1].RawSubject) {
+				return fmt.Errorf("subject %s issued by issuer=%s, expected %s", c.Subject, c.Issuer, chain[i+1].Subject)
 			}
 		}
 

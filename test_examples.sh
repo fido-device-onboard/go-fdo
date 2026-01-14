@@ -424,6 +424,103 @@ test_attested_payload_delegate() {
 	log_success "Attested Payload (Delegate Signed) test PASSED"
 }
 
+# Test: Attested Payload with Shell/OpenSSL (Interoperability)
+# This test creates attested payloads using shell commands and openssl,
+# then verifies them with the Go CLI. It also verifies Go CLI-created
+# payloads using openssl.
+test_attested_payload_shell() {
+	log_section "TEST: Attested Payload (Shell/OpenSSL Interoperability)"
+
+	rm -f "$DB_FILE" "$CRED_FILE" voucher.pem owner_ec_pvt.key owner_ec_pub.key
+	rm -f signed_data.bin sig.bin payload_shell.fdo payload_cli.fdo extracted_payload.bin extracted_sig.bin
+
+	log_step "Creating database with owner certs"
+	start_server "-owner-certs"
+
+	log_step "Running DI"
+	run_cmd go run ./cmd client -di "$SERVER_URL"
+	log_success "DI completed"
+
+	stop_server
+
+	log_step "Exporting voucher to PEM"
+	(echo '-----BEGIN OWNERSHIP VOUCHER-----' ; sqlite3 "$DB_FILE" 'select hex(cbor) from vouchers;' | xxd -r -p | base64 ; echo '-----END OWNERSHIP VOUCHER-----') > voucher.pem
+	log_success "Voucher exported"
+
+	log_step "Extracting owner EC key"
+	(echo '-----BEGIN PRIVATE KEY-----' ; sqlite3 "$DB_FILE" 'select hex(pkcs8) from owner_keys where type=11;' | xxd -r -p | base64 ; echo '-----END PRIVATE KEY-----') > owner_ec_pvt.key
+	openssl pkey -in owner_ec_pvt.key -pubout > owner_ec_pub.key
+	log_success "Owner EC key extracted"
+
+	# Test 1: Create payload with shell, verify with Go CLI
+	log_step "Creating attested payload with shell/openssl"
+	PAYLOAD='Hello from shell-created attested payload'
+	
+	# Build length-prefixed signed data (no type, no validity)
+	# Format: 4-byte type_len (0) + 4-byte validity_len (0) + payload
+	(printf '\x00\x00\x00\x00\x00\x00\x00\x00' ; printf '%s' "$PAYLOAD") > signed_data.bin
+	
+	# Sign with openssl
+	openssl dgst -sha384 -sign owner_ec_pvt.key -out sig.bin signed_data.bin
+	
+	# Assemble the .fdo file
+	cp voucher.pem payload_shell.fdo
+	(echo '-----BEGIN PAYLOAD-----' ; printf '%s' "$PAYLOAD" | base64 ; echo '-----END PAYLOAD-----') >> payload_shell.fdo
+	(echo '-----BEGIN SIGNATURE-----' ; base64 sig.bin ; echo '-----END SIGNATURE-----') >> payload_shell.fdo
+	log_success "Shell-created attested payload assembled"
+
+	log_step "Verifying shell-created payload with Go CLI"
+	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../payload_shell.fdo
+	log_success "Shell-created payload verified by Go CLI"
+
+	# Test 2: Create payload with Go CLI, verify with openssl
+	log_step "Creating attested payload with Go CLI"
+	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../voucher.pem -payload "Hello from Go CLI" -output ../payload_cli.fdo
+	log_success "Go CLI-created attested payload"
+
+	log_step "Extracting components from Go CLI payload"
+	# Extract payload
+	sed -n '/-----BEGIN PAYLOAD-----/,/-----END PAYLOAD-----/p' payload_cli.fdo | grep -v '^-----' | base64 -d > extracted_payload.bin
+	# Extract signature
+	sed -n '/-----BEGIN SIGNATURE-----/,/-----END SIGNATURE-----/p' payload_cli.fdo | grep -v '^-----' | base64 -d > extracted_sig.bin
+	log_success "Components extracted"
+
+	log_step "Verifying Go CLI payload with openssl"
+	# Build length-prefixed signed data (no type, no validity for this payload)
+	(printf '\x00\x00\x00\x00\x00\x00\x00\x00' ; cat extracted_payload.bin) > signed_data.bin
+	# Verify signature
+	openssl dgst -sha384 -verify owner_ec_pub.key -signature extracted_sig.bin signed_data.bin
+	log_success "Go CLI payload verified by openssl"
+
+	# Test 3: Create typed payload with shell, verify with Go CLI
+	log_step "Creating typed attested payload with shell/openssl"
+	PAYLOAD_TYPED='#!/bin/bash
+echo "Hello from typed shell payload"'
+	PAYLOAD_TYPE='text/x-shellscript'
+	TYPE_LEN=${#PAYLOAD_TYPE}
+	
+	# Build length-prefixed signed data WITH type
+	(printf '%08x' "$TYPE_LEN" | xxd -r -p ; printf '%s' "$PAYLOAD_TYPE" ; printf '\x00\x00\x00\x00' ; printf '%s' "$PAYLOAD_TYPED") > signed_data.bin
+	
+	# Sign
+	openssl dgst -sha384 -sign owner_ec_pvt.key -out sig.bin signed_data.bin
+	
+	# Assemble - PEM blocks use base64 encoding for the content
+	cp voucher.pem payload_shell_typed.fdo
+	(echo '-----BEGIN PAYLOAD TYPE-----' ; printf '%s' "$PAYLOAD_TYPE" | base64 ; echo '-----END PAYLOAD TYPE-----') >> payload_shell_typed.fdo
+	(echo '-----BEGIN PAYLOAD-----' ; printf '%s' "$PAYLOAD_TYPED" | base64 ; echo '-----END PAYLOAD-----') >> payload_shell_typed.fdo
+	(echo '-----BEGIN SIGNATURE-----' ; base64 sig.bin ; echo '-----END SIGNATURE-----') >> payload_shell_typed.fdo
+	log_success "Shell-created typed attested payload assembled"
+
+	log_step "Verifying shell-created typed payload with Go CLI"
+	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../payload_shell_typed.fdo
+	log_success "Shell-created typed payload verified by Go CLI"
+
+	rm -f voucher.pem owner_ec_pvt.key owner_ec_pub.key signed_data.bin sig.bin
+	rm -f payload_shell.fdo payload_cli.fdo payload_shell_typed.fdo extracted_payload.bin extracted_sig.bin
+	log_success "Attested Payload (Shell/OpenSSL Interoperability) test PASSED"
+}
+
 # Test: Bad Delegate Rejection (Security Test)
 # This test verifies that a delegate chain created with a DIFFERENT owner key
 # (simulating an attacker) cannot be used for onboarding.
@@ -482,6 +579,7 @@ test_all() {
 	test_attested_payload || failed=1
 	test_attested_payload_encrypted || failed=1
 	test_attested_payload_delegate || failed=1
+	test_attested_payload_shell || failed=1
 	test_bad_delegate || failed=1
 
 	echo ""
@@ -547,12 +645,15 @@ main() {
 	attested-payload-delegate)
 		test_attested_payload_delegate
 		;;
+	attested-payload-shell)
+		test_attested_payload_shell
+		;;
 	all)
 		test_all
 		;;
 	*)
 		echo "Unknown test: $test_name"
-		echo "Available tests: basic, basic-reuse, rv-blob, kex, fdo200, delegate, delegate-fdo200, bad-delegate, attested-payload, attested-payload-encrypted, attested-payload-delegate, all"
+		echo "Available tests: basic, basic-reuse, rv-blob, kex, fdo200, delegate, delegate-fdo200, bad-delegate, attested-payload, attested-payload-encrypted, attested-payload-delegate, attested-payload-shell, all"
 		exit 1
 		;;
 	esac

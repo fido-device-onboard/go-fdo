@@ -29,15 +29,17 @@ type ecdsaSignature struct {
 	R, S *big.Int
 }
 
-// signPayload signs a payload with the given key using SHA-384
+// signPayload signs a payload with the given key using SHA-384 and length-prefixed format
 func signPayload(key crypto.Signer, payload []byte) ([]byte, error) {
-	hashed := sha512.Sum384(payload)
+	signedData := fdo.BuildSignedData("", nil, payload)
+	hashed := sha512.Sum384(signedData)
 	return key.Sign(rand.Reader, hashed[:], crypto.SHA384)
 }
 
-// verifyECDSASignature verifies an ECDSA signature on a payload
+// verifyECDSASignature verifies an ECDSA signature on a payload using length-prefixed format
 func verifyECDSASignature(pubKey *ecdsa.PublicKey, payload, sigBytes []byte) bool {
-	hashed := sha512.Sum384(payload)
+	signedData := fdo.BuildSignedData("", nil, payload)
+	hashed := sha512.Sum384(signedData)
 	sig := new(ecdsaSignature)
 	if _, err := asn1.Unmarshal(sigBytes, sig); err != nil {
 		return false
@@ -789,8 +791,12 @@ func TestEncryptedPayloadCorruptedCiphertext(t *testing.T) {
 	// Generate symmetric key and IV
 	symmetricKey := make([]byte, 32)
 	iv := make([]byte, 16)
-	rand.Read(symmetricKey)
-	rand.Read(iv)
+	if _, err := rand.Read(symmetricKey); err != nil {
+		t.Fatalf("failed to generate symmetric key: %v", err)
+	}
+	if _, err := rand.Read(iv); err != nil {
+		t.Fatalf("failed to generate IV: %v", err)
+	}
 
 	// Original payload
 	originalPayload := []byte("Secret payload that will be corrupted")
