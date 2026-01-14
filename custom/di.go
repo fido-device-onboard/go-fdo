@@ -7,6 +7,7 @@ package custom
 import (
 	"crypto"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"fmt"
 	"time"
@@ -66,12 +67,18 @@ func SignDeviceCertificate(deviceCAKey crypto.Signer, deviceCAChain []*x509.Cert
 		}
 
 		// Sign CSR
+		pubkey, err := x509.MarshalPKIXPublicKey(csr.PublicKey)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling CSR public key for subject key ID generation: %w", err)
+		}
+		pubkeyHash := sha256.Sum256(pubkey)
 		template := &x509.Certificate{
-			Issuer:    deviceCAChain[0].Subject,
-			Subject:   csr.Subject,
-			NotBefore: time.Now(),
-			NotAfter:  time.Now().Add(30 * 360 * 24 * time.Hour), // Matches Java impl
-			KeyUsage:  x509.KeyUsageDigitalSignature,
+			Issuer:       deviceCAChain[0].Subject,
+			Subject:      csr.Subject,
+			SubjectKeyId: pubkeyHash[:20], // First 160 bits of SHA256 sum truncated, matching Let's Encrypt
+			NotBefore:    time.Now(),
+			NotAfter:     time.Now().Add(30 * 360 * 24 * time.Hour), // Matches Java impl
+			KeyUsage:     x509.KeyUsageDigitalSignature,
 		}
 		der, err := x509.CreateCertificate(rand.Reader, template, deviceCAChain[0], csr.PublicKey, deviceCAKey)
 		if err != nil {
