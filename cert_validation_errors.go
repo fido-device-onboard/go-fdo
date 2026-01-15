@@ -129,6 +129,7 @@ type LegacyCertificateCheckerAdapter struct {
 	}
 }
 
+// CheckCertificate wraps legacy certificate checker and converts errors to CertificateValidationError
 func (l *LegacyCertificateCheckerAdapter) CheckCertificate(cert *x509.Certificate) *CertificateValidationError {
 	if err := l.checker.CheckCertificate(cert); err != nil {
 		// Try to determine if this is a revocation error based on error message

@@ -21,7 +21,7 @@ It implements [FIDO Device Onboard Specification 1.1][fdo11] and [FIDO Device On
 
 ## Security Notice
 
-⚠️ **IMPORTANT**: This library is intended for development and testing. For production deployments, you MUST follow proper security practices. See [SECURITY_CONSIDERATIONS.md](SECURITY_CONSIDERATIONS.md) for detailed security considerations including:
+⚠️ **IMPORTANT**: This library is intended for development and testing. For production deployments, you MUST follow proper security practices. See [PRODUCTION_CONSIDERATIONS.md](PRODUCTION_CONSIDERATIONS.md) for detailed production considerations including:
 
 - Certificate validation and revocation checking
 - Key management best practices
@@ -428,7 +428,7 @@ When running tests with delegates, you will see warnings like:
 WARN: No CertificateChecker configured - revocation checking (CRL/OCSP) is disabled
 ```
 
-These warnings are expected during development. For production use, see [SECURITY_CONSIDERATIONS.md](SECURITY_CONSIDERATIONS.md) for detailed security requirements including:
+These warnings are expected during development. For production use, see [PRODUCTION_CONSIDERATIONS.md](PRODUCTION_CONSIDERATIONS.md) for detailed production requirements including:
 
 - Mandatory certificate revocation checking
 - Key management best practices

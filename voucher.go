@@ -16,9 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"hash"
-	"reflect"
 	"slices"
-	"time"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
@@ -501,74 +499,13 @@ func (e *VoucherEntryPayload) VerifyOwnerCertChain(roots *x509.CertPool) error {
 }
 
 func verifyCertChain(chain []*x509.Certificate, roots *x509.CertPool) error {
-	// Check certificate expiration for all certificates in chain
-	now := time.Now()
+	// Check certificate expiration and custom validation for all certificates
 	for i, cert := range chain {
-		if now.Before(cert.NotBefore) {
-			return NewCertificateValidationError(
-				CertValidationErrorNotYetValid,
-				cert,
-				"certificate chain",
-				fmt.Sprintf("certificate %d not yet valid (NotBefore: %v)", i, cert.NotBefore),
-			)
+		if err := checkCertificateValidity(cert, i); err != nil {
+			return err
 		}
-		if now.After(cert.NotAfter) {
-			return NewCertificateValidationError(
-				CertValidationErrorExpired,
-				cert,
-				"certificate chain",
-				fmt.Sprintf("certificate %d expired (NotAfter: %v)", i, cert.NotAfter),
-			)
-		}
-
-		// Call custom certificate checker if configured
-		if certificateChecker != nil {
-			var certErr *CertificateValidationError
-
-			// Try to use enhanced checker by checking for the specific method signature
-			// We use interface{} to avoid the conflicting method signature issue
-			if checkerVal := reflect.ValueOf(certificateChecker); checkerVal.IsValid() {
-				method := checkerVal.MethodByName("CheckCertificate")
-				if method.IsValid() {
-					methodType := method.Type()
-					// Check if the method returns *CertificateValidationError
-					if methodType.NumOut() == 1 && methodType.Out(0) == reflect.TypeOf((*CertificateValidationError)(nil)).Elem() {
-						// This is an enhanced checker
-						result := method.Call([]reflect.Value{reflect.ValueOf(cert)})
-						if len(result) == 1 && !result[0].IsNil() {
-							certErr = result[0].Interface().(*CertificateValidationError)
-						}
-					} else {
-						// This is a legacy checker
-						result := method.Call([]reflect.Value{reflect.ValueOf(cert)})
-						if len(result) == 1 && !result[0].IsNil() {
-							if err, ok := result[0].Interface().(error); ok {
-								// Wrap legacy error
-								if isRevocationError(err) {
-									certErr = NewCertificateValidationError(
-										CertValidationErrorRevoked,
-										cert,
-										"certificate chain",
-										err.Error(),
-									)
-								} else {
-									certErr = NewCertificateValidationError(
-										CertValidationErrorCustomCheck,
-										cert,
-										"certificate chain",
-										err.Error(),
-									)
-								}
-							}
-						}
-					}
-				}
-			}
-
-			if certErr != nil {
-				certErr.Context = "certificate chain"
-				return certErr
-			}
+		if err := runCustomCertificateChecker(cert); err != nil {
+			return err
 		}
 	}
 

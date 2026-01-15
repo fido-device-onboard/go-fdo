@@ -72,15 +72,6 @@ var (
 	certificateCheckerSet  bool
 )
 
-// hasEnhancedCheckCertificate checks if the given interface implements the enhanced CheckCertificate method
-func hasEnhancedCheckCertificate(checker interface{}) bool {
-	// Try the enhanced interface assertion and fall back to legacy if it fails
-	_, ok := checker.(interface {
-		CheckCertificate(cert *x509.Certificate) *CertificateValidationError
-	})
-	return ok
-}
-
 // SetCertificateChecker sets the global certificate checker for delegate chain validation.
 // This should be called once at application startup to enable custom certificate validation
 // such as revocation checking (CRL/OCSP).
