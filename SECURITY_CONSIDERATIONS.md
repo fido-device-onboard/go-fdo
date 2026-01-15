@@ -96,6 +96,7 @@ SerialNumber: big.NewInt(2), // Parent
 - Consider additional revocation strategies for offline/dark sites (local CRL caching, push-based revocation, short-lived certs)
 - Add certificate transparency logging
 - Regularly rotate certificates and private keys
+- **Consider limiting delegate certificate chain depth**: The library does not enforce a maximum depth for delegate certificate chains. Production deployments should consider implementing a reasonable limit (e.g., 10-20 certificates) to prevent potential DoS attacks through excessively deep chains. The appropriate limit depends on your delegation hierarchy requirements.
 
 ### Key Management
 
