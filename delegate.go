@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"math/big"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -70,6 +71,15 @@ var (
 	certificateCheckerOnce sync.Once
 	certificateCheckerSet  bool
 )
+
+// hasEnhancedCheckCertificate checks if the given interface implements the enhanced CheckCertificate method
+func hasEnhancedCheckCertificate(checker interface{}) bool {
+	// Try the enhanced interface assertion and fall back to legacy if it fails
+	_, ok := checker.(interface {
+		CheckCertificate(cert *x509.Certificate) *CertificateValidationError
+	})
+	return ok
+}
 
 // SetCertificateChecker sets the global certificate checker for delegate chain validation.
 // This should be called once at application startup to enable custom certificate validation
@@ -378,16 +388,71 @@ func processDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey,
 		// Check certificate expiration
 		now := time.Now()
 		if now.Before(c.NotBefore) {
-			return fmt.Errorf("VerifyDelegate cert %s: not yet valid (NotBefore: %v)", c.Subject, c.NotBefore)
+			err := NewCertificateValidationError(
+				CertValidationErrorNotYetValid,
+				c,
+				"delegate chain",
+				fmt.Sprintf("not yet valid (NotBefore: %v)", c.NotBefore),
+			)
+			return err
 		}
 		if now.After(c.NotAfter) {
-			return fmt.Errorf("VerifyDelegate cert %s: expired (NotAfter: %v)", c.Subject, c.NotAfter)
+			err := NewCertificateValidationError(
+				CertValidationErrorExpired,
+				c,
+				"delegate chain",
+				fmt.Sprintf("expired (NotAfter: %v)", c.NotAfter),
+			)
+			return err
 		}
 
 		// Call custom certificate checker if configured (e.g., for revocation checking)
 		if certificateChecker != nil {
-			if err := certificateChecker.CheckCertificate(c); err != nil {
-				return fmt.Errorf("VerifyDelegate cert %s: custom check failed: %w", c.Subject, err)
+			var certErr *CertificateValidationError
+
+			// Try to use enhanced checker by checking for the specific method signature
+			// We use interface{} to avoid the conflicting method signature issue
+			if checkerVal := reflect.ValueOf(certificateChecker); checkerVal.IsValid() {
+				method := checkerVal.MethodByName("CheckCertificate")
+				if method.IsValid() {
+					methodType := method.Type()
+					// Check if the method returns *CertificateValidationError
+					if methodType.NumOut() == 1 && methodType.Out(0) == reflect.TypeOf((*CertificateValidationError)(nil)).Elem() {
+						// This is an enhanced checker
+						result := method.Call([]reflect.Value{reflect.ValueOf(c)})
+						if len(result) == 1 && !result[0].IsNil() {
+							certErr = result[0].Interface().(*CertificateValidationError)
+						}
+					} else {
+						// This is a legacy checker
+						result := method.Call([]reflect.Value{reflect.ValueOf(c)})
+						if len(result) == 1 && !result[0].IsNil() {
+							if err, ok := result[0].Interface().(error); ok {
+								// Wrap legacy error
+								if isRevocationError(err) {
+									certErr = NewCertificateValidationError(
+										CertValidationErrorRevoked,
+										c,
+										"custom certificate check",
+										err.Error(),
+									)
+								} else {
+									certErr = NewCertificateValidationError(
+										CertValidationErrorCustomCheck,
+										c,
+										"custom certificate check",
+										err.Error(),
+									)
+								}
+							}
+						}
+					}
+				}
+			}
+
+			if certErr != nil {
+				certErr.Context = "delegate chain"
+				return certErr
 			}
 		} else if !certificateCheckerSet {
 			// Warn that no certificate checker is configured - revocation is not being checked
@@ -397,13 +462,28 @@ func processDelegateChain(chain []*x509.Certificate, ownerKey *crypto.PublicKey,
 		}
 
 		if (oid != nil) && (certMissingOID(c, *oid)) {
-			return fmt.Errorf("verifyDelegate error - %s has no permission %v", c.Subject, DelegateOIDtoString(*oid))
+			return NewCertificateValidationError(
+				CertValidationErrorMissingPermission,
+				c,
+				"delegate chain",
+				fmt.Sprintf("missing required permission %v", DelegateOIDtoString(*oid)),
+			)
 		}
 		if (c.KeyUsage & x509.KeyUsageDigitalSignature) == 0 {
-			return fmt.Errorf("VerifyDelegate cert %s: No Digital Signature Usage", c.Subject)
+			return NewCertificateValidationError(
+				CertValidationErrorKeyUsage,
+				c,
+				"delegate chain",
+				"No Digital Signature Usage",
+			)
 		}
 		if !c.BasicConstraintsValid {
-			return fmt.Errorf("VerifyDelegate cert %s: Basic Constraints not valid", c.Subject)
+			return NewCertificateValidationError(
+				CertValidationErrorBasicConstraints,
+				c,
+				"delegate chain",
+				"Basic Constraints not valid",
+			)
 		}
 
 		// Leaf cert does not need to be a CA, but others do

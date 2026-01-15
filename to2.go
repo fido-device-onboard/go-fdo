@@ -331,6 +331,13 @@ func verifyVoucher(ctx context.Context, transport Transport, to1d *cose.Sign1[pr
 			return fmt.Errorf("error parsing delegate chain: %w", err)
 		}
 		if err := VerifyDelegateChain(chain, &info.OriginalOwnerKey, nil); err != nil {
+			// Check if this is a CertificateValidationError for detailed error reporting
+			if certErr, ok := err.(*CertificateValidationError); ok {
+				// Send detailed certificate validation error to client
+				errorMsg := certErr.ToProtocolErrorMessage()
+				captureErr(ctx, errorMsg.Code, errorMsg.ErrString)
+				return fmt.Errorf("delegate chain verification failed: %w", certErr)
+			}
 			captureErr(ctx, protocol.InvalidMessageErrCode, "")
 			return fmt.Errorf("delegate chain verification failed: %w", err)
 		}

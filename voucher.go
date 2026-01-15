@@ -16,7 +16,9 @@ import (
 	"errors"
 	"fmt"
 	"hash"
+	"reflect"
 	"slices"
+	"time"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
@@ -330,7 +332,17 @@ func (v *Voucher) VerifyCertChainHash() error {
 		}
 	}
 	if !hmac.Equal(digest.Sum(nil), cchash.Value) {
-		return fmt.Errorf("%w: certificate chain hash did not match", ErrCryptoVerifyFailed)
+		// Find the first certificate to include in error
+		var cert *x509.Certificate
+		if len(*v.CertChain) > 0 {
+			cert = (*x509.Certificate)((*v.CertChain)[0])
+		}
+		return NewCertificateValidationError(
+			CertValidationErrorChainHashMismatch,
+			cert,
+			"voucher certificate chain hash",
+			"certificate chain hash did not match voucher header",
+		)
 	}
 	return nil
 }
@@ -489,6 +501,77 @@ func (e *VoucherEntryPayload) VerifyOwnerCertChain(roots *x509.CertPool) error {
 }
 
 func verifyCertChain(chain []*x509.Certificate, roots *x509.CertPool) error {
+	// Check certificate expiration for all certificates in chain
+	now := time.Now()
+	for i, cert := range chain {
+		if now.Before(cert.NotBefore) {
+			return NewCertificateValidationError(
+				CertValidationErrorNotYetValid,
+				cert,
+				"certificate chain",
+				fmt.Sprintf("certificate %d not yet valid (NotBefore: %v)", i, cert.NotBefore),
+			)
+		}
+		if now.After(cert.NotAfter) {
+			return NewCertificateValidationError(
+				CertValidationErrorExpired,
+				cert,
+				"certificate chain",
+				fmt.Sprintf("certificate %d expired (NotAfter: %v)", i, cert.NotAfter),
+			)
+		}
+
+		// Call custom certificate checker if configured
+		if certificateChecker != nil {
+			var certErr *CertificateValidationError
+
+			// Try to use enhanced checker by checking for the specific method signature
+			// We use interface{} to avoid the conflicting method signature issue
+			if checkerVal := reflect.ValueOf(certificateChecker); checkerVal.IsValid() {
+				method := checkerVal.MethodByName("CheckCertificate")
+				if method.IsValid() {
+					methodType := method.Type()
+					// Check if the method returns *CertificateValidationError
+					if methodType.NumOut() == 1 && methodType.Out(0) == reflect.TypeOf((*CertificateValidationError)(nil)).Elem() {
+						// This is an enhanced checker
+						result := method.Call([]reflect.Value{reflect.ValueOf(cert)})
+						if len(result) == 1 && !result[0].IsNil() {
+							certErr = result[0].Interface().(*CertificateValidationError)
+						}
+					} else {
+						// This is a legacy checker
+						result := method.Call([]reflect.Value{reflect.ValueOf(cert)})
+						if len(result) == 1 && !result[0].IsNil() {
+							if err, ok := result[0].Interface().(error); ok {
+								// Wrap legacy error
+								if isRevocationError(err) {
+									certErr = NewCertificateValidationError(
+										CertValidationErrorRevoked,
+										cert,
+										"certificate chain",
+										err.Error(),
+									)
+								} else {
+									certErr = NewCertificateValidationError(
+										CertValidationErrorCustomCheck,
+										cert,
+										"certificate chain",
+										err.Error(),
+									)
+								}
+							}
+						}
+					}
+				}
+			}
+
+			if certErr != nil {
+				certErr.Context = "certificate chain"
+				return certErr
+			}
+		}
+	}
+
 	// All all intermediates (if any) to a pool
 	intermediates := x509.NewCertPool()
 	if len(chain) > 2 {
@@ -508,7 +591,12 @@ func verifyCertChain(chain []*x509.Certificate, roots *x509.CertPool) error {
 		Roots:         roots,
 		Intermediates: intermediates,
 	}); err != nil {
-		return fmt.Errorf("%w: %w", ErrCryptoVerifyFailed, err)
+		return NewCertificateValidationError(
+			CertValidationErrorSignature,
+			chain[0],
+			"certificate chain",
+			fmt.Sprintf("signature verification failed: %v", err),
+		)
 	}
 
 	return nil

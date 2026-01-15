@@ -40,3 +40,9 @@ testvoucher*.ov
 # Retain spec for reference
 FIDO-IoT-spec.bs
 attested-payload-spec.bs
+server.log
+.gitignore
+.gitignore
+server2.log
+.gitignore
+test_output.log
