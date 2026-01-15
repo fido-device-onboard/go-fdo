@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
 	"github.com/fido-device-onboard/go-fdo/protocol"
 )
@@ -170,17 +169,18 @@ func checkOwnerKeyConsistency(newVoucher, existingVoucher *Voucher) error {
 }
 
 // hashPublicKey computes a SHA-256 hash of a protocol.PublicKey for comparison.
+// Uses PKIX encoding for consistency with hashCryptoPublicKey().
 func hashPublicKey(key protocol.PublicKey) (string, error) {
-	// Use CBOR encoding for consistent hashing
-	keyBytes, err := cbor.Marshal(key)
+	// Extract crypto.PublicKey and use PKIX encoding for consistency
+	cryptoKey, err := key.Public()
 	if err != nil {
-		return "", fmt.Errorf("error marshaling public key: %w", err)
+		return "", fmt.Errorf("error extracting public key: %w", err)
 	}
-	hash := sha256.Sum256(keyBytes)
-	return fmt.Sprintf("%x", hash), nil
+	return hashCryptoPublicKey(cryptoKey)
 }
 
 // hashCryptoPublicKey computes a SHA-256 hash of a crypto.PublicKey for comparison.
+// Use x509 marshaling for consistent key encoding
 func hashCryptoPublicKey(key crypto.PublicKey) (string, error) {
 	// Use x509 marshaling for consistent key encoding
 	keyBytes, err := x509.MarshalPKIXPublicKey(key)
