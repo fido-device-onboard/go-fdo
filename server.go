@@ -107,6 +107,11 @@ type TO0Server struct {
 	// requested TTL will be used. It is expected that some other means of
 	// authorization is used in this case.
 	AcceptVoucher func(ctx context.Context, ov Voucher, requestedTTLSecs uint32) (ttlSecs uint32, err error)
+
+	// VoucherReplacementPolicy controls how the RV service handles voucher
+	// replacements for the same GUID. Default is RVPolicyAllowAny (Option 0).
+	// See SECURITY_CONSIDERATIONS.md for detailed policy descriptions.
+	VoucherReplacementPolicy VoucherReplacementPolicy
 }
 
 // Respond validates a request and returns the appropriate response message.

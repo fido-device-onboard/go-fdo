@@ -327,6 +327,12 @@ func (s *TO0Server) acceptOwner(ctx context.Context, msg io.Reader) (*to0AcceptO
 		}
 	}
 
+	// Check voucher replacement policy
+	if err := CheckVoucherReplacement(ctx, s.VoucherReplacementPolicy, &ov, s.RVBlobs); err != nil {
+		captureErr(ctx, protocol.InvalidOwnershipVoucherCode, "")
+		return nil, fmt.Errorf("voucher replacement policy violation: %w", err)
+	}
+
 	// Store rendezvous blob
 	expiration := time.Now().Add(time.Duration(ttl) * time.Second)
 	if err := s.RVBlobs.SetRVBlob(ctx, &ov, sig.To1d.Untag(), expiration); err != nil {

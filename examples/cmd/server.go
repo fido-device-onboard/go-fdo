@@ -60,6 +60,7 @@ var (
 	reuseCred            bool
 	rvBypass             bool
 	rvDelay              int
+	rvReplacementPolicy  string
 	printOwnerPubKey     string
 	printOwnerPrivKey    string
 	printOwnerChain      string
@@ -103,6 +104,7 @@ func init() {
 	serverFlags.BoolVar(&ownerCert, "owner-certs", false, "Generate Owner Certificatats (in addition to keys)")
 	serverFlags.BoolVar(&rvBypass, "rv-bypass", false, "Skip TO1")
 	serverFlags.IntVar(&rvDelay, "rv-delay", 0, "Delay TO1 by N `seconds`")
+	serverFlags.StringVar(&rvReplacementPolicy, "rv-replacement-policy", "allow-any", "RV voucher replacement `policy`: allow-any (0), manufacturer-key-consistency (1), first-registration-lock (2), owner-key-consistency (3)")
 	serverFlags.StringVar(&printOwnerPubKey, "print-owner-public", "", "Print owner public key of `type` and exit")
 	serverFlags.StringVar(&printOwnerPrivKey, "print-owner-private", "", "Print owner private key of `type` and exit")
 	serverFlags.StringVar(&printOwnerChain, "print-owner-chain", "", "Print owner chain of `type` and exit")
@@ -160,6 +162,12 @@ func server(ctx context.Context) error { //nolint:gocyclo
 		extAddr = addr
 	}
 
+	// Parse RV replacement policy
+	replacementPolicy, err := fdo.ParseVoucherReplacementPolicy(rvReplacementPolicy)
+	if err != nil {
+		return fmt.Errorf("invalid rv-replacement-policy: %w", err)
+	}
+
 	// RV Info
 	var rvInfo [][]protocol.RvInstruction
 	if to0Addr != "" {
@@ -184,7 +192,7 @@ func server(ctx context.Context) error { //nolint:gocyclo
 		return resell(ctx, state)
 	}
 
-	return serveHTTP(ctx, rvInfo, state)
+	return serveHTTP(ctx, rvInfo, state, replacementPolicy)
 }
 
 func generateKeys(state *sqlite.DB) error { //nolint:gocyclo
@@ -313,9 +321,9 @@ func generateKeys(state *sqlite.DB) error { //nolint:gocyclo
 	return nil
 }
 
-func serveHTTP(ctx context.Context, rvInfo [][]protocol.RvInstruction, state *sqlite.DB) error {
+func serveHTTP(ctx context.Context, rvInfo [][]protocol.RvInstruction, state *sqlite.DB, replacementPolicy fdo.VoucherReplacementPolicy) error {
 	// Create FDO responder
-	handler, err := newHandler(ctx, rvInfo, state)
+	handler, err := newHandler(ctx, rvInfo, state, replacementPolicy)
 	if err != nil {
 		return err
 	}
@@ -627,7 +635,7 @@ func mustMarshal(v any) []byte {
 }
 
 //nolint:gocyclo
-func newHandler(ctx context.Context, rvInfo [][]protocol.RvInstruction, state *sqlite.DB) (*transport.Handler, error) {
+func newHandler(ctx context.Context, rvInfo [][]protocol.RvInstruction, state *sqlite.DB, replacementPolicy fdo.VoucherReplacementPolicy) (*transport.Handler, error) {
 	aio := fdo.AllInOne{
 		DIAndOwner:         state,
 		RendezvousAndOwner: withOwnerAddrs{state, rvInfo},
@@ -673,8 +681,9 @@ func newHandler(ctx context.Context, rvInfo [][]protocol.RvInstruction, state *s
 			RvInfo:               func(context.Context, *fdo.Voucher) ([][]protocol.RvInstruction, error) { return rvInfo, nil },
 		},
 		TO0Responder: &fdo.TO0Server{
-			Session: state,
-			RVBlobs: state,
+			Session:                  state,
+			RVBlobs:                  state,
+			VoucherReplacementPolicy: replacementPolicy,
 		},
 		TO1Responder: &fdo.TO1Server{
 			Session: state,
