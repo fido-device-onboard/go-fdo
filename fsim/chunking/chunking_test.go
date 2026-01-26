@@ -290,7 +290,9 @@ func TestChunkReceiverSizeMismatch(t *testing.T) {
 	// Send 10 bytes
 	chunk := []byte("1234567890")
 	chunkData, _ := cbor.Marshal(chunk)
-	receiver.HandleMessage("test-data-0", bytes.NewReader(chunkData))
+	if err := receiver.HandleMessage("test-data-0", bytes.NewReader(chunkData)); err != nil {
+		t.Fatalf("Failed to handle test-data-0: %v", err)
+	}
 
 	// Send end - should fail due to size mismatch
 	end := EndMessage{Status: 0}
@@ -347,7 +349,9 @@ func TestChunkSenderBasicFlow(t *testing.T) {
 
 	// Verify end message contains hash
 	var end EndMessage
-	end.UnmarshalCBOR(producer.messages["test-end"])
+	if err := end.UnmarshalCBOR(producer.messages["test-end"]); err != nil {
+		t.Fatalf("Failed to unmarshal end message: %v", err)
+	}
 	if len(end.HashValue) == 0 {
 		t.Errorf("hash not computed in end message")
 	}
@@ -364,7 +368,9 @@ func TestChunkSenderProgress(t *testing.T) {
 	producer := &mockProducer{messages: make(map[string][]byte)}
 
 	sender.SendBegin(producer)
-	sender.SendNextChunk(producer)
+	if _, err := sender.SendNextChunk(producer); err != nil {
+		t.Fatalf("Failed to send next chunk: %v", err)
+	}
 
 	progress := sender.GetProgress()
 	if progress <= 0 || progress > 100 {

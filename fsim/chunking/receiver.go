@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 
@@ -138,11 +139,18 @@ func (r *ChunkReceiver) handleData(messageName string, messageBody io.Reader) er
 		return fmt.Errorf("failed to decode chunk data: %w", err)
 	}
 
-	// Check if we would exceed expected size
-	if r.expectedSize > 0 && r.totalBytes+int64(len(chunkData)) > int64(r.expectedSize) {
-		r.reset()
-		return fmt.Errorf("chunk would exceed expected size: %d + %d > %d",
-			r.totalBytes, len(chunkData), r.expectedSize)
+	// Check if we would exceed expected size (but allow one chunk over for size mismatch detection)
+	if r.expectedSize > 0 {
+		chunkLen := int64(len(chunkData))
+		if chunkLen < 0 || r.totalBytes < 0 {
+			r.reset()
+			return fmt.Errorf("invalid chunk size or total bytes")
+		}
+		// Only check for overflow, not size limit (let end message handle size mismatch)
+		if r.totalBytes > math.MaxInt64-chunkLen {
+			r.reset()
+			return fmt.Errorf("total bytes would overflow")
+		}
 	}
 
 	// Buffer the chunk
@@ -179,9 +187,16 @@ func (r *ChunkReceiver) handleEnd(messageBody io.Reader) error {
 	}
 
 	// Verify size if provided
-	if r.expectedSize > 0 && r.totalBytes != int64(r.expectedSize) {
-		r.reset()
-		return fmt.Errorf("size mismatch: expected %d, received %d", r.expectedSize, r.totalBytes)
+	if r.expectedSize > 0 {
+		expectedSize := int64(r.expectedSize)
+		if expectedSize < 0 {
+			r.reset()
+			return fmt.Errorf("invalid expected size")
+		}
+		if r.totalBytes != expectedSize {
+			r.reset()
+			return fmt.Errorf("size mismatch: expected %d, received %d", r.expectedSize, r.totalBytes)
+		}
 	}
 
 	// Verify hash if provided

@@ -46,16 +46,22 @@ func Example_receiver() {
 		},
 	}
 	beginData, _ := begin.MarshalCBOR()
-	receiver.HandleMessage("cert-begin", bytes.NewReader(beginData))
+	if err := receiver.HandleMessage("cert-begin", bytes.NewReader(beginData)); err != nil {
+		log.Printf("Error handling cert-begin: %v", err)
+	}
 
 	// Simulate receiving data chunks
 	chunk1 := []byte("certificate data part 1...")
 	chunk1Data, _ := cbor.Marshal(chunk1)
-	receiver.HandleMessage("cert-data-0", bytes.NewReader(chunk1Data))
+	if err := receiver.HandleMessage("cert-data-0", bytes.NewReader(chunk1Data)); err != nil {
+		log.Printf("Error handling cert-data-0: %v", err)
+	}
 
 	chunk2 := []byte("certificate data part 2...")
 	chunk2Data, _ := cbor.Marshal(chunk2)
-	receiver.HandleMessage("cert-data-1", bytes.NewReader(chunk2Data))
+	if err := receiver.HandleMessage("cert-data-1", bytes.NewReader(chunk2Data)); err != nil {
+		log.Printf("Error handling cert-data-1: %v", err)
+	}
 
 	// Simulate receiving end message
 	fullData := append(chunk1, chunk2...)
@@ -65,7 +71,9 @@ func Example_receiver() {
 		HashValue: hash,
 	}
 	endData, _ := end.MarshalCBOR()
-	receiver.HandleMessage("cert-end", bytes.NewReader(endData))
+	if err := receiver.HandleMessage("cert-end", bytes.NewReader(endData)); err != nil {
+		log.Printf("Error handling cert-end: %v", err)
+	}
 
 	fmt.Printf("Certificate installed: %d bytes\n", len(installedCert))
 	// Output: Certificate installed: 52 bytes
@@ -87,7 +95,9 @@ func Example_sender() {
 	producer := &mockProducer{messages: make(map[string][]byte)}
 
 	// Send begin
-	sender.SendBegin(producer)
+	if err := sender.SendBegin(producer); err != nil {
+		log.Printf("Error sending begin: %v", err)
+	}
 	fmt.Println("Sent begin message")
 
 	// Send all chunks
@@ -103,7 +113,9 @@ func Example_sender() {
 	}
 
 	// Send end
-	sender.SendEnd(producer)
+	if err := sender.SendEnd(producer); err != nil {
+		log.Printf("Error sending end: %v", err)
+	}
 	fmt.Println("Sent end message")
 
 	fmt.Printf("Total messages sent: %d\n", len(producer.messages))

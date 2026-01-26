@@ -48,7 +48,7 @@ lint: lint-go lint-shell
 
 # Run Go linter
 lint-go:
-	golangci-lint run
+	golangci-lint run ./...
 
 # Run shell script linters (format + static analysis)
 lint-shell:
