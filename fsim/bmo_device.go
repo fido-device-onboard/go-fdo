@@ -135,7 +135,7 @@ func (b *BMO) Yield(ctx context.Context, respond func(string) io.Writer, yield f
 // reset clears the internal state.
 func (b *BMO) reset() {
 	if b.receiver != nil && b.receiver.IsReceiving() && b.ChunkedHandler != nil {
-		b.ChunkedHandler.CancelImage()
+		_ = b.ChunkedHandler.CancelImage()
 	}
 	b.receiver = nil
 	b.buffer = nil
@@ -180,7 +180,7 @@ func (b *BMO) handleChunkedMessage(ctx context.Context, messageName string, mess
 		}
 		b.receiver = nil
 		if b.ChunkedHandler != nil {
-			b.ChunkedHandler.CancelImage()
+			_ = b.ChunkedHandler.CancelImage()
 		}
 		return nil
 	}

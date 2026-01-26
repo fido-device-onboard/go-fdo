@@ -42,10 +42,11 @@ type Command struct {
 	stderr  bool
 
 	// Internal state
-	cmd  *exec.Cmd
-	out  *bufio.Reader
-	err  *bufio.Reader
-	errc chan error
+	cmd    *exec.Cmd
+	out    *bufio.Reader
+	err    *bufio.Reader
+	errc   chan error
+	cancel context.CancelFunc
 }
 
 var _ serviceinfo.DeviceModule = (*Command)(nil)
@@ -129,7 +130,7 @@ func (c *Command) execute(ctx context.Context) error {
 
 	// Start command
 	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
+	c.cancel = cancel
 	c.cmd = exec.CommandContext(ctx, name, arg...) //nolint:gosec // This is dangerous by intentional design as the owner service is meant to be privileged
 	if c.stdout {
 		var buf safeBuffer
@@ -150,6 +151,11 @@ func (c *Command) execute(ctx context.Context) error {
 	c.errc = make(chan error, 1)
 	go func() {
 		defer close(c.errc)
+		defer func() {
+			if c.cancel != nil {
+				c.cancel()
+			}
+		}()
 		if err := c.cmd.Wait(); err != nil {
 			c.errc <- err
 		}
@@ -226,6 +232,9 @@ func cborEncodeBuffer(w io.Writer, br *bufio.Reader) error {
 }
 
 func (c *Command) reset() {
+	if c.cancel != nil {
+		c.cancel()
+	}
 	if c.cmd != nil {
 		if c.cmd.Process == nil {
 			panic("command should always be started")

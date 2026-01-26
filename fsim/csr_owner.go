@@ -414,8 +414,8 @@ func createServerKeygenResponse(cert *x509.Certificate, key crypto.PrivateKey) (
 // Helper functions for certificate generation
 
 func mustRandomSerial() *big.Int {
-	max := new(big.Int).Lsh(big.NewInt(1), 128)
-	serial, err := rand.Int(rand.Reader, max)
+	maxVal := new(big.Int).Lsh(big.NewInt(1), 128)
+	serial, err := rand.Int(rand.Reader, maxVal)
 	if err != nil {
 		panic(fmt.Sprintf("failed to generate serial number: %v", err))
 	}

@@ -66,7 +66,6 @@ type WiFi struct {
 	SingleSidedMode bool
 
 	// Internal state for chunked transfers
-	csrSender    *chunking.ChunkSender
 	csrReceiver  *chunking.ChunkReceiver
 	certReceiver *chunking.ChunkReceiver
 	caReceiver   *chunking.ChunkReceiver
@@ -74,10 +73,6 @@ type WiFi struct {
 	// Current network context
 	currentNetworkID string
 	currentSSID      string
-	needsCSR         bool
-	csrData          []byte
-	csrMetadata      map[string]any
-	csrState         int // 0=not started, 1=sent begin, 2=sent data, 3=sent end
 
 	// Result storage
 	csrResultStatus  int
@@ -442,117 +437,6 @@ func (w *WiFi) sendCSR(respond func(string) io.Writer, yield func(), csrData []b
 		return fmt.Errorf("send csr-end: %w", err)
 	}
 	slog.Debug("fdo.wifi sent csr-end")
-
-	return nil
-}
-
-// handleCSRMessage processes CSR-related messages (device perspective - receiving result).
-func (w *WiFi) handleCSRMessage(messageName string, messageBody io.Reader, respond func(string) io.Writer) error {
-	// For device side, we only receive csr-result from owner
-	if messageName == "csr-result" {
-		var result chunking.ResultMessage
-		data, err := io.ReadAll(messageBody)
-		if err != nil {
-			return fmt.Errorf("failed to read csr-result: %w", err)
-		}
-		if err := result.UnmarshalCBOR(data); err != nil {
-			return fmt.Errorf("failed to decode csr-result: %w", err)
-		}
-
-		w.csrResultStatus = result.StatusCode
-		w.csrResultMsg = result.Message
-
-		slog.Debug("fdo.wifi csr-result", "status", result.StatusCode, "message", result.Message)
-		return nil
-	}
-
-	return fmt.Errorf("unexpected CSR message on device: %s", messageName)
-}
-
-// handleCertMessage processes certificate chunked messages.
-func (w *WiFi) handleCertMessage(messageName string, messageBody io.Reader, respond func(string) io.Writer) error {
-	if w.Handler == nil {
-		return fmt.Errorf("no WiFi handler configured")
-	}
-
-	// Initialize receiver on first message
-	if w.certReceiver == nil {
-		w.certReceiver = &chunking.ChunkReceiver{
-			PayloadName: "cert",
-			OnBegin:     w.onCertBegin,
-			OnChunk:     w.onCertChunk,
-			OnEnd:       w.onCertEnd,
-		}
-	}
-
-	// Handle the message
-	if err := w.certReceiver.HandleMessage(messageName, messageBody); err != nil {
-		w.certReceiver = nil
-		return err
-	}
-
-	// After successful end, send result
-	if strings.HasSuffix(messageName, "-end") && !w.certReceiver.IsReceiving() {
-		result := chunking.ResultMessage{
-			StatusCode: w.certResultStatus,
-			Message:    w.certResultMsg,
-		}
-		resultData, err := result.MarshalCBOR()
-		if err != nil {
-			return fmt.Errorf("failed to encode cert-result: %w", err)
-		}
-
-		writer := respond("cert-result")
-		if _, err := writer.Write(resultData); err != nil {
-			return fmt.Errorf("failed to send cert-result: %w", err)
-		}
-
-		w.certReceiver = nil
-	}
-
-	return nil
-}
-
-// handleCAMessage processes CA certificate chunked messages.
-func (w *WiFi) handleCAMessage(messageName string, messageBody io.Reader, respond func(string) io.Writer) error {
-	if w.Handler == nil {
-		return fmt.Errorf("no WiFi handler configured")
-	}
-
-	// Initialize receiver on first message
-	if w.caReceiver == nil {
-		w.caReceiver = &chunking.ChunkReceiver{
-			PayloadName: "ca",
-			OnBegin:     w.onCABegin,
-			OnChunk:     w.onCAChunk,
-			OnEnd:       w.onCAEnd,
-		}
-	}
-
-	// Handle the message
-	if err := w.caReceiver.HandleMessage(messageName, messageBody); err != nil {
-		w.caReceiver = nil
-		return err
-	}
-
-	// After successful end, send result
-	if strings.HasSuffix(messageName, "-end") && !w.caReceiver.IsReceiving() {
-		result := chunking.ResultMessage{
-			StatusCode: w.caResultStatus,
-			Message:    w.caResultMsg,
-		}
-		resultData, err := result.MarshalCBOR()
-		if err != nil {
-			return fmt.Errorf("failed to encode ca-result: %w", err)
-		}
-
-		writer := respond("ca-result")
-		if _, err := writer.Write(resultData); err != nil {
-			return fmt.Errorf("failed to send ca-result: %w", err)
-		}
-
-		w.caReceiver = nil
-	}
 
 	return nil
 }

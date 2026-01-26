@@ -400,25 +400,3 @@ func (p *Payload) sendError(respond func(string) io.Writer, code int, message, d
 	// The error has been communicated to the owner via the error message
 	return nil
 }
-
-// payloadErrorString returns a human-readable error message for error codes.
-func payloadErrorString(code int) string {
-	switch code {
-	case 1:
-		return "Unknown MIME Type"
-	case 2:
-		return "Invalid Format"
-	case 3:
-		return "Invalid Content"
-	case 4:
-		return "Unable to Apply"
-	case 5:
-		return "Unsupported Feature"
-	case 6:
-		return "Transfer Error"
-	case 7:
-		return "Resource Error"
-	default:
-		return fmt.Sprintf("Unknown Error (%d)", code)
-	}
-}

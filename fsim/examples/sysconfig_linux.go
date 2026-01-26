@@ -730,5 +730,5 @@ func (l *LinuxSysConfig) reloadWpaSupplicant() {
 	}
 
 	// Try killall and restart (last resort)
-	exec.Command("killall", "-HUP", "wpa_supplicant").Run()
+	_ = exec.Command("killall", "-HUP", "wpa_supplicant").Run()
 }
