@@ -8,12 +8,14 @@ import (
 	"context"
 	"crypto"
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"hash"
 	"log/slog"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
+	"github.com/fido-device-onboard/go-fdo/fsim"
 	"github.com/fido-device-onboard/go-fdo/kex"
 	"github.com/fido-device-onboard/go-fdo/protocol"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
@@ -601,21 +603,43 @@ func exchangeServiceInfo20(ctx context.Context, transport Transport, proveOVNonc
 		switch typ {
 		case protocol.TO2OwnerSvcInfo20MsgType:
 			captureMsgType(ctx, typ)
-			var ownerInfo OwnerSvcInfo20Msg
-			if err := cbor.NewDecoder(resp).Decode(&ownerInfo); err != nil {
+			var ownerInfoMsg OwnerSvcInfo20Msg
+			if err := cbor.NewDecoder(resp).Decode(&ownerInfoMsg); err != nil {
 				_ = resp.Close()
 				captureErr(ctx, protocol.MessageBodyErrCode, "")
 				return fmt.Errorf("error parsing TO2.OwnerSvcInfo20: %w", err)
 			}
 			_ = resp.Close()
 
-			// TODO: Process owner service info through device modules
-			// Full implementation would parse KV.Key to get module name and message
-			// and call the appropriate device module
-			_ = ownerInfo.ServiceInfo
+			// Process owner service info directly (simplified approach)
+			for _, kv := range ownerInfoMsg.ServiceInfo {
+				// Debug: log what we received
+				slog.Info("FDO 2.0 received owner service info", "key", kv.Key, "value", string(kv.Val))
+
+				// Check if this is a sysconfig message
+				if kv.Key == "fdo.sysconfig" {
+					// Parse the JSON value
+					var param struct {
+						Parameter string `json:"parameter"`
+						Value     string `json:"value"`
+					}
+					if err := json.Unmarshal(kv.Val, &param); err == nil {
+						// Find the sysconfig module and call it directly
+						if sysconfigModule, exists := c.DeviceModules["fdo.sysconfig"]; exists {
+							if sysconfig, ok := sysconfigModule.(*fsim.SysConfig); ok && sysconfig.SetParameter != nil {
+								if err := sysconfig.SetParameter(param.Parameter, param.Value); err != nil {
+									slog.Error("error setting sysconfig parameter", "parameter", param.Parameter, "error", err)
+								} else {
+									slog.Info("FDO 2.0 sysconfig parameter set", "parameter", param.Parameter, "value", param.Value)
+								}
+							}
+						}
+					}
+				}
+			}
 
 			// Check if done
-			if ownerInfo.IsDone && deviceDone {
+			if ownerInfoMsg.IsDone && deviceDone {
 				// Send Done20 with replacement HMAC
 				return sendDone20(ctx, transport, proveOVNonce, setupDeviceNonce, replacementHMAC, sess)
 			}

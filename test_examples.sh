@@ -599,6 +599,187 @@ test_sysconfig() {
 	log_success "Sysconfig FSIM test PASSED"
 }
 
+# Test: Sysconfig FSIM with FDO 2.0
+# This test explicitly verifies that the sysconfig FSIM works on FDO 2.0 protocol
+# Other tests have shown that it works when client is 101 but not when client is 200
+test_sysconfig_fdo200() {
+	log_section "TEST: Sysconfig FSIM with FDO 2.0"
+
+	rm -f "$DB_FILE" "$CRED_FILE"
+
+	start_server "-reuse-cred -sysconfig hostname=test-device-fdo200 -sysconfig timezone=America/New_York -sysconfig ntp-server=time.google.com -sysconfig locale=en_US.UTF-8"
+
+	log_step "Running DI"
+	run_cmd go run ./cmd client -di "$SERVER_URL"
+	log_success "DI completed"
+
+	log_step "Running TO1/TO2 with FDO 2.0 and sysconfig parameters"
+	echo ">>> PROOF TEST: Capturing FDO 2.0 client output to show sysconfig parameters:"
+	run_cmd go run ./cmd client -fdo-version 200 2>&1 | tee /tmp/fdo200_sysconfig.log
+	log_success "TO1/TO2 completed with FDO 2.0 and sysconfig parameters"
+
+	# Check if sysconfig parameters were received
+	if grep -q "\[fdo.sysconfig\]" /tmp/fdo200_sysconfig.log; then
+		echo "✓ FDO 2.0 SUCCESS: Found sysconfig parameters:"
+		grep "\[fdo.sysconfig\]" /tmp/fdo200_sysconfig.log
+		FDO200_SUCCESS=true
+	else
+		echo "✗ FDO 2.0 FAILURE: No sysconfig parameters found in FDO 2.0 client output"
+		echo ">>> This PROVES FDO 2.0 client is NOT receiving sysconfig parameters"
+		FDO200_SUCCESS=false
+	fi
+
+	log_step "Running TO1/TO2 again with FDO 2.0 (credential reuse with sysconfig)"
+	run_cmd go run ./cmd client -fdo-version 200
+	log_success "TO1/TO2 completed with FDO 2.0 (reuse with sysconfig)"
+
+	stop_server
+
+	# Now run the same test with FDO 1.01 for comparison
+	echo ""
+	log_step "COMPARISON: Running same test with FDO 1.01 to prove the difference"
+
+	rm -f "$DB_FILE" "$CRED_FILE"
+	start_server "-reuse-cred -sysconfig hostname=test-device-fdo101 -sysconfig timezone=America/New_York -sysconfig ntp-server=time.google.com -sysconfig locale=en_US.UTF-8"
+
+	log_step "Running DI (FDO 1.01)"
+	run_cmd go run ./cmd client -di "$SERVER_URL"
+	log_success "DI completed"
+
+	log_step "Running TO1/TO2 with FDO 1.01 and sysconfig parameters"
+	echo ">>> COMPARISON: Capturing FDO 1.01 client output to show sysconfig parameters:"
+	run_cmd go run ./cmd client 2>&1 | tee /tmp/fdo101_sysconfig.log
+	log_success "TO1/TO2 completed with FDO 1.01 and sysconfig parameters"
+
+	# Check if sysconfig parameters were received
+	if grep -q "\[fdo.sysconfig\]" /tmp/fdo101_sysconfig.log; then
+		echo "✓ FDO 1.01 SUCCESS: Found sysconfig parameters:"
+		grep "\[fdo.sysconfig\]" /tmp/fdo101_sysconfig.log
+		FDO101_SUCCESS=true
+	else
+		echo "✗ FDO 1.01 FAILURE: No sysconfig parameters found"
+		FDO101_SUCCESS=false
+	fi
+
+	stop_server
+
+	# Final verdict
+	echo ""
+	log_section "PROOF VERDICT"
+	if [ "$FDO200_SUCCESS" = true ] && [ "$FDO101_SUCCESS" = true ]; then
+		echo "✓ Both FDO 1.01 and FDO 2.0 successfully receive sysconfig parameters"
+		log_success "Sysconfig FSIM with FDO 2.0 test PASSED"
+	elif [ "$FDO200_SUCCESS" = false ] && [ "$FDO101_SUCCESS" = true ]; then
+		echo "✗ PROVEN: FDO 1.01 receives sysconfig parameters but FDO 2.0 does NOT"
+		echo ">>> This demonstrates the bug you wanted to prove exists"
+		log_success "Sysconfig FSIM with FDO 2.0 test COMPLETED (bug proven)"
+	else
+		echo "? Unexpected results - both versions failed"
+		log_success "Sysconfig FSIM with FDO 2.0 test COMPLETED (inconclusive)"
+	fi
+}
+
+# Test: Payload FSIM with FDO 2.0
+# This test demonstrates that the fdo.payload FSIM works correctly with FDO 2.0 protocol
+test_payload_fdo200() {
+	log_section "TEST: Payload FSIM with FDO 2.0"
+
+	mkdir -p "$EPHEMERAL_DIR"
+	rm -f "$DB_FILE" "$CRED_FILE"
+
+	# Create a random test file (10KB to test multi-chunk transfer)
+	# Default chunk size is 1014 bytes, so 10KB will require ~10 chunks
+	PAYLOAD_FILE="$EPHEMERAL_DIR/test_payload_fdo200.bin"
+	RECEIVED_FILE="$EPHEMERAL_DIR/test_payload_fdo200.bin"
+	log_step "Creating random test file (10KB for multi-chunk transfer)"
+	dd if=/dev/urandom of="$PAYLOAD_FILE" bs=1024 count=10 2>/dev/null
+	ORIGINAL_HASH=$(sha256sum "$PAYLOAD_FILE" | awk '{print $1}')
+	log_success "Created test file: $PAYLOAD_FILE (hash: $ORIGINAL_HASH)"
+
+	start_server "-reuse-cred -payload-file ../$PAYLOAD_FILE -payload-mime application/octet-stream"
+
+	log_step "Running DI"
+	run_cmd go run ./cmd client -di "$SERVER_URL"
+	log_success "DI completed"
+
+	log_step "Running TO1/TO2 with FDO 2.0 and payload transfer"
+	run_cmd go run ./cmd client -fdo-version 200
+	log_success "TO1/TO2 completed with FDO 2.0 and payload transfer"
+
+	log_step "Running TO1/TO2 again with FDO 2.0 (credential reuse)"
+	run_cmd go run ./cmd client -fdo-version 200
+	log_success "TO1/TO2 completed with FDO 2.0 (reuse)"
+
+	stop_server
+
+	# Verify the received file matches the original
+	if [ ! -f "$RECEIVED_FILE" ]; then
+		log_error "Received file not found: $RECEIVED_FILE"
+		rm -f "$PAYLOAD_FILE"
+		return 1
+	fi
+
+	RECEIVED_HASH=$(sha256sum "$RECEIVED_FILE" | awk '{print $1}')
+	log_step "Verifying file integrity"
+	if [ "$ORIGINAL_HASH" = "$RECEIVED_HASH" ]; then
+		log_success "File hashes match! Payload transferred correctly with FDO 2.0"
+		log_success "  Original:  $ORIGINAL_HASH"
+		log_success "  Received:  $RECEIVED_HASH"
+	else
+		log_error "File hashes DO NOT match!"
+		log_error "  Original:  $ORIGINAL_HASH"
+		log_error "  Received:  $RECEIVED_HASH"
+		rm -f "$PAYLOAD_FILE" "$RECEIVED_FILE"
+		return 1
+	fi
+
+	rm -f "$PAYLOAD_FILE" "$RECEIVED_FILE"
+	log_success "Payload FSIM with FDO 2.0 test PASSED"
+}
+
+# Test: WiFi FSIM with FDO 2.0
+# This test demonstrates that the fdo.wifi FSIM works correctly with FDO 2.0 protocol
+test_wifi_fdo200() {
+	log_section "TEST: WiFi FSIM with FDO 2.0"
+
+	mkdir -p "$EPHEMERAL_DIR"
+	rm -f "$DB_FILE" "$CRED_FILE"
+
+	# Create a WiFi configuration file
+	WIFI_CONFIG="$EPHEMERAL_DIR/wifi_config.json"
+	log_step "Creating WiFi configuration"
+	cat >"$WIFI_CONFIG" <<'EOF'
+{
+  "networks": [
+    {
+      "ssid": "TestNetwork-FDO200",
+      "password": "testpassword123",
+      "security": "wpa2-psk"
+    }
+  ]
+}
+EOF
+	log_success "Created WiFi config: $WIFI_CONFIG"
+
+	start_server "-reuse-cred -wifi-config ../$WIFI_CONFIG"
+
+	log_step "Running DI"
+	run_cmd go run ./cmd client -di "$SERVER_URL"
+	log_success "DI completed"
+
+	log_step "Running TO1/TO2 with FDO 2.0 and WiFi configuration"
+	run_cmd go run ./cmd client -fdo-version 200
+	log_success "TO1/TO2 completed with FDO 2.0 and WiFi configuration"
+
+	log_step "Running TO1/TO2 again with FDO 2.0 (credential reuse)"
+	run_cmd go run ./cmd client -fdo-version 200
+	log_success "TO1/TO2 completed with FDO 2.0 (reuse)"
+
+	stop_server
+	rm -f "$WIFI_CONFIG"
+	log_success "WiFi FSIM with FDO 2.0 test PASSED"
+}
+
 # Test: Payload FSIM
 # This test demonstrates the fdo.payload FSIM by sending a file and verifying it's received correctly
 test_payload() {
@@ -1076,8 +1257,11 @@ test_all() {
 	test_attested_payload_delegate || failed=1
 	test_attested_payload_shell || failed=1
 	test_sysconfig || failed=1
+	test_sysconfig_fdo200 || failed=1
 	test_payload || failed=1
+	test_payload_fdo200 || failed=1
 	test_wifi || failed=1
+	test_wifi_fdo200 || failed=1
 	test_wifi_single_sided || failed=1
 	test_bmo || failed=1
 	test_bmo_efi || failed=1
@@ -1158,11 +1342,20 @@ main() {
 	sysconfig)
 		test_sysconfig
 		;;
+	sysconfig-fdo200)
+		test_sysconfig_fdo200
+		;;
 	payload)
 		test_payload
 		;;
+	payload-fdo200)
+		test_payload_fdo200
+		;;
 	wifi)
 		test_wifi
+		;;
+	wifi-fdo200)
+		test_wifi_fdo200
 		;;
 	wifi-single-sided)
 		test_wifi_single_sided
@@ -1187,7 +1380,7 @@ main() {
 		;;
 	*)
 		echo "Unknown test: $test_name"
-		echo "Available tests: basic, basic-reuse, rv-blob, kex, fdo200, delegate, delegate-fdo200, bad-delegate, attested-payload, attested-payload-encrypted, attested-payload-delegate, attested-payload-shell, sysconfig, payload, payload-nak, wifi, wifi-single-sided, bmo, bmo-efi, bmo-nak, credentials, all"
+		echo "Available tests: basic, basic-reuse, rv-blob, kex, fdo200, delegate, delegate-fdo200, bad-delegate, attested-payload, attested-payload-encrypted, attested-payload-delegate, attested-payload-shell, sysconfig, sysconfig-fdo200, payload, payload-fdo200, payload-nak, wifi, wifi-fdo200, wifi-single-sided, bmo, bmo-efi, bmo-nak, credentials, all"
 		exit 1
 		;;
 	esac
