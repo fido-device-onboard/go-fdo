@@ -793,7 +793,7 @@ test_bmo_efi() {
 	ORIGINAL_HASH=$(sha256sum "$BMO_FILE" | awk '{print $1}')
 	log_success "Created test EFI app: $BMO_FILE (hash: $ORIGINAL_HASH)"
 
-	start_server "-bmo-file ../$BMO_FILE -bmo-type application/efi"
+	start_server "-bmo-file $BMO_FILE -bmo-type application/efi"
 
 	log_step "Running DI"
 	run_cmd go run ./cmd client -di "$SERVER_URL"
@@ -849,7 +849,7 @@ test_bmo_nak() {
 	log_success "Created test images: $BMO_FILE_1 (unsupported), $BMO_FILE_2 (supported)"
 
 	# Server sends two images: first unsupported, then supported (with RequireAck)
-	start_server "-bmo application/x-unsupported-format:../$BMO_FILE_1 -bmo application/efi:../$BMO_FILE_2"
+	start_server "-bmo application/x-unsupported-format:$BMO_FILE_1 -bmo application/efi:$BMO_FILE_2"
 
 	log_step "Running DI"
 	run_cmd go run ./cmd client -di "$SERVER_URL"

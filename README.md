@@ -38,6 +38,8 @@ go work use -r .
 ./test_examples.sh all
 ```
 
+Makefile included is for convenience, and to prove some quick ways to build, run test, run examples, and provide more of a "cheat sheet" to illustrate commands for common tasks. Try `make help` for more information.
+
 **Available tests:**
 
 | Test | Description |

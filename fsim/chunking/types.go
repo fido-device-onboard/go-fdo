@@ -270,10 +270,20 @@ func (r *ResultMessage) UnmarshalCBOR(data []byte) error {
 	}
 
 	if len(arr) > 0 {
-		if v, ok := arr[0].(int); ok {
+		switch v := arr[0].(type) {
+		case int:
 			r.StatusCode = v
-		} else if v, ok := arr[0].(uint64); ok {
+		case int64:
 			r.StatusCode = int(v)
+		case uint64:
+			r.StatusCode = int(v)
+		case float64:
+			r.StatusCode = int(v)
+		default:
+			// Try to handle other numeric types
+			if num, ok := v.(interface{ Int() int64 }); ok {
+				r.StatusCode = int(num.Int())
+			}
 		}
 	}
 
