@@ -130,6 +130,11 @@ func TO2v200(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol
 		return nil, err
 	}
 
+	// Emit TO2 completed event with attestation mode
+	// For single-sided mode, this will also emit EventTypeTO2SingleSidedComplete
+	credReuse := replacementOVH == nil
+	EmitTO2Completed(ctx, c.Cred.GUID, credReuse, c.attestationMode)
+
 	// If using Credential Reuse, return the original credential
 	if replacementOVH == nil {
 		return &c.Cred, nil

@@ -56,7 +56,16 @@ func (d *DatabaseEventLogger) HandleEvent(ctx context.Context, event fdo.Event) 
 		case fdo.EventTypeTO1Completed:
 			d.updateDeviceState(*event.GUID, "TO1_COMPLETED", event.Timestamp)
 		case fdo.EventTypeTO2Completed:
-			d.updateDeviceState(*event.GUID, "TO2_COMPLETED", event.Timestamp)
+			// Check attestation mode to determine completion type
+			if data, ok := event.Data.(fdo.TO2EventData); ok && data.AttestationMode == fdo.ModeSingleSided {
+				d.updateDeviceState(*event.GUID, "TO2_SINGLE_SIDED_COMPLETED", event.Timestamp)
+			} else {
+				d.updateDeviceState(*event.GUID, "TO2_COMPLETED", event.Timestamp)
+			}
+		case fdo.EventTypeTO2SingleSidedComplete:
+			// This is a specific trigger for single-sided completion
+			// Client implementations can use this to re-attempt full onboarding
+			d.updateDeviceState(*event.GUID, "TO2_SINGLE_SIDED_WIFI_READY", event.Timestamp)
 		case fdo.EventTypeDIFailed, fdo.EventTypeTO0Failed, fdo.EventTypeTO1Failed, fdo.EventTypeTO2Failed:
 			d.updateDeviceState(*event.GUID, "FAILED", event.Timestamp)
 		}

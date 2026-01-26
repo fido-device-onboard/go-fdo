@@ -22,6 +22,7 @@ import (
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/testdata"
 )
 
 // ecdsaSignature represents an ECDSA signature for ASN.1 encoding
@@ -55,7 +56,7 @@ func verifyECDSASignature(pubKey *ecdsa.PublicKey, payload, sigBytes []byte) boo
 
 // loadTestVoucher loads the test voucher from testdata
 func loadTestVoucher(t *testing.T) *fdo.Voucher {
-	b, err := os.ReadFile("testdata/ov.pem")
+	b, err := testdata.Files.ReadFile("ov.pem")
 	if err != nil {
 		t.Fatalf("error reading voucher: %v", err)
 	}

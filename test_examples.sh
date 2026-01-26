@@ -17,21 +17,28 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-DB_FILE="test.db"
+EPHEMERAL_DIR="ephemeral-test-files"
+DB_FILE="$EPHEMERAL_DIR/test.db"
 SERVER_ADDR="127.0.0.1:9999"
 SERVER_URL="http://${SERVER_ADDR}"
-CRED_FILE="cred.bin"
+CRED_FILE="$EPHEMERAL_DIR/cred.bin"
 SERVER_PID=""
 
-# Cleanup function
+# Cleanup function - only kills processes on exit, preserves ephemeral files for debugging
 cleanup() {
-	echo -e "${YELLOW}Cleaning up...${NC}"
 	if [ -n "$SERVER_PID" ]; then
 		kill "$SERVER_PID" 2>/dev/null || true
 		wait "$SERVER_PID" 2>/dev/null || true
 	fi
 	pkill -f "go-build.*server" 2>/dev/null || true
-	rm -f "$DB_FILE" "$CRED_FILE" key.pem /tmp/fdo_server.log 2>/dev/null || true
+}
+
+# Clean up ephemeral files from previous test runs
+cleanup_ephemeral() {
+	if [ -d "$EPHEMERAL_DIR" ]; then
+		echo -e "${YELLOW}Cleaning up ephemeral test files from previous run...${NC}"
+		rm -rf "$EPHEMERAL_DIR"
+	fi
 }
 
 trap cleanup EXIT
@@ -92,6 +99,9 @@ start_server() {
 	pkill -f "go-build.*server" 2>/dev/null || true
 	pkill -f "examples/cmd server" 2>/dev/null || true
 	sleep 1
+
+	# Create ephemeral test files directory
+	mkdir -p "$EPHEMERAL_DIR"
 
 	# Start server in background, redirecting output to a temp file
 	# shellcheck disable=SC2086 # $flags intentionally unquoted for word splitting
@@ -299,7 +309,7 @@ test_delegate_fdo200() {
 test_attested_payload() {
 	log_section "TEST: Attested Payload (Plaintext)"
 
-	rm -f "$DB_FILE" "$CRED_FILE" voucher.pem payload.fdo payload-typed.fdo
+	rm -f "$DB_FILE" "$CRED_FILE" $EPHEMERAL_DIR/voucher.pem $EPHEMERAL_DIR/payload.fdo $EPHEMERAL_DIR/payload-typed.fdo
 
 	log_step "Creating database with owner certs"
 	start_server "-owner-certs"
@@ -315,42 +325,42 @@ test_attested_payload() {
 		echo '-----BEGIN OWNERSHIP VOUCHER-----'
 		sqlite3 "$DB_FILE" 'select hex(cbor) from vouchers;' | xxd -r -p | base64
 		echo '-----END OWNERSHIP VOUCHER-----'
-	) >voucher.pem
+	) >$EPHEMERAL_DIR/voucher.pem
 	log_success "Voucher exported"
 
 	log_step "Creating plaintext attested payload"
-	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../voucher.pem -payload "Hello from attested payload test" -output ../payload.fdo
+	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../$EPHEMERAL_DIR/voucher.pem -payload "Hello from attested payload test" -output ../$EPHEMERAL_DIR/payload.fdo
 	log_success "Attested payload created"
 
 	log_step "Verifying attested payload"
-	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../payload.fdo
+	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../$EPHEMERAL_DIR/payload.fdo
 	log_success "Attested payload verified"
 
 	log_step "Creating attested payload with MIME type (text/x-shellscript)"
-	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../voucher.pem -payload '#!/bin/bash\necho "Hello from script"' -type "text/x-shellscript" -output ../payload-typed.fdo
+	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../$EPHEMERAL_DIR/voucher.pem -payload '#!/bin/bash\necho "Hello from script"' -type "text/x-shellscript" -output ../$EPHEMERAL_DIR/payload-typed.fdo
 	log_success "Typed attested payload created"
 
 	log_step "Verifying typed attested payload"
-	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../payload-typed.fdo
+	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../$EPHEMERAL_DIR/payload-typed.fdo
 	log_success "Typed attested payload verified"
 
 	log_step "Creating attested payload with validity (id and generation)"
-	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../voucher.pem -payload "Config v1" -id "network-config" -gen 1 -output ../payload-validity.fdo
+	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../$EPHEMERAL_DIR/voucher.pem -payload "Config v1" -id "network-config" -gen 1 -output ../$EPHEMERAL_DIR/payload-validity.fdo
 	log_success "Attested payload with validity created"
 
 	log_step "Verifying attested payload with validity"
-	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../payload-validity.fdo
+	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../$EPHEMERAL_DIR/payload-validity.fdo
 	log_success "Attested payload with validity verified"
 
 	log_step "Creating attested payload with expiration (future date)"
-	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../voucher.pem -payload "Time-limited command" -type "text/x-shellscript" -expires "2030-12-31T23:59:59Z" -output ../payload-expires.fdo
+	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../$EPHEMERAL_DIR/voucher.pem -payload "Time-limited command" -type "text/x-shellscript" -expires "2030-12-31T23:59:59Z" -output ../$EPHEMERAL_DIR/payload-expires.fdo
 	log_success "Attested payload with expiration created"
 
 	log_step "Verifying attested payload with expiration"
-	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../payload-expires.fdo
+	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../$EPHEMERAL_DIR/payload-expires.fdo
 	log_success "Attested payload with expiration verified"
 
-	rm -f voucher.pem payload.fdo payload-typed.fdo payload-validity.fdo payload-expires.fdo
+	rm -f $EPHEMERAL_DIR/voucher.pem $EPHEMERAL_DIR/payload.fdo $EPHEMERAL_DIR/payload-typed.fdo $EPHEMERAL_DIR/payload-validity.fdo $EPHEMERAL_DIR/payload-expires.fdo
 	log_success "Attested Payload (Plaintext) test PASSED"
 }
 
@@ -358,7 +368,7 @@ test_attested_payload() {
 test_attested_payload_encrypted() {
 	log_section "TEST: Attested Payload (Encrypted)"
 
-	rm -f "$DB_FILE" "$CRED_FILE" voucher.pem encrypted.fdo encrypted-typed.fdo
+	rm -f "$DB_FILE" "$CRED_FILE" $EPHEMERAL_DIR/voucher.pem $EPHEMERAL_DIR/encrypted.fdo $EPHEMERAL_DIR/encrypted-typed.fdo
 
 	log_step "Creating database with owner certs"
 	start_server "-owner-certs"
@@ -374,26 +384,26 @@ test_attested_payload_encrypted() {
 		echo '-----BEGIN OWNERSHIP VOUCHER-----'
 		sqlite3 "$DB_FILE" 'select hex(cbor) from vouchers;' | xxd -r -p | base64
 		echo '-----END OWNERSHIP VOUCHER-----'
-	) >voucher.pem
+	) >$EPHEMERAL_DIR/voucher.pem
 	log_success "Voucher exported"
 
 	log_step "Creating encrypted attested payload"
-	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../voucher.pem -payload "Secret encrypted message" -encrypt -output ../encrypted.fdo
+	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../$EPHEMERAL_DIR/voucher.pem -payload "Secret encrypted message" -encrypt -output ../$EPHEMERAL_DIR/encrypted.fdo
 	log_success "Encrypted attested payload created"
 
 	log_step "Verifying and decrypting attested payload"
-	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../encrypted.fdo
+	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../$EPHEMERAL_DIR/encrypted.fdo
 	log_success "Encrypted attested payload verified and decrypted"
 
 	log_step "Creating encrypted attested payload with MIME type (application/json)"
-	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../voucher.pem -payload '{"config": "secret"}' -type "application/json" -encrypt -output ../encrypted-typed.fdo
+	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../$EPHEMERAL_DIR/voucher.pem -payload '{"config": "secret"}' -type "application/json" -encrypt -output ../$EPHEMERAL_DIR/encrypted-typed.fdo
 	log_success "Encrypted typed attested payload created"
 
 	log_step "Verifying encrypted typed attested payload"
-	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../encrypted-typed.fdo
+	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../$EPHEMERAL_DIR/encrypted-typed.fdo
 	log_success "Encrypted typed attested payload verified"
 
-	rm -f voucher.pem encrypted.fdo encrypted-typed.fdo
+	rm -f $EPHEMERAL_DIR/voucher.pem $EPHEMERAL_DIR/encrypted.fdo $EPHEMERAL_DIR/encrypted-typed.fdo
 	log_success "Attested Payload (Encrypted) test PASSED"
 }
 
@@ -401,7 +411,7 @@ test_attested_payload_encrypted() {
 test_attested_payload_delegate() {
 	log_section "TEST: Attested Payload (Delegate Signed)"
 
-	rm -f "$DB_FILE" "$CRED_FILE" voucher.pem delegated.fdo
+	rm -f "$DB_FILE" "$CRED_FILE" $EPHEMERAL_DIR/voucher.pem $EPHEMERAL_DIR/delegated.fdo
 
 	log_step "Creating database with owner certs"
 	start_server "-owner-certs"
@@ -421,18 +431,18 @@ test_attested_payload_delegate() {
 		echo '-----BEGIN OWNERSHIP VOUCHER-----'
 		sqlite3 "$DB_FILE" 'select hex(cbor) from vouchers;' | xxd -r -p | base64
 		echo '-----END OWNERSHIP VOUCHER-----'
-	) >voucher.pem
+	) >$EPHEMERAL_DIR/voucher.pem
 	log_success "Voucher exported"
 
 	log_step "Creating delegate-signed attested payload"
-	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../voucher.pem -payload "Delegate signed payload" -delegate provisionDelegate -output ../delegated.fdo
+	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../$EPHEMERAL_DIR/voucher.pem -payload "Delegate signed payload" -delegate provisionDelegate -output ../$EPHEMERAL_DIR/delegated.fdo
 	log_success "Delegate-signed attested payload created"
 
 	log_step "Verifying delegate-signed attested payload"
-	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../delegated.fdo
+	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../$EPHEMERAL_DIR/delegated.fdo
 	log_success "Delegate-signed attested payload verified"
 
-	rm -f voucher.pem delegated.fdo
+	rm -f $EPHEMERAL_DIR/voucher.pem $EPHEMERAL_DIR/delegated.fdo
 	log_success "Attested Payload (Delegate Signed) test PASSED"
 }
 
@@ -443,8 +453,8 @@ test_attested_payload_delegate() {
 test_attested_payload_shell() {
 	log_section "TEST: Attested Payload (Shell/OpenSSL Interoperability)"
 
-	rm -f "$DB_FILE" "$CRED_FILE" voucher.pem owner_ec_pvt.key owner_ec_pub.key
-	rm -f signed_data.bin sig.bin payload_shell.fdo payload_cli.fdo extracted_payload.bin extracted_sig.bin
+	rm -f "$DB_FILE" "$CRED_FILE" $EPHEMERAL_DIR/voucher.pem $EPHEMERAL_DIR/owner_ec_pvt.key $EPHEMERAL_DIR/owner_ec_pub.key
+	rm -f $EPHEMERAL_DIR/signed_data.bin $EPHEMERAL_DIR/sig.bin $EPHEMERAL_DIR/payload_shell.fdo $EPHEMERAL_DIR/payload_cli.fdo $EPHEMERAL_DIR/extracted_payload.bin extracted_$EPHEMERAL_DIR/sig.bin
 
 	log_step "Creating database with owner certs"
 	start_server "-owner-certs"
@@ -460,7 +470,7 @@ test_attested_payload_shell() {
 		echo '-----BEGIN OWNERSHIP VOUCHER-----'
 		sqlite3 "$DB_FILE" 'select hex(cbor) from vouchers;' | xxd -r -p | base64
 		echo '-----END OWNERSHIP VOUCHER-----'
-	) >voucher.pem
+	) >$EPHEMERAL_DIR/voucher.pem
 	log_success "Voucher exported"
 
 	log_step "Extracting owner EC key"
@@ -468,8 +478,8 @@ test_attested_payload_shell() {
 		echo '-----BEGIN PRIVATE KEY-----'
 		sqlite3 "$DB_FILE" 'select hex(pkcs8) from owner_keys where type=11;' | xxd -r -p | base64
 		echo '-----END PRIVATE KEY-----'
-	) >owner_ec_pvt.key
-	openssl pkey -in owner_ec_pvt.key -pubout >owner_ec_pub.key
+	) >$EPHEMERAL_DIR/owner_ec_pvt.key
+	openssl pkey -in $EPHEMERAL_DIR/owner_ec_pvt.key -pubout >$EPHEMERAL_DIR/owner_ec_pub.key
 	log_success "Owner EC key extracted"
 
 	# Test 1: Create payload with shell, verify with Go CLI
@@ -481,49 +491,49 @@ test_attested_payload_shell() {
 	(
 		printf '\x00\x00\x00\x00\x00\x00\x00\x00'
 		printf '%s' "$PAYLOAD"
-	) >signed_data.bin
+	) >$EPHEMERAL_DIR/signed_data.bin
 
 	# Sign with openssl
-	openssl dgst -sha384 -sign owner_ec_pvt.key -out sig.bin signed_data.bin
+	openssl dgst -sha384 -sign $EPHEMERAL_DIR/owner_ec_pvt.key -out $EPHEMERAL_DIR/sig.bin $EPHEMERAL_DIR/signed_data.bin
 
 	# Assemble the .fdo file
-	cp voucher.pem payload_shell.fdo
+	cp $EPHEMERAL_DIR/voucher.pem $EPHEMERAL_DIR/payload_shell.fdo
 	(
 		echo '-----BEGIN PAYLOAD-----'
 		printf '%s' "$PAYLOAD" | base64
 		echo '-----END PAYLOAD-----'
-	) >>payload_shell.fdo
+	) >>$EPHEMERAL_DIR/payload_shell.fdo
 	(
 		echo '-----BEGIN SIGNATURE-----'
-		base64 sig.bin
+		base64 $EPHEMERAL_DIR/sig.bin
 		echo '-----END SIGNATURE-----'
-	) >>payload_shell.fdo
+	) >>$EPHEMERAL_DIR/payload_shell.fdo
 	log_success "Shell-created attested payload assembled"
 
 	log_step "Verifying shell-created payload with Go CLI"
-	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../payload_shell.fdo
+	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../$EPHEMERAL_DIR/payload_shell.fdo
 	log_success "Shell-created payload verified by Go CLI"
 
 	# Test 2: Create payload with Go CLI, verify with openssl
 	log_step "Creating attested payload with Go CLI"
-	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../voucher.pem -payload "Hello from Go CLI" -output ../payload_cli.fdo
+	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../$EPHEMERAL_DIR/voucher.pem -payload "Hello from Go CLI" -output ../$EPHEMERAL_DIR/payload_cli.fdo
 	log_success "Go CLI-created attested payload"
 
 	log_step "Extracting components from Go CLI payload"
 	# Extract payload
-	sed -n '/-----BEGIN PAYLOAD-----/,/-----END PAYLOAD-----/p' payload_cli.fdo | grep -v '^-----' | base64 -d >extracted_payload.bin
+	sed -n '/-----BEGIN PAYLOAD-----/,/-----END PAYLOAD-----/p' $EPHEMERAL_DIR/payload_cli.fdo | grep -v '^-----' | base64 -d >$EPHEMERAL_DIR/extracted_payload.bin
 	# Extract signature
-	sed -n '/-----BEGIN SIGNATURE-----/,/-----END SIGNATURE-----/p' payload_cli.fdo | grep -v '^-----' | base64 -d >extracted_sig.bin
+	sed -n '/-----BEGIN SIGNATURE-----/,/-----END SIGNATURE-----/p' $EPHEMERAL_DIR/payload_cli.fdo | grep -v '^-----' | base64 -d >extracted_$EPHEMERAL_DIR/sig.bin
 	log_success "Components extracted"
 
 	log_step "Verifying Go CLI payload with openssl"
 	# Build length-prefixed signed data (no type, no validity for this payload)
 	(
 		printf '\x00\x00\x00\x00\x00\x00\x00\x00'
-		cat extracted_payload.bin
-	) >signed_data.bin
+		cat $EPHEMERAL_DIR/extracted_payload.bin
+	) >$EPHEMERAL_DIR/signed_data.bin
 	# Verify signature
-	openssl dgst -sha384 -verify owner_ec_pub.key -signature extracted_sig.bin signed_data.bin
+	openssl dgst -sha384 -verify $EPHEMERAL_DIR/owner_ec_pub.key -signature extracted_$EPHEMERAL_DIR/sig.bin $EPHEMERAL_DIR/signed_data.bin
 	log_success "Go CLI payload verified by openssl"
 
 	# Test 3: Create typed payload with shell, verify with Go CLI
@@ -539,13 +549,13 @@ echo "Hello from typed shell payload"'
 		printf '%s' "$PAYLOAD_TYPE"
 		printf '\x00\x00\x00\x00'
 		printf '%s' "$PAYLOAD_TYPED"
-	) >signed_data.bin
+	) >$EPHEMERAL_DIR/signed_data.bin
 
 	# Sign
-	openssl dgst -sha384 -sign owner_ec_pvt.key -out sig.bin signed_data.bin
+	openssl dgst -sha384 -sign $EPHEMERAL_DIR/owner_ec_pvt.key -out $EPHEMERAL_DIR/sig.bin $EPHEMERAL_DIR/signed_data.bin
 
 	# Assemble - PEM blocks use base64 encoding for the content
-	cp voucher.pem payload_shell_typed.fdo
+	cp $EPHEMERAL_DIR/voucher.pem $EPHEMERAL_DIR/payload_shell_typed.fdo
 	{
 		echo '-----BEGIN PAYLOAD TYPE-----'
 		printf '%s' "$PAYLOAD_TYPE" | base64
@@ -554,18 +564,456 @@ echo "Hello from typed shell payload"'
 		printf '%s' "$PAYLOAD_TYPED" | base64
 		echo '-----END PAYLOAD-----'
 		echo '-----BEGIN SIGNATURE-----'
-		base64 sig.bin
+		base64 $EPHEMERAL_DIR/sig.bin
 		echo '-----END SIGNATURE-----'
-	} >>payload_shell_typed.fdo
+	} >>$EPHEMERAL_DIR/payload_shell_typed.fdo
 	log_success "Shell-created typed attested payload assembled"
 
 	log_step "Verifying shell-created typed payload with Go CLI"
-	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../payload_shell_typed.fdo
+	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../$EPHEMERAL_DIR/payload_shell_typed.fdo
 	log_success "Shell-created typed payload verified by Go CLI"
 
-	rm -f voucher.pem owner_ec_pvt.key owner_ec_pub.key signed_data.bin sig.bin
-	rm -f payload_shell.fdo payload_cli.fdo payload_shell_typed.fdo extracted_payload.bin extracted_sig.bin
+	rm -f $EPHEMERAL_DIR/voucher.pem $EPHEMERAL_DIR/owner_ec_pvt.key $EPHEMERAL_DIR/owner_ec_pub.key $EPHEMERAL_DIR/signed_data.bin $EPHEMERAL_DIR/sig.bin
+	rm -f $EPHEMERAL_DIR/payload_shell.fdo $EPHEMERAL_DIR/payload_cli.fdo $EPHEMERAL_DIR/payload_shell_typed.fdo $EPHEMERAL_DIR/extracted_payload.bin extracted_$EPHEMERAL_DIR/sig.bin
 	log_success "Attested Payload (Shell/OpenSSL Interoperability) test PASSED"
+}
+
+# Test: Sysconfig FSIM
+# This test demonstrates the fdo.sysconfig FSIM with key=value parameters
+test_sysconfig() {
+	log_section "TEST: Sysconfig FSIM"
+
+	rm -f "$DB_FILE" "$CRED_FILE"
+
+	start_server "-sysconfig hostname=test-device -sysconfig timezone=UTC -sysconfig ntp-server=pool.ntp.org"
+
+	log_step "Running DI"
+	run_cmd go run ./cmd client -di "$SERVER_URL"
+	log_success "DI completed"
+
+	log_step "Running TO1/TO2 with sysconfig parameters"
+	run_cmd go run ./cmd client
+	log_success "TO1/TO2 completed with sysconfig parameters"
+
+	stop_server
+	log_success "Sysconfig FSIM test PASSED"
+}
+
+# Test: Payload FSIM
+# This test demonstrates the fdo.payload FSIM by sending a file and verifying it's received correctly
+test_payload() {
+	log_section "TEST: Payload FSIM"
+
+	mkdir -p "$EPHEMERAL_DIR"
+	rm -f "$DB_FILE" "$CRED_FILE"
+
+	# Create a random test file (10KB to test multi-chunk transfer)
+	# Default chunk size is 1014 bytes, so 10KB will require ~10 chunks
+	PAYLOAD_FILE="$EPHEMERAL_DIR/test_payload.bin"
+	RECEIVED_FILE="$EPHEMERAL_DIR/test_payload.bin"
+	log_step "Creating random test file (10KB for multi-chunk transfer)"
+	dd if=/dev/urandom of="$PAYLOAD_FILE" bs=1024 count=10 2>/dev/null
+	ORIGINAL_HASH=$(sha256sum "$PAYLOAD_FILE" | awk '{print $1}')
+	log_success "Created test file: $PAYLOAD_FILE (hash: $ORIGINAL_HASH)"
+
+	start_server "-payload-file ../$PAYLOAD_FILE -payload-mime application/octet-stream"
+
+	log_step "Running DI"
+	run_cmd go run ./cmd client -di "$SERVER_URL"
+	log_success "DI completed"
+
+	log_step "Running TO1/TO2 with payload transfer"
+	run_cmd go run ./cmd client
+	log_success "TO1/TO2 completed with payload transfer"
+
+	stop_server
+
+	# Verify the received file matches the original
+	if [ ! -f "$RECEIVED_FILE" ]; then
+		log_error "Received file not found: $RECEIVED_FILE"
+		rm -f "$PAYLOAD_FILE"
+		return 1
+	fi
+
+	RECEIVED_HASH=$(sha256sum "$RECEIVED_FILE" | awk '{print $1}')
+	log_step "Verifying file integrity"
+	if [ "$ORIGINAL_HASH" = "$RECEIVED_HASH" ]; then
+		log_success "File hashes match! Payload transferred correctly"
+		log_success "  Original:  $ORIGINAL_HASH"
+		log_success "  Received:  $RECEIVED_HASH"
+	else
+		log_error "File hashes DO NOT match!"
+		log_error "  Original:  $ORIGINAL_HASH"
+		log_error "  Received:  $RECEIVED_HASH"
+		rm -f "$PAYLOAD_FILE" "$RECEIVED_FILE"
+		return 1
+	fi
+
+	# Cleanup
+	log_success "Payload FSIM test PASSED"
+}
+
+# Test: WiFi FSIM (network-add only)
+# This test verifies that the WiFi FSIM can send network configurations
+# from the server to the device, which displays them.
+test_wifi() {
+	log_section "TEST: WiFi FSIM (network-add)"
+
+	rm -f "$DB_FILE" "$CRED_FILE"
+
+	log_step "Starting server with WiFi config"
+	start_server "-wifi-config ../examples/wifi_config.json"
+
+	log_step "Running DI"
+	run_cmd go run ./cmd client -di "$SERVER_URL"
+	log_success "DI completed"
+
+	log_step "Running TO1/TO2 with WiFi network configuration"
+	run_cmd timeout 30 go run ./cmd client
+	log_success "TO1/TO2 completed with WiFi network-add"
+	stop_server
+	log_success "WiFi FSIM test PASSED"
+}
+
+# Test: Single-Sided WiFi Attestation
+# This test verifies single-sided attestation mode where:
+# - Server sends unsigned ProveOVHdr (algorithm=0, empty signature)
+# - Client accepts single-sided mode with -allow-single-sided flag
+# - Only devmod and fdo.wifi FSIMs are advertised/used
+# - Trust levels are downgraded to 0 (onboard-only)
+test_wifi_single_sided() {
+	log_section "TEST: Single-Sided WiFi Attestation"
+
+	mkdir -p "$EPHEMERAL_DIR"
+	rm -f "$DB_FILE" "$CRED_FILE"
+
+	# Create WiFi config file with trust_level=1 (full-access)
+	# In single-sided mode, device should downgrade this to 0
+	WIFI_CONFIG_FILE="$EPHEMERAL_DIR/wifi_single_sided.json"
+	cat >"$WIFI_CONFIG_FILE" <<'EOF'
+{
+  "networks": [
+    {
+      "network_id": "single-sided-test",
+      "ssid": "SingleSidedNetwork",
+      "auth_type": 1,
+      "password": "testpassword123",
+      "trust_level": 1
+    }
+  ]
+}
+EOF
+
+	log_step "Starting server in single-sided WiFi mode"
+	start_server "-single-sided-wifi -wifi-config ../$WIFI_CONFIG_FILE"
+
+	log_step "Running DI"
+	run_cmd go run ./cmd client -di "$SERVER_URL"
+	log_success "DI completed"
+
+	log_step "Running TO1/TO2 with single-sided attestation"
+	# Client must explicitly allow single-sided mode
+	run_cmd timeout 30 go run ./cmd client -allow-single-sided
+	log_success "TO1/TO2 completed in single-sided mode"
+
+	stop_server
+
+	# Cleanup
+	rm -f "$WIFI_CONFIG_FILE"
+	log_success "Single-Sided WiFi Attestation test PASSED"
+}
+
+# Test: BMO FSIM
+# This test demonstrates the fdo.bmo FSIM by sending a boot image and verifying it's received correctly
+test_bmo() {
+	log_section "TEST: BMO FSIM (Bare Metal Onboarding)"
+
+	mkdir -p "$EPHEMERAL_DIR"
+	rm -f "$DB_FILE" "$CRED_FILE"
+
+	# Create a random test file (10KB to test multi-chunk transfer)
+	BMO_FILE="$EPHEMERAL_DIR/test_bmo_image.bin"
+	RECEIVED_FILE="$EPHEMERAL_DIR/test_bmo_image.bin"
+	log_step "Creating random test boot image (10KB for multi-chunk transfer)"
+	dd if=/dev/urandom of="$BMO_FILE" bs=1024 count=10 2>/dev/null
+	ORIGINAL_HASH=$(sha256sum "$BMO_FILE" | awk '{print $1}')
+	log_success "Created test boot image: $BMO_FILE (hash: $ORIGINAL_HASH)"
+
+	start_server "-bmo-file ../$BMO_FILE -bmo-type application/x-iso9660-image"
+
+	log_step "Running DI"
+	run_cmd go run ./cmd client -di "$SERVER_URL"
+	log_success "DI completed"
+
+	log_step "Running TO1/TO2 with BMO boot image transfer"
+	run_cmd go run ./cmd client
+	log_success "TO1/TO2 completed with BMO boot image transfer"
+
+	stop_server
+
+	# Verify the received file matches the original
+	if [ ! -f "$RECEIVED_FILE" ]; then
+		log_error "Received file not found: $RECEIVED_FILE"
+		rm -f "$BMO_FILE"
+		return 1
+	fi
+
+	RECEIVED_HASH=$(sha256sum "$RECEIVED_FILE" | awk '{print $1}')
+	log_step "Verifying boot image integrity"
+	if [ "$ORIGINAL_HASH" = "$RECEIVED_HASH" ]; then
+		log_success "Boot image hashes match! BMO transfer successful"
+		log_success "  Original:  $ORIGINAL_HASH"
+		log_success "  Received:  $RECEIVED_HASH"
+	else
+		log_error "Boot image hashes DO NOT match!"
+		log_error "  Original:  $ORIGINAL_HASH"
+		log_error "  Received:  $RECEIVED_HASH"
+		rm -f "$BMO_FILE" "$RECEIVED_FILE"
+		return 1
+	fi
+
+	# Cleanup
+	rm -f "$BMO_FILE" "$RECEIVED_FILE"
+	log_success "BMO FSIM test PASSED"
+}
+
+# Test: BMO FSIM with EFI application type
+# This test verifies BMO can handle EFI application transfers
+test_bmo_efi() {
+	log_section "TEST: BMO FSIM (EFI Application)"
+
+	mkdir -p "$EPHEMERAL_DIR"
+	rm -f "$DB_FILE" "$CRED_FILE"
+
+	# Create a small test file simulating an EFI app
+	BMO_FILE="$EPHEMERAL_DIR/test_boot.efi"
+	RECEIVED_FILE="$EPHEMERAL_DIR/test_boot.efi"
+	log_step "Creating test EFI application (5KB)"
+	dd if=/dev/urandom of="$BMO_FILE" bs=1024 count=5 2>/dev/null
+	ORIGINAL_HASH=$(sha256sum "$BMO_FILE" | awk '{print $1}')
+	log_success "Created test EFI app: $BMO_FILE (hash: $ORIGINAL_HASH)"
+
+	start_server "-bmo-file ../$BMO_FILE -bmo-type application/efi"
+
+	log_step "Running DI"
+	run_cmd go run ./cmd client -di "$SERVER_URL"
+	log_success "DI completed"
+
+	log_step "Running TO1/TO2 with EFI application transfer"
+	run_cmd go run ./cmd client
+	log_success "TO1/TO2 completed with EFI application"
+
+	stop_server
+
+	# Verify the received file matches the original
+	if [ ! -f "$RECEIVED_FILE" ]; then
+		log_error "Received file not found: $RECEIVED_FILE"
+		rm -f "$BMO_FILE"
+		return 1
+	fi
+
+	RECEIVED_HASH=$(sha256sum "$RECEIVED_FILE" | awk '{print $1}')
+	log_step "Verifying EFI application integrity"
+	if [ "$ORIGINAL_HASH" = "$RECEIVED_HASH" ]; then
+		log_success "EFI app hashes match!"
+		log_success "  Original:  $ORIGINAL_HASH"
+		log_success "  Received:  $RECEIVED_HASH"
+	else
+		log_error "EFI app hashes DO NOT match!"
+		rm -f "$BMO_FILE" "$RECEIVED_FILE"
+		return 1
+	fi
+
+	# Cleanup
+	rm -f "$BMO_FILE" "$RECEIVED_FILE"
+	log_success "BMO FSIM (EFI Application) test PASSED"
+}
+
+# Test: BMO FSIM NAK (device rejects first type, accepts second)
+# This test verifies the NAK flow where device rejects unsupported MIME types
+test_bmo_nak() {
+	log_section "TEST: BMO FSIM NAK (Type Rejection/Fallback)"
+
+	mkdir -p "$EPHEMERAL_DIR"
+	rm -f "$DB_FILE" "$CRED_FILE"
+
+	# Create test files
+	BMO_FILE_1="$EPHEMERAL_DIR/test_unsupported.bin"
+	BMO_FILE_2="$EPHEMERAL_DIR/test_supported.efi"
+	RECEIVED_FILE="$EPHEMERAL_DIR/test_supported.efi"
+
+	log_step "Creating test boot images"
+	dd if=/dev/urandom of="$BMO_FILE_1" bs=1024 count=5 2>/dev/null
+	dd if=/dev/urandom of="$BMO_FILE_2" bs=1024 count=5 2>/dev/null
+	ORIGINAL_HASH=$(sha256sum "$BMO_FILE_2" | awk '{print $1}')
+	log_success "Created test images: $BMO_FILE_1 (unsupported), $BMO_FILE_2 (supported)"
+
+	# Server sends two images: first unsupported, then supported (with RequireAck)
+	start_server "-bmo application/x-unsupported-format:../$BMO_FILE_1 -bmo application/efi:../$BMO_FILE_2"
+
+	log_step "Running DI"
+	run_cmd go run ./cmd client -di "$SERVER_URL"
+	log_success "DI completed"
+
+	# Client only supports application/efi, should reject first, accept second
+	log_step "Running TO1/TO2 with NAK for first image, accept second"
+	run_cmd go run ./cmd client -bmo-supported-types "application/efi"
+	log_success "TO1/TO2 completed with NAK/fallback"
+
+	stop_server
+
+	# Verify the supported image was received
+	if [ ! -f "$RECEIVED_FILE" ]; then
+		log_error "Received file not found: $RECEIVED_FILE"
+		rm -f "$BMO_FILE_1" "$BMO_FILE_2"
+		return 1
+	fi
+
+	RECEIVED_HASH=$(sha256sum "$RECEIVED_FILE" | awk '{print $1}')
+	log_step "Verifying boot image integrity"
+	if [ "$ORIGINAL_HASH" = "$RECEIVED_HASH" ]; then
+		log_success "Boot image hashes match! NAK fallback successful"
+		log_success "  Original:  $ORIGINAL_HASH"
+		log_success "  Received:  $RECEIVED_HASH"
+	else
+		log_error "Boot image hashes DO NOT match!"
+		rm -f "$BMO_FILE_1" "$BMO_FILE_2" "$RECEIVED_FILE"
+		return 1
+	fi
+
+	# Cleanup
+	rm -f "$BMO_FILE_1" "$BMO_FILE_2" "$RECEIVED_FILE"
+	log_success "BMO FSIM NAK test PASSED"
+}
+
+# Test: Payload FSIM NAK (device rejects first type, accepts second)
+# This test verifies the NAK flow where device rejects unsupported MIME types
+test_payload_nak() {
+	log_section "TEST: Payload FSIM NAK (Type Rejection/Fallback)"
+
+	mkdir -p "$EPHEMERAL_DIR"
+	rm -f "$DB_FILE" "$CRED_FILE"
+
+	# Create test files
+	PAYLOAD_FILE_1="$EPHEMERAL_DIR/test_unsupported_payload.bin"
+	PAYLOAD_FILE_2="$EPHEMERAL_DIR/test_supported_payload.json"
+	RECEIVED_FILE="$EPHEMERAL_DIR/test_supported_payload.json"
+
+	log_step "Creating test payloads"
+	echo '{"unsupported": true}' >"$PAYLOAD_FILE_1"
+	echo '{"config": "valid", "supported": true}' >"$PAYLOAD_FILE_2"
+	ORIGINAL_HASH=$(sha256sum "$PAYLOAD_FILE_2" | awk '{print $1}')
+	log_success "Created test payloads: $PAYLOAD_FILE_1 (unsupported), $PAYLOAD_FILE_2 (supported)"
+
+	# Server sends two payloads: first unsupported, then supported (with RequireAck)
+	start_server "-payload application/x-unsupported:../$PAYLOAD_FILE_1 -payload application/json:../$PAYLOAD_FILE_2"
+
+	log_step "Running DI"
+	run_cmd go run ./cmd client -di "$SERVER_URL"
+	log_success "DI completed"
+
+	# Client only supports application/json, should reject first, accept second
+	log_step "Running TO1/TO2 with NAK for first payload, accept second"
+	run_cmd go run ./cmd client -payload-supported-types "application/json"
+	log_success "TO1/TO2 completed with NAK/fallback"
+
+	stop_server
+
+	# Verify the supported payload was received
+	if [ ! -f "$RECEIVED_FILE" ]; then
+		log_error "Received file not found: $RECEIVED_FILE"
+		rm -f "$PAYLOAD_FILE_1" "$PAYLOAD_FILE_2"
+		return 1
+	fi
+
+	RECEIVED_HASH=$(sha256sum "$RECEIVED_FILE" | awk '{print $1}')
+	log_step "Verifying payload integrity"
+	if [ "$ORIGINAL_HASH" = "$RECEIVED_HASH" ]; then
+		log_success "Payload hashes match! NAK fallback successful"
+		log_success "  Original:  $ORIGINAL_HASH"
+		log_success "  Received:  $RECEIVED_HASH"
+	else
+		log_error "Payload hashes DO NOT match!"
+		return 1
+	fi
+
+	# Cleanup
+	log_success "Payload FSIM NAK test PASSED"
+}
+
+# Test: Credentials FSIM
+# This test demonstrates the fdo.credentials FSIM by provisioning various credential types
+test_credentials() {
+	log_section "TEST: Credentials FSIM (Provisioned Credentials)"
+
+	rm -f "$DB_FILE" "$CRED_FILE"
+
+	log_step "Starting server with credential provisioning"
+	start_server "-credential password:admin-creds:admin:SecurePass123:https://mgmt.example.com/api -credential api_key:prod-api:sk_live_abc123xyz:https://api.example.com/v1 -credential oauth2_client_secret:oauth-app:client_secret_xyz789:https://oauth.example.com/token"
+
+	log_step "Running DI"
+	run_cmd go run ./cmd client -di "$SERVER_URL"
+	log_success "DI completed"
+
+	log_step "Running TO1/TO2 with credential provisioning"
+	run_cmd go run ./cmd client
+	log_success "TO1/TO2 completed with credentials provisioned"
+
+	stop_server
+	log_success "Provisioned Credentials test PASSED"
+
+	# Test Registered Credentials flow (device sends public key to owner)
+	log_section "TEST: Credentials FSIM (Registered Credentials)"
+
+	rm -f "$DB_FILE" "$CRED_FILE"
+
+	log_step "Starting server requesting SSH public key"
+	start_server "-request-pubkey ssh_public_key:device-ssh-key:ssh://admin.example.com:22"
+
+	log_step "Running DI"
+	run_cmd go run ./cmd client -di "$SERVER_URL"
+	log_success "DI completed"
+
+	log_step "Running TO1/TO2 with SSH public key registration"
+	run_cmd go run ./cmd client -register-ssh-key "device-ssh-key:ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDevicePublicKeyExample"
+	log_success "TO1/TO2 completed with public key registered"
+
+	# Show server log to verify public key was received
+	echo ">>> Server received public key:"
+	grep -A5 "Received public key" /tmp/fdo_server.log 2>/dev/null || echo "  (check /tmp/fdo_server.log for details)"
+
+	stop_server
+	log_success "Registered Credentials test PASSED"
+
+	# Test Enrolled Credentials flow (device sends CSR, owner returns signed cert + CA)
+	log_section "TEST: Credentials FSIM (Enrolled Credentials)"
+
+	rm -f "$DB_FILE" "$CRED_FILE"
+
+	log_step "Starting server with fake CA (will sign CSRs)"
+	start_server ""
+
+	log_step "Running DI"
+	run_cmd go run ./cmd client -di "$SERVER_URL"
+	log_success "DI completed"
+
+	log_step "Running TO1/TO2 with CSR enrollment"
+	run_cmd go run ./cmd client -enroll-csr "device-mtls-cert:-----BEGIN CERTIFICATE REQUEST-----FAKECSR-----END CERTIFICATE REQUEST-----"
+	log_success "TO1/TO2 completed with CSR enrollment"
+
+	# Show server received CSR
+	echo ">>> SERVER received CSR from CLIENT:"
+	grep -A4 "SERVER received CSR" /tmp/fdo_server.log 2>/dev/null || echo "  (check /tmp/fdo_server.log for details)"
+
+	# Show server sent cert + CA
+	echo ""
+	echo ">>> SERVER sent signed cert + CA to CLIENT:"
+	grep -A3 "SERVER sending signed cert" /tmp/fdo_server.log 2>/dev/null || echo "  (check /tmp/fdo_server.log for details)"
+
+	stop_server
+	log_success "Enrolled Credentials test PASSED"
+
+	log_success "Credentials FSIM test PASSED"
 }
 
 # Test: Bad Delegate Rejection (Security Test)
@@ -627,6 +1075,15 @@ test_all() {
 	test_attested_payload_encrypted || failed=1
 	test_attested_payload_delegate || failed=1
 	test_attested_payload_shell || failed=1
+	test_sysconfig || failed=1
+	test_payload || failed=1
+	test_wifi || failed=1
+	test_wifi_single_sided || failed=1
+	test_bmo || failed=1
+	test_bmo_efi || failed=1
+	test_bmo_nak || failed=1
+	test_payload_nak || failed=1
+	test_credentials || failed=1
 	test_bad_delegate || failed=1
 
 	echo ""
@@ -657,6 +1114,9 @@ main() {
 		log_error "sqlite3 is required but not installed"
 		exit 1
 	fi
+
+	# Clean up ephemeral files from previous test runs
+	cleanup_ephemeral
 
 	case "$test_name" in
 	basic)
@@ -695,12 +1155,39 @@ main() {
 	attested-payload-shell)
 		test_attested_payload_shell
 		;;
+	sysconfig)
+		test_sysconfig
+		;;
+	payload)
+		test_payload
+		;;
+	wifi)
+		test_wifi
+		;;
+	wifi-single-sided)
+		test_wifi_single_sided
+		;;
+	bmo)
+		test_bmo
+		;;
+	bmo-efi)
+		test_bmo_efi
+		;;
+	bmo-nak)
+		test_bmo_nak
+		;;
+	payload-nak)
+		test_payload_nak
+		;;
+	credentials)
+		test_credentials
+		;;
 	all)
 		test_all
 		;;
 	*)
 		echo "Unknown test: $test_name"
-		echo "Available tests: basic, basic-reuse, rv-blob, kex, fdo200, delegate, delegate-fdo200, bad-delegate, attested-payload, attested-payload-encrypted, attested-payload-delegate, attested-payload-shell, all"
+		echo "Available tests: basic, basic-reuse, rv-blob, kex, fdo200, delegate, delegate-fdo200, bad-delegate, attested-payload, attested-payload-encrypted, attested-payload-delegate, attested-payload-shell, sysconfig, payload, payload-nak, wifi, wifi-single-sided, bmo, bmo-efi, bmo-nak, credentials, all"
 		exit 1
 		;;
 	esac

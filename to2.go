@@ -33,6 +33,35 @@ import (
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
 
+// AttestationMode indicates the type of attestation performed during TO2.
+type AttestationMode int
+
+const (
+	// ModeFullOwner is the normal mutual attestation mode where both device
+	// and owner prove their identities. All FSIMs are available.
+	ModeFullOwner AttestationMode = iota
+
+	// ModeSingleSided is a restricted mode where the device proves its identity
+	// (via voucher) but the owner does not prove ownership. This is indicated
+	// by algorithm=0 and empty signature in ProveOVHdr. In this mode:
+	// - Only devmod and fdo.wifi FSIMs are available
+	// - devmod reports minimal information (no serial, device type, etc.)
+	// - All trust levels are downgraded to 0 (onboard-only)
+	ModeSingleSided
+)
+
+// String returns a human-readable name for the attestation mode.
+func (m AttestationMode) String() string {
+	switch m {
+	case ModeFullOwner:
+		return "full-owner"
+	case ModeSingleSided:
+		return "single-sided"
+	default:
+		return "unknown"
+	}
+}
+
 // COSE unprotected header labels for TO2.ProveOVHdr
 // These are in the "Reserved for Private Use" space of COSE Header Parameters.
 //
@@ -131,6 +160,28 @@ type TO2Config struct {
 	// enabled, TO2 will fail with CredReuseErrCode (102) if reuse is
 	// attempted by the owner service.
 	AllowCredentialReuse bool
+
+	// AllowSingleSided permits the device to accept single-sided attestation
+	// (algorithm=0, empty signature in ProveOVHdr). When single-sided mode is
+	// detected and allowed:
+	// - Owner signature verification is skipped
+	// - Only devmod and fdo.wifi FSIMs are advertised/accepted
+	// - devmod reports minimal information (no identifying data)
+	// - All WiFi trust levels are downgraded to 0 (onboard-only)
+	//
+	// This is used for WiFi bootstrap scenarios where a device needs network
+	// credentials before it can reach the real owner service.
+	AllowSingleSided bool
+
+	// attestationMode is set internally after ProveOVHdr is received.
+	// Use GetAttestationMode() to read this value.
+	attestationMode AttestationMode
+}
+
+// GetAttestationMode returns the attestation mode detected during TO2.
+// This is only valid after ProveOVHdr has been processed.
+func (c *TO2Config) GetAttestationMode() AttestationMode {
+	return c.attestationMode
 }
 
 // TO2 runs the TO2 protocol and returns a DeviceCredential with replaced GUID,
@@ -145,6 +196,8 @@ type TO2Config struct {
 //
 // If the Credential Reuse protocol is allowed and occurs, then the returned
 // device credential will be nil.
+//
+//nolint:gocyclo
 func TO2(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1d, []byte], c TO2Config) (*DeviceCredential, error) {
 	ctx = contextWithErrMsg(ctx)
 
@@ -214,13 +267,26 @@ func TO2(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1
 	defer func() { _ = serviceInfoWriter.Close() }()
 
 	// Send devmod KVs in initial ServiceInfo
-	go c.Devmod.Write(ctx, c.DeviceModules, sendMTU, serviceInfoWriter)
+	// In single-sided mode, only advertise devmod and fdo.wifi modules
+	var moduleFilter func(string) bool
+	if c.attestationMode == ModeSingleSided {
+		slog.Info("Single-sided mode: filtering modules to devmod and fdo.wifi only")
+		moduleFilter = func(moduleName string) bool {
+			return moduleName == "devmod" || moduleName == "fdo.wifi"
+		}
+	}
+	go c.Devmod.WriteFiltered(ctx, c.DeviceModules, sendMTU, serviceInfoWriter, moduleFilter)
 
 	// Loop, sending and receiving service info until done
 	if err := exchangeServiceInfo(ctx, transport, proveDeviceNonce, setupDeviceNonce, sendMTU, serviceInfoReader, sess, &c); err != nil {
 		errorMsg(ctx, transport, err)
 		return nil, err
 	}
+
+	// Emit TO2 completed event with attestation mode
+	// For single-sided mode, this will also emit EventTypeTO2SingleSidedComplete
+	credReuse := replacementOVH == nil
+	EmitTO2Completed(ctx, c.Cred.GUID, credReuse, c.attestationMode)
 
 	// If using the Credential Reuse protocol the device credential is not updated
 	if replacementOVH == nil {
@@ -301,6 +367,10 @@ func verifyOwner(ctx context.Context, transport Transport, to1d *cose.Sign1[prot
 	if err != nil {
 		return protocol.Nonce{}, nil, nil, nil, nil, err
 	}
+
+	// Store the attestation mode detected from ProveOVHdr
+	c.attestationMode = info.AttestationMode
+
 	if !c.KeyExchange.Valid(c.Key.Public(), info.PublicKeyToValidate) {
 		sess.Destroy()
 		return protocol.Nonce{}, nil, nil, nil, nil, fmt.Errorf(
@@ -389,6 +459,7 @@ type OvhValidationContext struct {
 	PublicKeyToValidate crypto.PublicKey
 	OriginalOwnerKey    crypto.PublicKey
 	DelegateChain       *protocol.PublicKey
+	AttestationMode     AttestationMode // ModeFullOwner or ModeSingleSided
 }
 
 // HelloDevice(60) -> ProveOVHdr(61)
@@ -476,6 +547,21 @@ func sendHelloDevice(ctx context.Context, transport Transport, c *TO2Config) (pr
 		return protocol.Nonce{}, nil, nil, fmt.Errorf("delegate pubkey unprotected header missing from TO2.ProveOVHdr response message: %w", err)
 	}
 
+	// Detect single-sided attestation mode: algorithm=0 and empty signature
+	// In single-sided mode, the owner does not prove ownership - only the device
+	// proves its identity (via the voucher). This is used for WiFi bootstrap.
+	attestationMode := ModeFullOwner
+	var sigAlg cose.SignatureAlgorithm
+	algFound, _ := proveOVHdr.Protected.Parse(cose.AlgLabel, &sigAlg)
+	if (!algFound || sigAlg == 0) && len(proveOVHdr.Signature) == 0 {
+		if !c.AllowSingleSided {
+			captureErr(ctx, protocol.InvalidMessageErrCode, "")
+			return protocol.Nonce{}, nil, nil, fmt.Errorf("single-sided attestation not allowed by client configuration")
+		}
+		attestationMode = ModeSingleSided
+		slog.Info("Single-sided attestation detected", "mode", attestationMode)
+	}
+
 	// Validate response signature and nonce. While the payload signature
 	// verification is performed using the untrusted owner public key from the
 	// headers, this is acceptable, because the owner public key will be
@@ -494,12 +580,17 @@ func sendHelloDevice(ctx context.Context, transport Transport, c *TO2Config) (pr
 		return protocol.Nonce{}, nil, nil, fmt.Errorf("error parsing owner public key to verify TO2.ProveOVHdr payload signature: %w", err)
 	}
 
-	if ok, err := proveOVHdr.Verify(key, nil, nil); err != nil {
-		captureErr(ctx, protocol.InvalidMessageErrCode, "")
-		return protocol.Nonce{}, nil, nil, fmt.Errorf("error verifying TO2.ProveOVHdr payload signature: %w", err)
-	} else if !ok {
-		captureErr(ctx, protocol.InvalidMessageErrCode, "")
-		return protocol.Nonce{}, nil, nil, fmt.Errorf("TO2.ProveOVHdr payload signature verification failed: %w", ErrCryptoVerifyFailed)
+	// Skip signature verification in single-sided mode (algorithm=0 means no signature)
+	if attestationMode == ModeFullOwner {
+		if ok, err := proveOVHdr.Verify(key, nil, nil); err != nil {
+			captureErr(ctx, protocol.InvalidMessageErrCode, "")
+			return protocol.Nonce{}, nil, nil, fmt.Errorf("error verifying TO2.ProveOVHdr payload signature: %w", err)
+		} else if !ok {
+			captureErr(ctx, protocol.InvalidMessageErrCode, "")
+			return protocol.Nonce{}, nil, nil, fmt.Errorf("TO2.ProveOVHdr payload signature verification failed: %w", ErrCryptoVerifyFailed)
+		}
+	} else {
+		slog.Debug("Skipping owner signature verification in single-sided mode")
 	}
 	if proveOVHdr.Payload.Val.NonceTO2ProveOV != proveOVNonce {
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
@@ -550,6 +641,7 @@ func sendHelloDevice(ctx context.Context, transport Transport, c *TO2Config) (pr
 			PublicKeyToValidate: publicKeyToValidate,
 			OriginalOwnerKey:    originalOwnerKey,
 			DelegateChain:       DelegateChain,
+			AttestationMode:     attestationMode,
 		},
 		// The key exchange parameter is zeroed and a copy used to initialize
 		// the key exchange session (which has its own Destroy method), because
@@ -744,9 +836,19 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 			MaxOwnerMessageSize: 65535, // TODO: Make this configurable and match handler config
 		}),
 	}
-	if err := s1.Sign(ownerKey, nil, nil, opts); err != nil {
-		clear(xA)
-		return nil, fmt.Errorf("error signing TO2.ProveOVHdr payload: %w", err)
+
+	// In single-sided mode, skip signing and use algorithm=0 with empty signature
+	// This signals to the device that owner verification is not performed
+	if s.SingleSidedMode {
+		slog.Info("Single-sided mode: generating unsigned ProveOVHdr", "guid", hello.GUID)
+		// Set empty protected headers (no algorithm) and empty signature
+		s1.Protected = cose.HeaderMap{}
+		s1.Signature = []byte{}
+	} else {
+		if err := s1.Sign(ownerKey, nil, nil, opts); err != nil {
+			clear(xA)
+			return nil, fmt.Errorf("error signing TO2.ProveOVHdr payload: %w", err)
+		}
 	}
 
 	// The lifetime of xA is until the transport has marshaled and sent the proof. Therefore, the

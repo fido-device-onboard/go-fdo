@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (C) 2024 Intel Corporation
+// SPDX-FileCopyrightText: (C) 2026 Dell Technologies
 // SPDX-License-Identifier: Apache 2.0
 
 package fsim
@@ -128,7 +128,8 @@ func (c *Command) execute(ctx context.Context) error {
 	}
 
 	// Start command
-	ctx, _ = context.WithTimeout(ctx, timeout)     //nolint:govet // This context is only used for the command
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	c.cmd = exec.CommandContext(ctx, name, arg...) //nolint:gosec // This is dangerous by intentional design as the owner service is meant to be privileged
 	if c.stdout {
 		var buf safeBuffer

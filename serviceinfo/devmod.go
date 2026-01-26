@@ -93,11 +93,23 @@ type Devmod struct {
 
 // Write the devmod messages.
 func (d *Devmod) Write(ctx context.Context, deviceModules map[string]DeviceModule, mtu uint16, w *UnchunkWriter) {
+	d.WriteFiltered(ctx, deviceModules, mtu, w, nil)
+}
+
+// WriteFiltered writes devmod messages with optional module filtering.
+// The moduleFilter function, if provided, is called for each module name and
+// returns true if the module should be advertised, false to exclude it.
+// This is used for single-sided attestation to only advertise devmod and fdo.wifi.
+func (d *Devmod) WriteFiltered(ctx context.Context, deviceModules map[string]DeviceModule, mtu uint16, w *UnchunkWriter, moduleFilter func(string) bool) {
 	defer func() { _ = w.Close() }()
 
 	var modules []string
 	for key := range deviceModules {
 		module, _, _ := strings.Cut(key, ":")
+		// Apply filter if provided
+		if moduleFilter != nil && !moduleFilter(module) {
+			continue
+		}
 		modules = append(modules, module)
 	}
 

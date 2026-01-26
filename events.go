@@ -60,7 +60,14 @@ const (
 	// EventTypeTO2ServiceInfoCompleted indicates service info exchange completed
 	EventTypeTO2ServiceInfoCompleted
 	// EventTypeTO2Completed indicates TO2 protocol completed successfully
+	// This is emitted for both normal (full owner) and single-sided attestation modes.
+	// Check the AttestationMode field in TO2EventData to determine which mode was used.
 	EventTypeTO2Completed
+	// EventTypeTO2SingleSidedComplete indicates single-sided WiFi onboarding completed.
+	// This is a more specific event than TO2Completed, emitted only for single-sided mode.
+	// Client implementations can use this as a trigger to re-attempt full onboarding
+	// using newly received WiFi credentials.
+	EventTypeTO2SingleSidedComplete
 	// EventTypeTO2Failed indicates TO2 protocol failed
 	EventTypeTO2Failed
 
@@ -111,6 +118,7 @@ var eventTypeNames = map[EventType]string{
 	EventTypeTO2ServiceInfoStarted:   "TO2 Service Info Started",
 	EventTypeTO2ServiceInfoCompleted: "TO2 Service Info Completed",
 	EventTypeTO2Completed:            "TO2 Completed",
+	EventTypeTO2SingleSidedComplete:  "TO2 Single-Sided Complete",
 	EventTypeTO2Failed:               "TO2 Failed",
 	EventTypeCertValidationStarted:   "Certificate Validation Started",
 	EventTypeCertValidationSuccess:   "Certificate Validation Success",
@@ -186,6 +194,11 @@ type TO2EventData struct {
 	KeyExchangeSuite string
 	CredentialReuse  bool
 	ServiceInfoCount int
+	// AttestationMode indicates the type of attestation used:
+	// - ModeFullOwner (0): Normal mutual attestation (device and owner verified)
+	// - ModeSingleSided (1): Single-sided attestation (device verified, owner not verified)
+	// Client implementations can use this to determine next steps after TO2 completes.
+	AttestationMode AttestationMode
 }
 
 func (TO2EventData) eventData() {}
@@ -388,16 +401,35 @@ func EmitTO2Started(ctx context.Context, guid protocol.GUID) {
 	})
 }
 
-// EmitTO2Completed emits a TO2 completed event
-func EmitTO2Completed(ctx context.Context, guid protocol.GUID, credReuse bool) {
+// EmitTO2Completed emits a TO2 completed event.
+// The attestationMode parameter indicates whether this was a normal (ModeFullOwner)
+// or single-sided (ModeSingleSided) attestation. For single-sided mode, this function
+// also emits EventTypeTO2SingleSidedComplete as a convenience for clients that want
+// to specifically handle single-sided completion (e.g., to re-attempt full onboarding).
+func EmitTO2Completed(ctx context.Context, guid protocol.GUID, credReuse bool, attestationMode AttestationMode) {
+	// Always emit the general TO2Completed event
 	emitEvent(ctx, Event{
 		Type: EventTypeTO2Completed,
 		GUID: &guid,
 		Data: TO2EventData{
 			VoucherGUID:     guid,
 			CredentialReuse: credReuse,
+			AttestationMode: attestationMode,
 		},
 	})
+
+	// For single-sided mode, also emit a specific event as a convenience trigger
+	if attestationMode == ModeSingleSided {
+		emitEvent(ctx, Event{
+			Type: EventTypeTO2SingleSidedComplete,
+			GUID: &guid,
+			Data: TO2EventData{
+				VoucherGUID:     guid,
+				CredentialReuse: credReuse,
+				AttestationMode: attestationMode,
+			},
+		})
+	}
 }
 
 // EmitTO2Failed emits a TO2 failed event

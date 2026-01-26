@@ -15,7 +15,6 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/fido-device-onboard/go-fdo"
@@ -23,6 +22,7 @@ import (
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
 	"github.com/fido-device-onboard/go-fdo/protocol"
+	"github.com/fido-device-onboard/go-fdo/testdata"
 )
 
 /*
@@ -49,7 +49,7 @@ Test data was generated with https://github.com/fdo-rs/fido-device-onboard-rs
 */
 
 func voucherBytes(t *testing.T, basename string) []byte {
-	b, err := os.ReadFile(filepath.Join("testdata", basename))
+	b, err := testdata.Files.ReadFile(basename)
 	if err != nil {
 		t.Fatalf("error opening voucher test data: %v", err)
 	}

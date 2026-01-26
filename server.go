@@ -243,6 +243,16 @@ type TO2Server struct {
 
 	// Use this delegate cert for rendezvous (or empty string)
 	RvDelegate string
+
+	// SingleSidedMode enables single-sided attestation for WiFi-only services.
+	// When true, the server generates ProveOVHdr with algorithm=0 and empty
+	// signature, signaling to the device that owner verification is skipped.
+	// In single-sided mode:
+	// - Server validates the device via voucher (device proves legitimacy)
+	// - Server does NOT prove ownership (no signature verification by device)
+	// - Only devmod and fdo.wifi FSIMs should be used
+	// - Device will downgrade all trust levels to 0 (onboard-only)
+	SingleSidedMode bool
 }
 
 // Resell implements the FDO Resale Protocol by removing a voucher from
