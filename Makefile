@@ -45,8 +45,8 @@ test-integration:
 
 # Run all linters
 lint:
-	@echo "=== Running Go linter (will show issues but not fail) ==="
-	-$(MAKE) lint-go
+	@echo "=== Running Go linter ==="
+	$(MAKE) lint-go
 	@echo ""
 	@echo "=== Running shell script linters ==="
 	$(MAKE) lint-shell
@@ -56,19 +56,19 @@ lint-go:
 	@echo "=== Linting base library ==="
 	go work init 2>/dev/null || true
 	go work use -r . 2>/dev/null || true
-	-golangci-lint run ./... || true
+	golangci-lint run ./...
 	@echo ""
 	@echo "=== Linting FSIM ==="
-	-golangci-lint run ./fsim/... || true
+	golangci-lint run ./fsim/...
 	@echo ""
 	@echo "=== Linting sqlite ==="
-	-golangci-lint run ./sqlite/... || true
+	golangci-lint run ./sqlite/...
 	@echo ""
 	@echo "=== Linting TPM ==="
-	-golangci-lint run ./tpm/... || true
+	golangci-lint run ./tpm/...
 	@echo ""
 	@echo "=== Linting examples ==="
-	-golangci-lint run ./examples/... || true
+	golangci-lint run ./examples/...
 
 # Run shell script linters (format + static analysis)
 lint-shell:

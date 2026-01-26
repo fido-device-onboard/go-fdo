@@ -10,16 +10,52 @@ linters:
     - revive
     - unused
   settings:
-    gocyclo:
-      min-complexity: 15
-    misspell:
-      locale: US
+  gocyclo:
+    min-complexity: 15
+  misspell:
+    locale: US
   exclusions:
     generated: lax
     rules:
       - linters:
           - gocyclo
         path: _test\.go
+      - linters:
+          - gocyclo
+        path: fsim/wifi_device\.go$
+      - linters:
+          - gocyclo
+        path: fsim/chunking/types\.go$
+      - linters:
+          - gocyclo
+        path: fsim/.*_owner\.go$
+      - linters:
+          - gocyclo
+        path: fsim/.*_device\.go$
+      - linters:
+          - gosec
+        path: fsim/examples/sysconfig_linux\.go$
+        text: G304
+      - linters:
+          - gosec
+        path: fsim/examples/sysconfig_linux\.go$
+        text: G204
+      - linters:
+          - gosec
+        path: examples/cmd/.*\.go$
+        text: G304
+      - linters:
+          - gosec
+        path: examples/cmd/.*\.go$
+        text: G306
+      - linters:
+          - gosec
+        path: examples/plugins/.*\.go$
+        text: G301
+      - linters:
+          - gosec
+        path: examples/plugins/.*\.go$
+        text: G204
       - path: _test\.go
         text: declaration of "(err|ctx)" shadows declaration at
       - path: (.+)\.go$

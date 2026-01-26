@@ -84,7 +84,7 @@ func (ca *SimpleCertificateAuthority) Initialize() error {
 
 	// Create cert store directory if needed
 	if ca.CertStorePath != "" {
-		if err := os.MkdirAll(ca.CertStorePath, 0755); err != nil {
+		if err := os.MkdirAll(ca.CertStorePath, 0750); err != nil {
 			return fmt.Errorf("failed to create cert store: %w", err)
 		}
 	}
@@ -139,7 +139,7 @@ func (ca *SimpleCertificateAuthority) SignCSR(csrDER []byte) ([]byte, error) {
 	if ca.CertStorePath != "" {
 		certPath := filepath.Join(ca.CertStorePath, fmt.Sprintf("%s.crt", serialNumber.Text(16)))
 		certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-		if err := os.WriteFile(certPath, certPEM, 0644); err != nil {
+		if err := os.WriteFile(certPath, certPEM, 0600); err != nil {
 			// Log but don't fail
 			fmt.Printf("Warning: failed to store certificate: %v\n", err)
 		}
@@ -235,7 +235,7 @@ func (ca *SimpleCertificateAuthority) GenerateServerKey(keyType string, subject 
 	if ca.CertStorePath != "" {
 		certPath := filepath.Join(ca.CertStorePath, fmt.Sprintf("%s.crt", serialNumber.Text(16)))
 		certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-		if err := os.WriteFile(certPath, certPEM, 0644); err != nil {
+		if err := os.WriteFile(certPath, certPEM, 0600); err != nil {
 			fmt.Printf("Warning: failed to store certificate: %v\n", err)
 		}
 	}
@@ -268,16 +268,16 @@ type DeviceCertificateStore struct {
 // This is used as the InstallCertificate callback for CSRDevice.
 func (store *DeviceCertificateStore) InstallCertificate(certDER, keyDER []byte) error {
 	// Ensure directories exist
-	if err := os.MkdirAll(filepath.Dir(store.CertPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(store.CertPath), 0750); err != nil {
 		return fmt.Errorf("failed to create cert directory: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(store.KeyPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(store.KeyPath), 0750); err != nil {
 		return fmt.Errorf("failed to create key directory: %w", err)
 	}
 
 	// Write certificate
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-	if err := os.WriteFile(store.CertPath, certPEM, 0644); err != nil {
+	if err := os.WriteFile(store.CertPath, certPEM, 0600); err != nil {
 		return fmt.Errorf("failed to write certificate: %w", err)
 	}
 
@@ -321,7 +321,7 @@ func (store *DeviceCertificateStore) InstallCACertificates(caCertsDER [][]byte) 
 	}
 
 	// Ensure directory exists
-	if err := os.MkdirAll(filepath.Dir(store.CAPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(store.CAPath), 0750); err != nil {
 		return fmt.Errorf("failed to create CA directory: %w", err)
 	}
 
@@ -333,13 +333,13 @@ func (store *DeviceCertificateStore) InstallCACertificates(caCertsDER [][]byte) 
 
 		// Also write individual files for reference
 		individualPath := filepath.Join(filepath.Dir(store.CAPath), fmt.Sprintf("ca-%d.crt", i))
-		if err := os.WriteFile(individualPath, certPEM, 0644); err != nil {
+		if err := os.WriteFile(individualPath, certPEM, 0600); err != nil {
 			fmt.Printf("Warning: failed to write individual CA cert: %v\n", err)
 		}
 	}
 
 	// Write combined CA bundle
-	if err := os.WriteFile(store.CAPath, allPEM, 0644); err != nil {
+	if err := os.WriteFile(store.CAPath, allPEM, 0600); err != nil {
 		return fmt.Errorf("failed to write CA bundle: %w", err)
 	}
 
@@ -418,7 +418,7 @@ func CreateSelfSignedCA(keyPath, certPath string) error {
 
 	// Write CA certificate
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caCertDER})
-	if err := os.WriteFile(certPath, certPEM, 0644); err != nil {
+	if err := os.WriteFile(certPath, certPEM, 0600); err != nil {
 		return fmt.Errorf("failed to write CA certificate: %w", err)
 	}
 

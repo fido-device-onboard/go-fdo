@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"unicode"
 )
 
 // LinuxSysConfig provides a Linux-specific implementation for setting system parameters.
@@ -68,7 +69,7 @@ func (l *LinuxSysConfig) setHostname(hostname string) error {
 	}
 
 	// Write to /etc/hostname
-	if err := os.WriteFile("/etc/hostname", []byte(hostname+"\n"), 0644); err != nil {
+	if err := os.WriteFile("/etc/hostname", []byte(hostname+"\n"), 0600); err != nil {
 		return fmt.Errorf("failed to write /etc/hostname: %w", err)
 	}
 
@@ -117,7 +118,7 @@ func (l *LinuxSysConfig) updateHostsFile(hostname string) error {
 	}
 
 	// Write back
-	return os.WriteFile(hostsPath, []byte(strings.Join(newLines, "\n")), 0644)
+	return os.WriteFile(hostsPath, []byte(strings.Join(newLines, "\n")), 0600)
 }
 
 // setTimezone sets the system timezone.
@@ -138,7 +139,7 @@ func (l *LinuxSysConfig) setTimezone(timezone string) error {
 	}
 
 	// Write timezone name to /etc/timezone (Debian/Ubuntu)
-	_ = os.WriteFile("/etc/timezone", []byte(timezone+"\n"), 0644)
+	_ = os.WriteFile("/etc/timezone", []byte(timezone+"\n"), 0600)
 
 	return nil
 }
@@ -212,7 +213,7 @@ func (l *LinuxSysConfig) setNTPServerSystemd(server string) error {
 	}
 
 	// Write back
-	if err := os.WriteFile(configPath, []byte(strings.Join(newLines, "\n")), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte(strings.Join(newLines, "\n")), 0600); err != nil {
 		return err
 	}
 
@@ -256,7 +257,7 @@ func (l *LinuxSysConfig) setNTPServerChrony(server string) error {
 	newLines = append(newLines, fmt.Sprintf("server %s iburst", server))
 
 	// Write back
-	if err := os.WriteFile(configPath, []byte(strings.Join(newLines, "\n")), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte(strings.Join(newLines, "\n")), 0600); err != nil {
 		return err
 	}
 
@@ -296,7 +297,7 @@ func (l *LinuxSysConfig) setNTPServerNTPD(server string) error {
 	newLines = append(newLines, fmt.Sprintf("server %s iburst", server))
 
 	// Write back
-	if err := os.WriteFile(configPath, []byte(strings.Join(newLines, "\n")), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte(strings.Join(newLines, "\n")), 0600); err != nil {
 		return err
 	}
 
@@ -364,6 +365,10 @@ func (l *LinuxSysConfig) setLocale(locale string) error {
 func (l *LinuxSysConfig) updateLocaleFile(path, locale string) error {
 	// Read existing file if it exists
 	var lines []string
+	// Validate path is within expected bounds
+	if !strings.HasPrefix(path, "/etc/") && !strings.HasPrefix(path, "/usr/") {
+		return fmt.Errorf("invalid path: %s", path)
+	}
 	data, err := os.ReadFile(path)
 	if err == nil {
 		lines = strings.Split(string(data), "\n")
@@ -388,7 +393,7 @@ func (l *LinuxSysConfig) updateLocaleFile(path, locale string) error {
 	}
 
 	// Write back
-	return os.WriteFile(path, []byte(strings.Join(newLines, "\n")), 0644)
+	return os.WriteFile(path, []byte(strings.Join(newLines, "\n")), 0600)
 }
 
 // generateLocale attempts to generate a locale using locale-gen.
@@ -402,11 +407,19 @@ func (l *LinuxSysConfig) generateLocale(locale string) error {
 	// Try localedef (RHEL/CentOS)
 	// Parse locale into parts (e.g., en_US.UTF-8 -> en_US and UTF-8)
 	parts := strings.Split(locale, ".")
-	if len(parts) == 2 {
-		cmd = exec.Command("localedef", "-i", parts[0], "-f", parts[1], locale)
-		if err := cmd.Run(); err == nil {
-			return nil
+	// Validate input to prevent command injection
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return fmt.Errorf("invalid locale format: %s", locale)
+	}
+	// Only allow alphanumeric and underscore in locale name
+	for _, r := range parts[0] {
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' {
+			return fmt.Errorf("invalid locale name: %s", parts[0])
 		}
+	}
+	cmd = exec.Command("localedef", "-i", parts[0], "-f", parts[1], locale)
+	if err := cmd.Run(); err == nil {
+		return nil
 	}
 
 	return fmt.Errorf("locale generation not supported on this system")
@@ -531,7 +544,7 @@ func (l *LinuxSysConfig) configureWpaSupplicant(config WiFiConfig) error {
 	// If no config exists, create one
 	if configPath == "" {
 		configPath = "/etc/wpa_supplicant/wpa_supplicant.conf"
-		if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(configPath), 0750); err != nil {
 			return fmt.Errorf("failed to create wpa_supplicant directory: %w", err)
 		}
 
@@ -543,6 +556,10 @@ func (l *LinuxSysConfig) configureWpaSupplicant(config WiFiConfig) error {
 	}
 
 	// Read existing config
+	// Validate configPath is within expected bounds
+	if !strings.HasPrefix(configPath, "/etc/") {
+		return fmt.Errorf("invalid config path: %s", configPath)
+	}
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return fmt.Errorf("failed to read wpa_supplicant config: %w", err)

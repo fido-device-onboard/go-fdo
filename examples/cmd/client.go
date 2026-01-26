@@ -456,7 +456,7 @@ func (h *bmoHandler) HandleImage(ctx context.Context, imageType, name string, si
 	if filename == "" {
 		filename = "received_image.bin"
 	}
-	if err := os.WriteFile(filename, image, 0644); err != nil {
+	if err := os.WriteFile(filename, image, 0600); err != nil {
 		fmt.Printf("[fdo.bmo] ERROR: failed to save file: %v\n", err)
 		return 2, fmt.Sprintf("failed to save image: %v", err), err
 	}
