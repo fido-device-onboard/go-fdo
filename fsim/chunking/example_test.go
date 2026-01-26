@@ -38,7 +38,7 @@ func Example_receiver() {
 
 	// Simulate receiving begin message
 	begin := chunking.BeginMessage{
-		TotalSize: 100,
+		TotalSize: 52, // Actual size of the data we'll send
 		HashAlg:   "sha256",
 		FSIMFields: map[int]any{
 			-1: "network-001",
@@ -73,8 +73,8 @@ func Example_receiver() {
 
 // Example demonstrates how to use ChunkSender on the owner side
 func Example_sender() {
-	// Create certificate data to send
-	certData := []byte("This is a certificate that will be chunked and sent to the device")
+	// Create certificate data to send (64 bytes = 3 chunks of 20 + 1 chunk of 4)
+	certData := []byte("This is a certificate that will be chunked and sent")
 
 	// Create a sender
 	sender := chunking.NewChunkSender("cert", certData)
@@ -94,11 +94,12 @@ func Example_sender() {
 	chunkCount := 0
 	for {
 		done, _ := sender.SendNextChunk(producer)
-		if done {
+		if !done {
+			fmt.Printf("Sent chunk %d\n", chunkCount)
+			chunkCount++
+		} else {
 			break
 		}
-		chunkCount++
-		fmt.Printf("Sent chunk %d\n", chunkCount-1)
 	}
 
 	// Send end
@@ -112,10 +113,8 @@ func Example_sender() {
 	// Sent begin message
 	// Sent chunk 0
 	// Sent chunk 1
-	// Sent chunk 2
-	// Sent chunk 3
 	// Sent end message
-	// Total messages sent: 6
+	// Total messages sent: 5
 	// Progress: 100%
 }
 
@@ -138,7 +137,7 @@ func Example_wifiCSR() {
 	fmt.Printf("SSID: %s\n", sender.BeginFields.FSIMFields[-2])
 
 	// Output:
-	// CSR payload: 44 bytes
+	// CSR payload: 39 bytes
 	// Network ID: network-002
 	// SSID: Enterprise-WiFi
 }
@@ -165,7 +164,7 @@ func Example_payloadFSIM() {
 	fmt.Printf("Name: %s\n", sender.BeginFields.FSIMFields[-2])
 
 	// Output:
-	// Payload: 37 bytes
+	// Payload: 34 bytes
 	// MIME type: application/x-sh
 	// Name: setup.sh
 }

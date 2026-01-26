@@ -16,6 +16,7 @@ import (
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/pem"
+	"math"
 	"math/big"
 	"os"
 	"testing"
@@ -1127,8 +1128,11 @@ func TestBuildSignedDataLengthPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ToJSON failed: %v", err)
 	}
-	if validityLen != uint32(len(validityJSON)) {
-		t.Errorf("expected validity length %d, got %d", len(validityJSON), validityLen)
+	actualLen := len(validityJSON)
+	if validityLen != 0 && actualLen > math.MaxUint32 {
+		t.Errorf("validity length %d exceeds uint32 max", actualLen)
+	} else if validityLen != uint32(actualLen) {
+		t.Errorf("expected validity length %d, got %d", actualLen, validityLen)
 	}
 
 	t.Logf("BuildSignedData correctly uses length prefixes")

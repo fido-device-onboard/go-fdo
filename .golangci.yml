@@ -3,10 +3,12 @@ run:
   modules-download-mode: readonly
 linters:
   enable:
+    - errcheck
     - gocyclo
     - gosec
     - misspell
     - revive
+    - unused
   settings:
     gocyclo:
       min-complexity: 15
@@ -17,9 +19,8 @@ linters:
     rules:
       - linters:
           - gocyclo
-          - gosec
         path: _test\.go
-      - path: (.+)\.go$
+      - path: _test\.go
         text: declaration of "(err|ctx)" shadows declaration at
       - path: (.+)\.go$
         text: "^unused-parameter: "
@@ -29,7 +30,6 @@ linters:
     paths:
       - third_party$
       - builtin$
-      - examples$
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
@@ -46,4 +46,3 @@ formatters:
     paths:
       - third_party$
       - builtin$
-      - examples$

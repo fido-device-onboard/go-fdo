@@ -20,9 +20,24 @@ build:
 # Run all tests
 test: test-unit test-integration
 
-# Run Go unit tests
+# Run Go unit tests (replicates GitHub Actions exactly)
 test-unit:
-	go test ./...
+	@echo "=== Testing base library ==="
+	go work init 2>/dev/null || true
+	go work use -r . 2>/dev/null || true
+	go test -v ./...
+	@echo ""
+	@echo "=== Testing FSIM ==="
+	go test -v ./fsim/...
+	@echo ""
+	@echo "=== Testing sqlite ==="
+	go test -v ./sqlite/...
+	@echo ""
+	@echo "=== Testing TPM ==="
+	go test -v ./tpm/...
+	@echo ""
+	@echo "=== Testing examples ==="
+	go test -v ./examples/...
 
 # Run integration/example tests
 test-integration:

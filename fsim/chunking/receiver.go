@@ -198,12 +198,14 @@ func (r *ChunkReceiver) handleEnd(messageBody io.Reader) error {
 		handlerErr = r.OnEnd(end)
 	}
 
-	// Reset state
-	r.reset()
-
+	// Reset state after handler has had a chance to access the buffer
 	if handlerErr != nil {
+		r.reset()
 		return fmt.Errorf("end handler failed: %w", handlerErr)
 	}
+
+	// Only reset on successful completion
+	r.reset()
 
 	return nil
 }

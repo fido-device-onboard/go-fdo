@@ -205,31 +205,10 @@ func (e *EndMessage) UnmarshalCBOR(data []byte) error {
 
 	for key, val := range m {
 		switch k := key.(type) {
-		case int:
+		case int64: // CBOR always returns int64 for integer keys
 			switch k {
 			case 0:
-				if v, ok := val.(int); ok {
-					e.Status = v
-				}
-			case 1:
-				if v, ok := val.([]byte); ok {
-					e.HashValue = v
-				}
-			case 2:
-				if v, ok := val.(string); ok {
-					e.Message = v
-				}
-			default:
-				if k < 0 {
-					e.FSIMFields[k] = val
-				}
-			}
-		case uint64:
-			switch k {
-			case 0:
-				if v, ok := val.(int); ok {
-					e.Status = v
-				} else if v, ok := val.(uint64); ok {
+				if v, ok := val.(int64); ok {
 					e.Status = int(v)
 				}
 			case 1:
@@ -240,6 +219,12 @@ func (e *EndMessage) UnmarshalCBOR(data []byte) error {
 				if v, ok := val.(string); ok {
 					e.Message = v
 				}
+			}
+		default:
+			if intKey, ok := key.(int); ok && intKey < 0 {
+				e.FSIMFields[intKey] = val
+			} else if int64Key, ok := key.(int64); ok && int64Key < 0 {
+				e.FSIMFields[int(int64Key)] = val
 			}
 		}
 	}
