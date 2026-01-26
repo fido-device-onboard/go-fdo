@@ -9,6 +9,9 @@
 package chunking
 
 import (
+	"fmt"
+	"math"
+
 	"github.com/fido-device-onboard/go-fdo/cbor"
 )
 
@@ -71,11 +74,19 @@ func (b *BeginMessage) UnmarshalCBOR(data []byte) error {
 			case 0:
 				// TotalSize can be decoded as uint64, int, or int64 depending on value
 				if v, ok := val.(uint64); ok {
-					b.TotalSize = v
+					b.TotalSize = uint64(v)
 				} else if v, ok := val.(int); ok {
-					b.TotalSize = uint64(v)
+					if v >= 0 {
+						b.TotalSize = uint64(v)
+					} else {
+						return fmt.Errorf("total size cannot be negative")
+					}
 				} else if v, ok := val.(int64); ok {
-					b.TotalSize = uint64(v)
+					if v >= 0 {
+						b.TotalSize = uint64(v)
+					} else {
+						return fmt.Errorf("total size cannot be negative")
+					}
 				}
 			case 1:
 				if v, ok := val.(string); ok {
@@ -100,13 +111,20 @@ func (b *BeginMessage) UnmarshalCBOR(data []byte) error {
 			ki := int(k)
 			switch ki {
 			case 0:
-				// TotalSize can be decoded as uint64, int, or int64 depending on value
 				if v, ok := val.(uint64); ok {
-					b.TotalSize = v
+					b.TotalSize = uint64(v)
 				} else if v, ok := val.(int); ok {
-					b.TotalSize = uint64(v)
+					if v >= 0 {
+						b.TotalSize = uint64(v)
+					} else {
+						return fmt.Errorf("total size cannot be negative")
+					}
 				} else if v, ok := val.(int64); ok {
-					b.TotalSize = uint64(v)
+					if v >= 0 {
+						b.TotalSize = uint64(v)
+					} else {
+						return fmt.Errorf("total size cannot be negative")
+					}
 				}
 			case 1:
 				if v, ok := val.(string); ok {
@@ -130,13 +148,20 @@ func (b *BeginMessage) UnmarshalCBOR(data []byte) error {
 			// Handle uint64 keys (CBOR may decode as uint64)
 			switch k {
 			case 0:
-				// TotalSize can be decoded as uint64, int, or int64 depending on value
 				if v, ok := val.(uint64); ok {
-					b.TotalSize = v
+					b.TotalSize = uint64(v)
 				} else if v, ok := val.(int); ok {
-					b.TotalSize = uint64(v)
+					if v >= 0 {
+						b.TotalSize = uint64(v)
+					} else {
+						return fmt.Errorf("total size cannot be negative")
+					}
 				} else if v, ok := val.(int64); ok {
-					b.TotalSize = uint64(v)
+					if v >= 0 {
+						b.TotalSize = uint64(v)
+					} else {
+						return fmt.Errorf("total size cannot be negative")
+					}
 				}
 			case 1:
 				if v, ok := val.(string); ok {
@@ -257,11 +282,13 @@ func (r *ResultMessage) UnmarshalCBOR(data []byte) error {
 	if len(arr) > 0 {
 		switch v := arr[0].(type) {
 		case int:
-			r.StatusCode = v
+			r.StatusCode = int(v)
 		case int64:
 			r.StatusCode = int(v)
 		case uint64:
-			r.StatusCode = int(v)
+			if v <= math.MaxInt {
+				r.StatusCode = int(v)
+			}
 		case float64:
 			r.StatusCode = int(v)
 		default:
@@ -326,9 +353,11 @@ func (a *AckMessage) UnmarshalCBOR(data []byte) error {
 
 	if len(arr) > 1 {
 		if v, ok := arr[1].(int); ok {
-			a.ReasonCode = v
-		} else if v, ok := arr[1].(uint64); ok {
 			a.ReasonCode = int(v)
+		} else if v, ok := arr[1].(uint64); ok {
+			if v <= math.MaxInt {
+				a.ReasonCode = int(v)
+			}
 		} else if v, ok := arr[1].(int64); ok {
 			a.ReasonCode = int(v)
 		}

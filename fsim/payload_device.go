@@ -134,7 +134,7 @@ func (p *Payload) Yield(ctx context.Context, respond func(string) io.Writer, yie
 // reset clears the internal state.
 func (p *Payload) reset() {
 	if p.receiver != nil && p.receiver.IsReceiving() && p.ChunkedHandler != nil {
-		p.ChunkedHandler.CancelPayload()
+		_ = p.ChunkedHandler.CancelPayload() // Ignore error during reset
 	}
 	p.receiver = nil
 	p.buffer = nil
@@ -180,7 +180,7 @@ func (p *Payload) handleChunkedMessage(ctx context.Context, messageName string, 
 		}
 		p.receiver = nil
 		if p.ChunkedHandler != nil {
-			p.ChunkedHandler.CancelPayload()
+			_ = p.ChunkedHandler.CancelPayload() // Ignore error during cleanup
 		}
 		// Return nil to allow protocol to continue after sending error
 		return nil

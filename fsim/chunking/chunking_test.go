@@ -266,7 +266,9 @@ func TestChunkReceiverOutOfOrderChunks(t *testing.T) {
 	// Send begin
 	begin := BeginMessage{TotalSize: 10}
 	beginData, _ := begin.MarshalCBOR()
-	receiver.HandleMessage("test-begin", bytes.NewReader(beginData))
+	if err := receiver.HandleMessage("test-begin", bytes.NewReader(beginData)); err != nil {
+		t.Fatalf("Failed to handle test-begin: %v", err)
+	}
 
 	// Send chunk 1 before chunk 0
 	chunk := []byte("test")
@@ -285,7 +287,9 @@ func TestChunkReceiverSizeMismatch(t *testing.T) {
 	// Send begin with size 5
 	begin := BeginMessage{TotalSize: 5}
 	beginData, _ := begin.MarshalCBOR()
-	receiver.HandleMessage("test-begin", bytes.NewReader(beginData))
+	if err := receiver.HandleMessage("test-begin", bytes.NewReader(beginData)); err != nil {
+		t.Fatalf("Failed to handle test-begin: %v", err)
+	}
 
 	// Send 10 bytes
 	chunk := []byte("1234567890")
@@ -367,7 +371,9 @@ func TestChunkSenderProgress(t *testing.T) {
 
 	producer := &mockProducer{messages: make(map[string][]byte)}
 
-	sender.SendBegin(producer)
+	if err := sender.SendBegin(producer); err != nil {
+		t.Fatalf("Failed to send begin: %v", err)
+	}
 	if _, err := sender.SendNextChunk(producer); err != nil {
 		t.Fatalf("Failed to send next chunk: %v", err)
 	}
@@ -524,7 +530,9 @@ func TestChunkSenderWithAckRejected(t *testing.T) {
 	producer := &mockProducer{messages: make(map[string][]byte)}
 
 	// Send begin
-	sender.SendBegin(producer)
+	if err := sender.SendBegin(producer); err != nil {
+		t.Fatalf("Failed to send begin: %v", err)
+	}
 
 	// Simulate receiving a reject ack
 	rejectAck := AckMessage{
@@ -663,7 +671,9 @@ func TestChunkReceiverSendAck(t *testing.T) {
 	// Send begin with RequireAck
 	begin := BeginMessage{RequireAck: true}
 	beginData, _ := begin.MarshalCBOR()
-	receiver.HandleMessage("payload-begin", bytes.NewReader(beginData))
+	if err := receiver.HandleMessage("payload-begin", bytes.NewReader(beginData)); err != nil {
+		t.Fatalf("Failed to handle payload-begin: %v", err)
+	}
 
 	// Send ack using mock respond function
 	var ackKey string
@@ -694,7 +704,9 @@ func TestChunkReceiverSendAck(t *testing.T) {
 		ackData, _ = ack.MarshalCBOR()
 
 		// Decode to verify
-		sentAck.UnmarshalCBOR(ackData)
+		if err := sentAck.UnmarshalCBOR(ackData); err != nil {
+			t.Fatalf("Failed to unmarshal sent ack: %v", err)
+		}
 	}
 
 	_ = respond // suppress unused warning

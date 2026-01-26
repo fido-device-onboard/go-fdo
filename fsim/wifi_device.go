@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"strings"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
@@ -74,9 +75,6 @@ type WiFi struct {
 	currentNetworkID string
 	currentSSID      string
 
-	// Result storage
-	csrResultStatus  int
-	csrResultMsg     string
 	certResultStatus int
 	certResultMsg    string
 	caResultStatus   int
@@ -162,7 +160,9 @@ func (w *WiFi) handleNetworkAdd(messageBody io.Reader, respond func(string) io.W
 		networkMap = make(map[uint64]any)
 		for k, v := range networkMapAny {
 			if ki, ok := k.(int); ok {
-				networkMap[uint64(ki)] = v
+				if ki >= 0 {
+					networkMap[uint64(ki)] = v
+				}
 			} else if ku, ok := k.(uint64); ok {
 				networkMap[ku] = v
 			}
@@ -197,7 +197,9 @@ func (w *WiFi) handleNetworkAdd(messageBody io.Reader, respond func(string) io.W
 	case int64:
 		network.AuthType = int(v)
 	case uint:
-		network.AuthType = int(v)
+		if v <= math.MaxInt {
+			network.AuthType = int(v)
+		}
 	case uint8:
 		network.AuthType = int(v)
 	case uint16:
@@ -205,7 +207,9 @@ func (w *WiFi) handleNetworkAdd(messageBody io.Reader, respond func(string) io.W
 	case uint32:
 		network.AuthType = int(v)
 	case uint64:
-		network.AuthType = int(v)
+		if v <= math.MaxInt {
+			network.AuthType = int(v)
+		}
 	default:
 		if networkMap[3] != nil {
 			slog.Warn("fdo.wifi auth_type type mismatch", "type", fmt.Sprintf("%T", networkMap[3]), "value", networkMap[3])
@@ -244,7 +248,9 @@ func (w *WiFi) handleNetworkAdd(messageBody io.Reader, respond func(string) io.W
 	case int64:
 		network.TrustLevel = int(v)
 	case uint:
-		network.TrustLevel = int(v)
+		if v <= math.MaxInt {
+			network.TrustLevel = int(v)
+		}
 	case uint8:
 		network.TrustLevel = int(v)
 	case uint16:
@@ -252,7 +258,9 @@ func (w *WiFi) handleNetworkAdd(messageBody io.Reader, respond func(string) io.W
 	case uint32:
 		network.TrustLevel = int(v)
 	case uint64:
-		network.TrustLevel = int(v)
+		if v <= math.MaxInt {
+			network.TrustLevel = int(v)
+		}
 	}
 
 	// Optional fields
@@ -552,19 +560,3 @@ func convertToStringMap(m map[any]any) map[string]any {
 }
 
 // wifiErrorString returns a human-readable error message for error codes.
-func wifiErrorString(code uint) string {
-	switch code {
-	case 1000:
-		return "Invalid configuration format"
-	case 1001:
-		return "Authentication not supported"
-	case 1002:
-		return "Certificate provisioning not available"
-	case 1003:
-		return "Invalid network configuration"
-	case 1004:
-		return "Trust level not authorized"
-	default:
-		return fmt.Sprintf("Unknown error (%d)", code)
-	}
-}

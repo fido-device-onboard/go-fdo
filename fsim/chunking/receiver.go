@@ -188,14 +188,19 @@ func (r *ChunkReceiver) handleEnd(messageBody io.Reader) error {
 
 	// Verify size if provided
 	if r.expectedSize > 0 {
-		expectedSize := int64(r.expectedSize)
-		if expectedSize < 0 {
+		if r.expectedSize <= math.MaxInt64 {
+			expectedSize := int64(r.expectedSize)
+			if expectedSize < 0 {
+				r.reset()
+				return fmt.Errorf("invalid expected size")
+			}
+			if r.totalBytes != expectedSize {
+				r.reset()
+				return fmt.Errorf("size mismatch: expected %d, received %d", r.expectedSize, r.totalBytes)
+			}
+		} else {
 			r.reset()
-			return fmt.Errorf("invalid expected size")
-		}
-		if r.totalBytes != expectedSize {
-			r.reset()
-			return fmt.Errorf("size mismatch: expected %d, received %d", r.expectedSize, r.totalBytes)
+			return fmt.Errorf("expected size too large")
 		}
 	}
 
