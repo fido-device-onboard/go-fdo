@@ -105,6 +105,7 @@ start_server() {
 
 	# Start server in background, redirecting output to a temp file
 	# shellcheck disable=SC2086 # $flags intentionally unquoted for word splitting
+	log_step "go run ./cmd server -http \"$SERVER_ADDR\" -db \"../$DB_FILE\" $flags"
 	(cd examples && go run ./cmd server -http "$SERVER_ADDR" -db "../$DB_FILE" $flags >/tmp/fdo_server.log 2>&1) &
 	SERVER_PID=$!
 

@@ -93,6 +93,45 @@
 
 ---
 
+## 4. FDO 2.0 Module System Architecture
+
+### Current State
+
+FDO 2.0 currently uses hardcoded sysconfig responses in `to2_server_v200.go` (lines 397-431) instead of the proper module state machine used by FDO 1.01.
+
+### Issues with Current Implementation
+
+- **Bypasses module system**: Hardcoded responses instead of using `SysConfigOwner` module
+- **No state machine**: Doesn't use devmod→sysconfig→nextmodule progression
+- **Not scalable**: Hardcoded responses can't adapt to different configurations
+- **Inconsistent**: Different architecture from FDO 1.01's proven module system
+
+### Required Changes
+
+#### High Priority
+
+- [ ] **Replace hardcoded sysconfig in FDO 2.0**: Remove the "Simple fix" in `to2_server_v200.go` lines 397-431
+- [ ] **Implement proper module state machine**: Use the same `ownerSvcInfo20()` → module progression as FDO 1.01
+- [ ] **Ensure devmod→sysconfig transition works**: Verify the module state machine works correctly with FDO 2.0 protocol messages
+- [ ] **Test with varying module counts**: Ensure the state machine works with 2-chunk vs 3-chunk devmod scenarios
+
+#### Medium Priority
+
+- [ ] **Unify module systems**: Ensure FDO 1.01 and FDO 2.0 use the same module architecture
+- [ ] **Add FDO 2.0 specific module tests**: Verify all FSIMs work with FDO 2.0 protocol
+- [ ] **Document architectural differences**: Clearly explain why FDO 2.0 was hardcoded and how to fix it
+
+#### Low Priority
+
+- [ ] **Performance optimization**: Ensure FDO 2.0 module performance matches hardcoded version
+- [ ] **Backward compatibility**: Ensure existing FDO 2.0 deployments continue to work
+
+### Technical Notes
+
+The issue is that FDO 2.0's `ownerSvcInfo20()` function bypasses the module system entirely, while FDO 1.01's `ownerServiceInfo()` properly uses the module state machine. This creates architectural inconsistency and prevents proper module progression in FDO 2.0.
+
+---
+
 ## Cross-Cutting Concerns
 
 ### Standardization
@@ -125,9 +164,10 @@
 
 ### High Priority
 
-1. Security hardening for all FSIMs
-2. Standardized error handling
-3. Complete documentation
+1. **Fix FDO 2.0 module system architecture** (replace hardcoded responses)
+2. Security hardening for all FSIMs
+3. Standardized error handling
+4. Complete documentation
 
 ### Medium Priority
 
@@ -148,3 +188,4 @@
 - All changes should maintain backward compatibility
 - Security fixes take highest priority
 - Documentation should be updated with any changes
+- **FDO 2.0 module system fix is critical for architectural consistency**

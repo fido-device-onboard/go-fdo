@@ -137,9 +137,9 @@ func TO2v200(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol
 	credReuse := replacementOVH == nil
 	EmitTO2Completed(ctx, c.Cred.GUID, credReuse, c.attestationMode)
 
-	// If using Credential Reuse, return the original credential
+	// If using Credential Reuse, return nil to match FDO 1.01 behavior
 	if replacementOVH == nil {
-		return &c.Cred, nil
+		return nil, nil
 	}
 
 	// Hash new owner public key and return replacement credential
