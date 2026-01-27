@@ -156,7 +156,7 @@ func (d *Wget) download(ctx context.Context, url string) (_ int64, err error) {
 		return 0, fmt.Errorf("checksum of %q failed verification: expected: %x, got: %x", d.name, d.sha384, hashed)
 	}
 
-	// Rename temp file to final file name
+	// Move temp file to final file name
 	resolveName := d.NameToPath
 	if resolveName == nil {
 		resolveName = func(name string) string { return name }
@@ -164,8 +164,8 @@ func (d *Wget) download(ctx context.Context, url string) (_ int64, err error) {
 	if d.name == "" {
 		return 0, fmt.Errorf("name not sent before file download completed")
 	}
-	if err := os.Rename(temp.Name(), resolveName(d.name)); err != nil {
-		return 0, fmt.Errorf("error renaming file to %q: %w", d.name, err)
+	if err := moveFile(temp.Name(), resolveName(d.name)); err != nil {
+		return 0, fmt.Errorf("error moving file to %q: %w", d.name, err)
 	}
 
 	return n, nil

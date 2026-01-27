@@ -146,7 +146,7 @@ func (d *Download) finalize(respond func(string) io.Writer) error {
 		return cbor.NewEncoder(respond("done")).Encode(-1)
 	}
 
-	// Rename temp file to final file name
+	// Move temp file to final file name
 	resolveName := d.NameToPath
 	if resolveName == nil {
 		resolveName = func(name string) string { return name }
@@ -157,9 +157,9 @@ func (d *Download) finalize(respond func(string) io.Writer) error {
 		}
 		return fmt.Errorf("name not sent before data transfer completed")
 	}
-	if err := os.Rename(d.temp.Name(), resolveName(d.name)); err != nil {
+	if err := moveFile(d.temp.Name(), resolveName(d.name)); err != nil {
 		if d.ErrorLog != nil {
-			_, _ = fmt.Fprintf(d.ErrorLog, "[file=%s] error renaming file: %v\n", d.name, err)
+			_, _ = fmt.Fprintf(d.ErrorLog, "[file=%s] error moving file: %v\n", d.name, err)
 		}
 		return cbor.NewEncoder(respond("done")).Encode(-1)
 	}
