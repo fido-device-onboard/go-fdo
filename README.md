@@ -12,11 +12,55 @@
 
 `go-fdo` is a lightweight stdlib-only library for implementing FDO device, owner service, and device initialization server roles.
 
-It implements [FIDO Device Onboard Specification 1.1][fdo] as well as necessary dependencies such as [CBOR][cbor] and [COSE][cose]. Implementations of dependencies are not meant to be complete implementations of their relative specifications, but are supported and any breaking changes to their APIs will be considered a breaking change to `go-fdo`.
+It implements [FIDO Device Onboard Specification 1.1][fdo11] and [FIDO Device Onboard Specification 2.0][fdo200] as well as necessary dependencies such as [CBOR][cbor] and [COSE][cose]. Implementations of dependencies are not meant to be complete implementations of their relative specifications, but are supported and any breaking changes to their APIs will be considered a breaking change to `go-fdo`.
 
-[fdo]: https://fidoalliance.org/specs/FDO/FIDO-Device-Onboard-PS-v1.1-20220419/FIDO-Device-Onboard-PS-v1.1-20220419.html
+[fdo11]: https://fidoalliance.org/specs/FDO/FIDO-Device-Onboard-PS-v1.1-20220419/FIDO-Device-Onboard-PS-v1.1-20220419.html
+[fdo200]: https://fidoalliance.org/specifications/download-iot-specifications/
 [cbor]: https://www.rfc-editor.org/rfc/rfc8949.html
 [cose]: https://datatracker.ietf.org/doc/html/rfc8152
+
+## Security Notice
+
+⚠️ **IMPORTANT**: This library is intended for development and testing. For production deployments, you MUST follow proper security practices. See [PRODUCTION_CONSIDERATIONS.md](PRODUCTION_CONSIDERATIONS.md) for detailed production considerations including:
+
+- Certificate validation and revocation checking
+- Key management best practices
+- Transport security requirements
+- Operational security guidelines
+
+## Quick Start
+
+A comprehensive test script is provided that demonstrates all major features of the FDO implementation. It serves as both a test suite and a self-documenting guide.
+
+```bash
+go work init
+go work use -r .
+./test_examples.sh all
+```
+
+Makefile included is for convenience, and to prove some quick ways to build, run test, run examples, and provide more of a "cheat sheet" to illustrate commands for common tasks. Try `make help` for more information.
+
+**Available tests:**
+
+| Test | Description |
+| ---- | ----------- |
+| `basic` | Basic device initialization (DI) and transfer of ownership (TO1/TO2) |
+| `basic-reuse` | Credential reuse protocol - multiple onboards without credential changes |
+| `rv-blob` | Rendezvous blob registration flow |
+| `kex` | Key exchange with ASYMKEX2048 (RSA keys) |
+| `fdo200` | FDO 2.0 protocol |
+| `delegate` | Delegate certificate support (FDO 1.01) |
+| `delegate-fdo200` | Delegate certificate support with FDO 2.0 |
+| `all` | Run all tests (default) |
+
+Run a specific test:
+
+```bash
+./test_examples.sh basic
+./test_examples.sh delegate-fdo200
+```
+
+**Requirements:** `sqlite3` must be installed for GUID extraction.
 
 ## Building the Example Application
 
@@ -51,6 +95,8 @@ Client options:
         A dir to download files into (FSIM disabled if empty)
   -echo-commands
         Echo all commands received to stdout (FSIM disabled if false)
+  -fdo-version int
+        FDO protocol version (101 or 200) (default 101)
   -insecure-tls
         Skip TLS certificate verification
   -kex suite
@@ -366,6 +412,44 @@ $ go run ./examples/cmd client -di-key rsa2048 -tpm simulator
 [2024-09-01 00:00:00] INFO: tpm: max input buffer size undefined, using default
   size: 1024
 Success
+```
+
+## Delegate Support
+
+The FDO Delegate Protocol allows a third party to act on behalf of the device owner during onboarding (TO2) or rendezvous registration (TO0). Delegate support is available in both FDO 1.01 and FDO 2.0 protocols.
+
+For detailed documentation on creating and using delegate certificates, see [delegate.md](delegate.md).
+
+### Certificate Validation
+
+> **Important:** The reference implementation validates certificate expiration but does **not** check certificate revocation (CRL/OCSP) by default. Production deployments MUST implement revocation checking using the `CertificateChecker` interface.
+
+When running tests with delegates, you will see warnings like:
+
+```text
+WARN: No CertificateChecker configured - revocation checking (CRL/OCSP) is disabled
+```
+
+These warnings are expected during development. For production use, see [PRODUCTION_CONSIDERATIONS.md](PRODUCTION_CONSIDERATIONS.md) for detailed production requirements including:
+
+- Mandatory certificate revocation checking
+- Key management best practices
+- Transport security requirements
+- Operational security guidelines
+
+## Attested Payloads
+
+Attested payloads combine data with cryptographic proof of authenticity, allowing devices to verify that payloads originated from their legitimate owner. See [attestedpayload.md](attestedpayload.md) for details.
+
+## Development
+
+A `Makefile` is provided for convenience during development:
+
+```bash
+make setup    # Initialize Go workspace (run once after clone)
+make lint     # Run golangci-lint and shellcheck
+make test     # Run unit and integration tests
+make          # Run lint + test (useful before commits)
 ```
 
 ## FIPS Compliance

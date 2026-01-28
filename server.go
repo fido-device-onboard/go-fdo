@@ -13,6 +13,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/kex"
 	"github.com/fido-device-onboard/go-fdo/protocol"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
@@ -107,6 +108,11 @@ type TO0Server struct {
 	// requested TTL will be used. It is expected that some other means of
 	// authorization is used in this case.
 	AcceptVoucher func(ctx context.Context, ov Voucher, requestedTTLSecs uint32) (ttlSecs uint32, err error)
+
+	// VoucherReplacementPolicy controls how the RV service handles voucher
+	// replacements for the same GUID. Default is RVPolicyAllowAny (Option 0).
+	// See SECURITY_CONSIDERATIONS.md for detailed policy descriptions.
+	VoucherReplacementPolicy VoucherReplacementPolicy
 }
 
 // Respond validates a request and returns the appropriate response message.
@@ -195,10 +201,11 @@ func (s *TO1Server) HandleError(ctx context.Context, errMsg protocol.ErrorMessag
 
 // TO2Server implements the TO2 protocol.
 type TO2Server struct {
-	Session   TO2SessionState
-	Modules   serviceinfo.ModuleStateMachine
-	Vouchers  OwnerVoucherPersistentState
-	OwnerKeys OwnerKeyPersistentState
+	Session      TO2SessionState
+	Modules      serviceinfo.ModuleStateMachine
+	Vouchers     OwnerVoucherPersistentState
+	OwnerKeys    OwnerKeyPersistentState
+	DelegateKeys DelegateKeyPersistentState
 
 	// This field must be non-nil in order to use the Resale Protocol (see
 	// [TO2Server.Resell]).
@@ -231,6 +238,22 @@ type TO2Server struct {
 	// is useful when it can help a well-behaved device communicate faster over
 	// a well understood network.
 	MaxDeviceServiceInfoSize func(context.Context, Voucher) (uint16, error)
+
+	// Use this delegate cert for onboarding (or empty string)
+	OnboardDelegate string
+
+	// Use this delegate cert for rendezvous (or empty string)
+	RvDelegate string
+
+	// SingleSidedMode enables single-sided attestation for WiFi-only services.
+	// When true, the server generates ProveOVHdr with algorithm=0 and empty
+	// signature, signaling to the device that owner verification is skipped.
+	// In single-sided mode:
+	// - Server validates the device via voucher (device proves legitimacy)
+	// - Server does NOT prove ownership (no signature verification by device)
+	// - Only devmod and fdo.wifi FSIMs should be used
+	// - Device will downgrade all trust levels to 0 (onboard-only)
+	SingleSidedMode bool
 }
 
 // Resell implements the FDO Resale Protocol by removing a voucher from
@@ -281,6 +304,8 @@ func (s *TO2Server) Resell(ctx context.Context, guid protocol.GUID, nextOwner cr
 }
 
 // Respond validates a request and returns the appropriate response message.
+//
+//nolint:gocyclo // Protocol handler requires multiple message type cases
 func (s *TO2Server) Respond(ctx context.Context, msgType uint8, msg io.Reader) (respType uint8, resp any) {
 	// Inject a mutable error into the context for error info capturing without
 	// complex error wrapping or overburdened method signatures.
@@ -290,6 +315,7 @@ func (s *TO2Server) Respond(ctx context.Context, msgType uint8, msg io.Reader) (
 	// Handle each message type
 	var err error
 	switch msgType {
+	// FDO 1.01 TO2 messages
 	case protocol.TO2HelloDeviceMsgType:
 		respType = protocol.TO2ProveOVHdrMsgType
 		resp, err = s.proveOVHdr(ctx, msg)
@@ -312,6 +338,35 @@ func (s *TO2Server) Respond(ctx context.Context, msgType uint8, msg io.Reader) (
 		s.Modules.CleanupModules(ctx)
 		respType = protocol.TO2Done2MsgType
 		resp, err = s.to2Done2(ctx, msg)
+
+	// FDO 2.0 TO2 messages
+	// Key difference: Device proves itself FIRST (anti-DoS)
+	case protocol.TO2HelloDeviceProbeMsgType:
+		respType = protocol.TO2HelloDeviceAck20MsgType
+		resp, err = s.helloDeviceAck20(ctx, msg)
+	case protocol.TO2ProveDevice20MsgType:
+		respType = protocol.TO2ProveOVHdr20MsgType
+		resp, err = s.proveOVHdr20(ctx, msg)
+	case protocol.TO2GetOVNextEntry20MsgType:
+		respType = protocol.TO2OVNextEntry20MsgType
+		resp, err = s.ovNextEntry20(ctx, msg)
+	case protocol.TO2DeviceSvcInfoRdy20MsgType:
+		respType = protocol.TO2SetupDevice20MsgType
+		resp, err = s.setupDevice20(ctx, msg)
+	case protocol.TO2DeviceSvcInfo20MsgType:
+		respType = protocol.TO2OwnerSvcInfo20MsgType
+		var req DeviceSvcInfo20Msg
+		if err := cbor.NewDecoder(msg).Decode(&req); err != nil {
+			return protocol.TO2OwnerSvcInfo20MsgType, nil
+		}
+		resp, err = s.ownerSvcInfo20(ctx, &req)
+		if err != nil {
+			s.Modules.CleanupModules(ctx)
+		}
+	case protocol.TO2Done20MsgType:
+		s.Modules.CleanupModules(ctx)
+		respType = protocol.TO2DoneAck20MsgType
+		resp, err = s.doneAck20(ctx, msg)
 	}
 
 	// Return response on success

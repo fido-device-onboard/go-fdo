@@ -1,0 +1,231 @@
+[21:37:43] INFO: Listening
+  local: 127.0.0.1:9999
+  external: 127.0.0.1:9999
+[21:37:45] DEBUG: request
+  dump: POST /fdo/101/msg/10 HTTP/1.1
+Host: 127.0.0.1:9999
+Accept-Encoding: gzip
+Content-Length: 313
+Content-Type: application/cbor
+User-Agent: Go-http-client/1.1
+  body: [h'850b01733137333535343039343332343034383434353866676f74657374590114308201103081970201003018311630140603550403130d6465766963652e676f2d66646f3076301006072a8648ce3d020106052b8104002203620004c79b56e6514ffc5db83fe2e1046f701f66ea0a05167982cd7fc2b787d02015ff2e750b3d8965a2200aacafb7945179351d9bb26489757b414db77bdfd203a44322c382edfe97a22c2af474d06217c95d7fdee93bd940556bfa1fe01f5ca0e394a000300a06082a8648ce3d04030303680030650231009949e3ee159a2b4323b838571e178065f51ba188b1c249b17653eb3041723b0923608b2d6755745f6e319688c152fb9502302e8c88c0fb352e20d9cc61586bfbd8f4019cc6172b6767c596749b69ec369fee513fb23a7f30a7d9d2aca185be8dff85']
+[21:37:45] DEBUG: response
+  dump: HTTP/1.1 200 OK
+Content-Length: 245
+Authorization: Bearer FsN4GAy7gPQIdE7bx3AlxFl2fE0km56sMElfHPYfFWZGsghxvN8hOhZgWSFsby-L
+Content-Type: application/cbor
+Message-Type: 11
+  body: [h'86186550a5c75c220504c0962d43028f462b236c8281820d410083820c41018202515000000000000000000000ffff7f00000182034319270f66676f74657374830b0158783076301006072a8648ce3d020106052b810400220362000473beebfb07ff5e947d5088339df0ff812c2bb13d323012676b37323fd9b0a6b7b0c1fdcb381c356429fbe6727b3b58240e38c94c7b553fad787e69b62a9a4bde9cd556b524c3501ed1afc57b151e1a706625c241ba05346b23e97d09bded6ca682382a5830390c304cb23ebf7a4037fa036da52fbb1ab61217d33caad84a35104837b1c722a9d5a0edefa9ca131f90522736df171d']
+[21:37:45] DEBUG: request
+  dump: POST /fdo/101/msg/12 HTTP/1.1
+Host: 127.0.0.1:9999
+Accept-Encoding: gzip
+Authorization: Bearer FsN4GAy7gPQIdE7bx3AlxFl2fE0km56sMElfHPYfFWZGsghxvN8hOhZgWSFsby-L
+Content-Length: 53
+Content-Type: application/cbor
+User-Agent: Go-http-client/1.1
+  body: [[6, h'49c7d1d0c95c09443f164dc4d7be9081e8894667cb60417963f823aa58d53d04b316ec9245c8994b27b95f4603bfb617']]
+[21:37:45] DEBUG: response
+  dump: HTTP/1.1 200 OK
+Content-Length: 1
+Authorization: Bearer FsN4GAy7gPQIdE7bx3AlxFl2fE0km56sMElfHPYfFWZGsghxvN8hOhZgWSFsby-L
+Content-Type: application/cbor
+Message-Type: 13
+  body: []
+[21:37:48] DEBUG: request
+  dump: POST /fdo/101/msg/30 HTTP/1.1
+Host: 127.0.0.1:9999
+Accept-Encoding: gzip
+Content-Length: 42
+Content-Type: application/cbor
+User-Agent: Go-http-client/1.1
+  body: [h'a5c75c220504c0962d43028f462b236c', [-35, h''], h'87', ["com.example.test"]]
+[21:37:48] DEBUG: response
+  dump: HTTP/1.1 200 OK
+Content-Length: 42
+Authorization: Bearer _R-GhJZuqpnu7WH3DPLGetr1LnxCtGkkaj3HjgauX7IyG2TynUEzlXV0Xwa8s7rs
+Content-Type: application/cbor
+Message-Type: 31
+  body: [h'cc206f469782cb3f8991aea78ef23cd3', [-35, h''], h'87', ["com.example.test"]]
+[21:37:48] DEBUG: request
+  dump: POST /fdo/101/msg/32 HTTP/1.1
+Host: 127.0.0.1:9999
+Accept-Encoding: gzip
+Authorization: Bearer _R-GhJZuqpnu7WH3DPLGetr1LnxCtGkkaj3HjgauX7IyG2TynUEzlXV0Xwa8s7rs
+Content-Length: 148
+Content-Type: application/cbor
+User-Agent: Go-http-client/1.1
+  body: 18([h'a1013822', {}, h'a20a50cc206f469782cb3f8991aea78ef23cd31901005101a5c75c220504c0962d43028f462b236c', h'09bb14dd34003029b6fe5ce5437ea7251fc9a795e867a81cf366ed791cfaa7353fa5dec721efd5d86b42bb71100b59c01fbc6cdcb0daed258cb8e30ad671324345233a161f16bdf6c0ad559a47797f48aa2548e7f136e8d1af573cabc1695631'])
+[21:37:48] DEBUG: response
+  dump: HTTP/1.1 200 OK
+Content-Length: 162
+Authorization: Bearer _R-GhJZuqpnu7WH3DPLGetr1LnxCtGkkaj3HjgauX7IyG2TynUEzlXV0Xwa8s7rs
+Content-Type: application/cbor
+Message-Type: 33
+  body: 18([h'a1013822', {}, h'828184f6693132372e302e302e3119270f03822f58200000000000000000000000000000000000000000000000000000000000000000', h'3ea7d2f9a769ae8be7871b4a1a7046497fafc7699bd1dd47f9e1b7136f4631f1ba6c7dfab3b8dcb605e93da71d4445d8fa7f8460d429491496b6baf71cf42a365135a39b48954c2a3ba9ad506bed7c606f63f60e89dc0ac6c8b21835b6b76ef9'])
+[21:37:48] DEBUG: request
+  dump: POST /fdo/101/msg/60 HTTP/1.1
+Host: 127.0.0.1:9999
+Accept-Encoding: gzip
+Content-Length: 51
+Content-Type: application/cbor
+User-Agent: Go-http-client/1.1
+  body: [65535, h'a5c75c220504c0962d43028f462b236c', h'9ce8d1699bf66b0d3fd8666df623955f', "ECDH384", 1, [-35, h'']]
+[21:37:48] DEBUG: response
+  dump: HTTP/1.1 200 OK
+Content-Length: 784
+Authorization: Bearer xZ1R-wlcphy-ch8BLhHCD5C_6kfwxMptdTsmv8KhS91Byf6xc_fySIb8ieo0Wmwq
+Content-Type: application/cbor
+Message-Type: 61
+  body: 18([h'a1013822', {256: h'320579c48807c67ef3084ae68d3cff81', 257: [11, 1, h'3076301006072a8648ce3d020106052b81040022036200045fec056112c8dddde4219d13b1bcd08ea0b7751debec808bf904944da661f5f15543a4c8b7b0e92937768d6164c792917478515682dd1a875779c88418d26444e4493f9fcde23a026dda27227450d36d0c202d55ebcccaad6b77225d0c9e79cb']}, h'8858f286186550a5c75c220504c0962d43028f462b236c8281820d410083820c41018202515000000000000000000000ffff7f00000182034319270f66676f74657374830b0158783076301006072a8648ce3d020106052b810400220362000473beebfb07ff5e947d5088339df0ff812c2bb13d323012676b37323fd9b0a6b7b0c1fdcb381c356429fbe6727b3b58240e38c94c7b553fad787e69b62a9a4bde9cd556b524c3501ed1afc57b151e1a706625c241ba05346b23e97d09bded6ca682382a5830390c304cb23ebf7a4037fa036da52fbb1ab61217d33caad84a35104837b1c722a9d5a0edefa9ca131f90522736df171d018206583049c7d1d0c95c09443f164dc4d7be9081e8894667cb60417963f823aa58d53d04b316ec9245c8994b27b95f4603bfb617509ce8d1699bf66b0d3fd8666df623955f8238224058960030f901647d34c1e010756435aefcff007beb1fd502fad2b60e823a47bf9f0a2b95d0168128a8b1a6e2dc62dbffcec9d2920030fa272427b7dcc6250280277f30ffde706be02e75efb8460dcf8d1b695ebd536c25f195fb652ab2f71f925397a66ed6ff00307c5219491bb4f271671d69c0be18f6766497d1297c64beb2cf9d6bbd22e5183c448684c5004fc8cf75b8df851128576b82382a5830cdc226be1dcdd6269ab4f7de05adaf1b4edb72f2691990c76ef1bea97d4d949973252f18a43de3c8d35a527f69e437e419ffff', h'75ec0acf57316421c5d353c9056672d8b4c511d1fa9bbcab0b7518a8fd19ce21352d0078066642fbcac0093c866deaaa8b201ebbe7cc0b8ce5f24f64f60594fec658a5d63135aee66d4cf82245cdc93ab674d26d503600e0b0ce65a6ce973fb7'])
+[21:37:48] DEBUG: request
+  dump: POST /fdo/101/msg/62 HTTP/1.1
+Host: 127.0.0.1:9999
+Accept-Encoding: gzip
+Authorization: Bearer xZ1R-wlcphy-ch8BLhHCD5C_6kfwxMptdTsmv8KhS91Byf6xc_fySIb8ieo0Wmwq
+Content-Length: 2
+Content-Type: application/cbor
+User-Agent: Go-http-client/1.1
+  body: [0]
+[21:37:48] DEBUG: response
+  dump: HTTP/1.1 200 OK
+Content-Length: 344
+Authorization: Bearer xZ1R-wlcphy-ch8BLhHCD5C_6kfwxMptdTsmv8KhS91Byf6xc_fySIb8ieo0Wmwq
+Content-Type: application/cbor
+Message-Type: 63
+  body: [0, 18([h'a1013822', {}, h'8482382a5830a7cb51adf6c82cd07d28404852e5e481fb7a55f76513193b2e27fd5260e1b8f72173ed0ad0399c0163aa9eaa72e6f75182382a5830dd5c8c2d9450a0e7a8891877c6c9b39ac7b6efdaa6024174e946e078e50eba39b7d9cc11055d94c17b3e1a8d108a07c841a0830b0158783076301006072a8648ce3d020106052b81040022036200045fec056112c8dddde4219d13b1bcd08ea0b7751debec808bf904944da661f5f15543a4c8b7b0e92937768d6164c792917478515682dd1a875779c88418d26444e4493f9fcde23a026dda27227450d36d0c202d55ebcccaad6b77225d0c9e79cb', h'dde8b4b9b20e1c07f43270bca66932cecca304ffd44ee27aee5d4c8d927490d85748feb38f90f15c0bc31551f34431e176345b627215508147fd81190fc71a120daf7a03901cd26f8b8a0d06bafde94e6299a494fd4290aec94003d47b6d9ecc'])]
+[21:37:48] DEBUG: request
+  dump: POST /fdo/101/msg/64 HTTP/1.1
+Host: 127.0.0.1:9999
+Accept-Encoding: gzip
+Authorization: Bearer xZ1R-wlcphy-ch8BLhHCD5C_6kfwxMptdTsmv8KhS91Byf6xc_fySIb8ieo0Wmwq
+Content-Length: 324
+Content-Type: application/cbor
+User-Agent: Go-http-client/1.1
+  body: 18([h'a1013822', {-259: h'588f4d43bca316d159368270f0274a43'}, h'a30a50320579c48807c67ef3084ae68d3cff811901005101a5c75c220504c0962d43028f462b236c39010081589600308ee0843285a62ff4f32bb0497514967b1afd2532a4fe317db35e02e92ed76fbbc1eb6b82beea2820c9fa93feb5a71cb900304c2af31706d73a6973339898b1481ab687b04269146dcf8660eb5bce03ab3902237c80cac56db21b87c5777ffd76f971003004bfa0d4dbeae17f188ad3f7547c75f8647b69f9df849e69f848d71485a499a2034f527fa224e89361e5e69b0eb510f8', h'8c7ade3ea745323b5478e35d192c5e02744f6c6fd8df9e612e994d17c5dad10a31173d9a78d767a1e26eeeafcbc080a39bae42f5c968dc2c9e8656867cdf43ae92face4f58c944937d46f454f48c853f0f741e8e6c0be416df9eb5ebce9722dc'])
+[21:37:48] DEBUG: unencrypted response
+  msg: 65
+  body: 18([h'a1013822', {}, h'848281820d410083820c41018202515000000000000000000000ffff7f00000182034319270f509cd084ff08638dbeec85edbe90d8c8f850588f4d43bca316d159368270f0274a43830b0158783076301006072a8648ce3d020106052b81040022036200045fec056112c8dddde4219d13b1bcd08ea0b7751debec808bf904944da661f5f15543a4c8b7b0e92937768d6164c792917478515682dd1a875779c88418d26444e4493f9fcde23a026dda27227450d36d0c202d55ebcccaad6b77225d0c9e79cb', h'20886c46466dd98e772e2d0b5085d836ba40d9554bc846393239a070b51348a3a845ee25f117c6ab6e335e1065fc3a35f581c1bb2cb4d28d02c3dc1470feca74d9264e30bbe2313dfb1b97528b476a2d72f8be77e2115f17c848dce77187fe74'])
+[21:37:48] DEBUG: response
+  dump: HTTP/1.1 200 OK
+Content-Length: 345
+Authorization: Bearer xZ1R-wlcphy-ch8BLhHCD5C_6kfwxMptdTsmv8KhS91Byf6xc_fySIb8ieo0Wmwq
+Content-Type: application/cbor
+Message-Type: 65
+  body: 16([h'a10101', {5: h'c5f57f3b5e320c98e191d8b1'}, h'f1ddb44b4b5334f121a4c7d55367ad96ddc35ee5b0b2a41410f15d17803a5c52b9c6119a0c8774cce519dec95b960d837311141aa050a3cd0eb13b8137696c83eaca12b8d9af851078ca39deb6c864e1d51becb161f0571e88ed0638176c23ec2e878669f0816fd8e308ff64ddd7b6c7ea3ab0b0c971c8c3dcf50f41e7a89d2895f18c6a64d435cd92ee15b231dbcd7e8a79d99bef766a60bf97138df54ecd707048dc15dab5a9f5ebeb0711e4b9da9a0af5868643a80f1a89eccc1d0d048bd794bfb0034ea44375aff8771652f7645122d37267f66e4512199bd14c61d424343d954f8a3eabdc04237c03783257a393bad4adaa15d739ab2210196d8198a50d7188530d62c9994f36caebc51a97fe20885913b1c131a71a56cc81ee706767bf290a16178f0a3c613b58f0289f564bd2488dd25d4d0b8a44cd1a5e78c8ef34d758'])
+[21:37:48] DEBUG: request
+  dump: POST /fdo/101/msg/66 HTTP/1.1
+Host: 127.0.0.1:9999
+Accept-Encoding: gzip
+Authorization: Bearer xZ1R-wlcphy-ch8BLhHCD5C_6kfwxMptdTsmv8KhS91Byf6xc_fySIb8ieo0Wmwq
+Content-Length: 95
+Content-Type: application/cbor
+User-Agent: Go-http-client/1.1
+  body: 16([h'a10101', {5: h'f2615a65676ccc5961ce1086'}, h'aaddabbc92ec01787e5506649372e5ca52240ac5199eedf76378d277f70ad8cf7db98fc4cca7b858bdfb9b7eee4a93c460087e2514cd3ca0067643f29f5491e2f8dc5ab83b3c9117'])
+[21:37:48] DEBUG: decrypted request
+  msg: 66
+  body: [[6, h'950296bd4c87e6e7cae5fa9c1b86d07864b5038378f8d8bfc7220c66c8989137e98f9c916fe74bba57d99b1d92abdf6e'], 1300]
+[21:37:48] DEBUG: unencrypted response
+  msg: 67
+  body: [null]
+[21:37:48] DEBUG: response
+  dump: HTTP/1.1 200 OK
+Content-Length: 40
+Authorization: Bearer xZ1R-wlcphy-ch8BLhHCD5C_6kfwxMptdTsmv8KhS91Byf6xc_fySIb8ieo0Wmwq
+Content-Type: application/cbor
+Message-Type: 67
+  body: 16([h'a10101', {5: h'c5f1dbddbd35860c4d40fb6d'}, h'53bf81ac76b5b09ff6ba3cc622482af5c2c4'])
+[21:37:48] DEBUG: request
+  dump: POST /fdo/101/msg/68 HTTP/1.1
+Host: 127.0.0.1:9999
+Accept-Encoding: gzip
+Authorization: Bearer xZ1R-wlcphy-ch8BLhHCD5C_6kfwxMptdTsmv8KhS91Byf6xc_fySIb8ieo0Wmwq
+Content-Length: 215
+Content-Type: application/cbor
+User-Agent: Go-http-client/1.1
+  body: 16([h'a10101', {5: h'5344f8e11c68f3d92e641ca7'}, h'a092ff0e5e7a425f206c65f41e5816a1e63ef56967a670a8fbc6222fbbf89345f3adb3972b23c6fc8f1c3e5bb5948a7b711fa7c7a7352b24ce48f846e3f7dfd658e45dfd8e994a045e2445e900f163efed3b929d9bcf51bff215b5a6d358c8ae1fbdea5d107268464cd09039fbc6a55cf2a546ed7930c68500999548266d9d34b59571626a7afe5e8195f997f62b11fb283d127f93d31fffc1c7860b0c484f09598c08227bd4f31e099086ef0deb31ae9bf67c211e0c769d1a4723f0f909d3f2'])
+[21:37:48] DEBUG: decrypted request
+  msg: 68
+  body: [true, [["devmod:active", h'f5'], ["devmod:os", h'656c696e7578'], ["devmod:arch", h'65616d643634'], ["devmod:version", h'6f44656269616e20426f6f6b776f726d'], ["devmod:device", h'6d676f2d76616c69646174696f6e'], ["devmod:sep", h'613b'], ["devmod:bin", h'65616d643634'], ["devmod:nummodules", h'04']]]
+[21:37:48] DEBUG: unencrypted response
+  msg: 69
+  body: [false, false, []]
+[21:37:48] DEBUG: response
+  dump: HTTP/1.1 200 OK
+Content-Length: 42
+Authorization: Bearer xZ1R-wlcphy-ch8BLhHCD5C_6kfwxMptdTsmv8KhS91Byf6xc_fySIb8ieo0Wmwq
+Content-Type: application/cbor
+Message-Type: 69
+  body: 16([h'a10101', {5: h'1ace07069826b03ccb3e0ec8'}, h'af1abd2469cb4d76a30b6b877dd9bd263098c2e2'])
+[21:37:48] DEBUG: request
+  dump: POST /fdo/101/msg/68 HTTP/1.1
+Host: 127.0.0.1:9999
+Accept-Encoding: gzip
+Authorization: Bearer xZ1R-wlcphy-ch8BLhHCD5C_6kfwxMptdTsmv8KhS91Byf6xc_fySIb8ieo0Wmwq
+Content-Length: 110
+Content-Type: application/cbor
+User-Agent: Go-http-client/1.1
+  body: 16([h'a10101', {5: h'4b57e9e8ef713691b349f203'}, h'bd2b26769856faddf1d8fac0677aa56279aedee425c2d63eca6f8f66c6d051064e675ff91943a1768995eb3321d2b244f6f7f81d04de3a2f649c2eb77f741675b09f74bf4eb123ec9b8a6d2c5e963d04f981b402810f04'])
+[21:37:48] DEBUG: decrypted request
+  msg: 68
+  body: [false, [["devmod:modules", h'8600046d6669646f5f616c6c69616e63656d66646f2e737973636f6e6669676b66646f2e7061796c6f6164666465766d6f64']]]
+[21:37:48] DEBUG: unencrypted response
+  msg: 69
+  body: [false, false, []]
+[21:37:48] DEBUG: response
+  dump: HTTP/1.1 200 OK
+Content-Length: 42
+Authorization: Bearer xZ1R-wlcphy-ch8BLhHCD5C_6kfwxMptdTsmv8KhS91Byf6xc_fySIb8ieo0Wmwq
+Content-Type: application/cbor
+Message-Type: 69
+  body: 16([h'a10101', {5: h'67606506ac3ae50e1dc48ee4'}, h'0c8e3c446fa5dfeb6a508fd79bf46d563f95590d'])
+[21:37:48] DEBUG: request
+  dump: POST /fdo/101/msg/68 HTTP/1.1
+Host: 127.0.0.1:9999
+Accept-Encoding: gzip
+Authorization: Bearer xZ1R-wlcphy-ch8BLhHCD5C_6kfwxMptdTsmv8KhS91Byf6xc_fySIb8ieo0Wmwq
+Content-Length: 41
+Content-Type: application/cbor
+User-Agent: Go-http-client/1.1
+  body: 16([h'a10101', {5: h'b890e173497f661be1300380'}, h'9933b3f389bd536172500dc5e3f463f80ec49e'])
+[21:37:48] DEBUG: decrypted request
+  msg: 68
+  body: [false, []]
+[21:37:48] DEBUG: unencrypted response
+  msg: 69
+  body: [false, false, [["fdo.payload:active", h'f5']]]
+[21:37:48] DEBUG: response
+  dump: HTTP/1.1 200 OK
+Content-Length: 65
+Authorization: Bearer xZ1R-wlcphy-ch8BLhHCD5C_6kfwxMptdTsmv8KhS91Byf6xc_fySIb8ieo0Wmwq
+Content-Type: application/cbor
+Message-Type: 69
+  body: 16([h'a10101', {5: h'f9ec0cece30c0950d1e5dfe2'}, h'5c24eab3174c1611190d557c43d17c4caab9ad60ed58c2f0ffda250e7cbece0b570f4cbb0ff4aa8e076b'])
+[21:37:48] DEBUG: request
+  dump: POST /fdo/101/msg/68 HTTP/1.1
+Host: 127.0.0.1:9999
+Accept-Encoding: gzip
+Authorization: Bearer xZ1R-wlcphy-ch8BLhHCD5C_6kfwxMptdTsmv8KhS91Byf6xc_fySIb8ieo0Wmwq
+Content-Length: 64
+Content-Type: application/cbor
+User-Agent: Go-http-client/1.1
+  body: 16([h'a10101', {5: h'4539b8f498c9ede76660bcd3'}, h'37a82af042dce14b8668eb41e2112bb34e45d191e890d34fc1b1d787c2a13fd00e4c41aa5a319dc41c'])
+[21:37:48] DEBUG: decrypted request
+  msg: 68
+  body: [false, [["fdo.payload:active", h'f5']]]
+[21:37:48] DEBUG: fdo.payload owner received message
+  key: active
+[21:37:48] DEBUG: fdo.payload device active status received
+[21:37:48] DEBUG: fdo.payload sent begin
+  mime_type: text/plain
+  size: 100
+[21:37:48] DEBUG: unencrypted response
+  msg: 69
+  body: [false, false, [["fdo.payload:payload-begin", h'a40018640166736861323536206a746578742f706c61696e2170746573745f7061796c6f61642e62696e']]]
+[21:37:48] DEBUG: response
+  dump: HTTP/1.1 200 OK
+Content-Length: 115
+Authorization: Bearer xZ1R-wlcphy-ch8BLhHCD5C_6kfwxMptdTsmv8KhS91Byf6xc_fySIb8ieo0Wmwq
+Content-Type: application/cbor
+Message-Type: 69
+  body: 16([h'a10101', {5: h'2cb42f16aad2ff605ae5d1cd'}, h'37875dd1edab08da8b5b630749e518f99f50c7241c50b2c11592efbe86b3aa99d0a4f9e808a680b642bb2b80608de84fda032c3ae579a6b0aec98d9afa8dbccc33ee7cc3e6217be6707518f10a2395ea87f2bbf9297b1403149f8417'])

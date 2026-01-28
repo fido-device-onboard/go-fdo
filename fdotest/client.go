@@ -33,6 +33,7 @@ import (
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/blob"
 	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/cose"
 	"github.com/fido-device-onboard/go-fdo/custom"
 	"github.com/fido-device-onboard/go-fdo/fdotest/internal/memory"
 	"github.com/fido-device-onboard/go-fdo/fdotest/internal/token"
@@ -42,6 +43,14 @@ import (
 )
 
 const timeout = 10 * time.Second
+
+// runTO2 calls the appropriate TO2 function based on protocol version
+func runTO2(ctx context.Context, transport fdo.Transport, to1d *cose.Sign1[protocol.To1d, []byte], config fdo.TO2Config, version protocol.Version) (*fdo.DeviceCredential, error) {
+	if version == protocol.Version200 {
+		return fdo.TO2v200(ctx, transport, to1d, config)
+	}
+	return fdo.TO2(ctx, transport, to1d, config)
+}
 
 // Config provides options to modify how the test suite runs.
 type Config struct {
@@ -56,6 +65,10 @@ type Config struct {
 
 	// Explicit disable for cases such as TPM simulators
 	UnsupportedRSA3072 bool
+
+	// Version specifies the FDO protocol version to test (101 or 200).
+	// Defaults to 101 if not set.
+	Version protocol.Version
 
 	// If NewCredential is non-nil, then it will be used to create and format
 	// the device credential. Otherwise the blob package will be used.
@@ -224,6 +237,7 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 		},
 		Vouchers:             conf.State,
 		OwnerKeys:            conf.State,
+		DelegateKeys:         conf.State,
 		VouchersForExtension: conf.State,
 		RvInfo: func(context.Context, fdo.Voucher) ([][]protocol.RvInstruction, error) {
 			return [][]protocol.RvInstruction{}, nil
@@ -404,7 +418,7 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 						Port:              8080,
 						TransportProtocol: protocol.HTTPTransport,
 					},
-				})
+				}, "")
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -426,7 +440,7 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 				}
 				t.Logf("RV Blob: %+v", to1d)
 
-				cred, err = fdo.TO2(ctx, transport, to1d, fdo.TO2Config{
+				cred, err = runTO2(ctx, transport, to1d, fdo.TO2Config{
 					Cred:       *cred,
 					HmacSha256: hmacSha256,
 					HmacSha384: hmacSha384,
@@ -443,7 +457,7 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 					KeyExchange:          table.keyExchange,
 					CipherSuite:          table.cipherSuite,
 					AllowCredentialReuse: conf.Reuse,
-				})
+				}, conf.Version)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -472,7 +486,7 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 
 				ctx, cancel := context.WithTimeout(context.Background(), timeout)
 				defer cancel()
-				cred, err = fdo.TO2(ctx, transport, nil, fdo.TO2Config{
+				cred, err = runTO2(ctx, transport, nil, fdo.TO2Config{
 					Cred:       *cred,
 					HmacSha256: hmacSha256,
 					HmacSha384: hmacSha384,
@@ -489,7 +503,7 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 					KeyExchange:          table.keyExchange,
 					CipherSuite:          table.cipherSuite,
 					AllowCredentialReuse: conf.Reuse,
-				})
+				}, conf.Version)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -518,7 +532,7 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 
 				ctx, cancel := context.WithTimeout(context.Background(), timeout)
 				defer cancel()
-				newCred, err := fdo.TO2(ctx, transport, nil, fdo.TO2Config{
+				cred, err = runTO2(ctx, transport, nil, fdo.TO2Config{
 					Cred:       *cred,
 					HmacSha256: hmacSha256,
 					HmacSha384: hmacSha384,
@@ -536,7 +550,7 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 					KeyExchange:          table.keyExchange,
 					CipherSuite:          table.cipherSuite,
 					AllowCredentialReuse: conf.Reuse,
-				})
+				}, conf.Version)
 				if conf.CustomExpect != nil {
 					conf.CustomExpect(t, err)
 					if err != nil {
@@ -546,7 +560,6 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 					t.Fatal(err)
 				}
 				t.Logf("New credential: %s", toDeviceCred(*cred))
-				cred = newCred
 			})
 		})
 	}
