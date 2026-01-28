@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"os"
 	"strings"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
@@ -390,15 +391,12 @@ func (s *TO2Server) setupDevice20(ctx context.Context, msg io.Reader) (*SetupDev
 // ownerSvcInfo20 handles TO2.DeviceSvcInfo20 (88) -> TO2.OwnerSvcInfo20 (89)
 // Uses the same module state machine as FDO 1.01
 func (s *TO2Server) ownerSvcInfo20(ctx context.Context, req *DeviceSvcInfo20Msg) (*OwnerSvcInfo20Msg, error) {
+	fmt.Fprintf(os.Stderr, "=== FORCED DEBUG: ownerSvcInfo20 called ===\n")
+	fmt.Printf("=== MY DEBUG: ownerSvcInfo20 called with %d service info entries ===\n", len(req.ServiceInfo))
 	fmt.Printf("[DEBUG FDO 2.0] ownerSvcInfo20 called with %d service info entries\n", len(req.ServiceInfo))
 
 	// Get session GUID
 	guid, err := s.Session.GUID(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("error getting GUID from session: %w", err)
-	}
-
-	// Process device service info through modules (reuse 1.01 logic)
 	if err != nil {
 		return nil, fmt.Errorf("error getting GUID from session: %w", err)
 	}
@@ -504,9 +502,13 @@ func (s *TO2Server) ownerSvcInfo20(ctx context.Context, req *DeviceSvcInfo20Msg)
 	// Use the same module state machine as FDO 1.01
 	// Continue processing modules until all are done
 	var allServiceInfo []*serviceinfo.KV
+
+	fmt.Printf("[DEBUG FDO 2.0] Starting module processing loop\n")
+
 	for {
 		// Get current module from the module state machine
 		moduleName, module, err := s.Modules.Module(ctx)
+		fmt.Printf("=== DEBUG: Module check - moduleName=%s, module=%v, err=%v ===\n", moduleName, module != nil, err)
 		if err != nil || module == nil {
 			// No more modules, break out of loop
 			fmt.Printf("[DEBUG FDO 2.0] No more modules, finished processing all modules\n")
@@ -583,11 +585,11 @@ func (s *TO2Server) ownerSvcInfo20(ctx context.Context, req *DeviceSvcInfo20Msg)
 		fmt.Printf("[DEBUG FDO 2.0] Module %s produced %d service info entries, complete=%t\n", moduleName, len(serviceInfo), complete)
 
 		// If module is blocking, we need to stop and send what we have so far
-		if explicitBlock {
+		if !complete {
 			fmt.Printf("[DEBUG FDO 2.0] Module %s is blocking, sending partial response with %d entries\n", moduleName, len(allServiceInfo))
 			return &OwnerSvcInfo20Msg{
-				IsMoreServiceInfo: true,  // More service info to come
-				IsDone:            false, // Not done yet
+				IsMoreServiceInfo: true,
+				IsDone:            false,
 				ServiceInfo:       allServiceInfo,
 			}, nil
 		}

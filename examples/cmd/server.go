@@ -141,6 +141,8 @@ func init() {
 }
 
 func server(ctx context.Context) error { //nolint:gocyclo
+	fmt.Println("=== STUPID DEBUG: SERVER FUNCTION CALLED ===")
+
 	if debug {
 		level.Set(slog.LevelDebug)
 	}
@@ -367,10 +369,32 @@ func serveHTTP(ctx context.Context, rvInfo [][]protocol.RvInstruction, state *sq
 	defer func() { _ = lis.Close() }()
 	slog.Info("Listening", "local", lis.Addr().String(), "external", extAddr)
 
-	if useTLS {
-		return serveTLS(lis, srv, state.DB())
+	// Start server in goroutine to monitor context cancellation
+	errChan := make(chan error, 1)
+	go func() {
+		if useTLS {
+			errChan <- serveTLS(lis, srv, state.DB())
+		} else {
+			errChan <- srv.Serve(lis)
+		}
+	}()
+
+	// Wait for context cancellation or server error
+	select {
+	case <-ctx.Done():
+		// Graceful shutdown on Ctrl+C
+		slog.Info("Shutting down server...")
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			slog.Error("Server shutdown error", "error", err)
+			return err
+		}
+		slog.Info("Server stopped")
+		return ctx.Err()
+	case err := <-errChan:
+		return err
 	}
-	return srv.Serve(lis)
 }
 
 func doPrintOwnerChain(ctx context.Context, state *sqlite.DB) error {

@@ -4,6 +4,7 @@
 package fdo
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/ecdsa"
@@ -354,12 +355,14 @@ func (s *TO2Server) Respond(ctx context.Context, msgType uint8, msg io.Reader) (
 		respType = protocol.TO2SetupDevice20MsgType
 		resp, err = s.setupDevice20(ctx, msg)
 	case protocol.TO2DeviceSvcInfo20MsgType:
+		fmt.Printf("=== STUPID DEBUG: TO2DeviceSvcInfo20MsgType RECEIVED ===\n")
 		respType = protocol.TO2OwnerSvcInfo20MsgType
 		var req DeviceSvcInfo20Msg
 		if err := cbor.NewDecoder(msg).Decode(&req); err != nil {
 			return protocol.TO2OwnerSvcInfo20MsgType, nil
 		}
-		resp, err = s.ownerSvcInfo20(ctx, &req)
+		// Convert 2.0 message to 1.0.1 format and reuse existing logic
+		resp, err = s.ownerServiceInfo20(ctx, &req)
 		if err != nil {
 			s.Modules.CleanupModules(ctx)
 		}
@@ -400,4 +403,70 @@ func (s *TO2Server) HandleError(ctx context.Context, errMsg protocol.ErrorMessag
 	// This should only be applicable if errMsg.PrevMsgType == 69, but the
 	// device reported error message cannot be completely trusted
 	s.Modules.CleanupModules(ctx)
+}
+
+// ownerServiceInfo20 converts 2.0 DeviceSvcInfo20Msg to 1.0.1 format and reuses existing logic
+// TODO: Consolidate 1.0.1 and 2.0 FSIM handling code to avoid duplicate implementations
+func (s *TO2Server) ownerServiceInfo20(ctx context.Context, req *DeviceSvcInfo20Msg) (*OwnerSvcInfo20Msg, error) {
+	fmt.Printf("=== DEBUG: ownerServiceInfo20 called with %d entries, more=%t ===\n", len(req.ServiceInfo), req.IsMoreServiceInfo)
+
+	// Special handling for 2.0: if no service info entries, check if we have a blocked module
+	if len(req.ServiceInfo) == 0 {
+		// Check current module state
+		moduleName, module, err := s.Modules.Module(ctx)
+		if err == nil && module != nil {
+			fmt.Printf("=== DEBUG: No entries but have module %s, checking if blocked ===\n", moduleName)
+
+			// Try to produce info to see if module is blocked
+			mtu, err := s.Session.MTU(ctx)
+			if err == nil {
+				producer := serviceinfo.NewProducer("debug", uint16(mtu))
+				_, complete, err := module.ProduceInfo(ctx, producer)
+				if err == nil && !complete {
+					fmt.Printf("=== DEBUG: Module %s is blocked, returning done=true ===\n", moduleName)
+					// Module is blocked, end the exchange
+					return &OwnerSvcInfo20Msg{
+						IsMoreServiceInfo: false,
+						IsDone:            true,
+						ServiceInfo:       []*serviceinfo.KV{},
+					}, nil
+				}
+			}
+		}
+	}
+
+	// Convert 2.0 message to 1.0.1 format and encode as CBOR
+	deviceInfo := deviceServiceInfo{
+		ServiceInfo:       req.ServiceInfo,
+		IsMoreServiceInfo: req.IsMoreServiceInfo,
+	}
+
+	fmt.Printf("=== DEBUG: Converted to 1.0.1 format with %d entries, more=%t ===\n", len(deviceInfo.ServiceInfo), deviceInfo.IsMoreServiceInfo)
+
+	var deviceInfoBuf bytes.Buffer
+	if err := cbor.NewEncoder(&deviceInfoBuf).Encode(&deviceInfo); err != nil {
+		return nil, fmt.Errorf("error encoding device service info: %w", err)
+	}
+
+	fmt.Printf("=== DEBUG: Calling 1.0.1 ownerServiceInfo ===\n")
+	// Call the existing 1.0.1 ownerServiceInfo method
+	ownerInfo, err := s.ownerServiceInfo(ctx, &deviceInfoBuf)
+	if err != nil {
+		return nil, err
+	}
+
+	fmt.Printf("=== DEBUG: 1.0.1 returned: more=%t, done=%t, entries=%d ===\n",
+		ownerInfo.IsMoreServiceInfo, ownerInfo.IsDone, len(ownerInfo.ServiceInfo))
+
+	// Convert 1.0.1 response to 2.0 format
+	result := &OwnerSvcInfo20Msg{
+		IsMoreServiceInfo: ownerInfo.IsMoreServiceInfo,
+		IsDone:            ownerInfo.IsDone,
+		ServiceInfo:       ownerInfo.ServiceInfo,
+	}
+
+	fmt.Printf("=== DEBUG: Returning 2.0 response: more=%t, done=%t, entries=%d ===\n",
+		result.IsMoreServiceInfo, result.IsDone, len(result.ServiceInfo))
+
+	return result, nil
 }

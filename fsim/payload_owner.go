@@ -128,139 +128,143 @@ func (p *PayloadOwner) produceInfo(ctx context.Context, producer *serviceinfo.Pr
 		return false, false, nil
 	}
 
-	// Check if we're done with all payloads
-	if p.currentIndex >= len(p.payloads) && p.sendState == stateIdle {
-		return false, true, nil
-	}
-
-	// Initialize sender for next payload if needed
-	if p.currentSender == nil && p.currentIndex < len(p.payloads) {
-		payload := &p.payloads[p.currentIndex]
-		p.currentSender = chunking.NewChunkSender("payload", payload.Data)
-
-		// Set hash algorithm if provided
-		if payload.HashAlg != "" {
-			p.currentSender.BeginFields.HashAlg = payload.HashAlg
+	// Main payload processing loop - handle multiple payloads in single call
+	for {
+		// Check if we're done with all payloads
+		if p.currentIndex >= len(p.payloads) && p.sendState == stateIdle {
+			return false, true, nil
 		}
 
-		// Set FSIM-specific fields per fdo.payload.md
-		p.currentSender.BeginFields.FSIMFields[-1] = payload.MimeType // Required
-		if payload.Name != "" {
-			p.currentSender.BeginFields.FSIMFields[-2] = payload.Name
-		}
-		if payload.Metadata != nil {
-			p.currentSender.BeginFields.FSIMFields[-3] = payload.Metadata
-		}
+		// Initialize sender for next payload if needed
+		if p.currentSender == nil && p.currentIndex < len(p.payloads) {
+			payload := &p.payloads[p.currentIndex]
+			fmt.Printf("[PayloadOwner] Starting payload %d/%d: MIME type=%s, Name=%s, RequireAck=%v\n",
+				p.currentIndex+1, len(p.payloads), payload.MimeType, payload.Name, payload.RequireAck)
+			p.currentSender = chunking.NewChunkSender("payload", payload.Data)
 
-		// Set RequireAck if requested
-		if payload.RequireAck {
-			p.currentSender.BeginFields.RequireAck = true
-		}
+			// Set hash algorithm if provided
+			if payload.HashAlg != "" {
+				p.currentSender.BeginFields.HashAlg = payload.HashAlg
+			}
 
-		p.sendState = stateSendingBegin
-	}
+			// Set FSIM-specific fields per fdo.payload.md
+			p.currentSender.BeginFields.FSIMFields[-1] = payload.MimeType // Required
+			if payload.Name != "" {
+				p.currentSender.BeginFields.FSIMFields[-2] = payload.Name
+			}
+			if payload.Metadata != nil {
+				p.currentSender.BeginFields.FSIMFields[-3] = payload.Metadata
+			}
 
-	// State machine for sending - send begin, all chunks, and end in one call
-	switch p.sendState {
-	case stateSendingBegin:
-		fmt.Printf("[PayloadOwner] Sending begin message\n")
-		if err := p.currentSender.SendBegin(producer); err != nil {
-			return false, false, fmt.Errorf("failed to send begin: %w", err)
-		}
-		slog.Debug("fdo.payload sent begin",
-			"mime_type", p.currentSender.BeginFields.FSIMFields[-1],
-			"size", len(p.currentSender.Data),
-			"require_ack", p.currentSender.BeginFields.RequireAck)
+			// Set RequireAck if requested
+			if payload.RequireAck {
+				p.currentSender.BeginFields.RequireAck = true
+			}
 
-		// If RequireAck, wait for payload-ack before sending chunks
-		if p.currentSender.IsWaitingForAck() {
-			fmt.Printf("[PayloadOwner] RequireAck set, waiting for payload-ack\n")
-			p.sendState = stateWaitingAck
-			return true, false, nil // Block peer while waiting for ack
+			p.sendState = stateSendingBegin
 		}
 
-		p.sendState = stateSendingChunks
-		fmt.Printf("[PayloadOwner] Sent begin, continuing to send chunks\n")
-		// Fall through to send chunks in same call
-		fallthrough
-
-	case stateWaitingAck:
-		// Waiting for device to send payload-ack
-		// This state is entered when RequireAck=true and we're waiting for ack
-		// We transition out when we receive payload-ack in HandleInfo
-		if p.currentSender.IsWaitingForAck() {
-			// Still waiting
-			return false, false, nil
-		}
-		// Check if rejected
-		if p.currentSender.IsRejected() {
-			reason, msg := p.currentSender.GetRejectReason()
-			slog.Warn("fdo.payload rejected by device",
+		// State machine for sending - send begin, all chunks, and end in one call
+		switch p.sendState {
+		case stateSendingBegin:
+			fmt.Printf("[PayloadOwner] Sending begin message\n")
+			if err := p.currentSender.SendBegin(producer); err != nil {
+				return false, false, fmt.Errorf("failed to send begin: %w", err)
+			}
+			slog.Debug("fdo.payload sent begin",
 				"mime_type", p.currentSender.BeginFields.FSIMFields[-1],
-				"reason_code", reason,
-				"message", msg)
-			// Move to next payload
-			p.currentSender = nil
-			p.currentIndex++
-			p.sendState = stateIdle
+				"size", len(p.currentSender.Data),
+				"require_ack", p.currentSender.BeginFields.RequireAck)
+
+			// If RequireAck, wait for payload-ack before sending chunks
+			if p.currentSender.IsWaitingForAck() {
+				fmt.Printf("[PayloadOwner] RequireAck set, waiting for payload-ack\n")
+				p.sendState = stateWaitingAck
+				return true, false, nil // Block peer while waiting for ack
+			}
+
+			p.sendState = stateSendingChunks
+			fmt.Printf("[PayloadOwner] Sent begin, continuing to send chunks\n")
+			// Fall through to send chunks in same call
+			fallthrough
+
+		case stateWaitingAck:
+			// Waiting for device to send payload-ack
+			// This state is entered when RequireAck=true and we're waiting for ack
+			// We transition out when we receive payload-ack in HandleInfo
+			if p.currentSender.IsWaitingForAck() {
+				// Still waiting
+				return false, false, nil
+			}
+			// Check if rejected
+			if p.currentSender.IsRejected() {
+				reason, msg := p.currentSender.GetRejectReason()
+				fmt.Printf("[PayloadOwner] Payload was rejected, moving to next payload. Reason: %d, Message: %s\n", reason, msg)
+				slog.Warn("fdo.payload rejected by device",
+					"mime_type", p.currentSender.BeginFields.FSIMFields[-1],
+					"reason_code", reason,
+					"message", msg)
+				// Move to next payload and continue in loop
+				p.currentSender = nil
+				p.currentIndex++
+				p.sendState = stateIdle
+				continue // Continue to next payload
+			}
+			// Ack received, proceed to send chunks
+			fmt.Printf("[PayloadOwner] payload-ack received, proceeding to send chunks\n")
+			p.sendState = stateSendingChunks
+			fallthrough
+
+		case stateSendingChunks:
+			// Send chunks one at a time, respecting MTU limits
+			// Check if we have space for the next chunk
+			chunkIndex := p.currentSender.GetBytesSent() / int64(p.currentSender.ChunkSize)
+			chunkKey := fmt.Sprintf("payload-data-%d", chunkIndex)
+
+			// Estimate the size needed for the next chunk (chunk size + CBOR overhead)
+			// Add some buffer for CBOR encoding overhead
+			estimatedSize := p.currentSender.ChunkSize + 50
+			if producer.Available(chunkKey) < estimatedSize {
+				// Not enough space, block and continue in next round
+				fmt.Printf("[PayloadOwner] Not enough MTU space for next chunk, blocking\n")
+				return true, false, nil
+			}
+
+			fmt.Printf("[PayloadOwner] Sending chunk %d, totalSize=%d\n", chunkIndex, len(p.currentSender.Data))
+			done, err := p.currentSender.SendNextChunk(producer)
+			if err != nil {
+				return false, false, fmt.Errorf("failed to send chunk: %w", err)
+			}
+			if done {
+				fmt.Printf("[PayloadOwner] All chunks sent, transitioning to send end\n")
+				p.sendState = stateSendingEnd
+				// Don't send end in same round - let it happen in next ProduceInfo call
+				// This ensures we don't exceed MTU
+				return true, false, nil
+			}
+			fmt.Printf("[PayloadOwner] Chunk sent, will continue in next round\n")
+			// Block to continue sending more chunks in next round
+			return true, false, nil
+
+		case stateSendingEnd:
+			fmt.Printf("[PayloadOwner] Sending end message\n")
+			if err := p.currentSender.SendEnd(producer); err != nil {
+				return false, false, fmt.Errorf("failed to send end: %w", err)
+			}
+			slog.Debug("fdo.payload sent end")
+			fmt.Printf("[PayloadOwner] Sent end, waiting for result\n")
+			p.sendState = stateWaitingResult
+			// Don't block - the device will send payload-result in the same round
+			// We'll receive it via HandleInfo before the next ProduceInfo call
+			return false, false, nil
+
+		case stateWaitingResult:
+			// Waiting for device to send payload-result
+			// This will be unblocked when we receive the result in HandleInfo
+			// Don't block or send anything - just wait for HandleInfo to be called
 			return false, false, nil
 		}
-		// Ack received, proceed to send chunks
-		fmt.Printf("[PayloadOwner] payload-ack received, proceeding to send chunks\n")
-		p.sendState = stateSendingChunks
-		fallthrough
-
-	case stateSendingChunks:
-		// Send chunks one at a time, respecting MTU limits
-		// Check if we have space for the next chunk
-		chunkIndex := p.currentSender.GetBytesSent() / int64(p.currentSender.ChunkSize)
-		chunkKey := fmt.Sprintf("payload-data-%d", chunkIndex)
-
-		// Estimate the size needed for the next chunk (chunk size + CBOR overhead)
-		// Add some buffer for CBOR encoding overhead
-		estimatedSize := p.currentSender.ChunkSize + 50
-		if producer.Available(chunkKey) < estimatedSize {
-			// Not enough space, block and continue in next round
-			fmt.Printf("[PayloadOwner] Not enough MTU space for next chunk, blocking\n")
-			return true, false, nil
-		}
-
-		fmt.Printf("[PayloadOwner] Sending chunk %d, totalSize=%d\n", chunkIndex, len(p.currentSender.Data))
-		done, err := p.currentSender.SendNextChunk(producer)
-		if err != nil {
-			return false, false, fmt.Errorf("failed to send chunk: %w", err)
-		}
-		if done {
-			fmt.Printf("[PayloadOwner] All chunks sent, transitioning to send end\n")
-			p.sendState = stateSendingEnd
-			// Don't send end in same round - let it happen in next ProduceInfo call
-			// This ensures we don't exceed MTU
-			return true, false, nil
-		}
-		fmt.Printf("[PayloadOwner] Chunk sent, will continue in next round\n")
-		// Block to continue sending more chunks in next round
-		return true, false, nil
-
-	case stateSendingEnd:
-		fmt.Printf("[PayloadOwner] Sending end message\n")
-		if err := p.currentSender.SendEnd(producer); err != nil {
-			return false, false, fmt.Errorf("failed to send end: %w", err)
-		}
-		slog.Debug("fdo.payload sent end")
-		fmt.Printf("[PayloadOwner] Sent end, waiting for result\n")
-		p.sendState = stateWaitingResult
-		// Don't block - the device will send payload-result in the same round
-		// We'll receive it via HandleInfo before the next ProduceInfo call
-		return false, false, nil
-
-	case stateWaitingResult:
-		// Waiting for device to send payload-result
-		// This will be unblocked when we receive the result in HandleInfo
-		// Don't block or send anything - just wait for HandleInfo to be called
-		return false, false, nil
 	}
-
-	return false, false, nil
 }
 
 // receive processes incoming messages from the device.
@@ -289,9 +293,13 @@ func (p *PayloadOwner) receive(ctx context.Context, key string, messageBody io.R
 			return fmt.Errorf("received unexpected ack")
 		}
 
+		fmt.Printf("[PayloadOwner] Received payload-ack for MIME type: %s\n", p.currentSender.BeginFields.FSIMFields[-1])
 		if err := p.currentSender.HandleAck(messageBody); err != nil {
 			// HandleAck returns error if rejected, but that's not a protocol error
+			fmt.Printf("[PayloadOwner] Payload rejected: %v\n", err)
 			slog.Debug("fdo.payload ack received", "error", err)
+		} else {
+			fmt.Printf("[PayloadOwner] Payload accepted\n")
 		}
 
 		// State machine will handle the transition in ProduceInfo
