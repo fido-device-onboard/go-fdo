@@ -176,7 +176,7 @@ func (p *PayloadOwner) produceInfo(ctx context.Context, producer *serviceinfo.Pr
 		if p.currentSender.IsWaitingForAck() {
 			fmt.Printf("[PayloadOwner] RequireAck set, waiting for payload-ack\n")
 			p.sendState = stateWaitingAck
-			return false, false, nil
+			return true, false, nil // Block peer while waiting for ack
 		}
 
 		p.sendState = stateSendingChunks

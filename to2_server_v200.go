@@ -459,16 +459,7 @@ func (s *TO2Server) ownerSvcInfo20(ctx context.Context, req *DeviceSvcInfo20Msg)
 		}
 	}
 
-	// If this is the final message (no more service info), initialize module system if needed
-	if !req.IsMoreServiceInfo {
-		fmt.Printf("[DEBUG FDO 2.0] Final service info message received\n")
-		// Initialize the module state machine with the device's declared modules
-		if _, err := s.Modules.NextModule(ctx); err != nil {
-			fmt.Printf("[DEBUG FDO 2.0] NextModule failed: %v\n", err)
-		}
-	}
-
-	// If devmod is not complete, just return empty response for now
+	// If devmod is not complete and we're still receiving device messages, return empty response
 	if devmodModule != nil && req.IsMoreServiceInfo {
 		fmt.Printf("[DEBUG FDO 2.0] Devmod not complete, returning empty service info\n")
 		return &OwnerSvcInfo20Msg{
@@ -476,6 +467,38 @@ func (s *TO2Server) ownerSvcInfo20(ctx context.Context, req *DeviceSvcInfo20Msg)
 			IsDone:            false,
 			ServiceInfo:       []*serviceinfo.KV{},
 		}, nil
+	}
+
+	// If this is the final message (no more service info), check if devmod is complete
+	if !req.IsMoreServiceInfo {
+		fmt.Printf("[DEBUG FDO 2.0] Final service info message received\n")
+
+		// Check if devmod is complete before proceeding
+		if devmodModule != nil {
+			// Try to produce info from devmod to check if it's complete
+			producer := serviceinfo.NewProducer("devmod", 304) // Use default MTU
+			_, complete, err := devmodModule.ProduceInfo(ctx, producer)
+			if err != nil {
+				fmt.Printf("[DEBUG FDO 2.0] Devmod ProduceInfo failed: %v\n", err)
+				return nil, err
+			}
+
+			if !complete {
+				fmt.Printf("[DEBUG FDO 2.0] Devmod not complete after final message, returning empty service info\n")
+				return &OwnerSvcInfo20Msg{
+					IsMoreServiceInfo: true,
+					IsDone:            false,
+					ServiceInfo:       []*serviceinfo.KV{},
+				}, nil
+			}
+
+			fmt.Printf("[DEBUG FDO 2.0] Devmod is complete, proceeding with other modules\n")
+		}
+
+		// Initialize the module state machine with the device's declared modules
+		if _, err := s.Modules.NextModule(ctx); err != nil {
+			fmt.Printf("[DEBUG FDO 2.0] NextModule failed: %v\n", err)
+		}
 	}
 
 	// Use the same module state machine as FDO 1.01
@@ -559,10 +582,14 @@ func (s *TO2Server) ownerSvcInfo20(ctx context.Context, req *DeviceSvcInfo20Msg)
 
 		fmt.Printf("[DEBUG FDO 2.0] Module %s produced %d service info entries, complete=%t\n", moduleName, len(serviceInfo), complete)
 
-		// If module is blocking, we need to stop and wait for next request
+		// If module is blocking, we need to stop and send what we have so far
 		if explicitBlock {
-			fmt.Printf("[DEBUG FDO 2.0] Module %s is blocking, sending partial response\n", moduleName)
-			break
+			fmt.Printf("[DEBUG FDO 2.0] Module %s is blocking, sending partial response with %d entries\n", moduleName, len(allServiceInfo))
+			return &OwnerSvcInfo20Msg{
+				IsMoreServiceInfo: true,  // More service info to come
+				IsDone:            false, // Not done yet
+				ServiceInfo:       allServiceInfo,
+			}, nil
 		}
 	}
 

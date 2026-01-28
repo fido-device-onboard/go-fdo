@@ -1,0 +1,69 @@
+[18:22:35] INFO: Listening
+  local: 127.0.0.1:9999
+  external: 127.0.0.1:9999
+[DEBUG FDO 2.0] ownerSvcInfo20 called with 1 service info entries
+[DEBUG FDO 2.0] Processing devmod message: active (len=1)
+[DEBUG FDO 2.0] Successfully processed devmod message: active
+[DEBUG FDO 2.0] Devmod module state: modules=[]
+[DEBUG FDO 2.0] Stored devmod data: modules=[], complete=false
+[DEBUG FDO 2.0] Devmod not complete, returning empty service info
+[DEBUG FDO 2.0] ownerSvcInfo20 called with 1 service info entries
+[DEBUG FDO 2.0] Processing devmod message: os (len=6)
+[DEBUG FDO 2.0] Successfully processed devmod message: os
+[DEBUG FDO 2.0] Devmod module state: modules=[]
+[DEBUG FDO 2.0] Stored devmod data: modules=[], complete=false
+[DEBUG FDO 2.0] Devmod not complete, returning empty service info
+[DEBUG FDO 2.0] ownerSvcInfo20 called with 1 service info entries
+[DEBUG FDO 2.0] Processing devmod message: arch (len=6)
+[DEBUG FDO 2.0] Successfully processed devmod message: arch
+[DEBUG FDO 2.0] Devmod module state: modules=[]
+[DEBUG FDO 2.0] Stored devmod data: modules=[], complete=false
+[DEBUG FDO 2.0] Devmod not complete, returning empty service info
+[DEBUG FDO 2.0] ownerSvcInfo20 called with 1 service info entries
+[DEBUG FDO 2.0] Processing devmod message: version (len=12)
+[DEBUG FDO 2.0] Successfully processed devmod message: version
+[DEBUG FDO 2.0] Devmod module state: modules=[]
+[DEBUG FDO 2.0] Stored devmod data: modules=[], complete=false
+[DEBUG FDO 2.0] Devmod not complete, returning empty service info
+[DEBUG FDO 2.0] ownerSvcInfo20 called with 1 service info entries
+[DEBUG FDO 2.0] Processing devmod message: device (len=12)
+[DEBUG FDO 2.0] Successfully processed devmod message: device
+[DEBUG FDO 2.0] Devmod module state: modules=[]
+[DEBUG FDO 2.0] Stored devmod data: modules=[], complete=false
+[DEBUG FDO 2.0] Devmod not complete, returning empty service info
+[DEBUG FDO 2.0] ownerSvcInfo20 called with 1 service info entries
+[DEBUG FDO 2.0] Processing devmod message: sep (len=2)
+[DEBUG FDO 2.0] Successfully processed devmod message: sep
+[DEBUG FDO 2.0] Devmod module state: modules=[]
+[DEBUG FDO 2.0] Stored devmod data: modules=[], complete=false
+[DEBUG FDO 2.0] Devmod not complete, returning empty service info
+[DEBUG FDO 2.0] ownerSvcInfo20 called with 1 service info entries
+[DEBUG FDO 2.0] Processing devmod message: bin (len=5)
+[DEBUG FDO 2.0] Successfully processed devmod message: bin
+[DEBUG FDO 2.0] Devmod module state: modules=[]
+[DEBUG FDO 2.0] Stored devmod data: modules=[], complete=false
+[DEBUG FDO 2.0] Devmod not complete, returning empty service info
+[DEBUG FDO 2.0] ownerSvcInfo20 called with 1 service info entries
+[DEBUG FDO 2.0] Processing devmod message: nummodules (len=1)
+[DEBUG FDO 2.0] Successfully processed devmod message: nummodules
+[DEBUG FDO 2.0] Devmod module state: modules=[   ]
+[DEBUG FDO 2.0] Stored devmod data: modules=[   ], complete=false
+[DEBUG FDO 2.0] Devmod not complete, returning empty service info
+[DEBUG FDO 2.0] ownerSvcInfo20 called with 1 service info entries
+[DEBUG FDO 2.0] Processing devmod message: modules (len=50)
+[DEBUG] parseModules: chunk.Start=0, chunk.Len=4, requiredSize=4, len(d.Modules)=0, cap(d.Modules)=0
+[DEBUG] parseModules: created new slice with size 4
+[DEBUG FDO 2.0] Successfully processed devmod message: modules
+[DEBUG FDO 2.0] Devmod module state: modules=[fido_alliance fdo.sysconfig fdo.payload devmod]
+[DEBUG FDO 2.0] Stored devmod data: modules=[fido_alliance fdo.sysconfig fdo.payload devmod], complete=false
+[DEBUG FDO 2.0] Devmod not complete, returning empty service info
+[DEBUG FDO 2.0] ownerSvcInfo20 called with 0 service info entries
+[DEBUG FDO 2.0] Final service info message received
+[DEBUG] Device declared modules: [fido_alliance fdo.sysconfig fdo.payload devmod]
+[DEBUG FDO 2.0] Processing module: fdo.sysconfig, type: *fsim.SysConfigOwner
+[18:24:00] INFO: Payload: Added payload with RequireAck: type=application/octet-stream, file=/tmp/payload.dat
+[18:24:00] INFO: Payload: Added payload with RequireAck: type=application/invalid, file=/tmp/payload.dat
+[DEBUG FDO 2.0] Module fdo.sysconfig produced 5 service info entries, complete=true
+[DEBUG FDO 2.0] Processing module: fdo.payload, type: *fsim.PayloadOwner
+[PayloadOwner] Sending begin message
+[PayloadOwner] RequireAck set, waiting for payload-ack
