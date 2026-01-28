@@ -479,88 +479,98 @@ func (s *TO2Server) ownerSvcInfo20(ctx context.Context, req *DeviceSvcInfo20Msg)
 	}
 
 	// Use the same module state machine as FDO 1.01
-	// Get current module from the module state machine
-	moduleName, module, err := s.Modules.Module(ctx)
-	if err != nil || module == nil {
-		// No more modules, return empty service info
-		fmt.Printf("[DEBUG FDO 2.0] No more modules, returning empty service info\n")
-		return &OwnerSvcInfo20Msg{
-			IsMoreServiceInfo: false,
-			IsDone:            true,
-			ServiceInfo:       []*serviceinfo.KV{},
-		}, nil
-	}
-
-	fmt.Printf("[DEBUG FDO 2.0] Processing module: %s, type: %T\n", moduleName, module)
-
-	// Produce service info from the current module using the same logic as 1.01
-	mtu, err := s.Session.MTU(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("error getting max device service info size: %w", err)
-	}
-
-	// Get service info produced by the module
-	producer := serviceinfo.NewProducer(moduleName, mtu)
-
-	// Keep calling ProduceInfo until the module is done or blocks
-	var explicitBlock bool
-	var complete bool
+	// Continue processing modules until all are done
+	var allServiceInfo []*serviceinfo.KV
 	for {
-		explicitBlock, complete, err = module.ProduceInfo(ctx, producer)
-		if err != nil {
-			return nil, fmt.Errorf("error producing owner service info from module: %w", err)
-		}
-
-		// If module is complete or blocking, stop
-		if complete || explicitBlock {
+		// Get current module from the module state machine
+		moduleName, module, err := s.Modules.Module(ctx)
+		if err != nil || module == nil {
+			// No more modules, break out of loop
+			fmt.Printf("[DEBUG FDO 2.0] No more modules, finished processing all modules\n")
 			break
 		}
 
-		// Continue producing more info from the same module
-	}
+		fmt.Printf("[DEBUG FDO 2.0] Processing module: %s, type: %T\n", moduleName, module)
 
-	if explicitBlock && complete {
-		slog.Warn("service info module completed but indicated that it had more service info to send", "module", moduleName)
-		explicitBlock = false
-	}
-	serviceInfo := producer.ServiceInfo()
-	if size := serviceinfo.ArraySizeCBOR(serviceInfo); size > int64(mtu) {
-		return nil, fmt.Errorf("owner service info module produced service info exceeding the MTU=%d - 3 (message overhead), size=%d", mtu, size)
-	}
-
-	// Store the current module state
-	if devmod, ok := module.(*devmodOwnerModule); ok {
-		if err := s.Session.SetDevmod(ctx, devmod.Devmod, devmod.Modules, complete); err != nil {
-			return nil, fmt.Errorf("error storing devmod state: %w", err)
-		}
-	}
-	if modules, ok := s.Modules.(serviceinfo.ModulePersister); ok {
-		if err := modules.PersistModule(ctx, moduleName, module); err != nil {
-			return nil, fmt.Errorf("error persisting service info module %q state: %w", moduleName, err)
-		}
-	}
-
-	// Progress the module state machine when the module completes
-	allModulesDone := false
-	if complete {
-		// Cleanup current module
-		if plugin, ok := module.(plugin.Module); ok {
-			stopOwnerPlugin(ctx, moduleName, plugin)
-		}
-
-		// Find out if there will be more modules
-		moreModules, err := s.Modules.NextModule(ctx)
+		// Produce service info from the current module using the same logic as 1.01
+		mtu, err := s.Session.MTU(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("error progressing service info module %q state: %w", moduleName, err)
+			return nil, fmt.Errorf("error getting max device service info size: %w", err)
 		}
-		allModulesDone = !moreModules
+
+		// Get service info produced by the module
+		producer := serviceinfo.NewProducer(moduleName, mtu)
+
+		// Keep calling ProduceInfo until the module is done or blocks
+		var explicitBlock bool
+		var complete bool
+		for {
+			explicitBlock, complete, err = module.ProduceInfo(ctx, producer)
+			if err != nil {
+				return nil, fmt.Errorf("error producing owner service info from module: %w", err)
+			}
+
+			// If module is complete or blocking, stop
+			if complete || explicitBlock {
+				break
+			}
+
+			// Continue producing more info from the same module
+		}
+
+		if explicitBlock && complete {
+			slog.Warn("service info module completed but indicated that it had more service info to send", "module", moduleName)
+			explicitBlock = false
+		}
+		serviceInfo := producer.ServiceInfo()
+		if size := serviceinfo.ArraySizeCBOR(serviceInfo); size > int64(mtu) {
+			return nil, fmt.Errorf("owner service info module produced service info exceeding the MTU=%d - 3 (message overhead), size=%d", mtu, size)
+		}
+
+		// Store the current module state
+		if devmod, ok := module.(*devmodOwnerModule); ok {
+			if err := s.Session.SetDevmod(ctx, devmod.Devmod, devmod.Modules, complete); err != nil {
+				return nil, fmt.Errorf("error storing devmod state: %w", err)
+			}
+		}
+		if modules, ok := s.Modules.(serviceinfo.ModulePersister); ok {
+			if err := modules.PersistModule(ctx, moduleName, module); err != nil {
+				return nil, fmt.Errorf("error persisting service info module %q state: %w", moduleName, err)
+			}
+		}
+
+		// Progress the module state machine when the module completes
+		if complete {
+			// Cleanup current module
+			if plugin, ok := module.(plugin.Module); ok {
+				stopOwnerPlugin(ctx, moduleName, plugin)
+			}
+
+			// Find out if there will be more modules
+			moreModules, err := s.Modules.NextModule(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("error progressing service info module %q state: %w", moduleName, err)
+			}
+			_ = !moreModules // allModulesDone not needed since we process all modules in loop
+		}
+
+		// Add service info to our collection
+		allServiceInfo = append(allServiceInfo, serviceInfo...)
+
+		fmt.Printf("[DEBUG FDO 2.0] Module %s produced %d service info entries, complete=%t\n", moduleName, len(serviceInfo), complete)
+
+		// If module is blocking, we need to stop and wait for next request
+		if explicitBlock {
+			fmt.Printf("[DEBUG FDO 2.0] Module %s is blocking, sending partial response\n", moduleName)
+			break
+		}
 	}
 
 	// Return chunked data in FDO 2.0 format
 	return &OwnerSvcInfo20Msg{
-		IsMoreServiceInfo: explicitBlock,
-		IsDone:            allModulesDone,
-		ServiceInfo:       serviceInfo,
+		IsMoreServiceInfo: false, // We processed all available modules
+		IsDone:            true,  // All modules are done
+		ServiceInfo:       allServiceInfo,
 	}, nil
 }
 
