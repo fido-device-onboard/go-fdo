@@ -300,6 +300,15 @@ func (s *TO2Server) setupDevice20(ctx context.Context, msg io.Reader) (*SetupDev
 		return nil, fmt.Errorf("error decoding TO2.DeviceSvcInfoRdy20: %w", err)
 	}
 
+	// Store MTU for service info exchange (same as 1.01)
+	mtu := serviceinfo.DefaultMTU
+	if req.MaxOwnerServiceInfoSz != nil {
+		mtu = int(*req.MaxOwnerServiceInfoSz)
+	}
+	if err := s.Session.SetMTU(ctx, uint16(mtu)); err != nil {
+		return nil, fmt.Errorf("error storing max service info size to send to device: %w", err)
+	}
+
 	guid, err := s.Session.GUID(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error getting GUID from session: %w", err)
