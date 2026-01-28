@@ -4,17 +4,20 @@
 package fdo
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/rand"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"strings"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
 	"github.com/fido-device-onboard/go-fdo/kex"
+	"github.com/fido-device-onboard/go-fdo/plugin"
 	"github.com/fido-device-onboard/go-fdo/protocol"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
@@ -376,15 +379,17 @@ func (s *TO2Server) setupDevice20(ctx context.Context, msg io.Reader) (*SetupDev
 }
 
 // ownerSvcInfo20 handles TO2.DeviceSvcInfo20 (88) -> TO2.OwnerSvcInfo20 (89)
-// Reuses the service info exchange logic from 1.01
-func (s *TO2Server) ownerSvcInfo20(ctx context.Context, msg io.Reader) (*OwnerSvcInfo20Msg, error) {
-	var req DeviceSvcInfo20Msg
-	if err := cbor.NewDecoder(msg).Decode(&req); err != nil {
-		return nil, fmt.Errorf("error decoding TO2.DeviceSvcInfo20: %w", err)
+// Uses the same module state machine as FDO 1.01
+func (s *TO2Server) ownerSvcInfo20(ctx context.Context, req *DeviceSvcInfo20Msg) (*OwnerSvcInfo20Msg, error) {
+	fmt.Printf("[DEBUG FDO 2.0] ownerSvcInfo20 called with %d service info entries\n", len(req.ServiceInfo))
+
+	// Get session GUID
+	guid, err := s.Session.GUID(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error getting GUID from session: %w", err)
 	}
 
 	// Process device service info through modules (reuse 1.01 logic)
-	guid, err := s.Session.GUID(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error getting GUID from session: %w", err)
 	}
@@ -394,40 +399,128 @@ func (s *TO2Server) ownerSvcInfo20(ctx context.Context, msg io.Reader) (*OwnerSv
 		return nil, fmt.Errorf("error retrieving voucher: %w", err)
 	}
 
-	// Simple fix: check if we have sysconfig parameters and send them
-	// This is a temporary workaround to get sysconfig working in FDO 2.0
-	var ownerKVs []*serviceinfo.KV
+	// Process device service info through modules (same as 1.01 ownerServiceInfo)
+	var devmodModule *devmodOwnerModule
 
-	// Check if sysconfig module is active and has parameters
-	// For now, we'll create a simple sysconfig response to test the fix
-	// In a full implementation, this would come from the module system
+	for _, kv := range req.ServiceInfo {
+		// Parse the key to extract module name and message type
+		parts := strings.SplitN(kv.Key, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
 
-	// For testing purposes, create a simple sysconfig KV
-	// In reality, this should come from the sysconfig module
-	ownerKVs = append(ownerKVs, &serviceinfo.KV{
-		Key: "fdo.sysconfig",
-		Val: []byte(`{"parameter":"hostname","value":"test-device-fdo200"}`),
-	})
+		moduleName := parts[0]
+		messageName := parts[1]
 
-	ownerKVs = append(ownerKVs, &serviceinfo.KV{
-		Key: "fdo.sysconfig",
-		Val: []byte(`{"parameter":"timezone","value":"America/New_York"}`),
-	})
+		// Check if this is devmod data - if so, store it directly in session state
+		if moduleName == "devmod" {
+			// Create a temporary devmod module to process the data
+			if devmodModule == nil {
+				devmodModule = &devmodOwnerModule{}
+			}
 
-	ownerKVs = append(ownerKVs, &serviceinfo.KV{
-		Key: "fdo.sysconfig",
-		Val: []byte(`{"parameter":"ntp-server","value":"time.google.com"}`),
-	})
+			fmt.Printf("[DEBUG FDO 2.0] Processing devmod message: %s (len=%d)\n", messageName, len(kv.Val))
 
-	ownerKVs = append(ownerKVs, &serviceinfo.KV{
-		Key: "fdo.sysconfig",
-		Val: []byte(`{"parameter":"locale","value":"en_US.UTF-8"}`),
-	})
+			// Process the message through the devmod module
+			if err := devmodModule.HandleInfo(ctx, messageName, bytes.NewReader(kv.Val)); err != nil {
+				fmt.Printf("[DEBUG FDO 2.0] Error handling devmod message: %v\n", err)
+				// Don't return error for modules processing - continue with other messages
+				continue
+			}
 
+			fmt.Printf("[DEBUG FDO 2.0] Successfully processed devmod message: %s\n", messageName)
+			fmt.Printf("[DEBUG FDO 2.0] Devmod module state: modules=%v\n", devmodModule.Modules)
+		}
+	}
+
+	// Store devmod data in session state (same as 1.01)
+	if devmodModule != nil {
+		if err := s.Session.SetDevmod(ctx, devmodModule.Devmod, devmodModule.Modules, !req.IsMoreServiceInfo); err != nil {
+			return nil, fmt.Errorf("error storing devmod state: %w", err)
+		}
+		fmt.Printf("[DEBUG FDO 2.0] Stored devmod data: modules=%v, complete=%t\n", devmodModule.Modules, !req.IsMoreServiceInfo)
+	}
+
+	// Use the same module state machine as FDO 1.01
+	// Initialize the module state machine if needed (same as 1.01)
+	if _, err := s.Modules.NextModule(ctx); err != nil {
+		// No more modules, return empty service info
+		fmt.Printf("[DEBUG FDO 2.0] NextModule failed, returning empty service info: %v\n", err)
+		return &OwnerSvcInfo20Msg{
+			IsMoreServiceInfo: false,
+			IsDone:            true,
+			ServiceInfo:       []*serviceinfo.KV{},
+		}, nil
+	}
+
+	// Get current module from the module system
+	moduleName, module, err := s.Modules.Module(ctx)
+	if err != nil || module == nil {
+		// No more modules, return empty service info
+		fmt.Printf("[DEBUG FDO 2.0] No more modules, returning empty service info\n")
+		return &OwnerSvcInfo20Msg{
+			IsMoreServiceInfo: false,
+			IsDone:            true,
+			ServiceInfo:       []*serviceinfo.KV{},
+		}, nil
+	}
+
+	fmt.Printf("[DEBUG FDO 2.0] Processing module: %s, type: %T\n", moduleName, module)
+
+	// Produce service info from the current module using the same logic as 1.01
+	mtu, err := s.Session.MTU(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error getting max device service info size: %w", err)
+	}
+
+	// Get service info produced by the module
+	producer := serviceinfo.NewProducer(moduleName, mtu)
+	explicitBlock, complete, err := module.ProduceInfo(ctx, producer)
+	if err != nil {
+		return nil, fmt.Errorf("error producing owner service info from module: %w", err)
+	}
+	if explicitBlock && complete {
+		slog.Warn("service info module completed but indicated that it had more service info to send", "module", moduleName)
+		explicitBlock = false
+	}
+	serviceInfo := producer.ServiceInfo()
+	if size := serviceinfo.ArraySizeCBOR(serviceInfo); size > int64(mtu) {
+		return nil, fmt.Errorf("owner service info module produced service info exceeding the MTU=%d - 3 (message overhead), size=%d", mtu, size)
+	}
+
+	// Store the current module state
+	if devmod, ok := module.(*devmodOwnerModule); ok {
+		if err := s.Session.SetDevmod(ctx, devmod.Devmod, devmod.Modules, complete); err != nil {
+			return nil, fmt.Errorf("error storing devmod state: %w", err)
+		}
+	}
+	if modules, ok := s.Modules.(serviceinfo.ModulePersister); ok {
+		if err := modules.PersistModule(ctx, moduleName, module); err != nil {
+			return nil, fmt.Errorf("error persisting service info module %q state: %w", moduleName, err)
+		}
+	}
+
+	// Progress the module state machine when the module completes
+	allModulesDone := false
+	if complete {
+		// Cleanup current module
+		if plugin, ok := module.(plugin.Module); ok {
+			stopOwnerPlugin(ctx, moduleName, plugin)
+		}
+
+		// Find out if there will be more modules
+		moreModules, err := s.Modules.NextModule(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("error progressing service info module %q state: %w", moduleName, err)
+		}
+		allModulesDone = !moreModules
+	}
+
+	// Return chunked data in FDO 2.0 format
 	return &OwnerSvcInfo20Msg{
-		IsMoreServiceInfo: false,
-		IsDone:            true,
-		ServiceInfo:       ownerKVs,
+		IsMoreServiceInfo: explicitBlock,
+		IsDone:            allModulesDone,
+		ServiceInfo:       serviceInfo,
 	}, nil
 }
 

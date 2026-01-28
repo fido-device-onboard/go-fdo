@@ -8,14 +8,16 @@ import (
 	"context"
 	"crypto"
 	"crypto/rand"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"hash"
+	"io"
 	"log/slog"
+	"strings"
+	"time"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
-	"github.com/fido-device-onboard/go-fdo/fsim"
 	"github.com/fido-device-onboard/go-fdo/kex"
 	"github.com/fido-device-onboard/go-fdo/protocol"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
@@ -122,8 +124,20 @@ func TO2v200(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol
 
 	// Step 6: Exchange service info
 	sendMTU := uint16(1300) // Default MTU
+
+	// Subtract 5 bytes from MTU to account for a CBOR header indicating "array
+	// of 256-65535 items" and 2 more bytes for "array of two" plus the first
+	// item indicating "IsMoreServiceInfo" (same as FDO 1.01)
+	sendMTU -= 5
+
 	serviceInfoReader, serviceInfoWriter := serviceinfo.NewChunkOutPipe(0)
 	defer func() { _ = serviceInfoWriter.Close() }()
+
+	// Debug: log what device modules we have
+	fmt.Printf("[DEBUG FDO 2.0] DeviceModules: %v\n", c.DeviceModules)
+	for name := range c.DeviceModules {
+		fmt.Printf("[DEBUG FDO 2.0]   Module: %s\n", name)
+	}
 
 	go c.Devmod.Write(ctx, c.DeviceModules, sendMTU, serviceInfoWriter)
 
@@ -584,15 +598,35 @@ func exchangeServiceInfo20(ctx context.Context, transport Transport, proveOVNonc
 		if !deviceDone {
 			kv, err := serviceInfoReader.ReadChunk(sendMTU)
 			if err != nil {
-				deviceDone = true
+				if errors.Is(err, io.EOF) {
+					fmt.Printf("[DEBUG FDO 2.0] Got EOF, device done\n")
+					deviceDone = true
+				} else if strings.Contains(err.Error(), "not enough size for chunk") {
+					fmt.Printf("[DEBUG FDO 2.0] Got size error, retrying: %v\n", err)
+					time.Sleep(10 * time.Millisecond)
+					continue
+				} else {
+					fmt.Printf("[DEBUG FDO 2.0] Got error reading chunk: %v, treating as done\n", err)
+					deviceDone = true
+				}
 			} else if kv != nil {
 				kvs = append(kvs, kv)
+				fmt.Printf("[DEBUG FDO 2.0] Read chunk: %s, size: %d\n", kv.Key, kv.Size())
+			} else {
+				fmt.Printf("[DEBUG FDO 2.0] Got nil chunk, waiting a bit...\n")
+				time.Sleep(10 * time.Millisecond)
 			}
 		}
 
 		req := DeviceSvcInfo20Msg{
 			IsMoreServiceInfo: !deviceDone,
 			ServiceInfo:       kvs,
+		}
+
+		// Debug: log what we're sending
+		fmt.Printf("[DEBUG FDO 2.0] Sending DeviceSvcInfo20: IsMoreServiceInfo=%t, ServiceInfo count=%d\n", req.IsMoreServiceInfo, len(req.ServiceInfo))
+		for i, kv := range req.ServiceInfo {
+			fmt.Printf("[DEBUG FDO 2.0]   KV[%d]: %s = %s\n", i, kv.Key, string(kv.Val))
 		}
 
 		typ, resp, err := transport.Send(ctx, protocol.TO2DeviceSvcInfo20MsgType, req, sess)
@@ -611,30 +645,40 @@ func exchangeServiceInfo20(ctx context.Context, transport Transport, proveOVNonc
 			}
 			_ = resp.Close()
 
-			// Process owner service info directly (simplified approach)
+			// Process owner service info through device modules (same as 1.01)
 			for _, kv := range ownerInfoMsg.ServiceInfo {
 				// Debug: log what we received
 				slog.Info("FDO 2.0 received owner service info", "key", kv.Key, "value", string(kv.Val))
 
-				// Check if this is a sysconfig message
-				if kv.Key == "fdo.sysconfig" {
-					// Parse the JSON value
-					var param struct {
-						Parameter string `json:"parameter"`
-						Value     string `json:"value"`
+				// Parse the key to extract module name and message type
+				parts := strings.SplitN(kv.Key, ":", 2)
+				if len(parts) != 2 {
+					slog.Warn("invalid service info key format", "key", kv.Key)
+					continue
+				}
+
+				moduleName := parts[0]
+				messageName := parts[1]
+				slog.Info("FDO 2.0 processing module", "module", moduleName, "message", messageName)
+
+				// Find the device module
+				if deviceModule, exists := c.DeviceModules[moduleName]; exists {
+					// Create a respond function for this message
+					respond := func(message string) io.Writer {
+						return &bytes.Buffer{}
 					}
-					if err := json.Unmarshal(kv.Val, &param); err == nil {
-						// Find the sysconfig module and call it directly
-						if sysconfigModule, exists := c.DeviceModules["fdo.sysconfig"]; exists {
-							if sysconfig, ok := sysconfigModule.(*fsim.SysConfig); ok && sysconfig.SetParameter != nil {
-								if err := sysconfig.SetParameter(param.Parameter, param.Value); err != nil {
-									slog.Error("error setting sysconfig parameter", "parameter", param.Parameter, "error", err)
-								} else {
-									slog.Info("FDO 2.0 sysconfig parameter set", "parameter", param.Parameter, "value", param.Value)
-								}
-							}
-						}
+
+					// Create a yield function (no-op for device modules)
+					yield := func() {}
+
+					// Process the message through the device module
+					if err := deviceModule.Receive(ctx, messageName, bytes.NewReader(kv.Val), respond, yield); err != nil {
+						slog.Error("error processing service info message", "module", moduleName, "message", messageName, "error", err)
+					} else {
+						slog.Info("FDO 2.0 successfully processed message", "module", moduleName, "message", messageName)
 					}
+				} else {
+					slog.Warn("unknown device module", "module", moduleName)
 				}
 			}
 

@@ -13,6 +13,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/kex"
 	"github.com/fido-device-onboard/go-fdo/protocol"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
@@ -354,7 +355,11 @@ func (s *TO2Server) Respond(ctx context.Context, msgType uint8, msg io.Reader) (
 		resp, err = s.setupDevice20(ctx, msg)
 	case protocol.TO2DeviceSvcInfo20MsgType:
 		respType = protocol.TO2OwnerSvcInfo20MsgType
-		resp, err = s.ownerSvcInfo20(ctx, msg)
+		var req DeviceSvcInfo20Msg
+		if err := cbor.NewDecoder(msg).Decode(&req); err != nil {
+			return protocol.TO2OwnerSvcInfo20MsgType, nil
+		}
+		resp, err = s.ownerSvcInfo20(ctx, &req)
 		if err != nil {
 			s.Modules.CleanupModules(ctx)
 		}
