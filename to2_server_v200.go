@@ -501,10 +501,24 @@ func (s *TO2Server) ownerSvcInfo20(ctx context.Context, req *DeviceSvcInfo20Msg)
 
 	// Get service info produced by the module
 	producer := serviceinfo.NewProducer(moduleName, mtu)
-	explicitBlock, complete, err := module.ProduceInfo(ctx, producer)
-	if err != nil {
-		return nil, fmt.Errorf("error producing owner service info from module: %w", err)
+
+	// Keep calling ProduceInfo until the module is done or blocks
+	var explicitBlock bool
+	var complete bool
+	for {
+		explicitBlock, complete, err = module.ProduceInfo(ctx, producer)
+		if err != nil {
+			return nil, fmt.Errorf("error producing owner service info from module: %w", err)
+		}
+
+		// If module is complete or blocking, stop
+		if complete || explicitBlock {
+			break
+		}
+
+		// Continue producing more info from the same module
 	}
+
 	if explicitBlock && complete {
 		slog.Warn("service info module completed but indicated that it had more service info to send", "module", moduleName)
 		explicitBlock = false

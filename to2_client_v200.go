@@ -683,7 +683,7 @@ func exchangeServiceInfo20(ctx context.Context, transport Transport, proveOVNonc
 			}
 
 			// Check if done
-			if ownerInfoMsg.IsDone && deviceDone {
+			if ownerInfoMsg.IsDone && deviceDone && !ownerInfoMsg.IsMoreServiceInfo {
 				// Send Done20 with replacement HMAC
 				return sendDone20(ctx, transport, proveOVNonce, setupDeviceNonce, replacementHMAC, sess)
 			}
