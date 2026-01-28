@@ -439,21 +439,38 @@ func (s *TO2Server) ownerSvcInfo20(ctx context.Context, req *DeviceSvcInfo20Msg)
 			return nil, fmt.Errorf("error storing devmod state: %w", err)
 		}
 		fmt.Printf("[DEBUG FDO 2.0] Stored devmod data: modules=%v, complete=%t\n", devmodModule.Modules, !req.IsMoreServiceInfo)
+
+		// Only initialize module state machine when devmod is complete
+		if !req.IsMoreServiceInfo {
+			fmt.Printf("[DEBUG FDO 2.0] Devmod complete, initializing module state machine\n")
+			// Initialize the module state machine with the device's declared modules
+			if _, err := s.Modules.NextModule(ctx); err != nil {
+				fmt.Printf("[DEBUG FDO 2.0] NextModule failed: %v\n", err)
+			}
+		}
 	}
 
-	// Use the same module state machine as FDO 1.01
-	// Initialize the module state machine if needed (same as 1.01)
-	if _, err := s.Modules.NextModule(ctx); err != nil {
-		// No more modules, return empty service info
-		fmt.Printf("[DEBUG FDO 2.0] NextModule failed, returning empty service info: %v\n", err)
+	// If this is the final message (no more service info), initialize module system if needed
+	if !req.IsMoreServiceInfo {
+		fmt.Printf("[DEBUG FDO 2.0] Final service info message received\n")
+		// Initialize the module state machine with the device's declared modules
+		if _, err := s.Modules.NextModule(ctx); err != nil {
+			fmt.Printf("[DEBUG FDO 2.0] NextModule failed: %v\n", err)
+		}
+	}
+
+	// If devmod is not complete, just return empty response for now
+	if devmodModule != nil && req.IsMoreServiceInfo {
+		fmt.Printf("[DEBUG FDO 2.0] Devmod not complete, returning empty service info\n")
 		return &OwnerSvcInfo20Msg{
-			IsMoreServiceInfo: false,
-			IsDone:            true,
+			IsMoreServiceInfo: true,
+			IsDone:            false,
 			ServiceInfo:       []*serviceinfo.KV{},
 		}, nil
 	}
 
-	// Get current module from the module system
+	// Use the same module state machine as FDO 1.01
+	// Get current module from the module state machine
 	moduleName, module, err := s.Modules.Module(ctx)
 	if err != nil || module == nil {
 		// No more modules, return empty service info
