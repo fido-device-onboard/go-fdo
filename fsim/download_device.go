@@ -29,6 +29,12 @@ type Download struct {
 	// the file after downloading to a temporary location.
 	NameToPath func(name string) string
 
+	// Rename optionally overrides the behavior of moving the file from the
+	// temporary location to the final destination. If not set, os.Rename is used.
+	// This can be used to implement custom rename logic, such as handling
+	// cross-filesystem moves.
+	Rename func(oldpath, newpath string) error
+
 	// ErrorLog is optional and any causes of a -1 response will have a
 	// corresponding message written.
 	ErrorLog io.Writer
@@ -157,7 +163,11 @@ func (d *Download) finalize(respond func(string) io.Writer) error {
 		}
 		return fmt.Errorf("name not sent before data transfer completed")
 	}
-	if err := os.Rename(d.temp.Name(), resolveName(d.name)); err != nil {
+	rename := d.Rename
+	if rename == nil {
+		rename = os.Rename
+	}
+	if err := rename(d.temp.Name(), resolveName(d.name)); err != nil {
 		if d.ErrorLog != nil {
 			_, _ = fmt.Fprintf(d.ErrorLog, "[file=%s] error renaming file: %v\n", d.name, err)
 		}
