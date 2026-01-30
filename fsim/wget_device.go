@@ -30,6 +30,12 @@ type Wget struct {
 	// the file after downloading to a temporary location.
 	NameToPath func(name string) string
 
+	// Rename optionally overrides the behavior of moving the file from the
+	// temporary location to the final destination. If not set, os.Rename is used.
+	// This can be used to implement custom rename logic, such as handling
+	// cross-filesystem moves.
+	Rename func(oldpath, newpath string) error
+
 	// Timeout determines the maximum amount of time to allow downloading data.
 	// Exceeding this time will result in the module sending an error. If
 	// Timeout is zero, then a default of 1 hour will be used.
@@ -164,7 +170,11 @@ func (d *Wget) download(ctx context.Context, url string) (_ int64, err error) {
 	if d.name == "" {
 		return 0, fmt.Errorf("name not sent before file download completed")
 	}
-	if err := os.Rename(temp.Name(), resolveName(d.name)); err != nil {
+	rename := d.Rename
+	if rename == nil {
+		rename = os.Rename
+	}
+	if err := rename(temp.Name(), resolveName(d.name)); err != nil {
 		return 0, fmt.Errorf("error renaming file to %q: %w", d.name, err)
 	}
 
