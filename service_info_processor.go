@@ -89,7 +89,8 @@ func (p *ServiceInfoProcessor) ProcessServiceInfo(ctx context.Context, deviceInf
 		if !ok {
 			break
 		}
-		moduleName, messageName, _ := strings.Cut(key, ":")
+		deviceModuleName, messageName, _ := strings.Cut(key, ":")
+		fmt.Printf("[DEBUG ServiceInfoProcessor] Received device message: module=%s, message=%s, currentOwnerModule=%s\n", deviceModuleName, messageName, moduleName)
 		if err := module.HandleInfo(ctx, messageName, messageBody); err != nil {
 			return nil, fmt.Errorf("error handling device service info %q: %w", key, err)
 		}

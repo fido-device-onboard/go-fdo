@@ -596,9 +596,18 @@ func exchangeServiceInfo20(ctx context.Context, transport Transport, proveOVNonc
 
 	// Simple service info exchange - send device info, receive owner info
 	var deviceDone bool
+	var pendingResponses []*serviceinfo.KV // Device module responses to send in next request
 	for {
 		// Read next chunk of device service info
 		var kvs []*serviceinfo.KV
+
+		// Include any pending responses from previous round
+		if len(pendingResponses) > 0 {
+			kvs = append(kvs, pendingResponses...)
+			fmt.Printf("[DEBUG FDO 2.0] Including %d pending responses in request\n", len(pendingResponses))
+			pendingResponses = nil
+		}
+
 		if !deviceDone {
 			kv, err := serviceInfoReader.ReadChunk(sendMTU)
 			if err != nil {
@@ -656,11 +665,11 @@ func exchangeServiceInfo20(ctx context.Context, transport Transport, proveOVNonc
 				return fmt.Errorf("error processing owner service info: %w", err)
 			}
 
-			// If device modules produced responses, include them in the next request
+			// If device modules produced responses, save them for next request
 			if len(responseKVs) > 0 {
-				// Add response KVs to the next request
-				kvs = append(kvs, responseKVs...)
+				pendingResponses = append(pendingResponses, responseKVs...)
 				slog.Info("FDO 2.0 device modules produced responses", "count", len(responseKVs))
+				fmt.Printf("[DEBUG FDO 2.0] Saved %d responses for next request\n", len(responseKVs))
 			}
 
 			// Check if done
@@ -787,12 +796,15 @@ func processOwnerServiceInfo20(ctx context.Context, serviceInfo []*serviceinfo.K
 
 		// Create respond/yield callback functions that collect responses
 		currentModule := moduleName
+		var writers []*responseWriter
 		respond := func(message string) io.Writer {
-			// Return a buffer that will be added to responseKVs when written
-			return &responseWriter{
+			// Return a buffer that will be flushed after Receive returns
+			w := &responseWriter{
 				key:         currentModule + ":" + message,
 				responseKVs: &responseKVs,
 			}
+			writers = append(writers, w)
+			return w
 		}
 		yield := func() {
 			// No-op for 2.0 - responses are collected and sent in next request
@@ -801,6 +813,20 @@ func processOwnerServiceInfo20(ctx context.Context, serviceInfo []*serviceinfo.K
 		// Process the message through the device module
 		if err := mod.Receive(ctx, messageName, bytes.NewReader(kv.Val), respond, yield); err != nil {
 			return nil, fmt.Errorf("error processing service info %s:%s: %w", moduleName, messageName, err)
+		}
+
+		// Flush all response writers after Receive completes
+		for _, w := range writers {
+			w.Flush()
+			if w.buf.Len() > 0 || len(*w.responseKVs) > 0 {
+				fmt.Printf("[DEBUG FDO 2.0] Flushed response writer: key=%s, bufLen=%d, totalResponses=%d\n", w.key, w.buf.Len(), len(*w.responseKVs))
+			}
+		}
+		if len(responseKVs) > 0 {
+			fmt.Printf("[DEBUG FDO 2.0] After processing %s:%s, have %d response KVs\n", moduleName, messageName, len(responseKVs))
+			for i, kv := range responseKVs {
+				fmt.Printf("[DEBUG FDO 2.0]   Response[%d]: %s\n", i, kv.Key)
+			}
 		}
 		slog.Info("FDO 2.0 successfully processed message", "module", moduleName, "message", messageName)
 	}
@@ -812,17 +838,24 @@ type responseWriter struct {
 	key         string
 	buf         bytes.Buffer
 	responseKVs *[]*serviceinfo.KV
+	flushed     bool
 }
 
 func (w *responseWriter) Write(p []byte) (n int, err error) {
 	n, err = w.buf.Write(p)
-	if err == nil && w.buf.Len() > 0 {
-		// Add to response KVs (will be sent in next request)
+	return n, err
+}
+
+// Flush adds the buffered data to responseKVs. Called after module.Receive returns.
+func (w *responseWriter) Flush() {
+	if w.buf.Len() > 0 && !w.flushed {
+		// Make a copy of the buffer data
+		data := make([]byte, w.buf.Len())
+		copy(data, w.buf.Bytes())
 		*w.responseKVs = append(*w.responseKVs, &serviceinfo.KV{
 			Key: w.key,
-			Val: w.buf.Bytes(),
+			Val: data,
 		})
-		w.buf.Reset()
+		w.flushed = true
 	}
-	return n, err
 }
