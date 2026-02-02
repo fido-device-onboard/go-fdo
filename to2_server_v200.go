@@ -4,21 +4,17 @@
 package fdo
 
 import (
-	"bytes"
 	"context"
 	"crypto"
 	"crypto/rand"
 	"fmt"
 	"io"
-	"log/slog"
 	"math"
-	"os"
 	"strings"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
 	"github.com/fido-device-onboard/go-fdo/kex"
-	"github.com/fido-device-onboard/go-fdo/plugin"
 	"github.com/fido-device-onboard/go-fdo/protocol"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
@@ -385,221 +381,6 @@ func (s *TO2Server) setupDevice20(ctx context.Context, msg io.Reader) (*SetupDev
 		ReplacementGUID:        replacementGUID,
 		ReplacementRvInfo:      replacementRvInfo,
 		MaxDeviceServiceInfoSz: maxSvcInfoSz,
-	}, nil
-}
-
-// ownerSvcInfo20 handles TO2.DeviceSvcInfo20 (88) -> TO2.OwnerSvcInfo20 (89)
-// Uses the same module state machine as FDO 1.01
-func (s *TO2Server) ownerSvcInfo20(ctx context.Context, req *DeviceSvcInfo20Msg) (*OwnerSvcInfo20Msg, error) {
-	fmt.Fprintf(os.Stderr, "=== FORCED DEBUG: ownerSvcInfo20 called ===\n")
-	fmt.Printf("=== MY DEBUG: ownerSvcInfo20 called with %d service info entries ===\n", len(req.ServiceInfo))
-	fmt.Printf("[DEBUG FDO 2.0] ownerSvcInfo20 called with %d service info entries\n", len(req.ServiceInfo))
-
-	// Get session GUID
-	guid, err := s.Session.GUID(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("error getting GUID from session: %w", err)
-	}
-
-	_, err = s.Vouchers.Voucher(ctx, guid)
-	if err != nil {
-		return nil, fmt.Errorf("error retrieving voucher: %w", err)
-	}
-
-	// Process device service info through modules (same as 1.01 ownerServiceInfo)
-	var devmodModule *devmodOwnerModule
-
-	for _, kv := range req.ServiceInfo {
-		// Parse the key to extract module name and message type
-		parts := strings.SplitN(kv.Key, ":", 2)
-		if len(parts) != 2 {
-			continue
-		}
-
-		moduleName := parts[0]
-		messageName := parts[1]
-
-		// Check if this is devmod data - if so, store it directly in session state
-		if moduleName == "devmod" {
-			// Create a temporary devmod module to process the data
-			if devmodModule == nil {
-				devmodModule = &devmodOwnerModule{}
-			}
-
-			fmt.Printf("[DEBUG FDO 2.0] Processing devmod message: %s (len=%d)\n", messageName, len(kv.Val))
-
-			// Process the message through the devmod module
-			if err := devmodModule.HandleInfo(ctx, messageName, bytes.NewReader(kv.Val)); err != nil {
-				fmt.Printf("[DEBUG FDO 2.0] Error handling devmod message: %v\n", err)
-				// Don't return error for modules processing - continue with other messages
-				continue
-			}
-
-			fmt.Printf("[DEBUG FDO 2.0] Successfully processed devmod message: %s\n", messageName)
-			fmt.Printf("[DEBUG FDO 2.0] Devmod module state: modules=%v\n", devmodModule.Modules)
-		}
-	}
-
-	// Store devmod data in session state (same as 1.01)
-	if devmodModule != nil {
-		if err := s.Session.SetDevmod(ctx, devmodModule.Devmod, devmodModule.Modules, !req.IsMoreServiceInfo); err != nil {
-			return nil, fmt.Errorf("error storing devmod state: %w", err)
-		}
-		fmt.Printf("[DEBUG FDO 2.0] Stored devmod data: modules=%v, complete=%t\n", devmodModule.Modules, !req.IsMoreServiceInfo)
-
-		// Only initialize module state machine when devmod is complete
-		if !req.IsMoreServiceInfo {
-			fmt.Printf("[DEBUG FDO 2.0] Devmod complete, initializing module state machine\n")
-			// Initialize the module state machine with the device's declared modules
-			if _, err := s.Modules.NextModule(ctx); err != nil {
-				fmt.Printf("[DEBUG FDO 2.0] NextModule failed: %v\n", err)
-			}
-		}
-	}
-
-	// If devmod is not complete and we're still receiving device messages, return empty response
-	if devmodModule != nil && req.IsMoreServiceInfo {
-		fmt.Printf("[DEBUG FDO 2.0] Devmod not complete, returning empty service info\n")
-		return &OwnerSvcInfo20Msg{
-			IsMoreServiceInfo: true,
-			IsDone:            false,
-			ServiceInfo:       []*serviceinfo.KV{},
-		}, nil
-	}
-
-	// If this is the final message (no more service info), check if devmod is complete
-	if !req.IsMoreServiceInfo {
-		fmt.Printf("[DEBUG FDO 2.0] Final service info message received\n")
-
-		// Check if devmod is complete before proceeding
-		if devmodModule != nil {
-			// Try to produce info from devmod to check if it's complete
-			producer := serviceinfo.NewProducer("devmod", 304) // Use default MTU
-			_, complete, err := devmodModule.ProduceInfo(ctx, producer)
-			if err != nil {
-				fmt.Printf("[DEBUG FDO 2.0] Devmod ProduceInfo failed: %v\n", err)
-				return nil, err
-			}
-
-			if !complete {
-				fmt.Printf("[DEBUG FDO 2.0] Devmod not complete after final message, returning empty service info\n")
-				return &OwnerSvcInfo20Msg{
-					IsMoreServiceInfo: true,
-					IsDone:            false,
-					ServiceInfo:       []*serviceinfo.KV{},
-				}, nil
-			}
-
-			fmt.Printf("[DEBUG FDO 2.0] Devmod is complete, proceeding with other modules\n")
-		}
-
-		// Initialize the module state machine with the device's declared modules
-		if _, err := s.Modules.NextModule(ctx); err != nil {
-			fmt.Printf("[DEBUG FDO 2.0] NextModule failed: %v\n", err)
-		}
-	}
-
-	// Use the same module state machine as FDO 1.01
-	// Continue processing modules until all are done
-	var allServiceInfo []*serviceinfo.KV
-
-	fmt.Printf("[DEBUG FDO 2.0] Starting module processing loop\n")
-
-	for {
-		// Get current module from the module state machine
-		moduleName, module, err := s.Modules.Module(ctx)
-		fmt.Printf("=== DEBUG: Module check - moduleName=%s, module=%v, err=%v ===\n", moduleName, module != nil, err)
-		if err != nil || module == nil {
-			// No more modules, break out of loop
-			fmt.Printf("[DEBUG FDO 2.0] No more modules, finished processing all modules\n")
-			break
-		}
-
-		fmt.Printf("[DEBUG FDO 2.0] Processing module: %s, type: %T\n", moduleName, module)
-
-		// Produce service info from the current module using the same logic as 1.01
-		mtu, err := s.Session.MTU(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("error getting max device service info size: %w", err)
-		}
-
-		// Get service info produced by the module
-		producer := serviceinfo.NewProducer(moduleName, mtu)
-
-		// Keep calling ProduceInfo until the module is done or blocks
-		var explicitBlock bool
-		var complete bool
-		for {
-			explicitBlock, complete, err = module.ProduceInfo(ctx, producer)
-			if err != nil {
-				return nil, fmt.Errorf("error producing owner service info from module: %w", err)
-			}
-
-			// If module is complete or blocking, stop
-			if complete || explicitBlock {
-				break
-			}
-
-			// Continue producing more info from the same module
-		}
-
-		if explicitBlock && complete {
-			slog.Warn("service info module completed but indicated that it had more service info to send", "module", moduleName)
-			explicitBlock = false
-		}
-		serviceInfo := producer.ServiceInfo()
-		if size := serviceinfo.ArraySizeCBOR(serviceInfo); size > int64(mtu) {
-			return nil, fmt.Errorf("owner service info module produced service info exceeding the MTU=%d - 3 (message overhead), size=%d", mtu, size)
-		}
-
-		// Store the current module state
-		if devmod, ok := module.(*devmodOwnerModule); ok {
-			if err := s.Session.SetDevmod(ctx, devmod.Devmod, devmod.Modules, complete); err != nil {
-				return nil, fmt.Errorf("error storing devmod state: %w", err)
-			}
-		}
-		if modules, ok := s.Modules.(serviceinfo.ModulePersister); ok {
-			if err := modules.PersistModule(ctx, moduleName, module); err != nil {
-				return nil, fmt.Errorf("error persisting service info module %q state: %w", moduleName, err)
-			}
-		}
-
-		// Progress the module state machine when the module completes
-		if complete {
-			// Cleanup current module
-			if plugin, ok := module.(plugin.Module); ok {
-				stopOwnerPlugin(ctx, moduleName, plugin)
-			}
-
-			// Find out if there will be more modules
-			moreModules, err := s.Modules.NextModule(ctx)
-			if err != nil {
-				return nil, fmt.Errorf("error progressing service info module %q state: %w", moduleName, err)
-			}
-			_ = !moreModules // allModulesDone not needed since we process all modules in loop
-		}
-
-		// Add service info to our collection
-		allServiceInfo = append(allServiceInfo, serviceInfo...)
-
-		fmt.Printf("[DEBUG FDO 2.0] Module %s produced %d service info entries, complete=%t\n", moduleName, len(serviceInfo), complete)
-
-		// If module is blocking, we need to stop and send what we have so far
-		if !complete {
-			fmt.Printf("[DEBUG FDO 2.0] Module %s is blocking, sending partial response with %d entries\n", moduleName, len(allServiceInfo))
-			return &OwnerSvcInfo20Msg{
-				IsMoreServiceInfo: true,
-				IsDone:            false,
-				ServiceInfo:       allServiceInfo,
-			}, nil
-		}
-	}
-
-	// Return chunked data in FDO 2.0 format
-	return &OwnerSvcInfo20Msg{
-		IsMoreServiceInfo: false, // We processed all available modules
-		IsDone:            true,  // All modules are done
-		ServiceInfo:       allServiceInfo,
 	}, nil
 }
 

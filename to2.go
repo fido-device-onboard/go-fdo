@@ -10,7 +10,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -1645,202 +1644,33 @@ func sendDeviceServiceInfo(ctx context.Context, transport Transport, msg deviceS
 }
 
 // DeviceServiceInfo(68) -> OwnerServiceInfo(69)
-func (s *TO2Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*ownerServiceInfo, error) { //nolint:gocyclo
+// This is now a thin wrapper that calls the common ServiceInfoProcessor
+func (s *TO2Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*ownerServiceInfo, error) {
 	// Parse request
 	var deviceInfo deviceServiceInfo
 	if err := cbor.NewDecoder(msg).Decode(&deviceInfo); err != nil {
 		return nil, fmt.Errorf("error decoding TO2.DeviceServiceInfo request: %w", err)
 	}
 
-	// Get next owner service info module
-	var moduleName string
-	var module serviceinfo.OwnerModule
-	if devmod, modules, complete, err := s.Session.Devmod(ctx); errors.Is(err, ErrNotFound) || (err == nil && !complete) {
-		moduleName, module = "devmod", &devmodOwnerModule{
-			Devmod:  devmod,
-			Modules: modules,
-		}
-	} else if err != nil {
-		return nil, fmt.Errorf("error getting devmod state: %w", err)
-	} else {
-		var err error
-		moduleName, module, err = s.Modules.Module(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("error getting current service info module: %w", err)
-		}
-
-		// Set the context values that an FSIM expects
-		guid, err := s.Session.GUID(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("error retrieving associated device GUID of proof session: %w", err)
-		}
-		ov, err := s.Vouchers.Voucher(ctx, guid)
-		if err != nil {
-			return nil, fmt.Errorf("error retrieving voucher for device %x: %w", guid, err)
-		}
-		var deviceCertChain []*x509.Certificate
-		if ov.CertChain != nil {
-			deviceCertChain = make([]*x509.Certificate, len(*ov.CertChain))
-			for i, cert := range *ov.CertChain {
-				deviceCertChain[i] = (*x509.Certificate)(cert)
-			}
-		}
-		ctx = serviceinfo.Context(ctx, &devmod, deviceCertChain)
+	// Create processor with server's dependencies
+	processor := &ServiceInfoProcessor{
+		Modules:   s.Modules,
+		Session:   s.Session,
+		Vouchers:  s.Vouchers,
+		OwnerKeys: s.OwnerKeys,
 	}
 
-	// Handle data with owner module
-	unchunked, unchunker := serviceinfo.NewChunkInPipe(len(deviceInfo.ServiceInfo))
-	for _, kv := range deviceInfo.ServiceInfo {
-		if err := unchunker.WriteChunk(kv); err != nil {
-			return nil, fmt.Errorf("error unchunking received device service info: write: %w", err)
-		}
-	}
-	if err := unchunker.Close(); err != nil {
-		return nil, fmt.Errorf("error unchunking received device service info: close: %w", err)
-	}
-	for {
-		key, messageBody, ok := unchunked.NextServiceInfo()
-		if !ok {
-			break
-		}
-		moduleName, messageName, _ := strings.Cut(key, ":")
-		if err := module.HandleInfo(ctx, messageName, messageBody); err != nil {
-			return nil, fmt.Errorf("error handling device service info %q: %w", key, err)
-		}
-		if n, err := io.Copy(io.Discard, messageBody); err != nil {
-			return nil, err
-		} else if n > 0 {
-			return nil, fmt.Errorf(
-				"owner module did not read full body of message '%s:%s'",
-				moduleName, messageName)
-		}
-		if err := messageBody.Close(); err != nil {
-			return nil, fmt.Errorf("error closing unchunked message body for %q: %w", key, err)
-		}
-	}
-
-	// Save devmod state. All devmod messages are "sent by the Device in the
-	// first Device ServiceInfo" but IsMoreServiceInfo may allow it to be sent
-	// over multiple network roundtrips.
-	fmt.Printf("[DEBUG] Processing module: %s, type: %T\n", moduleName, module)
-	if devmod, ok := module.(*devmodOwnerModule); ok {
-		fmt.Printf("[DEBUG] This is devmod module - applying fix\n")
-		// Mark devmod as complete when this is the final message
-		if err := s.Session.SetDevmod(ctx, devmod.Devmod, devmod.Modules, !deviceInfo.IsMoreServiceInfo); err != nil {
-			return nil, fmt.Errorf("error storing devmod state: %w", err)
-		}
-
-		// When this is the final devmod message, check if the module is complete
-		if !deviceInfo.IsMoreServiceInfo {
-			// Check what the module's ProduceInfo says about completion
-			_, moduleComplete, err := module.ProduceInfo(ctx, serviceinfo.NewProducer("debug", 1300))
-			if err == nil && moduleComplete {
-				fmt.Printf("[DEBUG] Module says complete - transitioning to next module\n")
-				// Module says it's complete, progress to the next module
-				if _, err := s.Modules.NextModule(ctx); err != nil {
-					// No more modules, return empty service info
-					return &ownerServiceInfo{
-						IsMoreServiceInfo: false,
-						IsDone:            true,
-						ServiceInfo:       []*serviceinfo.KV{},
-					}, nil
-				}
-
-				// Get the next module
-				nextModuleName, nextModule, err := s.Modules.Module(ctx)
-				if err != nil || nextModule == nil {
-					// No more modules or module not properly initialized
-					return &ownerServiceInfo{
-						IsMoreServiceInfo: false,
-						IsDone:            true,
-						ServiceInfo:       []*serviceinfo.KV{},
-					}, nil
-				}
-
-				// Produce service info from the next module
-				return s.produceOwnerServiceInfo(ctx, nextModuleName, nextModule)
-			} else {
-				fmt.Printf("[DEBUG] Module not complete yet - complete=%t, err=%v\n", moduleComplete, err)
-			}
-		}
-	} else {
-		fmt.Printf("[DEBUG] Not a devmodOwnerModule - skipping fix\n")
-	}
-
-	// Allow owner module to produce data unless blocked by device
-	if !deviceInfo.IsMoreServiceInfo {
-		return s.produceOwnerServiceInfo(ctx, moduleName, module)
-	}
-
-	// Store the current module state
-	if modules, ok := s.Modules.(serviceinfo.ModulePersister); ok {
-		if err := modules.PersistModule(ctx, moduleName, module); err != nil {
-			return nil, fmt.Errorf("error persisting service info module %q state: %w", moduleName, err)
-		}
-	}
-
-	return &ownerServiceInfo{
-		IsMoreServiceInfo: false,
-		IsDone:            false,
-		ServiceInfo:       nil,
-	}, nil
-}
-
-// Allow owner module to produce data
-func (s *TO2Server) produceOwnerServiceInfo(ctx context.Context, moduleName string, module serviceinfo.OwnerModule) (*ownerServiceInfo, error) {
-	mtu, err := s.Session.MTU(ctx)
+	// Call the common processor
+	resp, err := processor.ProcessServiceInfo(ctx, &deviceInfo)
 	if err != nil {
-		return nil, fmt.Errorf("error getting max device service info size: %w", err)
+		return nil, err
 	}
 
-	// Get service info produced by the module
-	producer := serviceinfo.NewProducer(moduleName, mtu)
-	explicitBlock, complete, err := module.ProduceInfo(ctx, producer)
-	if err != nil {
-		return nil, fmt.Errorf("error producing owner service info from module: %w", err)
-	}
-	if explicitBlock && complete {
-		slog.Warn("service info module completed but indicated that it had more service info to send", "module", moduleName)
-		explicitBlock = false
-	}
-	serviceInfo := producer.ServiceInfo()
-	if size := serviceinfo.ArraySizeCBOR(serviceInfo); size > int64(mtu) {
-		return nil, fmt.Errorf("owner service info module produced service info exceeding the MTU=%d - 3 (message overhead), size=%d", mtu, size)
-	}
-
-	// Store the current module state
-	if devmod, ok := module.(*devmodOwnerModule); ok {
-		if err := s.Session.SetDevmod(ctx, devmod.Devmod, devmod.Modules, complete); err != nil {
-			return nil, fmt.Errorf("error storing devmod state: %w", err)
-		}
-	}
-	if modules, ok := s.Modules.(serviceinfo.ModulePersister); ok {
-		if err := modules.PersistModule(ctx, moduleName, module); err != nil {
-			return nil, fmt.Errorf("error persisting service info module %q state: %w", moduleName, err)
-		}
-	}
-
-	// Progress the module state machine when the module completes
-	allModulesDone := false
-	if complete {
-		// Cleanup current module
-		if plugin, ok := module.(plugin.Module); ok {
-			stopOwnerPlugin(ctx, moduleName, plugin)
-		}
-
-		// Find out if there will be more modules
-		moreModules, err := s.Modules.NextModule(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("error progressing service info module %q state: %w", moduleName, err)
-		}
-		allModulesDone = !moreModules
-	}
-
-	// Return chunked data
+	// Convert response to 1.0.1 format
 	return &ownerServiceInfo{
-		IsMoreServiceInfo: explicitBlock,
-		IsDone:            allModulesDone,
-		ServiceInfo:       serviceInfo,
+		IsMoreServiceInfo: resp.IsMoreServiceInfo,
+		IsDone:            resp.IsDone,
+		ServiceInfo:       resp.ServiceInfo,
 	}, nil
 }
 
