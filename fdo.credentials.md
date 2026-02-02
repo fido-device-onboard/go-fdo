@@ -530,6 +530,7 @@ The owner sends this message to request a public key from the device. The owner 
     -2: credential_type: tstr    ; "ssh_public_key"
     ? -3: metadata: {
         ? service_name: tstr     ; Name of service device will access (e.g., "config-server")
+        ? username: tstr         ; Username account for SSH access (e.g., "admin", "root")
         ? key_type: tstr         ; Requested key type: "rsa" | "ed25519" | "ecdsa"
         ? key_size: uint         ; Requested key size (e.g., 2048, 4096 for RSA)
         * tstr => any
@@ -547,6 +548,7 @@ The owner sends this message to request a public key from the device. The owner 
     -1: credential_id: tstr      ; e.g., "device-mgmt-key"
     -2: credential_type: tstr    ; "ssh_public_key"
     ? -3: metadata: {
+        ? username: tstr         ; Username account for SSH access (e.g., "admin", "root")
         ? key_type: tstr         ; "rsa" | "ed25519" | "ecdsa"
         ? comment: tstr          ; Key comment/description
         * tstr => any
@@ -562,6 +564,15 @@ The owner sends this message to request a public key from the device. The owner 
 - SSH public key in OpenSSH format (e.g., "ssh-rsa AAAAB3NzaC1...")
 - Or SSH public key in RFC 4716 format
 
+**Note on username field:**
+
+The optional `username` metadata field specifies which user account the SSH key should be associated with. This is useful when:
+
+- The target system has multiple user accounts
+- SSH access must be restricted to a specific non-root user
+- The device needs to authenticate as a particular service account
+- Different keys are used for different users on the same system
+
 ### Example: Registered Credentials - SSH Public Key
 
 Device registers its SSH public key so it can later SSH into management servers.
@@ -573,6 +584,7 @@ fdo.credentials:pubkey-request = {
     -2: "ssh_public_key",
     -3: {
         "service_name": "config-server.example.com",
+        "username": "admin",
         "key_type": "ed25519"
     },
     -4: "ssh://config-server.example.com:22"
@@ -585,6 +597,7 @@ fdo.credentials:pubkey-begin = {
     -1: "device-config-access",
     -2: "ssh_public_key",
     -3: {
+        "username": "admin",
         "key_type": "ed25519",
         "comment": "device-001 config access key"
     }
