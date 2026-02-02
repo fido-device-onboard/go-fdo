@@ -747,18 +747,17 @@ test_wifi_fdo200() {
 	rm -f "$DB_FILE" "$CRED_FILE"
 
 	# Create a WiFi configuration file
+	# Format: array of WiFiConfigEntry objects (not wrapped in "networks")
 	WIFI_CONFIG="$EPHEMERAL_DIR/wifi_config.json"
 	log_step "Creating WiFi configuration"
 	cat >"$WIFI_CONFIG" <<'EOF'
-{
-  "networks": [
-    {
-      "ssid": "TestNetwork-FDO200",
-      "password": "testpassword123",
-      "security": "wpa2-psk"
-    }
-  ]
-}
+[
+  {
+    "ssid": "TestNetwork-FDO200",
+    "password": "testpassword123",
+    "auth_type": 2
+  }
+]
 EOF
 	log_success "Created WiFi config: $WIFI_CONFIG"
 
