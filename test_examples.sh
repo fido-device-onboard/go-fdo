@@ -834,6 +834,173 @@ test_payload() {
 	log_success "Payload FSIM test PASSED"
 }
 
+# Test: Payload FSIM with Multiple Types
+# This test demonstrates sending multiple payloads with different MIME types
+# and verifies that all are received correctly
+test_payload_multiple_types() {
+	log_section "TEST: Payload FSIM with Multiple MIME Types"
+
+	mkdir -p "$EPHEMERAL_DIR"
+	rm -f "$DB_FILE" "$CRED_FILE"
+
+	# Create test files with different MIME types
+	PAYLOAD_JSON="$EPHEMERAL_DIR/test_payload.json"
+	PAYLOAD_SCRIPT="$EPHEMERAL_DIR/test_payload.sh"
+	PAYLOAD_BIN="$EPHEMERAL_DIR/test_payload.bin"
+
+	log_step "Creating test payloads with different MIME types"
+	echo '{"config": "test", "version": 1}' >"$PAYLOAD_JSON"
+	echo '#!/bin/bash' >"$PAYLOAD_SCRIPT"
+	echo 'echo "Hello from script"' >>"$PAYLOAD_SCRIPT"
+	dd if=/dev/urandom of="$PAYLOAD_BIN" bs=1024 count=5 2>/dev/null
+
+	JSON_HASH=$(sha256sum "$PAYLOAD_JSON" | awk '{print $1}')
+	SCRIPT_HASH=$(sha256sum "$PAYLOAD_SCRIPT" | awk '{print $1}')
+	BIN_HASH=$(sha256sum "$PAYLOAD_BIN" | awk '{print $1}')
+
+	log_success "Created 3 test payloads:"
+	log_success "  JSON:   $PAYLOAD_JSON (hash: $JSON_HASH)"
+	log_success "  Script: $PAYLOAD_SCRIPT (hash: $SCRIPT_HASH)"
+	log_success "  Binary: $PAYLOAD_BIN (hash: $BIN_HASH)"
+
+	# Server sends three payloads with different MIME types (with RequireAck)
+	log_step "Starting server with multiple payload types"
+	start_server "-payload application/json:../$PAYLOAD_JSON -payload text/x-shellscript:../$PAYLOAD_SCRIPT -payload application/octet-stream:../$PAYLOAD_BIN"
+
+	log_step "Running DI"
+	run_cmd go run ./cmd client -di "$SERVER_URL"
+	log_success "DI completed"
+
+	# Client accepts all MIME types
+	log_step "Running TO1/TO2 with multiple payload types (all accepted)"
+	run_cmd go run ./cmd client
+	log_success "TO1/TO2 completed with multiple payloads"
+
+	stop_server
+
+	# Verify all payloads were received
+	RECEIVED_JSON="$EPHEMERAL_DIR/test_payload.json"
+	RECEIVED_SCRIPT="$EPHEMERAL_DIR/test_payload.sh"
+	RECEIVED_BIN="$EPHEMERAL_DIR/test_payload.bin"
+
+	log_step "Verifying all payloads received"
+	local all_match=true
+
+	if [ ! -f "$RECEIVED_JSON" ]; then
+		log_error "JSON payload not received"
+		all_match=false
+	else
+		RECEIVED_JSON_HASH=$(sha256sum "$RECEIVED_JSON" | awk '{print $1}')
+		if [ "$JSON_HASH" = "$RECEIVED_JSON_HASH" ]; then
+			log_success "JSON payload verified: $RECEIVED_JSON_HASH"
+		else
+			log_error "JSON payload hash mismatch!"
+			all_match=false
+		fi
+	fi
+
+	if [ ! -f "$RECEIVED_SCRIPT" ]; then
+		log_error "Script payload not received"
+		all_match=false
+	else
+		RECEIVED_SCRIPT_HASH=$(sha256sum "$RECEIVED_SCRIPT" | awk '{print $1}')
+		if [ "$SCRIPT_HASH" = "$RECEIVED_SCRIPT_HASH" ]; then
+			log_success "Script payload verified: $RECEIVED_SCRIPT_HASH"
+		else
+			log_error "Script payload hash mismatch!"
+			all_match=false
+		fi
+	fi
+
+	if [ ! -f "$RECEIVED_BIN" ]; then
+		log_error "Binary payload not received"
+		all_match=false
+	else
+		RECEIVED_BIN_HASH=$(sha256sum "$RECEIVED_BIN" | awk '{print $1}')
+		if [ "$BIN_HASH" = "$RECEIVED_BIN_HASH" ]; then
+			log_success "Binary payload verified: $RECEIVED_BIN_HASH"
+		else
+			log_error "Binary payload hash mismatch!"
+			all_match=false
+		fi
+	fi
+
+	if [ "$all_match" = false ]; then
+		return 1
+	fi
+
+	log_success "Payload FSIM with Multiple Types test PASSED"
+}
+
+# Test: Payload FSIM Selective MIME Type Rejection
+# This test demonstrates device rejecting unsupported MIME types
+# and accepting supported ones when multiple payloads are sent
+test_payload_selective_rejection() {
+	log_section "TEST: Payload FSIM Selective MIME Type Rejection"
+
+	mkdir -p "$EPHEMERAL_DIR"
+	rm -f "$DB_FILE" "$CRED_FILE"
+
+	# Create test files
+	PAYLOAD_UNSUPPORTED_1="$EPHEMERAL_DIR/test_unsupported_1.xml"
+	PAYLOAD_SUPPORTED="$EPHEMERAL_DIR/test_supported.json"
+	PAYLOAD_UNSUPPORTED_2="$EPHEMERAL_DIR/test_unsupported_2.yaml"
+
+	log_step "Creating test payloads"
+	echo '<?xml version="1.0"?><config></config>' >"$PAYLOAD_UNSUPPORTED_1"
+	echo '{"config": "supported", "version": 1}' >"$PAYLOAD_SUPPORTED"
+	echo 'config: unsupported' >"$PAYLOAD_UNSUPPORTED_2"
+
+	SUPPORTED_HASH=$(sha256sum "$PAYLOAD_SUPPORTED" | awk '{print $1}')
+
+	log_success "Created 3 test payloads:"
+	log_success "  Unsupported XML:  $PAYLOAD_UNSUPPORTED_1"
+	log_success "  Supported JSON:   $PAYLOAD_SUPPORTED (hash: $SUPPORTED_HASH)"
+	log_success "  Unsupported YAML: $PAYLOAD_UNSUPPORTED_2"
+
+	# Server sends three payloads: unsupported, supported, unsupported (with RequireAck)
+	log_step "Starting server with mixed supported/unsupported MIME types"
+	start_server "-payload application/xml:../$PAYLOAD_UNSUPPORTED_1 -payload application/json:../$PAYLOAD_SUPPORTED -payload application/x-yaml:../$PAYLOAD_UNSUPPORTED_2"
+
+	log_step "Running DI"
+	run_cmd go run ./cmd client -di "$SERVER_URL"
+	log_success "DI completed"
+
+	# Client only supports application/json, should reject XML and YAML, accept JSON
+	log_step "Running TO1/TO2 with selective MIME type rejection"
+	log_step "  Device supports: application/json only"
+	log_step "  Server sends: XML (reject), JSON (accept), YAML (reject)"
+	run_cmd go run ./cmd client -payload-supported-types "application/json"
+	log_success "TO1/TO2 completed with selective rejection"
+
+	stop_server
+
+	# Verify only the supported payload was received
+	RECEIVED_SUPPORTED="$EPHEMERAL_DIR/test_supported.json"
+
+	log_step "Verifying only supported payload was received"
+	if [ ! -f "$RECEIVED_SUPPORTED" ]; then
+		log_error "Supported JSON payload not received"
+		return 1
+	fi
+
+	RECEIVED_HASH=$(sha256sum "$RECEIVED_SUPPORTED" | awk '{print $1}')
+	if [ "$SUPPORTED_HASH" = "$RECEIVED_HASH" ]; then
+		log_success "Supported payload verified: $RECEIVED_HASH"
+	else
+		log_error "Supported payload hash mismatch!"
+		return 1
+	fi
+
+	# Verify unsupported payloads were NOT received
+	if [ -f "$EPHEMERAL_DIR/test_unsupported_1.xml" ] || [ -f "$EPHEMERAL_DIR/test_unsupported_2.yaml" ]; then
+		log_error "Unsupported payloads should not have been received"
+		return 1
+	fi
+
+	log_success "Payload FSIM Selective Rejection test PASSED"
+}
+
 # Test: WiFi FSIM (network-add only)
 # This test verifies that the WiFi FSIM can send network configurations
 # from the server to the device, which displays them.
@@ -1260,6 +1427,8 @@ test_all() {
 	test_sysconfig_fdo200 || failed=1
 	test_payload || failed=1
 	test_payload_fdo200 || failed=1
+	test_payload_multiple_types || failed=1
+	test_payload_selective_rejection || failed=1
 	test_wifi || failed=1
 	test_wifi_fdo200 || failed=1
 	test_wifi_single_sided || failed=1
@@ -1351,6 +1520,12 @@ main() {
 	payload-fdo200)
 		test_payload_fdo200
 		;;
+	payload-multiple-types)
+		test_payload_multiple_types
+		;;
+	payload-selective-rejection)
+		test_payload_selective_rejection
+		;;
 	wifi)
 		test_wifi
 		;;
@@ -1380,7 +1555,7 @@ main() {
 		;;
 	*)
 		echo "Unknown test: $test_name"
-		echo "Available tests: basic, basic-reuse, rv-blob, kex, fdo200, delegate, delegate-fdo200, bad-delegate, attested-payload, attested-payload-encrypted, attested-payload-delegate, attested-payload-shell, sysconfig, sysconfig-fdo200, payload, payload-fdo200, payload-nak, wifi, wifi-fdo200, wifi-single-sided, bmo, bmo-efi, bmo-nak, credentials, all"
+		echo "Available tests: basic, basic-reuse, rv-blob, kex, fdo200, delegate, delegate-fdo200, bad-delegate, attested-payload, attested-payload-encrypted, attested-payload-delegate, attested-payload-shell, sysconfig, sysconfig-fdo200, payload, payload-fdo200, payload-multiple-types, payload-selective-rejection, payload-nak, wifi, wifi-fdo200, wifi-single-sided, bmo, bmo-efi, bmo-nak, credentials, all"
 		exit 1
 		;;
 	esac
