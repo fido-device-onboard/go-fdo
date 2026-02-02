@@ -590,6 +590,10 @@ func sendDeviceSvcInfoRdy20(ctx context.Context, transport Transport, sess kex.S
 
 // exchangeServiceInfo20 handles the service info exchange loop for 2.0
 func exchangeServiceInfo20(ctx context.Context, transport Transport, proveOVNonce, setupDeviceNonce protocol.Nonce, sendMTU uint16, serviceInfoReader *serviceinfo.ChunkReader, replacementHMAC *protocol.Hmac, sess kex.Session, c *TO2Config) error {
+	// Track active modules (same as 1.0.1)
+	modules := deviceModuleMap{modules: c.DeviceModules, active: make(map[string]bool)}
+	defer stopDevicePlugins(&modules)
+
 	// Simple service info exchange - send device info, receive owner info
 	var deviceDone bool
 	for {
@@ -645,41 +649,9 @@ func exchangeServiceInfo20(ctx context.Context, transport Transport, proveOVNonc
 			}
 			_ = resp.Close()
 
-			// Process owner service info through device modules (same as 1.01)
-			for _, kv := range ownerInfoMsg.ServiceInfo {
-				// Debug: log what we received
-				slog.Info("FDO 2.0 received owner service info", "key", kv.Key, "value", string(kv.Val))
-
-				// Parse the key to extract module name and message type
-				parts := strings.SplitN(kv.Key, ":", 2)
-				if len(parts) != 2 {
-					slog.Warn("invalid service info key format", "key", kv.Key)
-					continue
-				}
-
-				moduleName := parts[0]
-				messageName := parts[1]
-				slog.Info("FDO 2.0 processing module", "module", moduleName, "message", messageName)
-
-				// Find the device module
-				if deviceModule, exists := c.DeviceModules[moduleName]; exists {
-					// Create a respond function for this message
-					respond := func(message string) io.Writer {
-						return &bytes.Buffer{}
-					}
-
-					// Create a yield function (no-op for device modules)
-					yield := func() {}
-
-					// Process the message through the device module
-					if err := deviceModule.Receive(ctx, messageName, bytes.NewReader(kv.Val), respond, yield); err != nil {
-						slog.Error("error processing service info message", "module", moduleName, "message", messageName, "error", err)
-					} else {
-						slog.Info("FDO 2.0 successfully processed message", "module", moduleName, "message", messageName)
-					}
-				} else {
-					slog.Warn("unknown device module", "module", moduleName)
-				}
+			// Process owner service info through device modules using same logic as 1.0.1
+			if err := processOwnerServiceInfo20(ctx, ownerInfoMsg.ServiceInfo, c.DeviceModules, &modules); err != nil {
+				return fmt.Errorf("error processing owner service info: %w", err)
 			}
 
 			// Check if done
@@ -743,4 +715,59 @@ func sendDone20(ctx context.Context, transport Transport, proveOVNonce, setupDev
 		captureErr(ctx, protocol.MessageBodyErrCode, "")
 		return fmt.Errorf("unexpected response type %d to TO2.Done20", typ)
 	}
+}
+
+// processOwnerServiceInfo20 processes owner service info KVs using the same logic as 1.0.1
+// This is the unified client-side FSIM processing for FDO 2.0
+func processOwnerServiceInfo20(ctx context.Context, serviceInfo []*serviceinfo.KV, deviceModules map[string]serviceinfo.DeviceModule, modules *deviceModuleMap) error {
+	for _, kv := range serviceInfo {
+		// Parse the key to extract module name and message type
+		moduleName, messageName, ok := strings.Cut(kv.Key, ":")
+		if !ok {
+			slog.Warn("invalid service info key format", "key", kv.Key)
+			continue
+		}
+
+		// Get the device module
+		mod, active := modules.Lookup(moduleName)
+
+		// Handle "active" message specially - call Transition() (same as 1.0.1 handleActive)
+		if messageName == "active" {
+			var newActive bool
+			if err := cbor.NewDecoder(bytes.NewReader(kv.Val)).Decode(&newActive); err != nil {
+				return fmt.Errorf("error decoding active message for %s: %w", moduleName, err)
+			}
+
+			// Transition internal state if changed
+			if newActive != active {
+				if err := mod.Transition(newActive); err != nil {
+					return fmt.Errorf("error transitioning module %s: %w", moduleName, err)
+				}
+			}
+			modules.active[moduleName] = newActive
+			slog.Info("FDO 2.0 transitioned module", "module", moduleName, "active", newActive)
+			continue
+		}
+
+		// For non-active messages, module must be active
+		if !active {
+			return fmt.Errorf("device has not activated module %q", moduleName)
+		}
+
+		// Create respond/yield callback functions (same as 1.0.1 handleOwnerModuleMessage)
+		respond := func(message string) io.Writer {
+			// In 2.0, we don't have a pipe to write responses to, so discard
+			return io.Discard
+		}
+		yield := func() {
+			// No-op for 2.0 simple exchange
+		}
+
+		// Process the message through the device module
+		if err := mod.Receive(ctx, messageName, bytes.NewReader(kv.Val), respond, yield); err != nil {
+			return fmt.Errorf("error processing service info %s:%s: %w", moduleName, messageName, err)
+		}
+		slog.Info("FDO 2.0 successfully processed message", "module", moduleName, "message", messageName)
+	}
+	return nil
 }

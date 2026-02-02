@@ -69,6 +69,42 @@ func TestClientWithMockModule(t *testing.T) {
 	}
 }
 
+func TestClientWithMockModuleFDO20(t *testing.T) {
+	deviceModule := &fdotest.MockDeviceModule{
+		ReceiveFunc: func(ctx context.Context, messageName string, messageBody io.Reader, respond func(message string) io.Writer, yield func()) error {
+			_, _ = io.Copy(io.Discard, messageBody)
+			return nil
+		},
+	}
+	ownerModule := &fdotest.MockOwnerModule{
+		ProduceInfoFunc: func(ctx context.Context, producer *serviceinfo.Producer) (blockPeer, moduleDone bool, _ error) {
+			if err := producer.WriteChunk("active", []byte{0xf5}); err != nil {
+				return false, false, err
+			}
+			if err := producer.WriteChunk("message", []byte{0xf4}); err != nil {
+				return false, false, err
+			}
+			return false, true, nil
+		},
+	}
+
+	fdotest.RunClientTestSuite(t, fdotest.Config{
+		Version: protocol.Version200,
+		DeviceModules: map[string]serviceinfo.DeviceModule{
+			mockModuleName: deviceModule,
+		},
+		OwnerModules: func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
+			return func(yield func(string, serviceinfo.OwnerModule) bool) {
+				yield(mockModuleName, ownerModule)
+			}
+		},
+	})
+
+	if !deviceModule.ActiveState {
+		t.Error("device module should be active")
+	}
+}
+
 func TestClientWithMockModuleAndAutoUnchunking(t *testing.T) {
 	deviceModule := &fdotest.MockDeviceModule{
 		ReceiveFunc: func(ctx context.Context, messageName string, messageBody io.Reader, respond func(message string) io.Writer, yield func()) error {
