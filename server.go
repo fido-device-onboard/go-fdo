@@ -406,35 +406,7 @@ func (s *TO2Server) HandleError(ctx context.Context, errMsg protocol.ErrorMessag
 }
 
 // ownerServiceInfo20 converts 2.0 DeviceSvcInfo20Msg to 1.0.1 format and reuses existing logic
-// TODO: Consolidate 1.0.1 and 2.0 FSIM handling code to avoid duplicate implementations
 func (s *TO2Server) ownerServiceInfo20(ctx context.Context, req *DeviceSvcInfo20Msg) (*OwnerSvcInfo20Msg, error) {
-	fmt.Printf("=== DEBUG: ownerServiceInfo20 called with %d entries, more=%t ===\n", len(req.ServiceInfo), req.IsMoreServiceInfo)
-
-	// Special handling for 2.0: if no service info entries, check if we have a blocked module
-	if len(req.ServiceInfo) == 0 {
-		// Check current module state
-		moduleName, module, err := s.Modules.Module(ctx)
-		if err == nil && module != nil {
-			fmt.Printf("=== DEBUG: No entries but have module %s, checking if blocked ===\n", moduleName)
-
-			// Try to produce info to see if module is blocked
-			mtu, err := s.Session.MTU(ctx)
-			if err == nil {
-				producer := serviceinfo.NewProducer("debug", uint16(mtu))
-				_, complete, err := module.ProduceInfo(ctx, producer)
-				if err == nil && !complete {
-					fmt.Printf("=== DEBUG: Module %s is blocked, returning done=true ===\n", moduleName)
-					// Module is blocked, end the exchange
-					return &OwnerSvcInfo20Msg{
-						IsMoreServiceInfo: false,
-						IsDone:            true,
-						ServiceInfo:       []*serviceinfo.KV{},
-					}, nil
-				}
-			}
-		}
-	}
-
 	// Convert 2.0 message to 1.0.1 format and encode as CBOR
 	deviceInfo := deviceServiceInfo{
 		ServiceInfo:       req.ServiceInfo,
