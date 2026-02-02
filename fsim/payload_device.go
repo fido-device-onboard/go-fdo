@@ -275,6 +275,11 @@ func (p *Payload) onChunkUnified(data []byte) error {
 // onEndUnified returns a callback for when payload-end is received in unified mode.
 func (p *Payload) onEndUnified(ctx context.Context) func(chunking.EndMessage) error {
 	return func(end chunking.EndMessage) error {
+		// Check if payload was rejected during ACK phase
+		if p.receiver != nil && p.receiver.IsAckPending() && !p.receiver.IsAckAccepted() {
+			// Payload was rejected, don't process it
+			return nil
+		}
 		// Extract MIME type from field -1 (required per fdo.payload.md)
 		mimeType, ok := p.begin.FSIMFields[-1].(string)
 		if !ok || mimeType == "" {

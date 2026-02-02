@@ -524,7 +524,7 @@ test_attested_payload_shell() {
 	# Extract payload
 	sed -n '/-----BEGIN PAYLOAD-----/,/-----END PAYLOAD-----/p' $EPHEMERAL_DIR/payload_cli.fdo | grep -v '^-----' | base64 -d >$EPHEMERAL_DIR/extracted_payload.bin
 	# Extract signature
-	sed -n '/-----BEGIN SIGNATURE-----/,/-----END SIGNATURE-----/p' $EPHEMERAL_DIR/payload_cli.fdo | grep -v '^-----' | base64 -d >extracted_$EPHEMERAL_DIR/sig.bin
+	sed -n '/-----BEGIN SIGNATURE-----/,/-----END SIGNATURE-----/p' $EPHEMERAL_DIR/payload_cli.fdo | grep -v '^-----' | base64 -d >$EPHEMERAL_DIR/sig.bin
 	log_success "Components extracted"
 
 	log_step "Verifying Go CLI payload with openssl"
@@ -534,7 +534,7 @@ test_attested_payload_shell() {
 		cat $EPHEMERAL_DIR/extracted_payload.bin
 	) >$EPHEMERAL_DIR/signed_data.bin
 	# Verify signature
-	openssl dgst -sha384 -verify $EPHEMERAL_DIR/owner_ec_pub.key -signature extracted_$EPHEMERAL_DIR/sig.bin $EPHEMERAL_DIR/signed_data.bin
+	openssl dgst -sha384 -verify $EPHEMERAL_DIR/owner_ec_pub.key -signature $EPHEMERAL_DIR/sig.bin $EPHEMERAL_DIR/signed_data.bin
 	log_success "Go CLI payload verified by openssl"
 
 	# Test 3: Create typed payload with shell, verify with Go CLI
@@ -952,6 +952,8 @@ test_payload_selective_rejection() {
 	echo 'config: unsupported' >"$PAYLOAD_UNSUPPORTED_2"
 
 	SUPPORTED_HASH=$(sha256sum "$PAYLOAD_SUPPORTED" | awk '{print $1}')
+	UNSUPPORTED_1_HASH=$(sha256sum "$PAYLOAD_UNSUPPORTED_1" | awk '{print $1}')
+	UNSUPPORTED_2_HASH=$(sha256sum "$PAYLOAD_UNSUPPORTED_2" | awk '{print $1}')
 
 	log_success "Created 3 test payloads:"
 	log_success "  Unsupported XML:  $PAYLOAD_UNSUPPORTED_1"
@@ -992,9 +994,12 @@ test_payload_selective_rejection() {
 		return 1
 	fi
 
-	# Verify unsupported payloads were NOT received
-	if [ -f "$EPHEMERAL_DIR/test_unsupported_1.xml" ] || [ -f "$EPHEMERAL_DIR/test_unsupported_2.yaml" ]; then
-		log_error "Unsupported payloads should not have been received"
+	# Verify unsupported payloads were NOT received (check if content changed)
+	CURRENT_UNSUPPORTED_1_HASH=$(sha256sum "$PAYLOAD_UNSUPPORTED_1" | awk '{print $1}')
+	CURRENT_UNSUPPORTED_2_HASH=$(sha256sum "$PAYLOAD_UNSUPPORTED_2" | awk '{print $1}')
+
+	if [ "$UNSUPPORTED_1_HASH" != "$CURRENT_UNSUPPORTED_1_HASH" ] || [ "$UNSUPPORTED_2_HASH" != "$CURRENT_UNSUPPORTED_2_HASH" ]; then
+		log_error "Unsupported payloads should not have been received (content was modified)"
 		return 1
 	fi
 

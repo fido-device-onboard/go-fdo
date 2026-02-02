@@ -302,7 +302,14 @@ func (s *TO2Server) setupDevice20(ctx context.Context, msg io.Reader) (*SetupDev
 	if req.MaxOwnerServiceInfoSz != nil {
 		mtu = int(*req.MaxOwnerServiceInfoSz)
 	}
-	if err := s.Session.SetMTU(ctx, uint16(mtu)); err != nil {
+	// Safe conversion to uint16 with bounds checking
+	var mtu16 uint16
+	if mtu >= 0 && mtu <= 65535 {
+		mtu16 = uint16(mtu)
+	} else {
+		mtu16 = uint16(serviceinfo.DefaultMTU)
+	}
+	if err := s.Session.SetMTU(ctx, mtu16); err != nil {
 		return nil, fmt.Errorf("error storing max service info size to send to device: %w", err)
 	}
 
