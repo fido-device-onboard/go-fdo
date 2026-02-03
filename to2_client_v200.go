@@ -31,11 +31,9 @@ import (
 //       DeviceSvcInfoRdy20(86) -> SetupDevice20(87) -> DeviceSvcInfo20(88) ->
 //       OwnerSvcInfo20(89) -> Done20(90) -> DoneAck20(91)
 
-// TO2v200 runs the FDO 2.0 TO2 protocol. It has the same interface as TO2 but
-// uses the 2.0 message flow where the device proves itself first.
-//
-//nolint:gocyclo // Protocol orchestration requires multiple steps and error paths
-func TO2v200(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1d, []byte], c TO2Config) (*DeviceCredential, error) {
+// TO2v200 implements the FDO 2.0 TO2 protocol
+func TO2v200(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1d, []byte], c *TO2Config) (*DeviceCredential, error) {
+	fmt.Printf("[DEBUG] TO2v200 starting!\n")
 	ctx = contextWithErrMsg(ctx)
 
 	// Configure defaults (same as 1.01)
@@ -53,7 +51,7 @@ func TO2v200(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol
 	}
 
 	// Step 1: Send HelloDeviceProbe, receive HelloDeviceAck20
-	ack, err := sendHelloDeviceProbe(ctx, transport, &c)
+	ack, err := sendHelloDeviceProbe(ctx, transport, c)
 	if err != nil {
 		errorMsg(ctx, transport, err)
 		return nil, err
@@ -61,7 +59,7 @@ func TO2v200(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol
 
 	// Step 2: Device proves itself FIRST (key 2.0 difference)
 	// Send ProveDevice20, receive ProveOVHdr20
-	proveOVNonce, ownerInfo, sess, err := sendProveDevice20(ctx, transport, ack, &c)
+	proveOVNonce, ownerInfo, sess, err := sendProveDevice20(ctx, transport, ack, c)
 	if err != nil {
 		errorMsg(ctx, transport, err)
 		return nil, err
@@ -69,14 +67,14 @@ func TO2v200(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol
 	defer sess.Destroy()
 
 	// Step 3: Verify owner's proof and get voucher entries
-	if err := verifyOwner20(ctx, transport, to1d, ownerInfo, &c); err != nil {
+	if err := verifyOwner20(ctx, transport, to1d, ownerInfo, c); err != nil {
 		errorMsg(ctx, transport, err)
 		return nil, err
 	}
 
 	// Step 4: Service info exchange
 	// Send DeviceSvcInfoRdy20 and receive SetupDevice20 with GUID/RvInfo
-	setupDeviceNonce, partialOVH, err := sendDeviceSvcInfoRdy20(ctx, transport, sess, ownerInfo.DelegateChain, &c)
+	setupDeviceNonce, partialOVH, err := sendDeviceSvcInfoRdy20(ctx, transport, sess, ownerInfo.DelegateChain, c)
 	if err != nil {
 		errorMsg(ctx, transport, err)
 		return nil, err
@@ -141,7 +139,7 @@ func TO2v200(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol
 
 	go c.Devmod.Write(ctx, c.DeviceModules, sendMTU, serviceInfoWriter)
 
-	if err := exchangeServiceInfo20(ctx, transport, proveOVNonce, setupDeviceNonce, sendMTU, serviceInfoReader, replacementHMAC, sess, &c); err != nil {
+	if err := exchangeServiceInfo20(ctx, transport, proveOVNonce, setupDeviceNonce, sendMTU, serviceInfoReader, replacementHMAC, sess, c); err != nil {
 		errorMsg(ctx, transport, err)
 		return nil, err
 	}

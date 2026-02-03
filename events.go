@@ -275,6 +275,8 @@ func UnregisterAllEventHandlers() {
 	globalDispatcher.handlers = make([]EventHandler, 0)
 }
 
+var EventFlushWaitGroup sync.WaitGroup
+
 // emitEvent dispatches an event to all registered handlers
 func emitEvent(ctx context.Context, event Event) {
 	// Set timestamp if not already set
@@ -297,7 +299,9 @@ func emitEvent(ctx context.Context, event Event) {
 	// However, we don't wait for handlers to complete
 	for _, handler := range handlers {
 		h := handler // capture for goroutine
+		EventFlushWaitGroup.Add(1)
 		go func() {
+			defer EventFlushWaitGroup.Done()
 			// Recover from panics in event handlers to prevent crashing the protocol
 			defer func() {
 				if r := recover(); r != nil {
@@ -309,6 +313,12 @@ func emitEvent(ctx context.Context, event Event) {
 			h.HandleEvent(ctx, event)
 		}()
 	}
+}
+
+// FlushEvents waits for all pending event dispatches to complete
+// This should be called before program exit to ensure all events are processed
+func FlushEvents() {
+	EventFlushWaitGroup.Wait()
 }
 
 // Helper functions to emit specific events
