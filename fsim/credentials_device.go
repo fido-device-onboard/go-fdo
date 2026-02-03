@@ -21,15 +21,15 @@ import (
 // 3. Registered Credentials - Device registers public keys (SSH)
 type CredentialsDevice struct {
 	// Callbacks for credential handling (Provisioned flow)
-	OnCredentialReceived func(credentialID, credentialType string, data []byte, metadata map[string]any) error
+	OnCredentialReceived func(credentialID string, credentialType int, data []byte, metadata map[string]any) error
 
 	// Callback for generating/retrieving public keys (Registered Credentials flow)
 	// Called when owner requests a public key. Returns the public key data.
-	OnPublicKeyRequested func(credentialID, credentialType string, metadata map[string]any) ([]byte, error)
+	OnPublicKeyRequested func(credentialID string, credentialType int, metadata map[string]any) ([]byte, error)
 
 	// Callback for receiving enrolled credential response (Enrolled Credentials flow)
 	// Called when owner sends signed certificate/config in response to device's request.
-	OnEnrolledCredentialReceived func(credentialID, credentialType string, data []byte, metadata map[string]any) error
+	OnEnrolledCredentialReceived func(credentialID string, credentialType int, data []byte, metadata map[string]any) error
 
 	// Enrollment requests to send (Enrolled Credentials flow)
 	// Device will send these requests when the module becomes active.
@@ -44,7 +44,7 @@ type CredentialsDevice struct {
 
 	// Current credential being received
 	currentCredentialID   string
-	currentCredentialType string
+	currentCredentialType int
 	currentMetadata       map[string]any
 	currentCredentialData []byte // Store data from OnEnd callback before reset
 
@@ -64,17 +64,17 @@ type CredentialsDevice struct {
 // pubkeyRequestInfo holds info about a pending pubkey request from owner
 type pubkeyRequestInfo struct {
 	CredentialID   string
-	CredentialType string
+	CredentialType int
 	Metadata       map[string]any
 	PublicKeyData  []byte // Generated/retrieved public key
 }
 
 // EnrollmentRequest represents a credential enrollment request from device to owner.
-// The device generates a key pair and sends the public key material (CSR, JWK) to the owner.
+// The device generates a key pair and sends the public key material (CSR) to the owner.
 type EnrollmentRequest struct {
 	CredentialID   string         // Required: unique identifier (e.g., "device-mtls-cert")
-	CredentialType string         // Required: "x509_cert" | "oauth2_private_key_jwt"
-	RequestData    []byte         // Required: CSR (PKCS#10) or JWK
+	CredentialType int            // Required: CredentialTypeX509Cert (3)
+	RequestData    []byte         // Required: CSR (PKCS#10)
 	Metadata       map[string]any // Optional: subject_dn, san, key_usage, etc.
 }
 
@@ -88,7 +88,7 @@ type responseResultInfo struct {
 // RegisteredCredential represents a public key to register with the owner.
 type RegisteredCredential struct {
 	CredentialID   string         // Required: unique identifier (e.g., "ssh-admin-key")
-	CredentialType string         // Required: "ssh_public_key"
+	CredentialType int            // Required: CredentialTypeSSHPublicKey (5)
 	PublicKeyData  []byte         // Required: public key data (OpenSSH format)
 	Metadata       map[string]any // Optional: username, authorized_hosts, key_type, comment
 }
@@ -110,7 +110,7 @@ func (c *CredentialsDevice) Transition(active bool) error {
 		c.receivingCredential = false
 		c.credentialReceiver = nil
 		c.currentCredentialID = ""
-		c.currentCredentialType = ""
+		c.currentCredentialType = 0
 		c.currentMetadata = nil
 		c.currentCredentialData = nil
 		// Reset registered credentials state
@@ -321,7 +321,18 @@ func (c *CredentialsDevice) handlePubkeyRequest(messageBody io.Reader, yield fun
 	}
 
 	credID, _ := request[-1].(string)
-	credType, _ := request[-2].(string)
+	var credType int
+	if credTypeInt, ok := request[-2].(int); ok {
+		credType = credTypeInt
+	} else if credTypeStr, ok := request[-2].(string); ok {
+		// Handle legacy string credential types
+		switch credTypeStr {
+		case "ssh_public_key":
+			credType = CredentialTypeSSHPublicKey
+		default:
+			return fmt.Errorf("unsupported credential type: %s", credTypeStr)
+		}
+	}
 	metadata, _ := request[-3].(map[string]any)
 	endpointURL, _ := request[-4].(string)
 
@@ -389,8 +400,20 @@ func (c *CredentialsDevice) handleCredentialBegin(messageBody io.Reader) error {
 				if credID, ok := begin.FSIMFields[-1].(string); ok {
 					c.currentCredentialID = credID
 				}
-				if credType, ok := begin.FSIMFields[-2].(string); ok {
-					c.currentCredentialType = credType
+				if credTypeInt, ok := begin.FSIMFields[-2].(int); ok {
+					c.currentCredentialType = credTypeInt
+				} else if credTypeStr, ok := begin.FSIMFields[-2].(string); ok {
+					// Handle legacy string credential types
+					switch credTypeStr {
+					case "password":
+						c.currentCredentialType = CredentialTypePassword
+					case "secret":
+						c.currentCredentialType = CredentialTypeSecret
+					case "x509_cert":
+						c.currentCredentialType = CredentialTypeX509Cert
+					default:
+						return fmt.Errorf("unsupported credential type: %s", credTypeStr)
+					}
 				}
 				if metadata, ok := begin.FSIMFields[-3].(map[string]any); ok {
 					c.currentMetadata = metadata
@@ -470,7 +493,7 @@ func (c *CredentialsDevice) handleCredentialEnd(messageBody io.Reader, respond f
 	c.credentialReceiver = nil
 	c.receivingCredential = false
 	c.currentCredentialID = ""
-	c.currentCredentialType = ""
+	c.currentCredentialType = 0
 	c.currentMetadata = nil
 	c.currentCredentialData = nil
 
@@ -495,7 +518,7 @@ func (c *CredentialsDevice) sendCredentialResult(respond func(string) io.Writer,
 }
 
 // NewCredentialsDevice creates a new CredentialsDevice with the given callback.
-func NewCredentialsDevice(onCredentialReceived func(credentialID, credentialType string, data []byte, metadata map[string]any) error) *CredentialsDevice {
+func NewCredentialsDevice(onCredentialReceived func(credentialID string, credentialType int, data []byte, metadata map[string]any) error) *CredentialsDevice {
 	return &CredentialsDevice{
 		OnCredentialReceived: onCredentialReceived,
 	}
@@ -512,8 +535,20 @@ func (c *CredentialsDevice) handleResponseBegin(messageBody io.Reader) error {
 				if credID, ok := begin.FSIMFields[-1].(string); ok {
 					c.currentCredentialID = credID
 				}
-				if credType, ok := begin.FSIMFields[-2].(string); ok {
-					c.currentCredentialType = credType
+				if credTypeInt, ok := begin.FSIMFields[-2].(int); ok {
+					c.currentCredentialType = credTypeInt
+				} else if credTypeStr, ok := begin.FSIMFields[-2].(string); ok {
+					// Handle legacy string credential types
+					switch credTypeStr {
+					case "password":
+						c.currentCredentialType = CredentialTypePassword
+					case "secret":
+						c.currentCredentialType = CredentialTypeSecret
+					case "x509_cert":
+						c.currentCredentialType = CredentialTypeX509Cert
+					default:
+						return fmt.Errorf("unsupported credential type: %s", credTypeStr)
+					}
 				}
 				if metadata, ok := begin.FSIMFields[-3].(map[string]any); ok {
 					c.currentMetadata = metadata
@@ -597,7 +632,7 @@ func (c *CredentialsDevice) handleResponseEnd(messageBody io.Reader, yield func(
 	c.responseReceiver = nil
 	c.receivingResponse = false
 	c.currentCredentialID = ""
-	c.currentCredentialType = ""
+	c.currentCredentialType = 0
 	c.currentMetadata = nil
 	c.currentCredentialData = nil
 

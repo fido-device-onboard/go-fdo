@@ -27,11 +27,11 @@ type CredentialsOwner struct {
 	PublicKeyRequests []PublicKeyRequest
 
 	// Callback for public key registration (Registered Credentials flow)
-	OnPublicKeyReceived func(credentialID, credentialType string, publicKey []byte, metadata map[string]any) error
+	OnPublicKeyReceived func(credentialID string, credentialType int, publicKey []byte, metadata map[string]any) error
 
 	// Callback for processing enrollment requests (Enrolled Credentials flow)
 	// Called when device sends a CSR or other enrollment request. Returns the signed credential/response.
-	OnEnrollmentRequest func(credentialID, credentialType string, requestData []byte, metadata map[string]any) (responseData []byte, responseMetadata map[string]any, err error)
+	OnEnrollmentRequest func(credentialID string, credentialType int, requestData []byte, metadata map[string]any) (responseData []byte, responseMetadata map[string]any, err error)
 
 	// Internal state
 	currentCredentialIndex int
@@ -48,8 +48,8 @@ type CredentialsOwner struct {
 	// Registered Credentials state
 	currentPubkeyRequestIndex int                     // Current pubkey request being processed
 	pubkeyReceiver            *chunking.ChunkReceiver // Receiver for pubkey from device
-	currentPubkeyID           string
-	currentPubkeyType         string
+	currentPubkeyID           int
+	currentPubkeyType         int
 	currentPubkeyMetadata     map[string]any
 	currentPubkeyData         []byte
 	pendingPubkeyResult       *chunking.ResultMessage // Result to send back to device
@@ -57,8 +57,8 @@ type CredentialsOwner struct {
 
 	// Enrolled Credentials state (owner receives request, sends response)
 	enrollmentReceiver       *chunking.ChunkReceiver // Receiver for enrollment request from device
-	currentEnrollmentID      string
-	currentEnrollmentType    string
+	currentEnrollmentID      int
+	currentEnrollmentType    int
 	currentEnrollmentMeta    map[string]any
 	currentEnrollmentData    []byte
 	pendingEnrollmentResp    *enrollmentResponseInfo // Pending response to send
@@ -68,17 +68,15 @@ type CredentialsOwner struct {
 
 // PublicKeyRequest represents a request for the device to send a public key.
 type PublicKeyRequest struct {
-	CredentialID   string         // Required: unique identifier (e.g., "ssh-admin-key")
-	CredentialType string         // Required: "ssh_public_key"
-	Metadata       map[string]any // Optional: username, key_type, key_size hints
-	EndpointURL    string         // Optional: service endpoint URL where public key will be used
+	CredentialID int            // Required: CredentialTypeSSHPublicKey (5)
+	Metadata     map[string]any // Optional: username, key_type, key_size hints
+	EndpointURL  string         // Optional: service endpoint URL where public key will be used
 }
 
 // ProvisionedCredential represents a credential to provision to the device.
 type ProvisionedCredential struct {
-	CredentialID   string         // Required: unique identifier for this credential
-	CredentialType string         // Required: "password", "api_key", "oauth2_client_secret", "bearer_token"
-	CredentialData []byte         // Required: serialized credential data (JSON or CBOR)
+	CredentialID   int            // Required: unique identifier for this credential
+	CredentialData []byte         // Required: serialized credential data (CBOR)
 	Metadata       map[string]any // Optional: type-specific metadata
 	HashAlg        string         // Optional: hash algorithm for verification
 	EndpointURL    string         // Optional: service endpoint URL where credential is used
@@ -86,8 +84,8 @@ type ProvisionedCredential struct {
 
 // enrollmentResponseInfo holds info about a pending enrollment response to send
 type enrollmentResponseInfo struct {
-	CredentialID   string
-	CredentialType string
+	CredentialID   int
+	CredentialType int
 	ResponseData   []byte
 	Metadata       map[string]any
 	EndpointURL    string
@@ -109,7 +107,6 @@ func (c *CredentialsOwner) ProduceInfo(ctx context.Context, producer *serviceinf
 func (c *CredentialsOwner) Transition(active bool) error {
 	if !active {
 		// Reset state when module is deactivated
-		c.currentCredentialIndex = 0
 		c.sentActive = false
 		c.sendingCredential = false
 		c.sentBegin = false
@@ -118,16 +115,15 @@ func (c *CredentialsOwner) Transition(active bool) error {
 		// Reset registered credentials state
 		c.currentPubkeyRequestIndex = 0
 		c.pubkeyReceiver = nil
-		c.currentPubkeyID = ""
-		c.currentPubkeyType = ""
+		c.currentPubkeyID = 0
+		c.currentPubkeyType = 0
 		c.currentPubkeyMetadata = nil
 		c.currentPubkeyData = nil
 		c.pendingPubkeyResult = nil
-		c.waitingForPubkey = false
 		// Reset enrolled credentials state
 		c.enrollmentReceiver = nil
-		c.currentEnrollmentID = ""
-		c.currentEnrollmentType = ""
+		c.currentEnrollmentID = 0
+		c.currentEnrollmentType = 0
 		c.currentEnrollmentMeta = nil
 		c.currentEnrollmentData = nil
 		c.pendingEnrollmentResp = nil
@@ -161,8 +157,8 @@ func (c *CredentialsOwner) Yield(ctx context.Context, producer *serviceinfo.Prod
 		// Create sender for response
 		sender := chunking.NewChunkSender("response", resp.ResponseData)
 		sender.BeginFields.FSIMFields = make(map[int]any)
-		sender.BeginFields.FSIMFields[-1] = resp.CredentialID
-		sender.BeginFields.FSIMFields[-2] = resp.CredentialType
+		sender.BeginFields.FSIMFields[-1] = "credential-" + fmt.Sprintf("%d", resp.CredentialID)
+		sender.BeginFields.FSIMFields[-2] = resp.CredentialID
 		if resp.Metadata != nil {
 			sender.BeginFields.FSIMFields[-3] = resp.Metadata
 		}
@@ -232,7 +228,7 @@ func (c *CredentialsOwner) produceInfo(ctx context.Context, producer *serviceinf
 			c.credentialSender = chunking.NewChunkSender("credential", cred.CredentialData)
 			c.credentialSender.BeginFields.FSIMFields = make(map[int]any)
 			c.credentialSender.BeginFields.FSIMFields[-1] = cred.CredentialID
-			c.credentialSender.BeginFields.FSIMFields[-2] = cred.CredentialType
+			c.credentialSender.BeginFields.FSIMFields[-2] = cred.CredentialID
 			if cred.Metadata != nil {
 				c.credentialSender.BeginFields.FSIMFields[-3] = cred.Metadata
 			}
@@ -245,7 +241,7 @@ func (c *CredentialsOwner) produceInfo(ctx context.Context, producer *serviceinf
 			c.sendingCredential = true
 			slog.Debug("[fdo.credentials] Starting credential provisioning",
 				"credential_id", cred.CredentialID,
-				"credential_type", cred.CredentialType,
+				"credential_type", cred.CredentialID,
 				"endpoint_url", cred.EndpointURL,
 				"size", len(cred.CredentialData))
 		}
@@ -294,8 +290,8 @@ func (c *CredentialsOwner) produceInfo(ctx context.Context, producer *serviceinf
 
 		// Send pubkey-request
 		requestMsg := map[int]any{
-			-1: req.CredentialID,
-			-2: req.CredentialType,
+			-1: req.Metadata["credential_id"],
+			-2: req.CredentialID,
 		}
 		if req.Metadata != nil {
 			requestMsg[-3] = req.Metadata
@@ -312,7 +308,7 @@ func (c *CredentialsOwner) produceInfo(ctx context.Context, producer *serviceinf
 		}
 		slog.Debug("[fdo.credentials] Sent pubkey-request",
 			"credential_id", req.CredentialID,
-			"credential_type", req.CredentialType,
+			"credential_type", req.CredentialID,
 			"endpoint_url", req.EndpointURL)
 
 		c.waitingForPubkey = true
@@ -327,8 +323,8 @@ func (c *CredentialsOwner) produceInfo(ctx context.Context, producer *serviceinf
 		// Create sender for response
 		sender := chunking.NewChunkSender("response", resp.ResponseData)
 		sender.BeginFields.FSIMFields = make(map[int]any)
-		sender.BeginFields.FSIMFields[-1] = resp.CredentialID
-		sender.BeginFields.FSIMFields[-2] = resp.CredentialType
+		sender.BeginFields.FSIMFields[-1] = "credential-" + fmt.Sprintf("%d", resp.CredentialID)
+		sender.BeginFields.FSIMFields[-2] = resp.CredentialID
 		if resp.Metadata != nil {
 			sender.BeginFields.FSIMFields[-3] = resp.Metadata
 		}
@@ -409,12 +405,12 @@ func (c *CredentialsOwner) receive(ctx context.Context, messageName string, mess
 		if result.StatusCode == 0 {
 			slog.Info("[fdo.credentials] Credential provisioned successfully",
 				"credential_id", cred.CredentialID,
-				"credential_type", cred.CredentialType,
+				"credential_type", cred.CredentialID,
 				"message", result.Message)
 		} else {
 			slog.Warn("[fdo.credentials] Credential provisioning failed",
 				"credential_id", cred.CredentialID,
-				"credential_type", cred.CredentialType,
+				"credential_type", cred.CredentialID,
 				"status", result.StatusCode,
 				"message", result.Message)
 		}
@@ -473,11 +469,22 @@ func (c *CredentialsOwner) handlePubkeyBegin(messageBody io.Reader) error {
 			PayloadName: "pubkey",
 			OnBegin: func(begin chunking.BeginMessage) error {
 				// Extract FSIM-specific fields
-				if credID, ok := begin.FSIMFields[-1].(string); ok {
-					c.currentPubkeyID = credID
+				if credIDInt, ok := begin.FSIMFields[-1].(int); ok {
+					c.currentPubkeyID = credIDInt
+				} else if _, ok := begin.FSIMFields[-1].(string); ok {
+					// Handle legacy string credential IDs
+					c.currentPubkeyID = CredentialTypeSSHPublicKey
 				}
-				if credType, ok := begin.FSIMFields[-2].(string); ok {
-					c.currentPubkeyType = credType
+				if credTypeInt, ok := begin.FSIMFields[-2].(int); ok {
+					c.currentPubkeyType = credTypeInt
+				} else if credTypeStr, ok := begin.FSIMFields[-2].(string); ok {
+					// Handle legacy string credential types
+					switch credTypeStr {
+					case "ssh_public_key":
+						c.currentPubkeyType = CredentialTypeSSHPublicKey
+					default:
+						c.currentPubkeyType = CredentialTypeSSHPublicKey
+					}
 				}
 				if metadata, ok := begin.FSIMFields[-3].(map[string]any); ok {
 					c.currentPubkeyMetadata = metadata
@@ -527,7 +534,7 @@ func (c *CredentialsOwner) handlePubkeyEnd(ctx context.Context, messageBody io.R
 	var resultMessage string
 	if c.OnPublicKeyReceived != nil {
 		if err := c.OnPublicKeyReceived(
-			c.currentPubkeyID,
+			fmt.Sprintf("credential-%d", c.currentPubkeyID),
 			c.currentPubkeyType,
 			pubkeyData,
 			c.currentPubkeyMetadata,
@@ -556,8 +563,8 @@ func (c *CredentialsOwner) handlePubkeyEnd(ctx context.Context, messageBody io.R
 
 	// Reset state for next public key request
 	c.pubkeyReceiver = nil
-	c.currentPubkeyID = ""
-	c.currentPubkeyType = ""
+	c.currentPubkeyID = 0
+	c.currentPubkeyType = 0
 	c.currentPubkeyMetadata = nil
 	c.currentPubkeyData = nil
 	c.waitingForPubkey = false
@@ -587,11 +594,22 @@ func (c *CredentialsOwner) handleRequestBegin(messageBody io.Reader) error {
 			PayloadName: "request",
 			OnBegin: func(begin chunking.BeginMessage) error {
 				// Extract FSIM-specific fields
-				if credID, ok := begin.FSIMFields[-1].(string); ok {
-					c.currentEnrollmentID = credID
+				if credIDInt, ok := begin.FSIMFields[-1].(int); ok {
+					c.currentEnrollmentID = credIDInt
+				} else if _, ok := begin.FSIMFields[-1].(string); ok {
+					// Handle legacy string credential IDs
+					c.currentEnrollmentID = CredentialTypeX509Cert
 				}
-				if credType, ok := begin.FSIMFields[-2].(string); ok {
-					c.currentEnrollmentType = credType
+				if credTypeInt, ok := begin.FSIMFields[-2].(int); ok {
+					c.currentEnrollmentType = credTypeInt
+				} else if credTypeStr, ok := begin.FSIMFields[-2].(string); ok {
+					// Handle legacy string credential types
+					switch credTypeStr {
+					case "x509_cert":
+						c.currentEnrollmentType = CredentialTypeX509Cert
+					default:
+						c.currentEnrollmentType = CredentialTypeX509Cert
+					}
 				}
 				if metadata, ok := begin.FSIMFields[-3].(map[string]any); ok {
 					c.currentEnrollmentMeta = metadata
@@ -640,7 +658,7 @@ func (c *CredentialsOwner) handleRequestEnd(ctx context.Context, messageBody io.
 	// Invoke callback if provided
 	if c.OnEnrollmentRequest != nil {
 		responseData, responseMeta, err := c.OnEnrollmentRequest(
-			c.currentEnrollmentID,
+			fmt.Sprintf("credential-%d", c.currentEnrollmentID),
 			c.currentEnrollmentType,
 			requestData,
 			c.currentEnrollmentMeta,
@@ -696,8 +714,8 @@ func (c *CredentialsOwner) handleResponseResult(messageBody io.Reader) error {
 	}
 
 	// Reset enrollment state
-	c.currentEnrollmentID = ""
-	c.currentEnrollmentType = ""
+	c.currentEnrollmentID = 0
+	c.currentEnrollmentType = 0
 	c.currentEnrollmentMeta = nil
 	c.currentEnrollmentData = nil
 	c.waitingForResponseResult = false

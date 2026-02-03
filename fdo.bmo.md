@@ -30,25 +30,39 @@ The `fdo.bmo` (Bare Metal Onboarding) FSIM enables delivery of bootable images t
 
 ## Relationship to fdo.payload
 
-**`fdo.bmo` and `fdo.payload` are functionally identical.** Both FSIMs use the same chunking strategy, message formats, acknowledgment gate, and result handling. The *only* difference is practical deployment semantics:
+**`fdo.bmo` and `fdo.payload` are functionally identical.** Both FSIMs use the same chunking strategy, message formats, acknowledgment gate, and result handling. The *only* difference is **intent and deployment context**:
 
-| FSIM | Client Type | Payload Purpose |
-|------|-------------|-----------------|
-| `fdo.bmo` | UEFI firmware | Boot images (EFI, ISO) to chainload |
-| `fdo.payload` | OS/Installer/Application | Scripts, configs, packages to execute/apply |
+| FSIM | Client Type | Payload Purpose | Implementation Complexity |
+|------|-------------|-----------------|--------------------------|
+| `fdo.bmo` | UEFI firmware | Boot images (EFI, ISO) to chainload | Minimal - limited capabilities |
+| `fdo.payload` | OS/Installer/Application | Scripts, configs, packages to execute/apply | Full - advanced configuration support |
 
 ### Why Separate FSIMs?
 
-The separation leverages **client-side FSIM advertisement as implicit phase detection**:
+The separation serves multiple strategic purposes:
 
-- A client advertising `fdo.bmo` is firmware looking for an OS installer boot image
-- A client advertising `fdo.payload` has already booted and is looking for configuration data
+#### 1. **Capability-Based Simplification**
+- **Firmware clients** (UEFI, BIOS) have extremely limited capabilities - they can only handle boot images
+- By advertising **only** `fdo.bmo`, firmware signals: "I can only boot images, don't send me complex configurations"
+- This prevents firmware from receiving payloads it cannot possibly understand or process
 
-This simplifies both client and server implementations:
+#### 2. **Intent-Based Phase Detection**
+FSIM advertisement serves as **implicit phase signaling** to the onboarding service:
 
-- **Firmware clients** only implement `fdo.bmo` - they don't need to parse or handle configuration payloads they would never use
-- **OS/application clients** only implement `fdo.payload` - they don't need boot image handling logic
-- **Servers** can determine the client's provisioning phase purely from which FSIMs are advertised, without explicit phase negotiation
+- **Only `fdo.bmo` advertised**: "I am firmware pre-OS, send me a boot image"
+- **Only `fdo.payload` advertised**: "I am booted OS/installer, send me configuration payloads"
+- **Both advertised**: "I can handle either" (unusual, but permitted)
+
+#### 3. **Server Steering and Optimization**
+The onboarding service can use FSIM advertisement to **steer the provisioning flow**:
+
+- **Sees `fdo.bmo` only**: Concludes this is firmware, simplifies its approach, sends only boot images
+- **Sees `fdo.payload` only**: Concludes this is a booted system, sends configuration payloads
+- **Sees both**: May need to determine context through other means
+
+This **bi-directional simplification** benefits both sides:
+- **Device work simplified**: Only receives payloads it can actually handle
+- **Server work simplified**: Knows exactly what type of client it's talking to
 
 ### Implementation Note
 
@@ -70,6 +84,84 @@ When a server sees a client advertising:
 - **Neither**: Client doesn't want any payloads
 
 This enables a single onboarding service to handle multiple phases of device provisioning without explicit phase negotiation.
+
+## Multi-Asset Handling and NAK Fallback
+
+### Multiple Boot Assets Strategy
+
+BMO FSIM can receive **multiple boot assets** in a single session. This enables sophisticated fallback strategies where the server offers different boot options and the firmware selects the first one it can handle.
+
+#### NAK-Based Selection Process
+
+When the server presents multiple boot assets:
+
+1. **Server presents first asset** (most preferred option)
+2. **Firmware checks MIME type compatibility**
+   - If supported: Firmware sends `image-ack [true]` and receives the asset
+   - If unsupported: Firmware sends `image-ack [false, 1, "Image type not supported"]`
+3. **Server presents next asset** (next preferred option)
+4. **Process repeats** until firmware accepts an asset
+5. **First accepted asset terminates BMO phase** - firmware boots it immediately
+
+#### Server Presentation Order
+
+**Servers SHOULD present boot assets in order of preference:**
+
+| Preference | Typical Asset Type | Rationale |
+|------------|-------------------|-----------|
+| 1 (Best) | `application/efi` | UEFI applications are lightweight, fast to boot |
+| 2 | `application/x-iso9660-image` | Standard ISO boot images |
+| 3 (Fallback) | `application/x-raw-disk-image` | Raw disk images (most cumbersome) |
+
+**Example preference hierarchy:**
+```
+1. UEFI App (application/efi)
+   ↓ NAK if not supported
+2. ISO Image (application/x-iso9660-image)  
+   ↓ NAK if not supported
+3. Raw Disk (application/x-raw-disk-image)
+   ↓ NAK if not supported
+4. PXE/iPXE (last resort)
+```
+
+#### BMO Phase Termination
+
+**Critical behavior**: The **first successfully received and executed boot asset terminates the BMO phase**:
+
+- Firmware accepts asset via `image-ack [true]`
+- Asset is transferred and verified
+- Firmware sends `image-result [0, "Booting..."]`
+- **Firmware immediately chainloads/boots the asset**
+- **FDO session ends** - no further FSIM processing occurs
+
+This ensures that:
+- **Only one boot asset is ever executed** per FDO session
+- **The best available option is used** (first in preference order)
+- **No unnecessary transfers occur** after successful boot
+
+#### Implementation Benefits
+
+This multi-asset approach provides:
+
+1. **Graceful degradation**: If firmware doesn't support the preferred format, it falls back automatically
+2. **Broad compatibility**: Single server can support diverse firmware capabilities
+3. **Optimal selection**: Firmware gets the best boot method it supports
+4. **Efficient transfers**: Only one asset transferred per successful session
+
+#### Protocol Example
+
+```
+Owner → Device: image-begin { -1: "application/x-iso9660-image", 3: true }
+Device → Owner: image-ack [false, 1, "ISO not supported"]
+
+Owner → Device: image-begin { -1: "application/efi", 3: true }  
+Device → Owner: image-ack [true]
+
+[Transfer EFI application...]
+
+Device → Owner: image-result [0, "Booting EFI app..."]
+[Firmware chainloads EFI app, FDO session ends]
+```
 
 ## Key-Value Pairs
 
@@ -192,7 +284,44 @@ Owner                           Device (Firmware)
   |         [Firmware chainloads] |
 ```
 
-### Unsupported Image Type (rejected via ack)
+### Multi-Asset NAK Fallback Flow
+
+```
+Owner                           Device (Firmware)
+  |                               |
+  | fdo.bmo:image-begin           |
+  | { 3: true, -1: "app/x-iso" }  |
+  |------------------------------>|
+  |                               | Check: ISO not supported
+  | fdo.bmo:image-ack [false, 1, "ISO not supported"] |
+  |<------------------------------|
+  |                               |
+  | fdo.bmo:image-begin           |
+  | { 3: true, -1: "application/efi" } |
+  |------------------------------>|
+  |                               | Check: EFI supported!
+  | fdo.bmo:image-ack [true]      |
+  |<------------------------------|
+  |                               |
+  | fdo.bmo:image-data-0          |
+  |------------------------------>|
+  |         ...                   |
+  | fdo.bmo:image-data-N          |
+  |------------------------------>|
+  |                               |
+  | fdo.bmo:image-end             |
+  |------------------------------>|
+  |                               | Verify hash, prepare boot
+  |                               |
+  | fdo.bmo:image-result          |
+  |<------------------------------|
+  |                               |
+  |         [FDO session ends]    |
+  |                               |
+  |         [Firmware boots EFI] |
+```
+
+### Single Asset Rejection
 
 ```
 Owner → Device: fdo.bmo:image-begin {
@@ -234,11 +363,25 @@ Owner MAY then attempt a different image type if firmware supports alternatives.
 - Only send boot images to clients advertising `fdo.bmo`
 - Specify valid image type in `image-begin`
 - Send data in appropriate chunk sizes for firmware memory constraints
+- Set `require_ack: true` for all image-begin messages to enable NAK fallback
 
 **SHOULD**:
 
 - Provide hash for integrity verification
 - Include descriptive metadata (name, version)
+- **Present multiple boot assets in preference order** (EFI → ISO → Raw disk)
+- **Implement NAK fallback** - if firmware rejects first asset, try next preferred option
+
+**Multi-Asset Strategy**:
+
+When offering multiple boot assets, servers SHOULD:
+
+1. **Start with most preferred format** (typically `application/efi`)
+2. **Use NAK feedback** to determine firmware capabilities
+3. **Progress through preference hierarchy** until firmware accepts
+4. **Terminate after first successful transfer** (BMO phase ends)
+
+This ensures firmware receives the **best boot method it supports** while maintaining broad compatibility across diverse firmware implementations.
 
 ## Security Considerations
 

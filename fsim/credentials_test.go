@@ -14,8 +14,7 @@ func TestCredentialsOwnerBasic(t *testing.T) {
 	// Test that CredentialsOwner can be created and implements the interface
 	creds := []ProvisionedCredential{
 		{
-			CredentialID:   "test-id",
-			CredentialType: "password",
+			CredentialID:   1, // Use integer credential type
 			CredentialData: []byte("test-password"),
 			Metadata:       map[string]any{"username": "testuser"},
 			HashAlg:        "sha256",
@@ -42,8 +41,8 @@ func TestCredentialsOwnerBasic(t *testing.T) {
 
 func TestCredentialsDeviceBasic(t *testing.T) {
 	// Test that CredentialsDevice can be created and implements the interface
-	device := NewCredentialsDevice(func(credentialID, credentialType string, data []byte, metadata map[string]any) error {
-		t.Logf("Received credential: %s (%s)", credentialID, credentialType)
+	device := NewCredentialsDevice(func(credentialID string, credentialType int, data []byte, metadata map[string]any) error {
+		t.Logf("Received credential: %s (%d)", credentialID, credentialType)
 		return nil
 	})
 

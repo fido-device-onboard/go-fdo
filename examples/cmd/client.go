@@ -452,9 +452,10 @@ func (h *bmoHandler) HandleImage(ctx context.Context, imageType, name string, si
 	fmt.Printf("[fdo.bmo] HandleImage called: name=%s, type=%s, size=%d, received=%d bytes\n", name, imageType, size, len(image))
 
 	// Save image to file
-	filename := name
-	if filename == "" {
-		filename = "received_image.bin"
+	// Save to current directory with bmo- prefix to avoid clutter
+	filename := "bmo-" + name
+	if filename == "" || filename == "bmo-" {
+		filename = "bmo-received_image.bin"
 	}
 	if err := os.WriteFile(filename, image, 0600); err != nil {
 		fmt.Printf("[fdo.bmo] ERROR: failed to save file: %v\n", err)
@@ -675,10 +676,10 @@ func transferOwnership2(ctx context.Context, transport fdo.Transport, to1d *cose
 	}
 
 	// Add credentials handler to receive and display credentials (using chunked protocol)
-	credDevice := fsim.NewCredentialsDevice(func(id, credType string, data []byte, metadata map[string]any) error {
+	credDevice := fsim.NewCredentialsDevice(func(credentialID string, credentialType int, data []byte, metadata map[string]any) error {
 		fmt.Printf("[fdo.credentials] Received credential:\n")
-		fmt.Printf("  ID:   %s\n", id)
-		fmt.Printf("  Type: %s\n", credType)
+		fmt.Printf("  ID:   %s\n", credentialID)
+		fmt.Printf("  Type: %d\n", credentialType)
 		if metadata != nil {
 			fmt.Printf("  Metadata: %v\n", metadata)
 		}
@@ -696,14 +697,14 @@ func transferOwnership2(ctx context.Context, transport fdo.Transport, to1d *cose
 		credID, keyData := parts[0], parts[1]
 		// Store the key data for the callback
 		sshKeyData := []byte(keyData)
-		credDevice.OnPublicKeyRequested = func(reqCredID, reqCredType string, metadata map[string]any) ([]byte, error) {
-			fmt.Printf("[fdo.credentials] Owner requested public key: %s (type: %s)\n", reqCredID, reqCredType)
+		credDevice.OnPublicKeyRequested = func(credentialID string, credentialType int, metadata map[string]any) ([]byte, error) {
+			fmt.Printf("[fdo.credentials] Owner requested public key: %s (type: %d)\n", credentialID, credentialType)
 			// Return the configured SSH key if IDs match, or for any request
-			if reqCredID == credID || credID == "*" {
+			if credentialID == credID || credID == "*" {
 				fmt.Printf("[fdo.credentials] Returning SSH key: %s\n", credID)
 				return sshKeyData, nil
 			}
-			return nil, fmt.Errorf("no public key available for credential_id: %s", reqCredID)
+			return nil, fmt.Errorf("no public key available for credential_id: %s", credentialID)
 		}
 		fmt.Printf("[fdo.credentials] Configured SSH key: %s\n", credID)
 	}
@@ -718,13 +719,13 @@ func transferOwnership2(ctx context.Context, transport fdo.Transport, to1d *cose
 		credID, csrData := parts[0], parts[1]
 		credDevice.EnrollmentRequests = append(credDevice.EnrollmentRequests, fsim.EnrollmentRequest{
 			CredentialID:   credID,
-			CredentialType: "x509_cert",
+			CredentialType: fsim.CredentialTypeX509Cert,
 			RequestData:    []byte(csrData),
 		})
-		credDevice.OnEnrolledCredentialReceived = func(credentialID, credentialType string, data []byte, metadata map[string]any) error {
+		credDevice.OnEnrolledCredentialReceived = func(credentialID string, credentialType int, data []byte, metadata map[string]any) error {
 			fmt.Printf("[fdo.credentials] CLIENT received signed cert + CA:\n")
 			fmt.Printf("  ID:       %s\n", credentialID)
-			fmt.Printf("  Type:     %s\n", credentialType)
+			fmt.Printf("  Type:     %d\n", credentialType)
 			if metadata != nil {
 				if caIncluded, ok := metadata["ca_bundle_included"].(bool); ok && caIncluded {
 					fmt.Printf("  CA included: yes\n")

@@ -106,6 +106,7 @@ start_server() {
 	# Start server in background, redirecting output to a temp file
 	# shellcheck disable=SC2086 # $flags intentionally unquoted for word splitting
 	log_step "go run ./cmd server -http \"$SERVER_ADDR\" -db \"../$DB_FILE\" $flags"
+	# shellcheck disable=SC2086
 	(cd examples && go run ./cmd server -http "$SERVER_ADDR" -db "../$DB_FILE" $flags >/tmp/fdo_server.log 2>&1) &
 	SERVER_PID=$!
 
@@ -1044,29 +1045,37 @@ test_wifi_single_sided() {
 	# In single-sided mode, device should downgrade this to 0
 	WIFI_CONFIG_FILE="$EPHEMERAL_DIR/wifi_single_sided.json"
 	cat >"$WIFI_CONFIG_FILE" <<'EOF'
-{
-  "networks": [
-    {
-      "network_id": "single-sided-test",
-      "ssid": "SingleSidedNetwork",
-      "auth_type": 1,
-      "password": "testpassword123",
-      "trust_level": 1
-    }
-  ]
-}
+[
+  {
+    "version": "1.0",
+    "network_id": "single-sided-test",
+    "ssid": "SingleSidedNetwork",
+    "auth_type": 1,
+    "password": "testpassword123",
+    "trust_level": 1,
+    "needs_cert": false
+  }
+]
 EOF
 
 	log_step "Starting server in single-sided WiFi mode"
 	start_server "-single-sided-wifi -wifi-config ../$WIFI_CONFIG_FILE"
 
 	log_step "Running DI"
-	run_cmd go run ./cmd client -di "$SERVER_URL"
+	if ! run_cmd go run ./cmd client -di "$SERVER_URL"; then
+		log_error "DI failed"
+		rm -f "$WIFI_CONFIG_FILE"
+		return 1
+	fi
 	log_success "DI completed"
 
 	log_step "Running TO1/TO2 with single-sided attestation"
 	# Client must explicitly allow single-sided mode
-	run_cmd timeout 30 go run ./cmd client -allow-single-sided
+	if ! run_cmd timeout 30 go run ./cmd client -allow-single-sided; then
+		log_error "TO1/TO2 failed in single-sided mode"
+		rm -f "$WIFI_CONFIG_FILE"
+		return 1
+	fi
 	log_success "TO1/TO2 completed in single-sided mode"
 
 	stop_server
@@ -1086,13 +1095,13 @@ test_bmo() {
 
 	# Create a random test file (10KB to test multi-chunk transfer)
 	BMO_FILE="$EPHEMERAL_DIR/test_bmo_image.bin"
-	RECEIVED_FILE="$EPHEMERAL_DIR/test_bmo_image.bin"
+	RECEIVED_FILE="examples/bmo-test_bmo_image.bin"
 	log_step "Creating random test boot image (10KB for multi-chunk transfer)"
 	dd if=/dev/urandom of="$BMO_FILE" bs=1024 count=10 2>/dev/null
 	ORIGINAL_HASH=$(sha256sum "$BMO_FILE" | awk '{print $1}')
 	log_success "Created test boot image: $BMO_FILE (hash: $ORIGINAL_HASH)"
 
-	start_server "-bmo-file ../$BMO_FILE -bmo-type application/x-iso9660-image"
+	start_server "-bmo application/x-iso9660-image:../$BMO_FILE"
 
 	log_step "Running DI"
 	run_cmd go run ./cmd client -di "$SERVER_URL"
@@ -1119,13 +1128,12 @@ test_bmo() {
 		log_success "  Received:  $RECEIVED_HASH"
 	else
 		log_error "Boot image hashes DO NOT match!"
-		log_error "  Original:  $ORIGINAL_HASH"
-		log_error "  Received:  $RECEIVED_HASH"
 		rm -f "$BMO_FILE" "$RECEIVED_FILE"
 		return 1
 	fi
 
 	# Cleanup
+	rm -f "$BMO_FILE" "$RECEIVED_FILE" bmo-*
 	rm -f "$BMO_FILE" "$RECEIVED_FILE"
 	log_success "BMO FSIM test PASSED"
 }
@@ -1140,13 +1148,13 @@ test_bmo_efi() {
 
 	# Create a small test file simulating an EFI app
 	BMO_FILE="$EPHEMERAL_DIR/test_boot.efi"
-	RECEIVED_FILE="$EPHEMERAL_DIR/test_boot.efi"
+	RECEIVED_FILE="examples/bmo-test_boot.efi"
 	log_step "Creating test EFI application (5KB)"
 	dd if=/dev/urandom of="$BMO_FILE" bs=1024 count=5 2>/dev/null
 	ORIGINAL_HASH=$(sha256sum "$BMO_FILE" | awk '{print $1}')
 	log_success "Created test EFI app: $BMO_FILE (hash: $ORIGINAL_HASH)"
 
-	start_server "-bmo-file $BMO_FILE -bmo-type application/efi"
+	start_server "-bmo application/efi:../$BMO_FILE"
 
 	log_step "Running DI"
 	run_cmd go run ./cmd client -di "$SERVER_URL"
@@ -1193,7 +1201,7 @@ test_bmo_nak() {
 	# Create test files
 	BMO_FILE_1="$EPHEMERAL_DIR/test_unsupported.bin"
 	BMO_FILE_2="$EPHEMERAL_DIR/test_supported.efi"
-	RECEIVED_FILE="$EPHEMERAL_DIR/test_supported.efi"
+	RECEIVED_FILE="examples/bmo-test_supported.efi"
 
 	log_step "Creating test boot images"
 	dd if=/dev/urandom of="$BMO_FILE_1" bs=1024 count=5 2>/dev/null
@@ -1202,15 +1210,26 @@ test_bmo_nak() {
 	log_success "Created test images: $BMO_FILE_1 (unsupported), $BMO_FILE_2 (supported)"
 
 	# Server sends two images: first unsupported, then supported (with RequireAck)
-	start_server "-bmo application/x-unsupported-format:$BMO_FILE_1 -bmo application/efi:$BMO_FILE_2"
+	# Convert paths to be relative to examples directory
+	BMO_FILE_1_REL="../$BMO_FILE_1"
+	BMO_FILE_2_REL="../$BMO_FILE_2"
+	start_server "-bmo application/x-unsupported-format:$BMO_FILE_1_REL -bmo application/efi:$BMO_FILE_2_REL"
 
 	log_step "Running DI"
-	run_cmd go run ./cmd client -di "$SERVER_URL"
+	if ! run_cmd go run ./cmd client -di "$SERVER_URL"; then
+		log_error "DI failed"
+		rm -f "$BMO_FILE_1" "$BMO_FILE_2"
+		return 1
+	fi
 	log_success "DI completed"
 
 	# Client only supports application/efi, should reject first, accept second
 	log_step "Running TO1/TO2 with NAK for first image, accept second"
-	run_cmd go run ./cmd client -bmo-supported-types "application/efi"
+	if ! run_cmd go run ./cmd client -bmo-supported-types "application/efi"; then
+		log_error "TO1/TO2 failed with NAK/fallback"
+		rm -f "$BMO_FILE_1" "$BMO_FILE_2"
+		return 1
+	fi
 	log_success "TO1/TO2 completed with NAK/fallback"
 
 	stop_server
@@ -1237,6 +1256,74 @@ test_bmo_nak() {
 	# Cleanup
 	rm -f "$BMO_FILE_1" "$BMO_FILE_2" "$RECEIVED_FILE"
 	log_success "BMO FSIM NAK test PASSED"
+}
+
+# Test: BMO FSIM Multi-Asset (preference order with NAK fallback)
+# This test demonstrates the multi-asset strategy where server presents
+# multiple boot assets in preference order and device selects first supported
+test_bmo_multi_asset() {
+	log_section "TEST: BMO FSIM Multi-Asset (Preference Order/NAK Fallback)"
+
+	mkdir -p "$EPHEMERAL_DIR"
+	rm -f "$DB_FILE" "$CRED_FILE"
+
+	# Create test files in preference order: EFI (best) -> ISO -> Raw disk
+	BMO_EFI="$EPHEMERAL_DIR/test_boot.efi"
+	BMO_ISO="$EPHEMERAL_DIR/test_boot.iso"
+	BMO_RAW="$EPHEMERAL_DIR/test_boot.raw"
+	RECEIVED_FILE="examples/bmo-test_boot.efi"  # EFI should be accepted
+
+	log_step "Creating test boot images in preference order"
+	dd if=/dev/urandom of="$BMO_EFI" bs=1024 count=3 2>/dev/null
+	dd if=/dev/urandom of="$BMO_ISO" bs=1024 count=5 2>/dev/null
+	dd if=/dev/urandom of="$BMO_RAW" bs=1024 count=8 2>/dev/null
+	EFI_HASH=$(sha256sum "$BMO_EFI" | awk '{print $1}')
+	log_success "Created test images: EFI (best), ISO (fallback), Raw disk (last resort)"
+
+	# Server presents multiple assets in preference order
+	# Device only supports EFI, so should accept first and NAK others won't be presented
+	start_server "-bmo application/efi:../$BMO_EFI -bmo application/x-iso9660-image:../$BMO_ISO -bmo application/x-raw-disk-image:../$BMO_RAW"
+
+	log_step "Running DI"
+	if ! run_cmd go run ./cmd client -di "$SERVER_URL"; then
+		log_error "DI failed"
+		rm -f "$BMO_EFI" "$BMO_ISO" "$BMO_RAW"
+		return 1
+	fi
+	log_success "DI completed"
+
+	log_step "Running TO1/TO2 with multi-asset preference order"
+	if ! run_cmd go run ./cmd client -bmo-supported-types "application/efi"; then
+		log_error "TO1/TO2 failed with multi-asset"
+		rm -f "$BMO_EFI" "$BMO_ISO" "$BMO_RAW"
+		return 1
+	fi
+	log_success "TO1/TO2 completed with EFI asset accepted"
+
+	stop_server
+
+	# Verify the EFI image was received (first in preference order)
+	if [ ! -f "$RECEIVED_FILE" ]; then
+		log_error "EFI file not found: $RECEIVED_FILE"
+		rm -f "$BMO_EFI" "$BMO_ISO" "$BMO_RAW"
+		return 1
+	fi
+
+	RECEIVED_HASH=$(sha256sum "$RECEIVED_FILE" | awk '{print $1}')
+	log_step "Verifying EFI image integrity (first in preference order)"
+	if [ "$EFI_HASH" = "$RECEIVED_HASH" ]; then
+		log_success "EFI image hashes match! Preference order working"
+		log_success "  Original:  $EFI_HASH"
+		log_success "  Received:  $RECEIVED_HASH"
+	else
+		log_error "EFI image hashes DO NOT match!"
+		rm -f "$BMO_EFI" "$BMO_ISO" "$BMO_RAW" "$RECEIVED_FILE"
+		return 1
+	fi
+
+	# Cleanup
+	rm -f "$BMO_EFI" "$BMO_ISO" "$BMO_RAW" "$RECEIVED_FILE"
+	log_success "BMO FSIM Multi-Asset test PASSED"
 }
 
 # Test: Payload FSIM NAK (device rejects first type, accepts second)
@@ -1440,6 +1527,7 @@ test_all() {
 	test_bmo || failed=1
 	test_bmo_efi || failed=1
 	test_bmo_nak || failed=1
+	test_bmo_multi_asset || failed=1
 	test_payload_nak || failed=1
 	test_credentials || failed=1
 	test_bad_delegate || failed=1
@@ -1549,6 +1637,9 @@ main() {
 	bmo-nak)
 		test_bmo_nak
 		;;
+	bmo-multi-asset)
+		test_bmo_multi_asset
+		;;
 	payload-nak)
 		test_payload_nak
 		;;
@@ -1560,7 +1651,7 @@ main() {
 		;;
 	*)
 		echo "Unknown test: $test_name"
-		echo "Available tests: basic, basic-reuse, rv-blob, kex, fdo200, delegate, delegate-fdo200, bad-delegate, attested-payload, attested-payload-encrypted, attested-payload-delegate, attested-payload-shell, sysconfig, sysconfig-fdo200, payload, payload-fdo200, payload-multiple-types, payload-selective-rejection, payload-nak, wifi, wifi-fdo200, wifi-single-sided, bmo, bmo-efi, bmo-nak, credentials, all"
+		echo "Available tests: basic, basic-reuse, rv-blob, kex, fdo200, delegate, delegate-fdo200, bad-delegate, attested-payload, attested-payload-encrypted, attested-payload-delegate, attested-payload-shell, sysconfig, sysconfig-fdo200, payload, payload-fdo200, payload-multiple-types, payload-selective-rejection, payload-nak, wifi, wifi-fdo200, wifi-single-sided, bmo, bmo-efi, bmo-nak, bmo-multi-asset, credentials, all"
 		exit 1
 		;;
 	esac

@@ -1014,16 +1014,21 @@ func ownerModules(modules []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 				if len(parts) < 3 {
 					log.Fatalf("invalid credential specification %q: expected type:id:data[:endpoint_url] format", credSpec)
 				}
-				credType, credID, credData := parts[0], parts[1], parts[2]
+				credType, _, credData := parts[0], parts[1], parts[2]
 				var endpointURL string
 				if len(parts) == 4 {
 					endpointURL = parts[3]
 				}
 
-				// Validate credential type
-				validTypes := []string{"password", "api_key", "oauth2_client_secret", "bearer_token"}
-				if !slices.Contains(validTypes, credType) {
-					log.Fatalf("invalid credential type %q: must be one of %v", credType, validTypes)
+				// Convert string credential type to integer
+				var credTypeInt int
+				switch credType {
+				case "password":
+					credTypeInt = fsim.CredentialTypePassword
+				case "api_key", "oauth2_client_secret", "bearer_token":
+					credTypeInt = fsim.CredentialTypeSecret
+				default:
+					log.Fatalf("invalid credential type %q: must be one of password, api_key, oauth2_client_secret, bearer_token", credType)
 				}
 
 				// For password type, create metadata with username
@@ -1043,8 +1048,7 @@ func ownerModules(modules []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 				}
 
 				provisionedCreds = append(provisionedCreds, fsim.ProvisionedCredential{
-					CredentialID:   credID,
-					CredentialType: credType,
+					CredentialID:   credTypeInt,
 					CredentialData: data,
 					Metadata:       metadata,
 					EndpointURL:    endpointURL,
@@ -1064,36 +1068,44 @@ func ownerModules(modules []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 				if len(parts) == 3 {
 					endpointURL = parts[2]
 				}
+				// Convert SSH key type to integer
+				var credTypeInt int
+				switch credType {
+				case "ssh-rsa":
+					credTypeInt = fsim.CredentialTypeSSHPublicKey
+				default:
+					credTypeInt = fsim.CredentialTypeSSHPublicKey
+				}
 				credentialsOwner.PublicKeyRequests = append(credentialsOwner.PublicKeyRequests, fsim.PublicKeyRequest{
-					CredentialID:   credID,
-					CredentialType: credType,
-					EndpointURL:    endpointURL,
+					CredentialID: credTypeInt,
+					Metadata:     map[string]any{"credential_id": credID},
+					EndpointURL:  endpointURL,
 				})
 			}
 
 			// Add handler for receiving public keys from device
-			credentialsOwner.OnPublicKeyReceived = func(credID, credType string, pubkey []byte, metadata map[string]any) error {
+			credentialsOwner.OnPublicKeyReceived = func(credentialID string, credentialType int, publicKey []byte, metadata map[string]any) error {
 				fmt.Printf("[fdo.credentials] Received public key registration:\n")
-				fmt.Printf("  ID:   %s\n", credID)
-				fmt.Printf("  Type: %s\n", credType)
+				fmt.Printf("  ID:   %s\n", credentialID)
+				fmt.Printf("  Type: %d\n", credentialType)
 				if metadata != nil {
 					fmt.Printf("  Metadata: %v\n", metadata)
 				}
-				fmt.Printf("  Key:  %s (length: %d bytes)\n", string(pubkey), len(pubkey))
+				fmt.Printf("  Key:  %s (length: %d bytes)\n", string(publicKey), len(publicKey))
 				return nil
 			}
 
 			// Add handler for enrollment requests (CSR signing, etc.)
-			credentialsOwner.OnEnrollmentRequest = func(credID, credType string, requestData []byte, metadata map[string]any) ([]byte, map[string]any, error) {
+			credentialsOwner.OnEnrollmentRequest = func(credentialID string, credentialType int, requestData []byte, metadata map[string]any) (responseData []byte, responseMetadata map[string]any, err error) {
 				fmt.Printf("[fdo.credentials] SERVER received CSR:\n")
-				fmt.Printf("  ID:   %s\n", credID)
-				fmt.Printf("  Type: %s\n", credType)
+				fmt.Printf("  ID:   %s\n", credentialID)
+				fmt.Printf("  Type: %d\n", credentialType)
 				fmt.Printf("  CSR:  %s\n", string(requestData))
 
 				// For demo purposes, return a fake signed certificate + CA bundle
-				fakeCert := fmt.Sprintf("-----BEGIN CERTIFICATE-----\nSigned certificate for %s\n-----END CERTIFICATE-----\n", credID)
+				fakeCert := fmt.Sprintf("-----BEGIN CERTIFICATE-----\nSigned certificate for %s\n-----END CERTIFICATE-----\n", credentialID)
 				fakeCA := "-----BEGIN CERTIFICATE-----\nFake CA Certificate\n-----END CERTIFICATE-----\n"
-				responseData := fakeCert + fakeCA
+				responseData = []byte(fakeCert + fakeCA)
 
 				fmt.Printf("[fdo.credentials] SERVER sending signed cert + CA:\n")
 				fmt.Printf("  Cert: %d bytes\n", len(fakeCert))
@@ -1103,7 +1115,7 @@ func ownerModules(modules []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 					"cert_format":        "pem",
 					"ca_bundle_included": true,
 				}
-				return []byte(responseData), responseMeta, nil
+				return responseData, responseMeta, nil
 			}
 			if !yield("fdo.credentials", credentialsOwner) {
 				return

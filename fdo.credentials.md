@@ -37,6 +37,105 @@ This specification incorporates and extends concepts from:
 - **OAuth2/OIDC** - Modern token-based authentication
 - **SSH** - Public key authentication
 
+## Implementation Responsibilities
+
+This section clarifies the responsibilities of both device (client) and server (owner) implementations when using the credentials FSIM.
+
+### Core Architectural Principle
+
+**Both sides MUST have pre-established knowledge of credential types and purposes by credential ID.**
+
+The credential ID (e.g., "device-mtls-cert", "api-access-key", "ssh-config-access") is not just an identifier - it represents a **semantic contract** between device and server about:
+
+- What service the credential is for
+- What type of credential is expected
+- What level of access is appropriate
+- What deployment-specific details the server will provide
+
+### Device (Client) Responsibilities
+
+#### 1. **Know What You Need**
+
+- Maintain a list of credential IDs your device requires
+- Understand what each credential ID means (service, purpose, type)
+- Request credentials only by their established semantic IDs
+
+#### 2. **Generate Your Own Keys** (for enrolled flows)
+
+- For X.509 certificates: generate key pair and create CSR
+- For OAuth2 JWT: generate key pair and send public key
+- **NEVER** expect the server to know your private keys
+
+#### 3. **Trust Server's Decisions**
+
+- Accept the scope and endpoint URL provided by the server
+- The server knows the deployment-specific configuration
+- Do not attempt to specify your own endpoints or scopes
+
+#### 4. **Handle Multiple Services**
+
+- Use different credential IDs for different services
+- Example: "monitoring-api-key" vs "config-api-key"
+- Each ID represents a distinct service relationship
+
+### Server (Owner) Responsibilities
+
+#### 1. **Recognize Credential IDs**
+
+- Maintain a mapping of credential IDs to service configurations
+- Understand what each ID means in your deployment
+- Be prepared to provide the appropriate credential type
+
+#### 2. **Grant Appropriate Access**
+
+- Decide scope based on the credential ID and your policies
+- Do not trust client requests for scope - grant what's appropriate
+- Apply principle of least privilege
+
+#### 3. **Provide Deployment Details**
+
+- Return the actual endpoint URL for the service in your deployment
+- This may differ between development, staging, and production
+- The device needs this to actually use the credential
+
+#### 4. **Maintain Security Boundaries**
+
+- Each credential ID should have a well-defined security boundary
+- Do not grant cross-access between different credential IDs
+- Enforce isolation between services
+
+### Example: Multi-Service Device
+
+A device needs credentials for two different services:
+
+```
+Device requests:
+- credential_id: "telemetry-api-key" → Server grants: scope="telemetry:write", endpoint="https://telemetry.prod.example.com"
+- credential_id: "config-api-key" → Server grants: scope="config:read", endpoint="https://config.prod.example.com"
+```
+
+The device doesn't specify endpoints or scopes - it trusts the server to provide the correct deployment-specific values for each semantic credential ID.
+
+### Example: Environment-Specific Deployment
+
+```
+Development:
+- credential_id: "api-access" → endpoint="https://api-dev.example.com"
+
+Production:
+- credential_id: "api-access" → endpoint="https://api.prod.example.com"
+```
+
+Same credential ID, different deployment-specific endpoint provided by the server.
+
+### Benefits of This Architecture
+
+1. **Clear Contracts** - Credential IDs have well-understood meanings
+2. **Deployment Flexibility** - Servers can adapt to different environments
+3. **Security Boundaries** - Each ID represents a specific service relationship
+4. **Scalability** - Easy to add new services by defining new credential IDs
+5. **Maintainability** - Changes to endpoints only require server updates
+
 ## Design Principles
 
 ### Security Requirements
@@ -189,14 +288,34 @@ All `*-begin` messages use this structure:
 ```cddl
 BeginMessage = {
     0: total_size: uint          ; Total payload size in bytes
-    ? 1: hash_alg: tstr          ; Hash algorithm (e.g., "sha256", "sha384")
+    ? 1: hash_alg: int           ; COSE hash algorithm identifier (e.g., -16=SHA-256, -43=SHA-384, -44=SHA-512)
     -1: credential_id: tstr      ; Unique credential identifier
-    -2: credential_type: tstr    ; Credential type (see Credential Types)
-    ? -3: metadata: {* tstr => any}  ; Type-specific metadata
+    -2: credential_type: tstr    ; Credential type (see enumerated types below)
     ? -4: endpoint_url: tstr     ; Service endpoint URL where credential is used
-    ? -5: credential_scope: tstr ; Scope/domain identifier for multi-app disambiguation
 }
 ```
+
+**Credential Type Enumeration:**
+
+The `credential_type` field MUST be one of the following values:
+
+- `"password"` - User/password authentication credentials
+- `"secret"` - Unified secret type (API keys, OAuth secrets, bearer tokens, etc.)
+- `"x509_cert"` - X.509 certificate enrollment (CSR-based)
+- `"server_generated_key"` - Server-generated key pairs (discouraged)
+- `"ssh_public_key"` - SSH public key registration
+
+**Note:** These types are defined exclusively within this specification. Extensions require updating this document.
+
+**Hash Algorithm Identifiers (COSE):**
+
+- `-16` = SHA-256 (recommended)
+- `-43` = SHA-384  
+- `-44` = SHA-512
+- `-18` = SHAKE128
+- `-45` = SHAKE256
+
+See [IANA COSE Algorithms Registry](https://www.iana.org/assignments/cose/cose.xhtml) for complete list.
 
 ### End Message Format
 
@@ -260,82 +379,90 @@ Device → Owner: credential-result
 ```cddl
 {
     0: total_size: uint
-    ? 1: hash_alg: tstr
+    ? 1: hash_alg: int           ; COSE hash algorithm identifier
     -1: credential_id: tstr      ; e.g., "api-key-production"
-    -2: credential_type: tstr    ; "password" | "api_key" | "oauth2_client_secret" | "bearer_token"
-    ? -3: metadata: {
-        ? username: tstr         ; For password type
-        ? scope: tstr            ; Usage scope (e.g., "sudoers", "api.example.com")
-        ? expires_at: tstr       ; ISO 8601 timestamp
-        ? client_id: tstr        ; For OAuth2 client_secret type
-        ? token_endpoint: tstr   ; For OAuth2 client_secret type
-        * tstr => any            ; Additional type-specific fields
-    }
+    -2: credential_type: CredentialType  ; 1=password, 2=secret (for provisioned)
     ? -4: endpoint_url: tstr     ; Service endpoint URL where credential is used
 }
 ```
 
 ### Credential Data Format
 
+**Type Definitions:**
+
+```cddl
+; Unified credential type identifiers for all flows (integers)
+CredentialType = 1 / 2 / 3 / 4 / 5
+; 1 = password (provisioned - PasswordCredential)
+; 2 = secret (provisioned - SecretCredential)
+; 3 = x509_cert (enrolled - X509CertRequest/Response)
+; 4 = server_generated_key (enrolled - ServerKeyRequest/Response)
+; 5 = ssh_public_key (registered - SSHPublicKey)
+
+; Hash algorithms for password storage
+HashAlgorithm = "bcrypt" / "pbkdf2" / "scrypt" / "argon2" / tstr
+
+; Secret types for unified secret credential (suggested values)
+SecretType = "api_key" / "oauth2_client_secret" / "bootstrap_token" / "bearer_token" / "basic_auth" / tstr
+
+; Certificate encoding formats
+CertFormat = "pem" / "der"
+
+; Private key encoding formats  
+KeyFormat = "pkcs1" / "pkcs8"
+```
+
 **For password type:**
 
-```json
-{
-    "username": "admin",
-    "password": "hashed-or-plaintext",
-    "hash_algorithm": "bcrypt"
+```cddl
+PasswordCredential = {
+    username: tstr,             ; Username for authentication
+    password: tstr,             ; Password (hashed or plaintext)
+    ? hash_algorithm: HashAlgorithm,  ; bcrypt, pbkdf2, scrypt, argon2
+    ? scope: tstr,               ; Usage scope (e.g., "sudoers", "api.example.com")
+    ? expires_at: tstr           ; ISO 8601 expiration timestamp
 }
 ```
 
-**For api_key type:**
+**For unified secret type (api_key, oauth2, jwt, bearer_token):**
 
-```json
-{
-    "api_key": "sk_live_abc123...",
-    "service": "api.example.com"
+```cddl
+SecretCredential = {
+    ? client_id: tstr,           ; Client identifier (optional)
+    secret: tstr,                ; Opaque secret string
+    ? type: SecretType,          ; api_key, oauth2_client_secret, bootstrap_token, bearer_token, basic_auth
+    ? endpoint: tstr              ; Service endpoint URL (optional)
 }
 ```
 
-**For oauth2_client_secret type:**
+The `type` field is a hint for the client application and is opaque to the FDO protocol. The values listed below are **suggested** common types, but implementations may use any string value that makes sense for their use case.
 
-```json
-{
-    "client_id": "device-12345",
-    "client_secret": "secret-abc...",
-    "token_endpoint": "https://auth.example.com/token",
-    "scope": "read write"
-}
-```
+**Suggested type values:**
 
-**For bearer_token type:**
+- `api_key` - Static, long-lived string used directly in headers
+- `oauth2_client_secret` - Permanent secret for Client Credentials flow
+- `bootstrap_token` - One-time-use ticket for initial registration
+- `bearer_token` - Pre-generated access token for Authorization header
+- `basic_auth` - Legacy username:password pair (client_id is username)
 
-```json
-{
-    "token": "eyJhbGciOiJSUzI1NiIs...",
-    "token_type": "Bearer",
-    "expires_at": "2026-12-31T23:59:59Z"
-}
-```
+**Note:** Implementations are free to define additional secret types as needed for their specific requirements.
 
-### Example: Provisioned Credentials - OAuth2 Client Credentials
+**Note:** The FDO protocol treats the `secret` as an opaque string. The `type` and `endpoint` fields are provided for client convenience only.
+
+### Example: Provisioned Credentials - Unified Secret
 
 ```
 Owner → Device:
 fdo.credentials:credential-begin = {
     0: 156,
-    1: "sha256",
-    -1: "oauth2-api-access",
-    -2: "oauth2_client_secret",
-    -3: {
-        "client_id": "device-001",
-        "token_endpoint": "https://auth.example.com/token",
-        "scope": "device:read device:write"
-    },
+    1: -16,                    ; SHA-256
+    -1: "api-access-key",
+    -2: "secret",
     -4: "https://api.example.com/v1"
 }
 
 Owner → Device:
-fdo.credentials:credential-data-0 = <CBOR bstr containing JSON credential data>
+fdo.credentials:credential-data-0 = <CBOR bstr containing SecretCredential: {"client_id": "device-001", "secret": "sk_live_abc123...", "type": "api_key", "endpoint": "https://api.example.com/v1"}>
 
 Owner → Device:
 fdo.credentials:credential-end = {
@@ -344,7 +471,7 @@ fdo.credentials:credential-end = {
 }
 
 Device → Owner:
-fdo.credentials:credential-result = [0, "OAuth2 credentials stored"]
+fdo.credentials:credential-result = [0, "API key stored"]
 ```
 
 ## Enrolled Credentials Flow
@@ -352,7 +479,6 @@ fdo.credentials:credential-result = [0, "OAuth2 credentials stored"]
 ### Use Cases
 
 - X.509 certificate enrollment (CSR-based)
-- OAuth2 with private key JWT authentication
 - Server-generated keys (discouraged but supported)
 
 ### Message Flow
@@ -374,17 +500,9 @@ Device → Owner: response-result
 ```cddl
 {
     0: total_size: uint
-    ? 1: hash_alg: tstr
+    ? 1: hash_alg: int           ; COSE hash algorithm identifier
     -1: credential_id: tstr      ; e.g., "device-mtls-cert"
-    -2: credential_type: tstr    ; "x509_cert" | "oauth2_private_key_jwt" | "server_generated_key"
-    ? -3: metadata: {
-        ? subject_dn: tstr       ; For x509_cert: "CN=device-001,O=Example"
-        ? san: [* tstr]          ; For x509_cert: Subject Alternative Names
-        ? key_usage: [* tstr]    ; For x509_cert: Key usage extensions
-        ? token_endpoint: tstr   ; For oauth2_private_key_jwt
-        ? scope: tstr            ; For oauth2_private_key_jwt
-        * tstr => any
-    }
+    -2: credential_type: CredentialType  ; 3=x509_cert, 4=server_generated_key (for enrolled)
     ? -4: endpoint_url: tstr     ; Service endpoint URL where credential is used
 }
 ```
@@ -393,35 +511,24 @@ Device → Owner: response-result
 
 **For x509_cert type:**
 
+```cddl
+X509CertRequest = {
+    csr: tstr                    ; PEM-encoded PKCS#10 Certificate Signing Request
+}
+```
+
 - CSR in PKCS#10 format (DER or PEM encoded)
-- Device has generated key pair, CSR contains public key
-
-**For oauth2_private_key_jwt type:**
-
-- Public key in JWK (JSON Web Key) format
-- Device has generated key pair, will sign JWTs with private key
-
-**For server_generated_key type:**
-
-- Request parameters (subject DN, key algorithm, etc.)
-- Owner will generate key pair and return both private key and certificate
+- Device has generated key pair, CSR contains subject DN, SAN, key usage
 
 ### response-begin Message
 
 ```cddl
 {
     0: total_size: uint
-    ? 1: hash_alg: tstr
+    ? 1: hash_alg: int           ; COSE hash algorithm identifier
     -1: credential_id: tstr
-    -2: credential_type: tstr
-    ? -3: metadata: {
-        ? cert_format: tstr      ; "pem" | "der"
-        ? ca_bundle_included: bool
-        ? client_id: tstr        ; For oauth2_private_key_jwt
-        ? token_endpoint: tstr   ; For oauth2_private_key_jwt
-        * tstr => any
-    }
-    ? -4: endpoint_url: tstr     ; Service endpoint URL where credential is used
+    -2: credential_type: CredentialType  ; 3=x509_cert, 4=server_generated_key (for enrolled)
+    ? -4: endpoint_url: tstr     ; Service endpoint URL where credential is used (server-specified)
 }
 ```
 
@@ -429,25 +536,16 @@ Device → Owner: response-result
 
 **For x509_cert type:**
 
-- Signed X.509 certificate (DER or PEM)
-- Optionally followed by CA bundle (concatenated certificates)
-
-**For oauth2_private_key_jwt type:**
-
-```json
-{
-    "client_id": "device-001",
-    "token_endpoint": "https://auth.example.com/token",
-    "scope": "device:read device:write",
-    "public_key_registered": true
+```cddl
+X509CertResponse = {
+    certificate: tstr,          ; PEM or DER encoded X.509 certificate
+    ? ca_bundle: [ * tstr ],     ; Array of CA certificates (optional)
+    ? cert_format: CertFormat    ; pem, der
 }
 ```
 
-**For server_generated_key type:**
-
-- Private key (PKCS#8 format)
-- Certificate (X.509 format)
-- CA bundle (optional)
+- Signed X.509 certificate (DER or PEM)
+- Optionally followed by CA bundle (concatenated certificates)
 
 ### Example: Enrolled Credentials - X.509 Certificate
 
@@ -455,19 +553,13 @@ Device → Owner: response-result
 Device → Owner:
 fdo.credentials:request-begin = {
     0: 1024,
-    1: "sha256",
+    1: -16,                    ; SHA-256
     -1: "device-mtls-cert",
-    -2: "x509_cert",
-    -3: {
-        "subject_dn": "CN=device-001,O=Example Corp",
-        "san": ["device-001.example.com", "192.168.1.100"],
-        "key_usage": ["digitalSignature", "keyEncipherment"]
-    },
-    -4: "https://api.example.com/v1"
+    -2: "x509_cert"
 }
 
 Device → Owner:
-fdo.credentials:request-data-0 = <CBOR bstr containing CSR>
+fdo.credentials:request-data-0 = <CBOR bstr containing X509CertRequest: {"csr": "-----BEGIN CERTIFICATE REQUEST-----\n...\n-----END CERTIFICATE REQUEST-----"}>
 
 Device → Owner:
 fdo.credentials:request-end = {
@@ -478,18 +570,14 @@ fdo.credentials:request-end = {
 Owner → Device:
 fdo.credentials:response-begin = {
     0: 2048,
-    1: "sha256",
+    1: -16,                    ; SHA-256
     -1: "device-mtls-cert",
     -2: "x509_cert",
-    -3: {
-        "cert_format": "pem",
-        "ca_bundle_included": true
-    }
+    -4: "https://api.example.com/v1"
 }
 
 Owner → Device:
-fdo.credentials:response-data-0 = <CBOR bstr containing certificate>
-fdo.credentials:response-data-1 = <CBOR bstr containing CA bundle>
+fdo.credentials:response-data-0 = <CBOR bstr containing X509CertResponse: {"certificate": "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----", "ca_bundle": ["-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----"], "cert_format": "pem"}>
 
 Owner → Device:
 fdo.credentials:response-end = {
@@ -527,14 +615,7 @@ The owner sends this message to request a public key from the device. The owner 
 ```cddl
 {
     -1: credential_id: tstr      ; Unique identifier for this key (e.g., "device-mgmt-key")
-    -2: credential_type: tstr    ; "ssh_public_key"
-    ? -3: metadata: {
-        ? service_name: tstr     ; Name of service device will access (e.g., "config-server")
-        ? username: tstr         ; Username account for SSH access (e.g., "admin", "root")
-        ? key_type: tstr         ; Requested key type: "rsa" | "ed25519" | "ecdsa"
-        ? key_size: uint         ; Requested key size (e.g., 2048, 4096 for RSA)
-        * tstr => any
-    }
+    -2: credential_type: CredentialType  ; 5=ssh_public_key (for registered)
     ? -4: endpoint_url: tstr     ; Service endpoint URL where public key will be used
 }
 ```
@@ -544,15 +625,9 @@ The owner sends this message to request a public key from the device. The owner 
 ```cddl
 {
     0: total_size: uint
-    ? 1: hash_alg: tstr
+    ? 1: hash_alg: int           ; COSE hash algorithm identifier
     -1: credential_id: tstr      ; e.g., "device-mgmt-key"
     -2: credential_type: tstr    ; "ssh_public_key"
-    ? -3: metadata: {
-        ? username: tstr         ; Username account for SSH access (e.g., "admin", "root")
-        ? key_type: tstr         ; "rsa" | "ed25519" | "ecdsa"
-        ? comment: tstr          ; Key comment/description
-        * tstr => any
-    }
     ? -4: endpoint_url: tstr     ; Service endpoint URL where public key will be used
 }
 ```
@@ -561,12 +636,21 @@ The owner sends this message to request a public key from the device. The owner 
 
 **For ssh_public_key type:**
 
+```cddl
+SSHPublicKey = {
+    -1: public_key: tstr,       ; OpenSSH or RFC 4716 format public key
+    ? -2: username: tstr,          ; Username account for SSH access
+    ? -3: key_type: tstr,         ; rsa, ed25519, ecdsa, dsa
+    ? -4: comment: tstr           ; Key comment/description
+}
+```
+
 - SSH public key in OpenSSH format (e.g., "ssh-rsa AAAAB3NzaC1...")
 - Or SSH public key in RFC 4716 format
 
 **Note on username field:**
 
-The optional `username` metadata field specifies which user account the SSH key should be associated with. This is useful when:
+The optional `username` field in the payload specifies which user account the SSH key should be associated with. This is useful when:
 
 - The target system has multiple user accounts
 - SSH access must be restricted to a specific non-root user
@@ -582,29 +666,19 @@ Owner → Device:
 fdo.credentials:pubkey-request = {
     -1: "device-config-access",
     -2: "ssh_public_key",
-    -3: {
-        "service_name": "config-server.example.com",
-        "username": "admin",
-        "key_type": "ed25519"
-    },
     -4: "ssh://config-server.example.com:22"
 }
 
 Device → Owner:
 fdo.credentials:pubkey-begin = {
     0: 68,
-    1: "sha256",
+    1: -16,                    ; SHA-256
     -1: "device-config-access",
-    -2: "ssh_public_key",
-    -3: {
-        "username": "admin",
-        "key_type": "ed25519",
-        "comment": "device-001 config access key"
-    }
+    -2: 5                      ; ssh_public_key
 }
 
 Device → Owner:
-fdo.credentials:pubkey-data-0 = <CBOR bstr containing SSH public key>
+fdo.credentials:pubkey-data-0 = <CBOR bstr containing SSHPublicKey: {"public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGbVQa6Y8bPQc4yYj+nUEhCgM+jhGQsCCLXX/XrX6q7o", "username": "admin", "key_type": "ed25519", "comment": "device-001 config access key"}>
 
 Device → Owner:
 fdo.credentials:pubkey-end = {
@@ -715,14 +789,10 @@ Owner → Device: fdo.credentials:credential-begin = {
     1: "sha256",
     -1: "production-api-key",
     -2: "api_key",
-    -3: {
-        "service_endpoint": "https://api.example.com",
-        "scope": "read write",
-        "expires_at": "2027-01-01T00:00:00Z"
-    }
+    -4: "https://api.example.com/v1"
 }
 
-Owner → Device: fdo.credentials:credential-data-0 = <CBOR bstr: {"api_key": "sk_live_abc123..."}>
+Owner → Device: fdo.credentials:credential-data-0 = <CBOR bstr: {"api_key": "sk_live_abc123...", "service": "api.example.com", "scope": "read write", "expires_at": "2027-01-01T00:00:00Z"}>
 
 Owner → Device: fdo.credentials:credential-end = {0: 0, 1: h'hash...'}
 
@@ -743,15 +813,10 @@ Device → Owner: fdo.credentials:request-begin = {
     0: 1024,
     1: "sha256",
     -1: "mtls-identity",
-    -2: "x509_cert",
-    -3: {
-        "subject_dn": "CN=device-001,O=Example Corp",
-        "san": ["device-001.example.com"],
-        "key_usage": ["digitalSignature", "keyEncipherment"]
-    }
+    -2: "x509_cert"
 }
 
-Device → Owner: fdo.credentials:request-data-0 = <CBOR bstr: CSR in PEM format>
+Device → Owner: fdo.credentials:request-data-0 = <CBOR bstr: {"csr": "-----BEGIN CERTIFICATE REQUEST-----\n...\n-----END CERTIFICATE REQUEST-----"}>
 
 Device → Owner: fdo.credentials:request-end = {0: 0, 1: h'csr-hash...'}
 
@@ -761,15 +826,10 @@ Owner → Device: fdo.credentials:response-begin = {
     1: "sha256",
     -1: "mtls-identity",
     -2: "x509_cert",
-    -3: {
-        "cert_format": "pem",
-        "ca_bundle_included": true
-    }
+    -4: "https://api.example.com/v1"
 }
 
-Owner → Device: fdo.credentials:response-data-0 = <CBOR bstr: client certificate>
-Owner → Device: fdo.credentials:response-data-1 = <CBOR bstr: intermediate CA cert>
-Owner → Device: fdo.credentials:response-data-2 = <CBOR bstr: root CA cert>
+Owner → Device: fdo.credentials:response-data-0 = <CBOR bstr: {"certificate": "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----", "ca_bundle": ["-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----", "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----"], "cert_format": "pem"}>
 
 Owner → Device: fdo.credentials:response-end = {0: 0, 1: h'cert-hash...'}
 
@@ -790,15 +850,10 @@ Device → Owner: fdo.credentials:pubkey-begin = {
     0: 564,
     1: "sha256",
     -1: "ssh-admin-access",
-    -2: "ssh_public_key",
-    -3: {
-        "username": "admin",
-        "authorized_hosts": ["server1.example.com"],
-        "key_type": "ed25519"
-    }
+    -2: "ssh_public_key"
 }
 
-Device → Owner: fdo.credentials:pubkey-data-0 = <CBOR bstr: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5...">
+Device → Owner: fdo.credentials:pubkey-data-0 = <CBOR bstr: {"public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5...", "username": "admin", "authorized_hosts": ["server1.example.com"], "key_type": "ed25519"}>
 
 Device → Owner: fdo.credentials:pubkey-end = {0: 0, 1: h'pubkey-hash...'}
 
