@@ -3,23 +3,60 @@ run:
   modules-download-mode: readonly
 linters:
   enable:
+    - errcheck
     - gocyclo
     - gosec
     - misspell
     - revive
+    - unused
   settings:
-    gocyclo:
-      min-complexity: 15
-    misspell:
-      locale: US
+  gocyclo:
+    min-complexity: 15
+  misspell:
+    locale: US
   exclusions:
     generated: lax
     rules:
       - linters:
           - gocyclo
-          - gosec
         path: _test\.go
-      - path: (.+)\.go$
+      - linters:
+          - gocyclo
+        path: fsim/wifi_device\.go$
+      - linters:
+          - gocyclo
+        path: fsim/chunking/types\.go$
+      - linters:
+          - gocyclo
+        path: fsim/.*_owner\.go$
+      - linters:
+          - gocyclo
+        path: fsim/.*_device\.go$
+      - linters:
+          - gosec
+        path: fsim/examples/sysconfig_linux\.go$
+        text: G304
+      - linters:
+          - gosec
+        path: fsim/examples/sysconfig_linux\.go$
+        text: G204
+      - linters:
+          - gosec
+        path: examples/cmd/.*\.go$
+        text: G304
+      - linters:
+          - gosec
+        path: examples/cmd/.*\.go$
+        text: G306
+      - linters:
+          - gosec
+        path: examples/plugins/.*\.go$
+        text: G301
+      - linters:
+          - gosec
+        path: examples/plugins/.*\.go$
+        text: G204
+      - path: _test\.go
         text: declaration of "(err|ctx)" shadows declaration at
       - path: (.+)\.go$
         text: "^unused-parameter: "
@@ -29,7 +66,6 @@ linters:
     paths:
       - third_party$
       - builtin$
-      - examples$
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
@@ -46,4 +82,3 @@ formatters:
     paths:
       - third_party$
       - builtin$
-      - examples$

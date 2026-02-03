@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
@@ -31,6 +32,9 @@ type TO0Client struct {
 	// OwnerKeys are used for signing the rendezvous blob.
 	OwnerKeys OwnerKeyPersistentState
 
+	// DelegateKeys may be used for signing the rendezvous blob.
+	DelegateKeys DelegateKeyPersistentState
+
 	// TTL is the amount of time to recommend that the Rendezvous Server allows
 	// the rendezvous blob mapping to remain active.
 	//
@@ -41,7 +45,7 @@ type TO0Client struct {
 // RegisterBlob tells a Rendezvous Server where to direct a given device to its
 // owner service for onboarding. The returned uint32 is the number of seconds
 // before the rendezvous blob must be refreshed by calling [RegisterBlob] again.
-func (c *TO0Client) RegisterBlob(ctx context.Context, transport Transport, guid protocol.GUID, addrs []protocol.RvTO2Addr) (uint32, error) {
+func (c *TO0Client) RegisterBlob(ctx context.Context, transport Transport, guid protocol.GUID, addrs []protocol.RvTO2Addr, delegateName string) (uint32, error) {
 	ctx = contextWithErrMsg(ctx)
 
 	nonce, err := c.hello(ctx, transport)
@@ -54,13 +58,13 @@ func (c *TO0Client) RegisterBlob(ctx context.Context, transport Transport, guid 
 		ttl = DefaultRVBlobTTL
 	}
 
-	return c.ownerSign(ctx, transport, guid, ttl, nonce, addrs)
+	return c.ownerSign(ctx, transport, guid, ttl, nonce, addrs, delegateName)
 }
 
 // Hello(20) -> HelloAck(21)
 func (c *TO0Client) hello(ctx context.Context, transport Transport) (protocol.Nonce, error) {
 	// Define request structure
-	msg := struct{}{}
+	msg := GlobalCapabilityFlags
 
 	// Make request
 	typ, resp, err := transport.Send(ctx, protocol.TO0HelloMsgType, msg, nil)
@@ -99,7 +103,7 @@ type to0Ack struct {
 
 // Hello(20) -> HelloAck(21)
 func (s *TO0Server) helloAck(ctx context.Context, msg io.Reader) (*to0Ack, error) {
-	var hello struct{}
+	var hello CapabilityFlags
 	if err := cbor.NewDecoder(msg).Decode(&hello); err != nil {
 		return nil, fmt.Errorf("error decoding TO0.Hello request: %w", err)
 	}
@@ -125,12 +129,15 @@ type to0d struct {
 }
 
 type ownerSign struct {
-	To0d cbor.Bstr[to0d]
-	To1d cose.Sign1Tag[protocol.To1d, []byte]
+	To0d          cbor.Bstr[to0d]
+	To1d          cose.Sign1Tag[protocol.To1d, []byte]
+	DelegateChain *[]*cbor.X509Certificate `cbor:",omitempty"`
 }
 
 // OwnerSign(22) -> AcceptOwner(23)
-func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid protocol.GUID, ttl uint32, nonce protocol.Nonce, addrs []protocol.RvTO2Addr) (negotiatedTTL uint32, _ error) {
+//
+//nolint:gocyclo // Protocol implementation with multiple key type handling
+func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid protocol.GUID, ttl uint32, nonce protocol.Nonce, addrs []protocol.RvTO2Addr, delegateName string) (negotiatedTTL uint32, _ error) {
 	// Create and hash to0d
 	ov, err := c.Vouchers.Voucher(ctx, guid)
 	if err != nil {
@@ -163,17 +170,69 @@ func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid pro
 	if err != nil {
 		return 0, fmt.Errorf("error determining signing options for TO0.OwnerSign: %w", err)
 	}
-	to1d := cose.Sign1[protocol.To1d, []byte]{Payload: cbor.NewByteWrap(protocol.To1d{
-		RV: addrs,
-		To0dHash: protocol.Hash{
-			Algorithm: alg,
-			Value:     to0dHash.Sum(nil),
-		},
-	})}
-	if err := to1d.Sign(ownerKey, nil, nil, opts); err != nil {
-		return 0, fmt.Errorf("error signing To1d payload for TO0.OwnerSign: %w", err)
+
+	var header = cose.Header{
+		Unprotected: map[cose.Label]any{},
 	}
 
+	to1d := cose.Sign1[protocol.To1d, []byte]{
+		Header: header,
+		Payload: cbor.NewByteWrap(protocol.To1d{
+			RV: addrs,
+			To0dHash: protocol.Hash{
+				Algorithm: alg,
+				Value:     to0dHash.Sum(nil),
+			},
+		})}
+
+	// Sign blob with OwnerKey - or Delegate, if requested
+	if delegateName != "" {
+		// Delegate must be X509 or X5CHAIN so it can prove that Owner signed it
+		delegateName = strings.ReplaceAll(delegateName, "=", keyType.KeyString())
+		delegateKey, ch, err := c.DelegateKeys.DelegateKey(delegateName)
+		if err != nil {
+			return 0, fmt.Errorf("error getting delegate key [type=%s]: %w", keyType, err)
+		}
+		// Get key type from the delegate certificate's public key (leaf cert)
+		delegateKeyType, err := protocol.KeyTypeFromPublicKey(ch[0].PublicKey)
+		if err != nil {
+			return 0, fmt.Errorf("error determining delegate key type: %w", err)
+		}
+		delegateOpts, err := signOptsFor(delegateKey, delegateKeyType == protocol.RsaPssKeyType)
+		if err != nil {
+			return 0, fmt.Errorf("error determining signing options for TO0 Delegate: %w", err)
+		}
+		chain, err := protocol.NewPublicKey(delegateKeyType, ch, false)
+		if err != nil {
+			return 0, fmt.Errorf("error creating delegate public key: %w", err)
+		}
+		header.Unprotected[to2DelegateClaim] = chain
+
+		if err := to1d.Sign(delegateKey, nil, nil, delegateOpts); err != nil {
+			return 0, fmt.Errorf("error signing To1d payload for w/ Delegate TO0.OwnerSign: %w", err)
+		}
+
+		// TODO Do a veryify just to check if this is okay
+		//ok,err := to1d.Verify(delegateKey.Public(),nil,nil)
+
+		// This will fail if the device has been DI'd with a key of one type,
+		// but the Delegate chain was rooted by a different key of a different type
+		p, err := chain.Public()
+		if err != nil {
+			return 0, fmt.Errorf("Error getting public key from delegate chain: %v", err)
+		}
+		ok, err := to1d.Verify(p, nil, nil)
+		if err != nil {
+			return 0, fmt.Errorf("To1d verify failed: %w", err)
+		}
+		if !ok {
+			return 0, fmt.Errorf("To1d verify failed")
+		}
+	} else {
+		if err := to1d.Sign(ownerKey, nil, nil, opts); err != nil {
+			return 0, fmt.Errorf("error signing To1d payload for TO0.OwnerSign: %w", err)
+		}
+	}
 	// Define request structure
 	msg := ownerSign{
 		To0d: *cbor.NewBstr(to0d),
@@ -266,6 +325,12 @@ func (s *TO0Server) acceptOwner(ctx context.Context, msg io.Reader) (*to0AcceptO
 			captureErr(ctx, protocol.InvalidMessageErrCode, "")
 			return nil, fmt.Errorf("voucher has been rejected")
 		}
+	}
+
+	// Check voucher replacement policy
+	if err := CheckVoucherReplacement(ctx, s.VoucherReplacementPolicy, &ov, s.RVBlobs); err != nil {
+		captureErr(ctx, protocol.InvalidOwnershipVoucherCode, "")
+		return nil, fmt.Errorf("voucher replacement policy violation: %w", err)
 	}
 
 	// Store rendezvous blob

@@ -44,19 +44,25 @@ import (
 var clientFlags = flag.NewFlagSet("client", flag.ContinueOnError)
 
 var (
-	blobPath    string
-	diURL       string
-	diKey       string
-	diKeyEnc    string
-	kexSuite    string
-	cipherSuite string
-	tpmPath     string
-	printDevice bool
-	rvOnly      bool
-	dlDir       string
-	echoCmds    bool
-	uploads     = make(fsVar)
-	wgetDir     string
+	blobPath              string
+	diURL                 string
+	diKey                 string
+	diKeyEnc              string
+	kexSuite              string
+	cipherSuite           string
+	tpmPath               string
+	printDevice           bool
+	rvOnly                bool
+	dlDir                 string
+	echoCmds              bool
+	uploads               = make(fsVar)
+	wgetDir               string
+	fdoVersion            int
+	registerSSHKey        string // SSH public key to register with owner
+	enrollCSR             string // CSR enrollment request (format: id:csrdata)
+	bmoSupportedTypes     string // Comma-separated list of supported BMO MIME types (empty = accept all)
+	payloadSupportedTypes string // Comma-separated list of supported Payload MIME types (empty = accept all)
+	allowSingleSided      bool   // Allow single-sided attestation (WiFi-only mode)
 )
 
 type fsVar map[string]string
@@ -150,6 +156,12 @@ func init() {
 	clientFlags.Var(&uploads, "upload", "List of dirs and `files` to upload files from, "+
 		"comma-separated and/or flag provided multiple times (FSIM disabled if empty)")
 	clientFlags.StringVar(&wgetDir, "wget-dir", "", "A `dir` to wget files into (FSIM disabled if empty)")
+	clientFlags.IntVar(&fdoVersion, "fdo-version", 101, "FDO protocol version (101 or 200)")
+	clientFlags.StringVar(&registerSSHKey, "register-ssh-key", "", "SSH public `key` to register with owner (format: id:keydata)")
+	clientFlags.StringVar(&enrollCSR, "enroll-csr", "", "CSR enrollment `request` (format: id:csrdata)")
+	clientFlags.StringVar(&bmoSupportedTypes, "bmo-supported-types", "", "Comma-separated list of supported BMO MIME `types` (empty = accept all)")
+	clientFlags.StringVar(&payloadSupportedTypes, "payload-supported-types", "", "Comma-separated list of supported Payload MIME `types` (empty = accept all)")
+	clientFlags.BoolVar(&allowSingleSided, "allow-single-sided", false, "Allow single-sided attestation (WiFi-only mode, owner not verified)")
 }
 
 func client(ctx context.Context) error {
@@ -176,7 +188,7 @@ func client(ctx context.Context) error {
 	if !ok {
 		return fmt.Errorf("invalid key exchange cipher suite: %s", cipherSuite)
 	}
-	newDC := transferOwnership(ctx, dc.RvInfo, fdo.TO2Config{
+	newDC, err := transferOwnership(ctx, dc.RvInfo, fdo.TO2Config{
 		Cred:       *dc,
 		HmacSha256: hmacSha256,
 		HmacSha384: hmacSha384,
@@ -192,12 +204,17 @@ func client(ctx context.Context) error {
 		KeyExchange:          kex.Suite(kexSuite),
 		CipherSuite:          kexCipherSuiteID,
 		AllowCredentialReuse: true,
+		AllowSingleSided:     allowSingleSided,
 	})
 	if rvOnly {
 		return nil
 	}
+	if err != nil {
+		return fmt.Errorf("transfer ownership failed: %w", err)
+	}
 	if newDC == nil {
-		fmt.Println("Credential not updated (either due to failure of TO2 or the Credential Reuse Protocol")
+		// Credential reuse - this is a success case
+		fmt.Println("Credential reuse - credential not updated")
 		return nil
 	}
 
@@ -306,7 +323,7 @@ func di(ctx context.Context) (err error) { //nolint:gocyclo
 	})
 }
 
-func transferOwnership(ctx context.Context, rvInfo [][]protocol.RvInstruction, conf fdo.TO2Config) *fdo.DeviceCredential { //nolint:gocyclo
+func transferOwnership(ctx context.Context, rvInfo [][]protocol.RvInstruction, conf fdo.TO2Config) (*fdo.DeviceCredential, error) { //nolint:gocyclo
 	var to2URLs []string
 	directives := protocol.ParseDeviceRvInfo(rvInfo)
 	for _, directive := range directives {
@@ -340,7 +357,7 @@ TO1:
 			// A 25% plus or minus jitter is allowed by spec
 			select {
 			case <-ctx.Done():
-				return nil
+				return nil, ctx.Err()
 			case <-time.After(directive.Delay):
 			}
 		}
@@ -380,21 +397,200 @@ TO1:
 		if to1d != nil {
 			fmt.Printf("TO1 Blob: %+v\n", to1d.Payload.Val)
 		}
-		return nil
+		return nil, nil
 	}
 
 	// Try TO2 on each address only once
 	for _, baseURL := range to2URLs {
-		newDC := transferOwnership2(ctx, tlsTransport(baseURL, nil), to1d, conf)
+		// Use version-aware transport for TO2
+		if fdoVersion < 0 || fdoVersion > 65535 {
+			slog.Error("invalid FDO version", "version", fdoVersion)
+			return nil, fmt.Errorf("invalid FDO version: %d", fdoVersion)
+		}
+		version := protocol.Version(fdoVersion) //#nosec G115 -- bounds checked above
+		transport := tlsTransportWithVersion(baseURL, nil, version)
+		newDC, err := transferOwnership2(ctx, transport, to1d, conf)
+		if err != nil {
+			// TO2 failed - continue to next URL, but remember the error
+			continue
+		}
 		if newDC != nil {
-			return newDC
+			return newDC, nil
+		}
+		// newDC == nil && err == nil means credential reuse
+		return nil, nil
+	}
+
+	return nil, fmt.Errorf("TO2 failed on all addresses")
+}
+
+// payloadHandler implements fsim.UnifiedPayloadHandler to save received payloads.
+// The framework handles all chunking transparently - we just receive the complete payload.
+type payloadHandler struct{}
+
+func (h *payloadHandler) HandlePayload(ctx context.Context, mimeType, name string, size uint64, metadata map[string]any, payload []byte) (statusCode int, message string, err error) {
+	fmt.Printf("[fdo.payload] HandlePayload called: name=%s, mime=%s, size=%d, received=%d bytes\n", name, mimeType, size, len(payload))
+
+	// Save payload to file
+	filename := name
+	if filename == "" {
+		filename = "received_payload.bin"
+	}
+	if err := os.WriteFile(filename, payload, 0644); err != nil {
+		fmt.Printf("[fdo.payload] ERROR: failed to save file: %v\n", err)
+		return 2, fmt.Sprintf("failed to save payload: %v", err), err
+	}
+	fmt.Printf("[fdo.payload] Saved payload to: %s (%d bytes)\n", filename, len(payload))
+	return 0, fmt.Sprintf("saved to %s", filename), nil
+}
+
+// bmoHandler implements fsim.UnifiedImageHandler to receive boot images.
+// The framework handles all chunking transparently - we just receive the complete image.
+type bmoHandler struct{}
+
+func (h *bmoHandler) HandleImage(ctx context.Context, imageType, name string, size uint64, metadata map[string]any, image []byte) (statusCode int, message string, err error) {
+	fmt.Printf("[fdo.bmo] HandleImage called: name=%s, type=%s, size=%d, received=%d bytes\n", name, imageType, size, len(image))
+
+	// Save image to file
+	// Save to current directory with bmo- prefix to avoid clutter
+	filename := "bmo-" + name
+	if filename == "" || filename == "bmo-" {
+		filename = "bmo-received_image.bin"
+	}
+	if err := os.WriteFile(filename, image, 0600); err != nil {
+		fmt.Printf("[fdo.bmo] ERROR: failed to save file: %v\n", err)
+		return 2, fmt.Sprintf("failed to save image: %v", err), err
+	}
+	fmt.Printf("[fdo.bmo] Saved image to: %s (%d bytes)\n", filename, len(image))
+	return 0, fmt.Sprintf("saved to %s", filename), nil
+}
+
+// bmoAckHandler implements fsim.ImageAckHandler to accept/reject images based on MIME type.
+type bmoAckHandler struct {
+	supportedTypes []string
+}
+
+func (h *bmoAckHandler) AcceptImage(imageType, name string, size uint64, metadata map[string]any) (accepted bool, reasonCode int, message string) {
+	fmt.Printf("[fdo.bmo] AcceptImage called: type=%s, name=%s, size=%d\n", imageType, name, size)
+
+	// Check if this image type is in our supported list
+	for _, supported := range h.supportedTypes {
+		if imageType == supported {
+			fmt.Printf("[fdo.bmo] Image type %s is supported, accepting\n", imageType)
+			return true, 0, ""
 		}
 	}
+
+	fmt.Printf("[fdo.bmo] Image type %s is NOT supported (supported: %v), rejecting\n", imageType, h.supportedTypes)
+	return false, 1, fmt.Sprintf("unsupported image type: %s", imageType)
+}
+
+// payloadAckHandler implements fsim.PayloadAckHandler to accept/reject payloads based on MIME type.
+type payloadAckHandler struct {
+	supportedTypes []string
+}
+
+func (h *payloadAckHandler) AcceptPayload(mimeType, name string, size uint64, metadata map[string]any) (accepted bool, reasonCode int, message string) {
+	fmt.Printf("[fdo.payload] AcceptPayload called: type=%s, name=%s, size=%d\n", mimeType, name, size)
+
+	// Check if this MIME type is in our supported list
+	for _, supported := range h.supportedTypes {
+		if mimeType == supported {
+			fmt.Printf("[fdo.payload] MIME type %s is supported, accepting\n", mimeType)
+			return true, 0, ""
+		}
+	}
+
+	fmt.Printf("[fdo.payload] MIME type %s is NOT supported (supported: %v), rejecting\n", mimeType, h.supportedTypes)
+	return false, 1, fmt.Sprintf("unsupported MIME type: %s", mimeType)
+}
+
+// wifiHandler implements fsim.WiFiHandler to display WiFi network configuration.
+// For this simple test, we just display the networks received from the server.
+type wifiHandler struct {
+	lastNetworkID string
+	lastSSID      string
+}
+
+func (h *wifiHandler) AddNetwork(network *fsim.WiFiNetwork) error {
+	fmt.Printf("[fdo.wifi] Received network configuration:\n")
+	fmt.Printf("  Version:     %s\n", network.Version)
+	fmt.Printf("  NetworkID:   %s\n", network.NetworkID)
+	fmt.Printf("  SSID:        %s\n", network.SSID)
+	fmt.Printf("  AuthType:    %d", network.AuthType)
+	switch network.AuthType {
+	case 0:
+		fmt.Printf(" (open)")
+	case 1:
+		fmt.Printf(" (wpa2-psk)")
+	case 2:
+		fmt.Printf(" (wpa3-psk)")
+	case 3:
+		fmt.Printf(" (wpa3-enterprise)")
+		fmt.Printf("\n[fdo.wifi] Enterprise network detected - will generate CSR")
+	}
+	fmt.Printf("\n")
+	if len(network.Password) > 0 {
+		fmt.Printf("  Password:    %s\n", string(network.Password))
+	}
+	fmt.Printf("  TrustLevel:  %d", network.TrustLevel)
+	switch network.TrustLevel {
+	case 0:
+		fmt.Printf(" (onboard-only)")
+	case 1:
+		fmt.Printf(" (full-access)")
+	}
+	fmt.Printf("\n")
+
+	// Store network info for CSR generation
+	h.lastNetworkID = network.NetworkID
+	h.lastSSID = network.SSID
 
 	return nil
 }
 
-func transferOwnership2(ctx context.Context, transport fdo.Transport, to1d *cose.Sign1[protocol.To1d, []byte], conf fdo.TO2Config) *fdo.DeviceCredential {
+func (h *wifiHandler) GenerateCSR(networkID, ssid string) (csrData []byte, metadata map[string]any, err error) {
+	// Generate fake CSR data for testing
+	fmt.Printf("[fdo.wifi] Generating fake CSR for network %s (%s)\n", networkID, ssid)
+
+	// Create fake CSR data (just some bytes that look like a CSR)
+	fakeCSR := []byte("-----BEGIN CERTIFICATE REQUEST-----\n" +
+		"MIICvDCCAaQCAQAwdzELMAkGA1UEBhMCVVMxEzARBgNVBAgMCkNhbGlmb3JuaWEx\n" +
+		"FjAUBgNVBAcMDVNhbiBGcmFuY2lzY28xDTALBgNVBAoMBFRlc3QxDTALBgNVBAsM\n" +
+		"BFRlc3QxHTAbBgNVBAMMFHRlc3QtZGV2aWNlLmxvY2FsLmNvbTCCASIwDQYJKoZI\n" +
+		"-----END CERTIFICATE REQUEST-----\n")
+
+	meta := map[string]any{
+		"csr_type": "pkcs10",
+		"key_type": "rsa2048",
+	}
+
+	fmt.Printf("[fdo.wifi] Generated fake CSR (%d bytes)\n", len(fakeCSR))
+	return fakeCSR, meta, nil
+}
+
+func (h *wifiHandler) InstallCertificate(networkID, ssid string, certData []byte, metadata map[string]any) (statusCode int, message string, err error) {
+	fmt.Printf("[fdo.wifi] Received certificate for network %s (%s)\n", networkID, ssid)
+	fmt.Printf("[fdo.wifi] Certificate size: %d bytes\n", len(certData))
+	if metadata != nil {
+		fmt.Printf("[fdo.wifi] Certificate metadata: %v\n", metadata)
+	}
+	fmt.Printf("[fdo.wifi] Certificate installed successfully (fake)\n")
+	return 0, "Certificate installed", nil
+}
+
+func (h *wifiHandler) InstallCACerts(networkID, bundleID string, caData []byte, metadata map[string]any) (statusCode int, message string, err error) {
+	fmt.Printf("[fdo.wifi] Received CA bundle for network %s\n", networkID)
+	fmt.Printf("[fdo.wifi] Bundle ID: %s\n", bundleID)
+	fmt.Printf("[fdo.wifi] CA bundle size: %d bytes\n", len(caData))
+	if metadata != nil {
+		fmt.Printf("[fdo.wifi] CA bundle metadata: %+v\n", metadata)
+	}
+	fmt.Printf("[fdo.wifi] CA bundle installed successfully (fake)\n")
+	return 0, "CA bundle installed successfully", nil
+}
+
+func transferOwnership2(ctx context.Context, transport fdo.Transport, to1d *cose.Sign1[protocol.To1d, []byte], conf fdo.TO2Config) (*fdo.DeviceCredential, error) {
 	fsims := map[string]serviceinfo.DeviceModule{
 		"fido_alliance": &fsim.Interop{},
 	}
@@ -441,12 +637,120 @@ func transferOwnership2(ctx context.Context, transport fdo.Transport, to1d *cose
 			Timeout: 10 * time.Second,
 		}
 	}
+	fsims["fdo.sysconfig"] = &fsim.SysConfig{
+		SetParameter: func(parameter, value string) error {
+			fmt.Printf("[fdo.sysconfig] Received parameter: %s = %s\n", parameter, value)
+			return nil
+		},
+	}
+
+	// Add payload handler to receive and save payloads
+	// Using UnifiedHandler - the framework handles chunking transparently
+	payloadFSIM := &fsim.Payload{
+		UnifiedHandler: &payloadHandler{},
+	}
+	// Add AckHandler if supported types are specified (for NAK testing)
+	if payloadSupportedTypes != "" {
+		types := strings.Split(payloadSupportedTypes, ",")
+		payloadFSIM.AckHandler = &payloadAckHandler{supportedTypes: types}
+		fmt.Printf("[fdo.payload] NAK mode enabled, supported types: %v\n", types)
+	}
+	fsims["fdo.payload"] = payloadFSIM
+
+	// Add BMO handler to receive boot images
+	// Using UnifiedHandler - the framework handles chunking transparently
+	bmoFSIM := &fsim.BMO{
+		UnifiedHandler: &bmoHandler{},
+	}
+	// Add AckHandler if supported types are specified (for NAK testing)
+	if bmoSupportedTypes != "" {
+		types := strings.Split(bmoSupportedTypes, ",")
+		bmoFSIM.AckHandler = &bmoAckHandler{supportedTypes: types}
+		fmt.Printf("[fdo.bmo] NAK mode enabled, supported types: %v\n", types)
+	}
+	fsims["fdo.bmo"] = bmoFSIM
+
+	// Add WiFi handler to display network configuration
+	fsims["fdo.wifi"] = &fsim.WiFi{
+		Handler: &wifiHandler{},
+	}
+
+	// Add credentials handler to receive and display credentials (using chunked protocol)
+	credDevice := fsim.NewCredentialsDevice(func(credentialID string, credentialType int, data []byte, metadata map[string]any) error {
+		fmt.Printf("[fdo.credentials] Received credential:\n")
+		fmt.Printf("  ID:   %s\n", credentialID)
+		fmt.Printf("  Type: %d\n", credentialType)
+		if metadata != nil {
+			fmt.Printf("  Metadata: %v\n", metadata)
+		}
+		fmt.Printf("  Data: %s (length: %d bytes)\n", string(data), len(data))
+		return nil
+	})
+
+	// Add callback for public key requests (owner-driven Registered Credentials flow)
+	if registerSSHKey != "" {
+		// Format: id:keydata (e.g., device-config-key:ssh-ed25519 AAAA...)
+		parts := strings.SplitN(registerSSHKey, ":", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid -register-ssh-key format: expected id:keydata")
+		}
+		credID, keyData := parts[0], parts[1]
+		// Store the key data for the callback
+		sshKeyData := []byte(keyData)
+		credDevice.OnPublicKeyRequested = func(credentialID string, credentialType int, metadata map[string]any) ([]byte, error) {
+			fmt.Printf("[fdo.credentials] Owner requested public key: %s (type: %d)\n", credentialID, credentialType)
+			// Return the configured SSH key if IDs match, or for any request
+			if credentialID == credID || credID == "*" {
+				fmt.Printf("[fdo.credentials] Returning SSH key: %s\n", credID)
+				return sshKeyData, nil
+			}
+			return nil, fmt.Errorf("no public key available for credential_id: %s", credentialID)
+		}
+		fmt.Printf("[fdo.credentials] Configured SSH key: %s\n", credID)
+	}
+
+	// Add enrollment requests (device-initiated Enrolled Credentials flow)
+	if enrollCSR != "" {
+		// Format: id:csrdata (e.g., device-mtls-cert:-----BEGIN CERTIFICATE REQUEST-----)
+		parts := strings.SplitN(enrollCSR, ":", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid -enroll-csr format: expected id:csrdata")
+		}
+		credID, csrData := parts[0], parts[1]
+		credDevice.EnrollmentRequests = append(credDevice.EnrollmentRequests, fsim.EnrollmentRequest{
+			CredentialID:   credID,
+			CredentialType: fsim.CredentialTypeX509Cert,
+			RequestData:    []byte(csrData),
+		})
+		credDevice.OnEnrolledCredentialReceived = func(credentialID string, credentialType int, data []byte, metadata map[string]any) error {
+			fmt.Printf("[fdo.credentials] CLIENT received signed cert + CA:\n")
+			fmt.Printf("  ID:       %s\n", credentialID)
+			fmt.Printf("  Type:     %d\n", credentialType)
+			if metadata != nil {
+				if caIncluded, ok := metadata["ca_bundle_included"].(bool); ok && caIncluded {
+					fmt.Printf("  CA included: yes\n")
+				}
+			}
+			fmt.Printf("  Response:\n%s\n", string(data))
+			return nil
+		}
+		fmt.Printf("[fdo.credentials] Configured CSR enrollment: %s\n", credID)
+	}
+	fsims["fdo.credentials"] = credDevice
+
 	conf.DeviceModules = fsims
 
-	cred, err := fdo.TO2(ctx, transport, to1d, conf)
+	// Call version-specific TO2 function
+	var cred *fdo.DeviceCredential
+	var err error
+	if fdoVersion == 200 {
+		cred, err = fdo.TO2v200(ctx, transport, to1d, conf)
+	} else {
+		cred, err = fdo.TO2(ctx, transport, to1d, conf)
+	}
 	if err != nil {
 		slog.Error("TO2 failed", "error", err)
-		return nil
+		return nil, err
 	}
-	return cred
+	return cred, nil
 }

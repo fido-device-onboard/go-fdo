@@ -1,0 +1,2 @@
+server error: listen tcp 127.0.0.1:9999: bind: address already in use
+exit status 2

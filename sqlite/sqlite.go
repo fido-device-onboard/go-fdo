@@ -64,6 +64,11 @@ func Init(db *sql.DB) error {
 			, x509_chain BLOB NOT NULL
 			, PRIMARY KEY(type, rsa_bits)
 			)`,
+		`CREATE TABLE IF NOT EXISTS delegate_keys
+			( name TEXT UNIQUE NOT NULL
+			, pkcs8 BLOB NOT NULL
+			, x509_chain BLOB 
+			)`,
 		`CREATE TABLE IF NOT EXISTS owner_keys
 			( type INTEGER NOT NULL
 			, pkcs8 BLOB NOT NULL
@@ -189,6 +194,7 @@ var _ interface {
 	fdo.RendezvousBlobPersistentState
 	fdo.OwnerVoucherPersistentState
 	fdo.OwnerKeyPersistentState
+	fdo.DelegateKeyPersistentState
 } = (*DB)(nil)
 
 const sessionIDSize = 16
@@ -1146,6 +1152,37 @@ func (db *DB) AddOwnerKey(keyType protocol.KeyType, key crypto.PrivateKey, chain
 	return db.insertOrIgnore(context.Background(), "owner_keys", kvs)
 }
 
+// AddDelegateKey to retrieve with [DB.DelegateKey].
+func (db *DB) AddDelegateKey(name string, key crypto.PrivateKey, chain []*x509.Certificate) error {
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return err
+	}
+	return db.insert(context.Background(), "delegate_keys", map[string]any{
+		"pkcs8":      der,
+		"x509_chain": derEncode(chain),
+		"name":       name,
+	}, []string{"name"})
+}
+
+// ListDelegateKeys returns the names of all delegate key chains in the database.
+func (db *DB) ListDelegateKeys() (names []string, err error) {
+	rows, err := db.db.Query("SELECT name from delegate_keys;")
+	if err != nil {
+		return
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var name string
+		if err = rows.Scan(&name); err != nil {
+			return
+		}
+		names = append(names, name)
+	}
+	return
+}
+
 // OwnerKey returns the private key matching a given key type and optionally
 // its certificate chain. If key type is not RSAPKCS or RSAPSS then rsaBits
 // is ignored. Otherwise it must be either 2048 or 3072.
@@ -1179,6 +1216,35 @@ func (db *DB) OwnerKey(ctx context.Context, keyType protocol.KeyType, rsaBits in
 	chain, err := x509.ParseCertificates(certChainDer)
 	if err != nil {
 		return nil, nil, fmt.Errorf("error parsing owner certificate chain: %w", err)
+	}
+
+	return key.(crypto.Signer), chain, nil
+}
+
+// DelegateKey returns the private key and certificate chain for a delegate by name.
+func (db *DB) DelegateKey(keyName string) (crypto.Signer, []*x509.Certificate, error) {
+	var keyDer, certChainDer []byte
+	if err := db.query(context.Background(), "delegate_keys", []string{"pkcs8", "x509_chain"}, map[string]any{
+		"name": keyName,
+	}, &keyDer, &certChainDer); err != nil {
+		return nil, nil, fmt.Errorf("error querying delegate key [name=%s]: %w", keyName, err)
+	}
+	if keyDer == nil { // x509_chain may be NULL
+		return nil, nil, fdo.ErrNotFound
+	}
+	return returnDelegate(keyDer, certChainDer)
+}
+
+// Worker function for two functions above
+func returnDelegate(keyDer []byte, certChainDer []byte) (crypto.Signer, []*x509.Certificate, error) {
+	key, err := x509.ParsePKCS8PrivateKey(keyDer)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error parsing delegate key: %w", err)
+	}
+
+	chain, err := x509.ParseCertificates(certChainDer)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error parsing delegate certificate chain: %w", err)
 	}
 
 	return key.(crypto.Signer), chain, nil

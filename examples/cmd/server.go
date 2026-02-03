@@ -13,6 +13,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"flag"
@@ -46,25 +47,45 @@ import (
 var serverFlags = flag.NewFlagSet("server", flag.ContinueOnError)
 
 var (
-	useTLS           bool
-	addr             string
-	dbPath           string
-	dbPass           string
-	extAddr          string
-	to0Addr          string
-	to0GUID          string
-	resaleGUID       string
-	resaleKey        string
-	reuseCred        bool
-	rvBypass         bool
-	rvDelay          int
-	printOwnerPubKey string
-	importVoucher    string
-	cmdDate          bool
-	downloads        stringList
-	uploadDir        string
-	uploadReqs       stringList
-	wgets            stringList
+	useTLS               bool
+	addr                 string
+	dbPath               string
+	dbPass               string
+	extAddr              string
+	to0Addr              string
+	to0GUID              string
+	rvDelegate           string
+	onboardDelegate      string
+	resaleGUID           string
+	resaleKey            string
+	reuseCred            bool
+	rvBypass             bool
+	rvDelay              int
+	rvReplacementPolicy  string
+	printOwnerPubKey     string
+	printOwnerPrivKey    string
+	printOwnerChain      string
+	printDelegateChain   string
+	printDelegatePrivKey string
+	ownerCert            bool
+	importVoucher        string
+	cmdDate              bool
+	downloads            stringList
+	uploadDir            string
+	uploadReqs           stringList
+	wgets                stringList
+	sysconfig            stringList
+	payloadFile          string
+	payloadMimeType      string
+	bmoFile              string
+	bmoImageType         string
+	bmoFiles             stringList // Multiple BMO files with types (format: type:file)
+	payloadFiles         stringList // Multiple payload files with types (format: type:file)
+	wifiConfigFile       string
+	credentials          stringList
+	pubkeyRequests       stringList
+	initOnly             bool
+	singleSidedWiFi      bool
 )
 
 type stringList []string
@@ -82,6 +103,8 @@ func init() {
 	serverFlags.StringVar(&dbPath, "db", "", "SQLite database file path")
 	serverFlags.StringVar(&dbPass, "db-pass", "", "SQLite database encryption-at-rest passphrase")
 	serverFlags.BoolVar(&debug, "debug", debug, "Print HTTP contents")
+	serverFlags.StringVar(&rvDelegate, "rvDelegate", "", "Use delegate cert (name) for RV blob signing")
+	serverFlags.StringVar(&onboardDelegate, "onboardDelegate", "", "Use delegate cert (name) for TO2")
 	serverFlags.StringVar(&to0Addr, "to0", "", "Rendezvous server `addr`ess to register RV blobs (disables self-registration)")
 	serverFlags.StringVar(&to0GUID, "to0-guid", "", "Device `guid` to immediately register an RV blob (requires to0 flag)")
 	serverFlags.StringVar(&extAddr, "ext-http", "", "External `addr`ess devices should connect to (default \"127.0.0.1:${LISTEN_PORT}\")")
@@ -90,18 +113,36 @@ func init() {
 	serverFlags.StringVar(&resaleKey, "resale-key", "", "The `path` to a PEM-encoded x.509 public key for the next owner")
 	serverFlags.BoolVar(&reuseCred, "reuse-cred", false, "Perform the Credential Reuse Protocol in TO2")
 	serverFlags.BoolVar(&insecureTLS, "insecure-tls", false, "Listen with a self-signed TLS certificate")
+	serverFlags.BoolVar(&ownerCert, "owner-certs", false, "Generate Owner Certificatats (in addition to keys)")
 	serverFlags.BoolVar(&rvBypass, "rv-bypass", false, "Skip TO1")
 	serverFlags.IntVar(&rvDelay, "rv-delay", 0, "Delay TO1 by N `seconds`")
+	serverFlags.StringVar(&rvReplacementPolicy, "rv-replacement-policy", "allow-any", "RV voucher replacement `policy`: allow-any (0), manufacturer-key-consistency (1), first-registration-lock (2), owner-key-consistency (3)")
 	serverFlags.StringVar(&printOwnerPubKey, "print-owner-public", "", "Print owner public key of `type` and exit")
+	serverFlags.StringVar(&printOwnerPrivKey, "print-owner-private", "", "Print owner private key of `type` and exit")
+	serverFlags.StringVar(&printOwnerChain, "print-owner-chain", "", "Print owner chain of `type` and exit")
 	serverFlags.StringVar(&importVoucher, "import-voucher", "", "Import a PEM encoded voucher file at `path`")
 	serverFlags.BoolVar(&cmdDate, "command-date", false, "Use fdo.command FSIM to have device run \"date +%s\"")
 	serverFlags.Var(&downloads, "download", "Use fdo.download FSIM for each `file` (flag may be used multiple times)")
 	serverFlags.StringVar(&uploadDir, "upload-dir", "uploads", "The directory `path` to put file uploads")
 	serverFlags.Var(&uploadReqs, "upload", "Use fdo.upload FSIM for each `file` (flag may be used multiple times)")
 	serverFlags.Var(&wgets, "wget", "Use fdo.wget FSIM for each `url` (flag may be used multiple times)")
+	serverFlags.Var(&sysconfig, "sysconfig", "Use fdo.sysconfig FSIM with `key=value` pairs (flag may be used multiple times)")
+	serverFlags.StringVar(&payloadFile, "payload-file", "", "Use fdo.payload FSIM to send `file` to device")
+	serverFlags.StringVar(&payloadMimeType, "payload-mime", "application/octet-stream", "MIME type for payload file")
+	serverFlags.StringVar(&bmoFile, "bmo-file", "", "Use fdo.bmo FSIM to send boot image `file` to device")
+	serverFlags.StringVar(&bmoImageType, "bmo-type", "application/x-iso9660-image", "Image type for BMO file")
+	serverFlags.Var(&bmoFiles, "bmo", "Use fdo.bmo FSIM with `type:file` format with RequireAck (flag may be used multiple times for NAK testing)")
+	serverFlags.Var(&payloadFiles, "payload", "Use fdo.payload FSIM with `type:file` format with RequireAck (flag may be used multiple times for NAK testing)")
+	serverFlags.StringVar(&wifiConfigFile, "wifi-config", "", "Use fdo.wifi FSIM with network config from JSON `file`")
+	serverFlags.Var(&credentials, "credential", "Use fdo.credentials FSIM with `type:id:data[:endpoint_url]` format (flag may be used multiple times)")
+	serverFlags.Var(&pubkeyRequests, "request-pubkey", "Request public key from device with `type:id[:endpoint_url]` format (flag may be used multiple times)")
+	serverFlags.BoolVar(&initOnly, "initOnly", false, "Initialize initialization (db/key/voucher creation)")
+	serverFlags.BoolVar(&singleSidedWiFi, "single-sided-wifi", false, "Run as single-sided WiFi setup service (owner not verified by device)")
 }
 
 func server(ctx context.Context) error { //nolint:gocyclo
+	fmt.Println("=== STUPID DEBUG: SERVER FUNCTION CALLED ===")
+
 	if debug {
 		level.Set(slog.LevelDebug)
 	}
@@ -127,6 +168,14 @@ func server(ctx context.Context) error { //nolint:gocyclo
 		return doPrintOwnerPubKey(ctx, state)
 	}
 
+	if printOwnerPrivKey != "" {
+		return doPrintOwnerPrivKey(ctx, state)
+	}
+
+	if printOwnerChain != "" {
+		return doPrintOwnerChain(ctx, state)
+	}
+
 	// If importing a voucher, do so and exit
 	if importVoucher != "" {
 		return doImportVoucher(ctx, state)
@@ -136,6 +185,12 @@ func server(ctx context.Context) error { //nolint:gocyclo
 	useTLS = insecureTLS
 	if extAddr == "" {
 		extAddr = addr
+	}
+
+	// Parse RV replacement policy
+	replacementPolicy, err := fdo.ParseVoucherReplacementPolicy(rvReplacementPolicy)
+	if err != nil {
+		return fmt.Errorf("invalid rv-replacement-policy: %w", err)
 	}
 
 	// RV Info
@@ -162,7 +217,7 @@ func server(ctx context.Context) error { //nolint:gocyclo
 		return resell(ctx, state)
 	}
 
-	return serveHTTP(ctx, rvInfo, state)
+	return serveHTTP(ctx, rvInfo, state, replacementPolicy)
 }
 
 func generateKeys(state *sqlite.DB) error { //nolint:gocyclo
@@ -251,34 +306,56 @@ func generateKeys(state *sqlite.DB) error { //nolint:gocyclo
 	if err != nil {
 		return err
 	}
-	if err := state.AddOwnerKey(protocol.Rsa2048RestrKeyType, rsa2048OwnerKey, nil); err != nil {
+
+	// Generate owner certificates if requested
+	var rsa2048OwnerCert, rsa3072OwnerCert, ec256OwnerCert, ec384OwnerCert []*x509.Certificate
+	if ownerCert {
+		rsa2048OwnerCert, err = generateCA(rsa2048OwnerKey)
+		if err != nil {
+			return err
+		}
+		rsa3072OwnerCert, err = generateCA(rsa3072OwnerKey)
+		if err != nil {
+			return err
+		}
+		ec256OwnerCert, err = generateCA(ec256OwnerKey)
+		if err != nil {
+			return err
+		}
+		ec384OwnerCert, err = generateCA(ec384OwnerKey)
+		if err != nil {
+			return err
+		}
+	}
+
+	if err := state.AddOwnerKey(protocol.Rsa2048RestrKeyType, rsa2048OwnerKey, rsa2048OwnerCert); err != nil {
 		return err
 	}
-	if err := state.AddOwnerKey(protocol.RsaPkcsKeyType, rsa3072OwnerKey, nil); err != nil {
+	if err := state.AddOwnerKey(protocol.RsaPkcsKeyType, rsa3072OwnerKey, rsa3072OwnerCert); err != nil {
 		return err
 	}
-	if err := state.AddOwnerKey(protocol.RsaPssKeyType, rsa3072OwnerKey, nil); err != nil {
+	if err := state.AddOwnerKey(protocol.RsaPssKeyType, rsa3072OwnerKey, rsa3072OwnerCert); err != nil {
 		return err
 	}
-	if err := state.AddOwnerKey(protocol.Secp256r1KeyType, ec256OwnerKey, nil); err != nil {
+	if err := state.AddOwnerKey(protocol.Secp256r1KeyType, ec256OwnerKey, ec256OwnerCert); err != nil {
 		return err
 	}
-	if err := state.AddOwnerKey(protocol.Secp384r1KeyType, ec384OwnerKey, nil); err != nil {
+	if err := state.AddOwnerKey(protocol.Secp384r1KeyType, ec384OwnerKey, ec384OwnerCert); err != nil {
 		return err
 	}
 	return nil
 }
 
-func serveHTTP(ctx context.Context, rvInfo [][]protocol.RvInstruction, state *sqlite.DB) error {
+func serveHTTP(ctx context.Context, rvInfo [][]protocol.RvInstruction, state *sqlite.DB, replacementPolicy fdo.VoucherReplacementPolicy) error {
 	// Create FDO responder
-	handler, err := newHandler(ctx, rvInfo, state)
+	handler, err := newHandler(ctx, rvInfo, state, replacementPolicy)
 	if err != nil {
 		return err
 	}
 
 	// Handle messages
 	mux := http.NewServeMux()
-	mux.Handle("POST /fdo/101/msg/{msg}", handler)
+	mux.Handle("POST /fdo/{fdoVer}/msg/{msg}", handler)
 	srv := &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 3 * time.Second,
@@ -292,10 +369,45 @@ func serveHTTP(ctx context.Context, rvInfo [][]protocol.RvInstruction, state *sq
 	defer func() { _ = lis.Close() }()
 	slog.Info("Listening", "local", lis.Addr().String(), "external", extAddr)
 
-	if useTLS {
-		return serveTLS(lis, srv, state.DB())
+	// Start server in goroutine to monitor context cancellation
+	errChan := make(chan error, 1)
+	go func() {
+		if useTLS {
+			errChan <- serveTLS(lis, srv, state.DB())
+		} else {
+			errChan <- srv.Serve(lis)
+		}
+	}()
+
+	// Wait for context cancellation or server error
+	select {
+	case <-ctx.Done():
+		// Graceful shutdown on Ctrl+C
+		slog.Info("Shutting down server...")
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			slog.Error("Server shutdown error", "error", err)
+			return err
+		}
+		slog.Info("Server stopped")
+		return ctx.Err()
+	case err := <-errChan:
+		return err
 	}
-	return srv.Serve(lis)
+}
+
+func doPrintOwnerChain(ctx context.Context, state *sqlite.DB) error {
+	keyType, err := protocol.ParseKeyType(printOwnerChain)
+	if err != nil {
+		return fmt.Errorf("%w: see usage", err)
+	}
+	_, chain, err := state.OwnerKey(ctx, keyType, 3072)
+	if err != nil {
+		return err
+	}
+	fmt.Println(fdo.CertChainToString("CERTIFICATE", chain))
+	return nil
 }
 
 func doPrintOwnerPubKey(ctx context.Context, state *sqlite.DB) error {
@@ -307,6 +419,7 @@ func doPrintOwnerPubKey(ctx context.Context, state *sqlite.DB) error {
 	if err != nil {
 		return err
 	}
+	fmt.Printf("%s\n", fdo.KeyToString(key.Public()))
 	der, err := x509.MarshalPKIXPublicKey(key.Public())
 	if err != nil {
 		return err
@@ -315,6 +428,40 @@ func doPrintOwnerPubKey(ctx context.Context, state *sqlite.DB) error {
 		Type:  "PUBLIC KEY",
 		Bytes: der,
 	})
+}
+
+func doPrintOwnerPrivKey(ctx context.Context, state *sqlite.DB) error {
+	var pemBlock *pem.Block
+	keyType, err := protocol.ParseKeyType(printOwnerPrivKey)
+	if err != nil {
+		return fmt.Errorf("%w: see usage", err)
+	}
+	key, _, err := state.OwnerKey(ctx, keyType, 3072)
+	if err != nil {
+		return err
+	}
+
+	switch k := key.(type) {
+	case *rsa.PrivateKey:
+		der := x509.MarshalPKCS1PrivateKey(k)
+		pemBlock = &pem.Block{
+			Type:  "PRIVATE KEY",
+			Bytes: der,
+		}
+	case *ecdsa.PrivateKey:
+		der, err := x509.MarshalECPrivateKey(k)
+		if err != nil {
+			return err
+		}
+		pemBlock = &pem.Block{
+			Type:  "EC PRIVATE KEY",
+			Bytes: der,
+		}
+	default:
+		return fmt.Errorf("unknown owner key type %T", key)
+	}
+
+	return pem.Encode(os.Stdout, pemBlock)
 }
 
 func doImportVoucher(ctx context.Context, state *sqlite.DB) error {
@@ -463,9 +610,10 @@ func registerRvBlob(ctx context.Context, state *sqlite.DB) error {
 
 	// Register RV blob with RV server
 	refresh, err := (&fdo.TO0Client{
-		Vouchers:  state,
-		OwnerKeys: state,
-	}).RegisterBlob(ctx, tlsTransport(to0Addr, nil), guid, to2Addrs)
+		Vouchers:     state,
+		OwnerKeys:    state,
+		DelegateKeys: state,
+	}).RegisterBlob(ctx, tlsTransport(to0Addr, nil), guid, to2Addrs, rvDelegate)
 	if err != nil {
 		return fmt.Errorf("error performing to0: %w", err)
 	}
@@ -505,8 +653,11 @@ func resell(ctx context.Context, state *sqlite.DB) error {
 
 	// Perform resale protocol
 	extended, err := (&fdo.TO2Server{
-		Vouchers:  state,
-		OwnerKeys: state,
+		Vouchers:        state,
+		OwnerKeys:       state,
+		DelegateKeys:    state,
+		OnboardDelegate: onboardDelegate,
+		RvDelegate:      rvDelegate,
 	}).Resell(ctx, guid, nextOwner, nil)
 	if err != nil {
 		// TODO: If extended != nil, then call AddVoucher to restore state
@@ -530,7 +681,8 @@ func mustMarshal(v any) []byte {
 	return data
 }
 
-func newHandler(ctx context.Context, rvInfo [][]protocol.RvInstruction, state *sqlite.DB) (*transport.Handler, error) {
+//nolint:gocyclo
+func newHandler(ctx context.Context, rvInfo [][]protocol.RvInstruction, state *sqlite.DB, replacementPolicy fdo.VoucherReplacementPolicy) (*transport.Handler, error) {
 	aio := fdo.AllInOne{
 		DIAndOwner:         state,
 		RendezvousAndOwner: withOwnerAddrs{state, rvInfo},
@@ -576,8 +728,9 @@ func newHandler(ctx context.Context, rvInfo [][]protocol.RvInstruction, state *s
 			RvInfo:               func(context.Context, *fdo.Voucher) ([][]protocol.RvInstruction, error) { return rvInfo, nil },
 		},
 		TO0Responder: &fdo.TO0Server{
-			Session: state,
-			RVBlobs: state,
+			Session:                  state,
+			RVBlobs:                  state,
+			VoucherReplacementPolicy: replacementPolicy,
 		},
 		TO1Responder: &fdo.TO1Server{
 			Session: state,
@@ -588,8 +741,12 @@ func newHandler(ctx context.Context, rvInfo [][]protocol.RvInstruction, state *s
 			Modules:         moduleStateMachines{DB: state, states: make(map[string]*moduleStateMachineState)},
 			Vouchers:        state,
 			OwnerKeys:       state,
+			DelegateKeys:    state,
 			RvInfo:          func(context.Context, fdo.Voucher) ([][]protocol.RvInstruction, error) { return rvInfo, nil },
+			OnboardDelegate: onboardDelegate,
+			RvDelegate:      rvDelegate,
 			ReuseCredential: func(context.Context, fdo.Voucher) (bool, error) { return reuseCred, nil },
+			SingleSidedMode: singleSidedWiFi,
 		},
 	}, nil
 }
@@ -689,6 +846,7 @@ func (s moduleStateMachines) NextModule(ctx context.Context) (bool, error) {
 		if err != nil {
 			return false, fmt.Errorf("error getting devmod: %w", err)
 		}
+		fmt.Printf("[DEBUG] Device declared modules: %v\n", modules)
 		next, stop := iter.Pull2(ownerModules(modules))
 		module = &moduleStateMachineState{
 			Next: next,
@@ -761,7 +919,210 @@ func ownerModules(modules []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 			}
 		}
 
-		if cmdDate && slices.Contains(modules, "fdo.command") {
+		if slices.Contains(modules, "fdo.sysconfig") && len(sysconfig) > 0 {
+			sysconfigOwner := &fsim.SysConfigOwner{}
+			for _, param := range sysconfig {
+				parts := strings.SplitN(param, "=", 2)
+				if len(parts) != 2 {
+					log.Fatalf("invalid sysconfig parameter %q: expected key=value format", param)
+				}
+				sysconfigOwner.AddParameter(parts[0], parts[1])
+			}
+			if !yield("fdo.sysconfig", sysconfigOwner) {
+				return
+			}
+		}
+
+		if slices.Contains(modules, "fdo.payload") && (payloadFile != "" || len(payloadFiles) > 0) {
+			payloadOwner := &fsim.PayloadOwner{}
+
+			// Handle multi-file NAK testing mode (with RequireAck)
+			if len(payloadFiles) > 0 {
+				for _, payloadSpec := range payloadFiles {
+					parts := strings.SplitN(payloadSpec, ":", 2)
+					if len(parts) != 2 {
+						log.Fatalf("invalid payload specification %q: expected type:file format", payloadSpec)
+					}
+					mimeType, filePath := parts[0], parts[1]
+					data, err := os.ReadFile(filePath)
+					if err != nil {
+						log.Fatalf("error reading payload file %q: %v", filePath, err)
+					}
+					payloadOwner.AddPayloadWithAck(mimeType, filepath.Base(filePath), data, nil)
+					log.Printf("Payload: Added payload with RequireAck: type=%s, file=%s", mimeType, filePath)
+				}
+			} else {
+				// Single file mode (no RequireAck)
+				data, err := os.ReadFile(payloadFile)
+				if err != nil {
+					log.Fatalf("error reading payload file %q: %v", payloadFile, err)
+				}
+				payloadOwner.AddPayload(payloadMimeType, filepath.Base(payloadFile), data, nil)
+			}
+
+			if !yield("fdo.payload", payloadOwner) {
+				return
+			}
+		}
+
+		if slices.Contains(modules, "fdo.bmo") && (bmoFile != "" || len(bmoFiles) > 0) {
+			bmoOwner := &fsim.BMOOwner{}
+
+			// Handle multi-file NAK testing mode (with RequireAck)
+			if len(bmoFiles) > 0 {
+				for _, bmoSpec := range bmoFiles {
+					parts := strings.SplitN(bmoSpec, ":", 2)
+					if len(parts) != 2 {
+						log.Fatalf("invalid BMO specification %q: expected type:file format", bmoSpec)
+					}
+					imageType, filePath := parts[0], parts[1]
+					data, err := os.ReadFile(filePath)
+					if err != nil {
+						log.Fatalf("error reading BMO file %q: %v", filePath, err)
+					}
+					bmoOwner.AddImageWithAck(imageType, filepath.Base(filePath), data, nil)
+					log.Printf("BMO: Added image with RequireAck: type=%s, file=%s", imageType, filePath)
+				}
+			} else {
+				// Single file mode (no RequireAck)
+				data, err := os.ReadFile(bmoFile)
+				if err != nil {
+					log.Fatalf("error reading BMO file %q: %v", bmoFile, err)
+				}
+				bmoOwner.AddImage(bmoImageType, filepath.Base(bmoFile), data, nil)
+			}
+
+			if !yield("fdo.bmo", bmoOwner) {
+				return
+			}
+		}
+
+		if slices.Contains(modules, "fdo.wifi") && wifiConfigFile != "" {
+			wifiOwner, err := loadWiFiConfig(wifiConfigFile)
+			if err != nil {
+				log.Fatalf("error loading WiFi config from %q: %v", wifiConfigFile, err)
+			}
+			if !yield("fdo.wifi", wifiOwner) {
+				return
+			}
+		}
+
+		if slices.Contains(modules, "fdo.credentials") {
+			var provisionedCreds []fsim.ProvisionedCredential
+			for _, credSpec := range credentials {
+				parts := strings.SplitN(credSpec, ":", 4)
+				if len(parts) < 3 {
+					log.Fatalf("invalid credential specification %q: expected type:id:data[:endpoint_url] format", credSpec)
+				}
+				credType, _, credData := parts[0], parts[1], parts[2]
+				var endpointURL string
+				if len(parts) == 4 {
+					endpointURL = parts[3]
+				}
+
+				// Convert string credential type to integer
+				var credTypeInt int
+				switch credType {
+				case "password":
+					credTypeInt = fsim.CredentialTypePassword
+				case "api_key", "oauth2_client_secret", "bearer_token":
+					credTypeInt = fsim.CredentialTypeSecret
+				default:
+					log.Fatalf("invalid credential type %q: must be one of password, api_key, oauth2_client_secret, bearer_token", credType)
+				}
+
+				// For password type, create metadata with username
+				var data []byte
+				var metadata map[string]any
+				if credType == "password" {
+					// credData format for password: "username:password"
+					userPass := strings.SplitN(credData, ":", 2)
+					if len(userPass) == 2 {
+						metadata = map[string]any{"username": userPass[0]}
+						data = []byte(userPass[1])
+					} else {
+						data = []byte(credData)
+					}
+				} else {
+					data = []byte(credData)
+				}
+
+				provisionedCreds = append(provisionedCreds, fsim.ProvisionedCredential{
+					CredentialID:   credTypeInt,
+					CredentialData: data,
+					Metadata:       metadata,
+					EndpointURL:    endpointURL,
+				})
+			}
+
+			credentialsOwner := fsim.NewCredentialsOwner(provisionedCreds)
+
+			// Add public key requests (Registered Credentials flow)
+			for _, reqSpec := range pubkeyRequests {
+				parts := strings.SplitN(reqSpec, ":", 3)
+				if len(parts) < 2 {
+					log.Fatalf("invalid pubkey request specification %q: expected type:id[:endpoint_url] format", reqSpec)
+				}
+				credType, credID := parts[0], parts[1]
+				var endpointURL string
+				if len(parts) == 3 {
+					endpointURL = parts[2]
+				}
+				// Convert SSH key type to integer
+				var credTypeInt int
+				switch credType {
+				case "ssh-rsa":
+					credTypeInt = fsim.CredentialTypeSSHPublicKey
+				default:
+					credTypeInt = fsim.CredentialTypeSSHPublicKey
+				}
+				credentialsOwner.PublicKeyRequests = append(credentialsOwner.PublicKeyRequests, fsim.PublicKeyRequest{
+					CredentialID: credTypeInt,
+					Metadata:     map[string]any{"credential_id": credID},
+					EndpointURL:  endpointURL,
+				})
+			}
+
+			// Add handler for receiving public keys from device
+			credentialsOwner.OnPublicKeyReceived = func(credentialID string, credentialType int, publicKey []byte, metadata map[string]any) error {
+				fmt.Printf("[fdo.credentials] Received public key registration:\n")
+				fmt.Printf("  ID:   %s\n", credentialID)
+				fmt.Printf("  Type: %d\n", credentialType)
+				if metadata != nil {
+					fmt.Printf("  Metadata: %v\n", metadata)
+				}
+				fmt.Printf("  Key:  %s (length: %d bytes)\n", string(publicKey), len(publicKey))
+				return nil
+			}
+
+			// Add handler for enrollment requests (CSR signing, etc.)
+			credentialsOwner.OnEnrollmentRequest = func(credentialID string, credentialType int, requestData []byte, metadata map[string]any) (responseData []byte, responseMetadata map[string]any, err error) {
+				fmt.Printf("[fdo.credentials] SERVER received CSR:\n")
+				fmt.Printf("  ID:   %s\n", credentialID)
+				fmt.Printf("  Type: %d\n", credentialType)
+				fmt.Printf("  CSR:  %s\n", string(requestData))
+
+				// For demo purposes, return a fake signed certificate + CA bundle
+				fakeCert := fmt.Sprintf("-----BEGIN CERTIFICATE-----\nSigned certificate for %s\n-----END CERTIFICATE-----\n", credentialID)
+				fakeCA := "-----BEGIN CERTIFICATE-----\nFake CA Certificate\n-----END CERTIFICATE-----\n"
+				responseData = []byte(fakeCert + fakeCA)
+
+				fmt.Printf("[fdo.credentials] SERVER sending signed cert + CA:\n")
+				fmt.Printf("  Cert: %d bytes\n", len(fakeCert))
+				fmt.Printf("  CA:   %d bytes\n", len(fakeCA))
+
+				responseMeta := map[string]any{
+					"cert_format":        "pem",
+					"ca_bundle_included": true,
+				}
+				return responseData, responseMeta, nil
+			}
+			if !yield("fdo.credentials", credentialsOwner) {
+				return
+			}
+		}
+
+		if slices.Contains(modules, "fdo.command") {
 			if !yield("fdo.command", &fsim.RunCommand{
 				Command: "date",
 				Args:    []string{"+%s"},
@@ -772,4 +1133,83 @@ func ownerModules(modules []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 			}
 		}
 	}
+}
+
+// WiFiConfigEntry represents a single WiFi network in the JSON config file
+type WiFiConfigEntry struct {
+	Version    string `json:"version"`
+	NetworkID  string `json:"network_id"`
+	SSID       string `json:"ssid"`
+	AuthType   int    `json:"auth_type"`
+	Password   string `json:"password"`
+	TrustLevel int    `json:"trust_level"`
+	NeedsCert  bool   `json:"needs_cert"`
+}
+
+// loadWiFiConfig loads WiFi network configurations from a JSON file
+func loadWiFiConfig(filePath string) (*fsim.WiFiOwner, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read WiFi config file: %w", err)
+	}
+
+	var entries []WiFiConfigEntry
+	if err := json.Unmarshal(data, &entries); err != nil {
+		return nil, fmt.Errorf("failed to parse WiFi config JSON: %w", err)
+	}
+
+	wifiOwner := &fsim.WiFiOwner{}
+	for _, entry := range entries {
+		network := &fsim.WiFiNetwork{
+			Version:    entry.Version,
+			NetworkID:  entry.NetworkID,
+			SSID:       entry.SSID,
+			AuthType:   entry.AuthType,
+			Password:   []byte(entry.Password),
+			TrustLevel: entry.TrustLevel,
+		}
+		wifiOwner.AddNetwork(network)
+
+		// If this is an enterprise network that needs a certificate, add a fake cert and CA bundle
+		if entry.NeedsCert && entry.AuthType == 3 {
+			fakeCert := []byte("-----BEGIN CERTIFICATE-----\n" +
+				"MIIDXTCCAkWgAwIBAgIJAKL0UG+mRKKzMA0GCSqGSIb3DQEBCwUAMEUxCzAJBgNV\n" +
+				"BAYTAkFVMRMwEQYDVQQIDApTb21lLVN0YXRlMSEwHwYDVQQKDBhJbnRlcm5ldCBX\n" +
+				"aWRnaXRzIFB0eSBMdGQwHhcNMjQwMTAxMDAwMDAwWhcNMjUwMTAxMDAwMDAwWjBF\n" +
+				"-----END CERTIFICATE-----\n")
+
+			cert := fsim.WiFiCertificate{
+				NetworkID: entry.NetworkID,
+				SSID:      entry.SSID,
+				CertRole:  0, // client certificate
+				CertData:  fakeCert,
+				Metadata: map[string]any{
+					"cert_type": "x509",
+					"format":    "pem",
+				},
+			}
+			wifiOwner.AddCertificate(cert)
+
+			// Add fake CA bundle (root CA certificate)
+			fakeCA := []byte("-----BEGIN CERTIFICATE-----\n" +
+				"MIIDQTCCAimgAwIBAgITBmyfz5m/jAo54vB4ikPmljZbyjANBgkqhkiG9w0BAQsF\n" +
+				"ADA5MQswCQYDVQQGEwJVUzEPMA0GA1UEChMGQW1hem9uMRkwFwYDVQQDExBBbWF6\n" +
+				"b24gUm9vdCBDQSAxMB4XDTE1MDUyNjAwMDAwMFoXDTM4MDExNzAwMDAwMFowOTEL\n" +
+				"MAkGA1UEBhMCVVMxDzANBgNVBAoTBkFtYXpvbjEZMBcGA1UEAxMQQW1hem9uIFJv\n" +
+				"-----END CERTIFICATE-----\n")
+
+			caBundle := fsim.WiFiCABundle{
+				NetworkID: entry.NetworkID,
+				BundleID:  "root-ca",
+				CAData:    fakeCA,
+				Metadata: map[string]any{
+					"cert_type": "x509",
+					"format":    "pem",
+				},
+			}
+			wifiOwner.AddCABundle(caBundle)
+		}
+	}
+
+	return wifiOwner, nil
 }

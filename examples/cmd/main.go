@@ -29,7 +29,7 @@ func init() {
 func usage() {
 	_, _ = fmt.Fprintf(os.Stderr, `
 Usage:
-  fdo [global_options] [client|server] [--] [options]
+  fdo [global_options] [client|server|delegate|attestpayload] [--] [options]
 
 Global options:
 %s
@@ -37,6 +37,14 @@ Client options:
 %s
 Server options:
 %s
+Delegate options:
+%s
+Attested Payload options:
+%s
+
+"delegate help" for more delegate commands
+"attestpayload help" for attested payload commands
+
 Key types:
   - RSA2048RESTR
   - RSAPKCS
@@ -62,7 +70,7 @@ Key exchange suites:
   - ASYMKEX3072
   - ECDH256
   - ECDH384
-`, options(flags), options(clientFlags), options(serverFlags))
+`, options(flags), options(clientFlags), options(serverFlags), options(delegateFlags), options(attestPayloadFlags))
 }
 
 func options(flags *flag.FlagSet) string {
@@ -76,7 +84,10 @@ func options(flags *flag.FlagSet) string {
 	return buf.String()
 }
 
+//nolint:gocyclo
 func main() {
+	fmt.Println("=== STUPID DEBUG: MAIN FUNCTION CALLED ===")
+
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		usage()
 		os.Exit(1)
@@ -111,6 +122,20 @@ func main() {
 		}
 		if err := server(ctx); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "server error: %v\n", err)
+			os.Exit(2)
+		}
+	case "delegate", "d", "del":
+		if err := delegateFlags.Parse(args); err != nil {
+			usage()
+			os.Exit(1)
+		}
+		if err := delegate(delegateFlags.Args()); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "delegate error: %v\n", err)
+			os.Exit(2)
+		}
+	case "attestpayload", "ap":
+		if err := attestPayload(args); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "attestpayload error: %v\n", err)
 			os.Exit(2)
 		}
 	default:

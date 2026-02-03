@@ -10,7 +10,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -33,10 +32,56 @@ import (
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
 
-// COSE claims for TO2ProveOVHdrUnprotectedHeaders
+// AttestationMode indicates the type of attestation performed during TO2.
+type AttestationMode int
+
+const (
+	// ModeFullOwner is the normal mutual attestation mode where both device
+	// and owner prove their identities. All FSIMs are available.
+	ModeFullOwner AttestationMode = iota
+
+	// ModeSingleSided is a restricted mode where the device proves its identity
+	// (via voucher) but the owner does not prove ownership. This is indicated
+	// by algorithm=0 and empty signature in ProveOVHdr. In this mode:
+	// - Only devmod and fdo.wifi FSIMs are available
+	// - devmod reports minimal information (no serial, device type, etc.)
+	// - All trust levels are downgraded to 0 (onboard-only)
+	ModeSingleSided
+)
+
+// String returns a human-readable name for the attestation mode.
+func (m AttestationMode) String() string {
+	switch m {
+	case ModeFullOwner:
+		return "full-owner"
+	case ModeSingleSided:
+		return "single-sided"
+	default:
+		return "unknown"
+	}
+}
+
+// COSE unprotected header labels for TO2.ProveOVHdr
+// These are in the "Reserved for Private Use" space of COSE Header Parameters.
+//
+// TODO: There is an open debate about whether OwnerPubKey and DelegateChain
+// should remain in unprotected headers or be moved into the signed payload.
+// The spec (TO2ProveOVHdrPayload) shows them in the payload, but this
+// implementation keeps them in unprotected headers for consistency with FDO 1.x.
+// Security argument for unprotected headers: these provide verification materials,
+// so if tampered, signature verification fails anyway - the security properties
+// are equivalent whether signed or unsigned.
 var (
-	to2NonceClaim       = cose.Label{Int64: 256}
-	to2OwnerPubKeyClaim = cose.Label{Int64: 257}
+	CUPHNonce         = cose.Label{Int64: 256} // FDO assigned
+	CUPHOwnerPubKey   = cose.Label{Int64: 257} // FDO assigned
+	CUPHDelegateChain = cose.Label{Int64: 258} // FDO assigned - delegate certificate chain
+)
+
+// Aliases for backward compatibility
+var (
+	to2NonceClaim       = CUPHNonce
+	to2OwnerPubKeyClaim = CUPHOwnerPubKey
+	to2DelegateClaim    = CUPHDelegateChain
 )
 
 // TO2Config contains the device credential, including secrets and keys,
@@ -114,6 +159,28 @@ type TO2Config struct {
 	// enabled, TO2 will fail with CredReuseErrCode (102) if reuse is
 	// attempted by the owner service.
 	AllowCredentialReuse bool
+
+	// AllowSingleSided permits the device to accept single-sided attestation
+	// (algorithm=0, empty signature in ProveOVHdr). When single-sided mode is
+	// detected and allowed:
+	// - Owner signature verification is skipped
+	// - Only devmod and fdo.wifi FSIMs are advertised/accepted
+	// - devmod reports minimal information (no identifying data)
+	// - All WiFi trust levels are downgraded to 0 (onboard-only)
+	//
+	// This is used for WiFi bootstrap scenarios where a device needs network
+	// credentials before it can reach the real owner service.
+	AllowSingleSided bool
+
+	// attestationMode is set internally after ProveOVHdr is received.
+	// Use GetAttestationMode() to read this value.
+	attestationMode AttestationMode
+}
+
+// GetAttestationMode returns the attestation mode detected during TO2.
+// This is only valid after ProveOVHdr has been processed.
+func (c *TO2Config) GetAttestationMode() AttestationMode {
+	return c.attestationMode
 }
 
 // TO2 runs the TO2 protocol and returns a DeviceCredential with replaced GUID,
@@ -128,6 +195,8 @@ type TO2Config struct {
 //
 // If the Credential Reuse protocol is allowed and occurs, then the returned
 // device credential will be nil.
+//
+//nolint:gocyclo
 func TO2(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1d, []byte], c TO2Config) (*DeviceCredential, error) {
 	ctx = contextWithErrMsg(ctx)
 
@@ -149,13 +218,13 @@ func TO2(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1
 	//
 	// Results: Replacement ownership voucher, nonces to be retransmitted in
 	// Done/Done2 messages
-	proveDeviceNonce, ownerPublicKey, originalOVH, sess, err := verifyOwner(ctx, transport, to1d, &c)
+	proveDeviceNonce, ownerPublicKey, originalOwnerKey, originalOVH, sess, err := verifyOwner(ctx, transport, to1d, &c)
 	if err != nil {
 		errorMsg(ctx, transport, err)
 		return nil, err
 	}
 	defer sess.Destroy()
-	setupDeviceNonce, partialOVH, err := proveDevice(ctx, transport, proveDeviceNonce, ownerPublicKey, sess, &c)
+	setupDeviceNonce, partialOVH, err := proveDevice(ctx, transport, proveDeviceNonce, ownerPublicKey, originalOwnerKey, sess, &c)
 	if err != nil {
 		errorMsg(ctx, transport, err)
 		return nil, err
@@ -197,13 +266,26 @@ func TO2(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1
 	defer func() { _ = serviceInfoWriter.Close() }()
 
 	// Send devmod KVs in initial ServiceInfo
-	go c.Devmod.Write(ctx, c.DeviceModules, sendMTU, serviceInfoWriter)
+	// In single-sided mode, only advertise devmod and fdo.wifi modules
+	var moduleFilter func(string) bool
+	if c.attestationMode == ModeSingleSided {
+		slog.Info("Single-sided mode: filtering modules to devmod and fdo.wifi only")
+		moduleFilter = func(moduleName string) bool {
+			return moduleName == "devmod" || moduleName == "fdo.wifi"
+		}
+	}
+	go c.Devmod.WriteFiltered(ctx, c.DeviceModules, sendMTU, serviceInfoWriter, moduleFilter)
 
 	// Loop, sending and receiving service info until done
 	if err := exchangeServiceInfo(ctx, transport, proveDeviceNonce, setupDeviceNonce, sendMTU, serviceInfoReader, sess, &c); err != nil {
 		errorMsg(ctx, transport, err)
 		return nil, err
 	}
+
+	// Emit TO2 completed event with attestation mode
+	// For single-sided mode, this will also emit EventTypeTO2SingleSidedComplete
+	credReuse := replacementOVH == nil
+	EmitTO2Completed(ctx, c.Cred.GUID, credReuse, c.attestationMode)
 
 	// If using the Credential Reuse protocol the device credential is not updated
 	if replacementOVH == nil {
@@ -279,30 +361,57 @@ func stopDevicePlugins(modules *deviceModuleMap) {
 // Verify owner by sending HelloDevice and validating the response, as well as
 // all ownership voucher entries, which are retrieved iteratively with
 // subsequence requests.
-func verifyOwner(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1d, []byte], c *TO2Config) (protocol.Nonce, crypto.PublicKey, *VoucherHeader, kex.Session, error) {
+func verifyOwner(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1d, []byte], c *TO2Config) (protocol.Nonce, crypto.PublicKey, crypto.PublicKey, *VoucherHeader, kex.Session, error) {
 	proveDeviceNonce, info, sess, err := sendHelloDevice(ctx, transport, c)
 	if err != nil {
-		return protocol.Nonce{}, nil, nil, nil, err
+		return protocol.Nonce{}, nil, nil, nil, nil, err
 	}
+
+	// Store the attestation mode detected from ProveOVHdr
+	c.attestationMode = info.AttestationMode
+
 	if !c.KeyExchange.Valid(c.Key.Public(), info.PublicKeyToValidate) {
 		sess.Destroy()
-		return protocol.Nonce{}, nil, nil, nil, fmt.Errorf(
+		return protocol.Nonce{}, nil, nil, nil, nil, fmt.Errorf(
 			"key exchange %s is invalid for the device and owner attestation types",
 			c.KeyExchange,
 		)
 	}
 	if !kex.Available(c.KeyExchange, c.CipherSuite) {
 		sess.Destroy()
-		return protocol.Nonce{}, nil, nil, nil, fmt.Errorf("unsupported key exchange/cipher suite")
+		return protocol.Nonce{}, nil, nil, nil, nil, fmt.Errorf("unsupported key exchange/cipher suite")
 	}
 	if err := verifyVoucher(ctx, transport, to1d, info, c); err != nil {
 		sess.Destroy()
-		return protocol.Nonce{}, nil, nil, nil, err
+		return protocol.Nonce{}, nil, nil, nil, nil, err
 	}
-	return proveDeviceNonce, info.PublicKeyToValidate, &info.OVH, sess, nil
+	return proveDeviceNonce, info.PublicKeyToValidate, info.OriginalOwnerKey, &info.OVH, sess, nil
 }
 
-func verifyVoucher(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1d, []byte], info *ovhValidationContext, c *TO2Config) error {
+// Verify Voucher - using Transport to get entries
+func verifyVoucher(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1d, []byte], info *OvhValidationContext, c *TO2Config) error {
+	// If a delegate is used, verify the delegate chain is signed by the original owner.
+	// This is critical security: without this check, an attacker could present a
+	// self-signed delegate certificate and the client would trust it.
+	if info.DelegateChain != nil {
+		chain, err := info.DelegateChain.Chain()
+		if err != nil {
+			captureErr(ctx, protocol.InvalidMessageErrCode, "")
+			return fmt.Errorf("error parsing delegate chain: %w", err)
+		}
+		if err := VerifyDelegateChain(chain, &info.OriginalOwnerKey, nil); err != nil {
+			// Check if this is a CertificateValidationError for detailed error reporting
+			if certErr, ok := err.(*CertificateValidationError); ok {
+				// Send detailed certificate validation error to client
+				errorMsg := certErr.ToProtocolErrorMessage()
+				captureErr(ctx, errorMsg.Code, errorMsg.ErrString)
+				return fmt.Errorf("delegate chain verification failed: %w", certErr)
+			}
+			captureErr(ctx, protocol.InvalidMessageErrCode, "")
+			return fmt.Errorf("delegate chain verification failed: %w", err)
+		}
+	}
+
 	// Construct ownership voucher from parts received from the owner service
 	var entries []cose.Sign1Tag[VoucherEntryPayload, []byte]
 	for i := range info.NumVoucherEntries {
@@ -318,62 +427,15 @@ func verifyVoucher(ctx context.Context, transport Transport, to1d *cose.Sign1[pr
 		Entries: entries,
 	}
 
-	// Verify ownership voucher header
-	if err := ov.VerifyHeader(c.HmacSha256, c.HmacSha384); err != nil {
+	if err := ov.VerifyCrypto(VerifyOptions{
+		HmacSha256:         c.HmacSha256,
+		HmacSha384:         c.HmacSha384,
+		MfgPubKeyHash:      c.Cred.PublicKeyHash,
+		OwnerPubToValidate: info.PublicKeyToValidate,
+		To1d:               to1d,
+	}); err != nil {
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
-		return fmt.Errorf("bad ownership voucher header from TO2.ProveOVHdr: %w", err)
-	}
-
-	// Verify that the owner service corresponds to the most recent device
-	// initialization performed by checking that the voucher header has a GUID
-	// and/or manufacturer key corresponding to the stored device credentials.
-	if err := ov.VerifyManufacturerKey(c.Cred.PublicKeyHash); err != nil {
-		captureErr(ctx, protocol.InvalidMessageErrCode, "")
-		return fmt.Errorf("bad ownership voucher header from TO2.ProveOVHdr: manufacturer key: %w", err)
-	}
-
-	// Verify each entry in the voucher's list by performing iterative
-	// signature and hash (header and GUID/devInfo) checks.
-	if err := ov.VerifyEntries(); err != nil {
-		captureErr(ctx, protocol.InvalidMessageErrCode, "")
-		return fmt.Errorf("bad ownership voucher entries from TO2.ProveOVHdr: %w", err)
-	}
-
-	// Ensure that the voucher entry chain ends with given owner key.
-	//
-	// Note that this check is REQUIRED in this case, because the the owner public
-	// key from the ProveOVHdr message's unprotected headers is used to
-	// validate its COSE signature. If the public key were not to match the
-	// last entry of the voucher, then it would not be known that ProveOVHdr
-	// was signed by the intended owner service.
-	ownerPub := ov.Header.Val.ManufacturerKey
-	if len(ov.Entries) > 0 {
-		ownerPub = ov.Entries[len(ov.Entries)-1].Payload.Val.PublicKey
-	}
-	expectedOwnerPub, err := ownerPub.Public()
-	if err != nil {
-		return fmt.Errorf("error parsing last public key of ownership voucher: %w", err)
-	}
-	if !info.PublicKeyToValidate.(interface{ Equal(crypto.PublicKey) bool }).Equal(expectedOwnerPub) {
-		captureErr(ctx, protocol.InvalidMessageErrCode, "")
-		return fmt.Errorf("owner public key did not match last entry in ownership voucher")
-	}
-
-	// If no to1d blob was given, then immmediately return. This will be the
-	// case when RV bypass was used.
-	if to1d == nil {
-		return nil
-	}
-
-	// If the TO1.RVRedirect signature does not verify, the Device must assume
-	// that a man in the middle is monitoring its traffic, and fail TO2
-	// immediately with an error code message.
-	if ok, err := to1d.Verify(expectedOwnerPub, nil, nil); err != nil {
-		captureErr(ctx, protocol.InvalidMessageErrCode, "")
-		return fmt.Errorf("error verifying to1d signature: %w", err)
-	} else if !ok {
-		captureErr(ctx, protocol.InvalidMessageErrCode, "")
-		return fmt.Errorf("%w: to1d signature verification failed", ErrCryptoVerifyFailed)
+		return err
 	}
 
 	return nil
@@ -388,17 +450,21 @@ type helloDeviceMsg struct {
 	SigInfoA             sigInfo
 }
 
-type ovhValidationContext struct {
+// OvhValidationContext holds context for ownership voucher header validation.
+type OvhValidationContext struct {
 	OVH                 VoucherHeader
 	OVHHmac             protocol.Hmac
 	NumVoucherEntries   int
 	PublicKeyToValidate crypto.PublicKey
+	OriginalOwnerKey    crypto.PublicKey
+	DelegateChain       *protocol.PublicKey
+	AttestationMode     AttestationMode // ModeFullOwner or ModeSingleSided
 }
 
 // HelloDevice(60) -> ProveOVHdr(61)
 //
 //nolint:gocyclo // This is very complex validation that is better understood linearly
-func sendHelloDevice(ctx context.Context, transport Transport, c *TO2Config) (protocol.Nonce, *ovhValidationContext, kex.Session, error) {
+func sendHelloDevice(ctx context.Context, transport Transport, c *TO2Config) (protocol.Nonce, *OvhValidationContext, kex.Session, error) {
 	// Generate a new nonce
 	var proveOVNonce protocol.Nonce
 	if _, err := rand.Read(proveOVNonce[:]); err != nil {
@@ -471,22 +537,59 @@ func sendHelloDevice(ctx context.Context, transport Transport, c *TO2Config) (pr
 		return protocol.Nonce{}, nil, nil, fmt.Errorf("owner pubkey unprotected header from TO2.ProveOVHdr could not be unmarshaled: %w", err)
 	}
 
+	// Parse delegate public key (if presented)
+	var delegatePubKey protocol.PublicKey
+	var delegateFound bool
+
+	if delegateFound, err = proveOVHdr.Unprotected.Parse(to2DelegateClaim, &delegatePubKey); err != nil {
+		captureErr(ctx, protocol.InvalidMessageErrCode, "")
+		return protocol.Nonce{}, nil, nil, fmt.Errorf("delegate pubkey unprotected header missing from TO2.ProveOVHdr response message: %w", err)
+	}
+
+	// Detect single-sided attestation mode: algorithm=0 and empty signature
+	// In single-sided mode, the owner does not prove ownership - only the device
+	// proves its identity (via the voucher). This is used for WiFi bootstrap.
+	attestationMode := ModeFullOwner
+	var sigAlg cose.SignatureAlgorithm
+	algFound, _ := proveOVHdr.Protected.Parse(cose.AlgLabel, &sigAlg)
+	if (!algFound || sigAlg == 0) && len(proveOVHdr.Signature) == 0 {
+		if !c.AllowSingleSided {
+			captureErr(ctx, protocol.InvalidMessageErrCode, "")
+			return protocol.Nonce{}, nil, nil, fmt.Errorf("single-sided attestation not allowed by client configuration")
+		}
+		attestationMode = ModeSingleSided
+		slog.Info("Single-sided attestation detected", "mode", attestationMode)
+	}
+
 	// Validate response signature and nonce. While the payload signature
 	// verification is performed using the untrusted owner public key from the
 	// headers, this is acceptable, because the owner public key will be
 	// subsequently verified when the voucher entry chain is built and
 	// verified.
-	key, err := ownerPubKey.Public()
+
+	var key crypto.PublicKey
+	if delegateFound {
+		key, err = delegatePubKey.Public()
+
+	} else {
+		key, err = ownerPubKey.Public()
+	}
 	if err != nil {
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
 		return protocol.Nonce{}, nil, nil, fmt.Errorf("error parsing owner public key to verify TO2.ProveOVHdr payload signature: %w", err)
 	}
-	if ok, err := proveOVHdr.Verify(key, nil, nil); err != nil {
-		captureErr(ctx, protocol.InvalidMessageErrCode, "")
-		return protocol.Nonce{}, nil, nil, fmt.Errorf("error verifying TO2.ProveOVHdr payload signature: %w", err)
-	} else if !ok {
-		captureErr(ctx, protocol.InvalidMessageErrCode, "")
-		return protocol.Nonce{}, nil, nil, fmt.Errorf("%w: TO2.ProveOVHdr payload signature verification failed", ErrCryptoVerifyFailed)
+
+	// Skip signature verification in single-sided mode (algorithm=0 means no signature)
+	if attestationMode == ModeFullOwner {
+		if ok, err := proveOVHdr.Verify(key, nil, nil); err != nil {
+			captureErr(ctx, protocol.InvalidMessageErrCode, "")
+			return protocol.Nonce{}, nil, nil, fmt.Errorf("error verifying TO2.ProveOVHdr payload signature: %w", err)
+		} else if !ok {
+			captureErr(ctx, protocol.InvalidMessageErrCode, "")
+			return protocol.Nonce{}, nil, nil, fmt.Errorf("TO2.ProveOVHdr payload signature verification failed: %w", ErrCryptoVerifyFailed)
+		}
+	} else {
+		slog.Debug("Skipping owner signature verification in single-sided mode")
 	}
 	if proveOVHdr.Payload.Val.NonceTO2ProveOV != proveOVNonce {
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
@@ -513,12 +616,31 @@ func sendHelloDevice(ctx context.Context, transport Transport, c *TO2Config) (pr
 		return protocol.Nonce{}, nil, nil, fmt.Errorf("nonce unprotected header from TO2.ProveOVHdr could not be unmarshaled: %w", err)
 	}
 
+	var DelegateChain *protocol.PublicKey
+	originalOwnerKey, err := ownerPubKey.Public()
+	if err != nil {
+		captureErr(ctx, protocol.InvalidMessageErrCode, "")
+		return protocol.Nonce{}, nil, nil, fmt.Errorf("error re-parsing owner public key to verify TO2.ProveOVHdr payload signature: %w", err)
+	}
+
+	// When a delegate is used, PublicKeyToValidate must be the original owner key
+	// (from the voucher chain), not the delegate key. The delegate key is only
+	// used for signature verification.
+	publicKeyToValidate := key
+	if delegateFound {
+		DelegateChain = &delegatePubKey
+		publicKeyToValidate = originalOwnerKey
+	}
+
 	return cuphNonce,
-		&ovhValidationContext{
+		&OvhValidationContext{
 			OVH:                 proveOVHdr.Payload.Val.OVH.Val,
 			OVHHmac:             proveOVHdr.Payload.Val.OVHHmac,
 			NumVoucherEntries:   int(proveOVHdr.Payload.Val.NumOVEntries),
-			PublicKeyToValidate: key,
+			PublicKeyToValidate: publicKeyToValidate,
+			OriginalOwnerKey:    originalOwnerKey,
+			DelegateChain:       DelegateChain,
+			AttestationMode:     attestationMode,
 		},
 		// The key exchange parameter is zeroed and a copy used to initialize
 		// the key exchange session (which has its own Destroy method), because
@@ -592,12 +714,49 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 	if err != nil {
 		return nil, err
 	}
+
 	expectedCUPHOwnerKey, err := ov.OwnerPublicKey()
 	if err != nil {
 		return nil, fmt.Errorf("error parsing owner public key from voucher: %w", err)
 	}
-	if !ownerKey.Public().(interface{ Equal(crypto.PublicKey) bool }).Equal(expectedCUPHOwnerKey) {
-		return nil, fmt.Errorf("owner key to be used for CUPHOwnerKey does not match voucher")
+	var delegateKey crypto.Signer
+	var delegateChain *protocol.PublicKey
+
+	if s.OnboardDelegate != "" {
+		OnboardDelegateName := strings.ReplaceAll(s.OnboardDelegate, "=", (*ownerPublicKey).Type.KeyString())
+		dk, chain, err := s.DelegateKeys.DelegateKey(OnboardDelegateName)
+		if err != nil {
+			return nil, fmt.Errorf("delegate chain %q not found: %w", OnboardDelegateName, err)
+		}
+		// Get key type from the delegate certificate's public key (leaf cert)
+		delegateKeyType, err := protocol.KeyTypeFromPublicKey(chain[0].PublicKey)
+		if err != nil {
+			return nil, fmt.Errorf("error determining delegate key type: %w", err)
+		}
+		delegateChain, err = protocol.NewPublicKey(delegateKeyType, chain, false)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal delegate chain in proveOVHdr: %w", err)
+		}
+		//chain,err1 := delegatePublicKey.Chain()
+
+		// Verify delegate chain is signed by owner and has any onboard permission
+		err = VerifyDelegateChain(chain, &expectedCUPHOwnerKey, nil)
+		if err != nil {
+			return nil, fmt.Errorf("cert chain verification failed: %w", err)
+		}
+		// Check for any fdo-ekt-permit-onboard-* permission
+		if !DelegateCanOnboard(chain) {
+			return nil, fmt.Errorf("delegate certificate does not have any fdo-ekt-permit-onboard-* permission")
+		}
+
+		// Sign with delegate key instead of owner key (below)
+		ownerKey = dk
+		delegateKey = dk
+	} else {
+		// Make sure the server's ("owner") key matches the one in the voucher
+		if !ownerKey.Public().(interface{ Equal(crypto.PublicKey) bool }).Equal(expectedCUPHOwnerKey) {
+			return nil, fmt.Errorf("owner key to be used for CUPHOwnerKey does not match voucher")
+		}
 	}
 
 	// Verify voucher using custom configuration option.
@@ -652,13 +811,19 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 		clear(xA)
 		return nil, fmt.Errorf("device sig info has key type %q, must be %q to match manufacturer key", keyType, mfgKeyType)
 	}
-	s1 := cose.Sign1[ovhProof, []byte]{
-		Header: cose.Header{
-			Unprotected: map[cose.Label]any{
-				to2NonceClaim:       proveDeviceNonce,
-				to2OwnerPubKeyClaim: ownerPublicKey,
-			},
+
+	var header = cose.Header{
+		Unprotected: map[cose.Label]any{
+			to2NonceClaim:       proveDeviceNonce,
+			to2OwnerPubKeyClaim: ownerPublicKey,
 		},
+	}
+
+	if delegateKey != nil {
+		header.Unprotected[to2DelegateClaim] = delegateChain //delegatePublicKey
+	}
+	s1 := cose.Sign1[ovhProof, []byte]{
+		Header: header,
 		Payload: cbor.NewByteWrap(ovhProof{
 			OVH:                 ov.Header,
 			NumOVEntries:        uint8(numEntries),
@@ -670,9 +835,19 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 			MaxOwnerMessageSize: 65535, // TODO: Make this configurable and match handler config
 		}),
 	}
-	if err := s1.Sign(ownerKey, nil, nil, opts); err != nil {
-		clear(xA)
-		return nil, fmt.Errorf("error signing TO2.ProveOVHdr payload: %w", err)
+
+	// In single-sided mode, skip signing and use algorithm=0 with empty signature
+	// This signals to the device that owner verification is not performed
+	if s.SingleSidedMode {
+		slog.Info("Single-sided mode: generating unsigned ProveOVHdr", "guid", hello.GUID)
+		// Set empty protected headers (no algorithm) and empty signature
+		s1.Protected = cose.HeaderMap{}
+		s1.Signature = []byte{}
+	} else {
+		if err := s1.Sign(ownerKey, nil, nil, opts); err != nil {
+			clear(xA)
+			return nil, fmt.Errorf("error signing TO2.ProveOVHdr payload: %w", err)
+		}
 	}
 
 	// The lifetime of xA is until the transport has marshaled and sent the proof. Therefore, the
@@ -802,7 +977,7 @@ func (s *TO2Server) ovNextEntry(ctx context.Context, msg io.Reader) (*ovEntry, e
 }
 
 // ProveDevice(64) -> SetupDevice(65)
-func proveDevice(ctx context.Context, transport Transport, proveDeviceNonce protocol.Nonce, ownerPublicKey crypto.PublicKey, sess kex.Session, c *TO2Config) (protocol.Nonce, *VoucherHeader, error) {
+func proveDevice(ctx context.Context, transport Transport, proveDeviceNonce protocol.Nonce, ownerPublicKey crypto.PublicKey, originalOwnerKey crypto.PublicKey, sess kex.Session, c *TO2Config) (protocol.Nonce, *VoucherHeader, error) {
 	// Generate a new nonce
 	var setupDeviceNonce protocol.Nonce
 	if _, err := rand.Read(setupDeviceNonce[:]); err != nil {
@@ -862,7 +1037,10 @@ func proveDevice(ctx context.Context, transport Transport, proveDeviceNonce prot
 			RvInfo:          setupDevice.Payload.Val.RendezvousInfo,
 			ManufacturerKey: setupDevice.Payload.Val.Owner2Key,
 		}
-		if credReuse, err := reuseCredentials(ctx, replacementOVH, ownerPublicKey, c); err != nil || credReuse {
+
+		// If we are using Delgate, sinve ownerPublicKey is now the Delegate key,
+		// we need to reset it back to what was in the OV.
+		if credReuse, err := reuseCredentials(ctx, replacementOVH, originalOwnerKey, c); err != nil || credReuse {
 			return setupDeviceNonce, nil, err
 		}
 		return setupDeviceNonce, replacementOVH, nil
@@ -886,6 +1064,7 @@ func reuseCredentials(ctx context.Context, replacementOVH *VoucherHeader, ownerP
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
 		return false, fmt.Errorf("owner key in TO2.SetupDevice could not be parsed: %w", err)
 	}
+
 	if replacementOVH.GUID != c.Cred.GUID ||
 		!reflect.DeepEqual(replacementOVH.RvInfo, c.Cred.RvInfo) ||
 		!replacementOwnerPublicKey.(interface{ Equal(crypto.PublicKey) bool }).Equal(ownerPublicKey) {
@@ -990,10 +1169,18 @@ func (s *TO2Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1
 	mfgKey := ov.Header.Val.ManufacturerKey
 	keyType, rsaBits := mfgKey.Type, mfgKey.RsaBits()
 	ownerKey, ownerPublicKey, err := s.ownerKey(ctx, keyType, ov.Header.Val.ManufacturerKey.Encoding, rsaBits)
+	sessionOwnerKey := ownerKey
+	if s.OnboardDelegate != "" {
+		OnboardDelegateName := strings.ReplaceAll(s.OnboardDelegate, "=", keyType.KeyString())
+		sessionOwnerKey, _, err = s.DelegateKeys.DelegateKey(OnboardDelegateName)
+	}
 	if err != nil {
 		return nil, err
 	}
-	rsaOwnerPrivateKey, _ := ownerKey.(*rsa.PrivateKey)
+
+	// For the sake of Session Parameters, must use delegate key
+	// But for re-assignment below, must be owner in voucher
+	rsaOwnerPrivateKey, _ := sessionOwnerKey.(*rsa.PrivateKey)
 	if err := sess.SetParameter(xB, rsaOwnerPrivateKey); err != nil {
 		return nil, fmt.Errorf("error completing key exchange: %w", err)
 	}
@@ -1457,168 +1644,33 @@ func sendDeviceServiceInfo(ctx context.Context, transport Transport, msg deviceS
 }
 
 // DeviceServiceInfo(68) -> OwnerServiceInfo(69)
-func (s *TO2Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*ownerServiceInfo, error) { //nolint:gocyclo
+// This is now a thin wrapper that calls the common ServiceInfoProcessor
+func (s *TO2Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*ownerServiceInfo, error) {
 	// Parse request
 	var deviceInfo deviceServiceInfo
 	if err := cbor.NewDecoder(msg).Decode(&deviceInfo); err != nil {
 		return nil, fmt.Errorf("error decoding TO2.DeviceServiceInfo request: %w", err)
 	}
 
-	// Get next owner service info module
-	var moduleName string
-	var module serviceinfo.OwnerModule
-	if devmod, modules, complete, err := s.Session.Devmod(ctx); errors.Is(err, ErrNotFound) || (err == nil && !complete) {
-		moduleName, module = "devmod", &devmodOwnerModule{
-			Devmod:  devmod,
-			Modules: modules,
-		}
-	} else if err != nil {
-		return nil, fmt.Errorf("error getting devmod state: %w", err)
-	} else {
-		var err error
-		moduleName, module, err = s.Modules.Module(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("error getting current service info module: %w", err)
-		}
-
-		// Set the context values that an FSIM expects
-		guid, err := s.Session.GUID(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("error retrieving associated device GUID of proof session: %w", err)
-		}
-		ov, err := s.Vouchers.Voucher(ctx, guid)
-		if err != nil {
-			return nil, fmt.Errorf("error retrieving voucher for device %x: %w", guid, err)
-		}
-		var deviceCertChain []*x509.Certificate
-		if ov.CertChain != nil {
-			deviceCertChain = make([]*x509.Certificate, len(*ov.CertChain))
-			for i, cert := range *ov.CertChain {
-				deviceCertChain[i] = (*x509.Certificate)(cert)
-			}
-		}
-		ctx = serviceinfo.Context(ctx, &devmod, deviceCertChain)
+	// Create processor with server's dependencies
+	processor := &ServiceInfoProcessor{
+		Modules:   s.Modules,
+		Session:   s.Session,
+		Vouchers:  s.Vouchers,
+		OwnerKeys: s.OwnerKeys,
 	}
 
-	// Handle data with owner module
-	unchunked, unchunker := serviceinfo.NewChunkInPipe(len(deviceInfo.ServiceInfo))
-	for _, kv := range deviceInfo.ServiceInfo {
-		if err := unchunker.WriteChunk(kv); err != nil {
-			return nil, fmt.Errorf("error unchunking received device service info: write: %w", err)
-		}
-	}
-	if err := unchunker.Close(); err != nil {
-		return nil, fmt.Errorf("error unchunking received device service info: close: %w", err)
-	}
-	for {
-		key, messageBody, ok := unchunked.NextServiceInfo()
-		if !ok {
-			break
-		}
-		moduleName, messageName, _ := strings.Cut(key, ":")
-		if err := module.HandleInfo(ctx, messageName, messageBody); err != nil {
-			return nil, fmt.Errorf("error handling device service info %q: %w", key, err)
-		}
-		if n, err := io.Copy(io.Discard, messageBody); err != nil {
-			return nil, err
-		} else if n > 0 {
-			return nil, fmt.Errorf(
-				"owner module did not read full body of message '%s:%s'",
-				moduleName, messageName)
-		}
-		if err := messageBody.Close(); err != nil {
-			return nil, fmt.Errorf("error closing unchunked message body for %q: %w", key, err)
-		}
-	}
-
-	// Save devmod state. All devmod messages are "sent by the Device in the
-	// first Device ServiceInfo" but IsMoreServiceInfo may allow it to be sent
-	// over multiple network roundtrips.
-	if devmod, ok := module.(*devmodOwnerModule); ok {
-		if err := s.Session.SetDevmod(ctx, devmod.Devmod, devmod.Modules, false); err != nil {
-			return nil, fmt.Errorf("error storing devmod state: %w", err)
-		}
-	}
-
-	// Allow owner module to produce data unless blocked by device
-	if !deviceInfo.IsMoreServiceInfo {
-		return s.produceOwnerServiceInfo(ctx, moduleName, module)
-	}
-
-	// Store the current module state
-	if devmod, ok := module.(*devmodOwnerModule); ok {
-		if err := s.Session.SetDevmod(ctx, devmod.Devmod, devmod.Modules, false); err != nil {
-			return nil, fmt.Errorf("error storing devmod state: %w", err)
-		}
-	}
-	if modules, ok := s.Modules.(serviceinfo.ModulePersister); ok {
-		if err := modules.PersistModule(ctx, moduleName, module); err != nil {
-			return nil, fmt.Errorf("error persisting service info module %q state: %w", moduleName, err)
-		}
-	}
-
-	return &ownerServiceInfo{
-		IsMoreServiceInfo: false,
-		IsDone:            false,
-		ServiceInfo:       nil,
-	}, nil
-}
-
-// Allow owner module to produce data
-func (s *TO2Server) produceOwnerServiceInfo(ctx context.Context, moduleName string, module serviceinfo.OwnerModule) (*ownerServiceInfo, error) {
-	mtu, err := s.Session.MTU(ctx)
+	// Call the common processor
+	resp, err := processor.ProcessServiceInfo(ctx, &deviceInfo)
 	if err != nil {
-		return nil, fmt.Errorf("error getting max device service info size: %w", err)
+		return nil, err
 	}
 
-	// Get service info produced by the module
-	producer := serviceinfo.NewProducer(moduleName, mtu)
-	explicitBlock, complete, err := module.ProduceInfo(ctx, producer)
-	if err != nil {
-		return nil, fmt.Errorf("error producing owner service info from module: %w", err)
-	}
-	if explicitBlock && complete {
-		slog.Warn("service info module completed but indicated that it had more service info to send", "module", moduleName)
-		explicitBlock = false
-	}
-	serviceInfo := producer.ServiceInfo()
-	if size := serviceinfo.ArraySizeCBOR(serviceInfo); size > int64(mtu) {
-		return nil, fmt.Errorf("owner service info module produced service info exceeding the MTU=%d - 3 (message overhead), size=%d", mtu, size)
-	}
-
-	// Store the current module state
-	if devmod, ok := module.(*devmodOwnerModule); ok {
-		if err := s.Session.SetDevmod(ctx, devmod.Devmod, devmod.Modules, complete); err != nil {
-			return nil, fmt.Errorf("error storing devmod state: %w", err)
-		}
-	}
-	if modules, ok := s.Modules.(serviceinfo.ModulePersister); ok {
-		if err := modules.PersistModule(ctx, moduleName, module); err != nil {
-			return nil, fmt.Errorf("error persisting service info module %q state: %w", moduleName, err)
-		}
-	}
-
-	// Progress the module state machine when the module completes
-	allModulesDone := false
-	if complete {
-		// Cleanup current module
-		if plugin, ok := module.(plugin.Module); ok {
-			stopOwnerPlugin(ctx, moduleName, plugin)
-		}
-
-		// Find out if there will be more modules
-		moreModules, err := s.Modules.NextModule(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("error progressing service info module %q state: %w", moduleName, err)
-		}
-		allModulesDone = !moreModules
-	}
-
-	// Return chunked data
+	// Convert response to 1.0.1 format
 	return &ownerServiceInfo{
-		IsMoreServiceInfo: explicitBlock,
-		IsDone:            allModulesDone,
-		ServiceInfo:       serviceInfo,
+		IsMoreServiceInfo: resp.IsMoreServiceInfo,
+		IsDone:            resp.IsDone,
+		ServiceInfo:       resp.ServiceInfo,
 	}, nil
 }
 

@@ -1,0 +1,21 @@
+
+[0;34m========================================[0m
+[0;34mFDO Example Application Tests[0m
+[0;34m========================================[0m
+Test: payload
+Working directory: /var/bkgdata/go-fdo-merge
+
+[0;34m========================================[0m
+[0;34mTEST: Payload FSIM[0m
+[0;34m========================================[0m
+[1;33m>>> Creating random test file (1KB)[0m
+[0;32m✓ Created test file: test_payload.bin (hash: 09eb370df84724a532c3b6bc84c3d1fcca27418b6e51c6fb3da1c756ea5475e6)[0m
+[1;33m>>> Starting server with flags: -payload-file test_payload.bin -payload-mime application/octet-stream[0m
+[0;32m✓ Server started (PID: 1325461)[0m
+[1;33m>>> Running DI[0m
+[1;33m$ go run ./cmd client -di http://127.0.0.1:9999[0m
+[0;32m✓ DI completed[0m
+[1;33m>>> Running TO1/TO2 with payload transfer[0m
+[1;33m$ go run ./cmd client[0m
+[fdo.payload] BeginPayload called: name=test_payload.bin, mime=application/octet-stream, size=100
+[fdo.payload] BeginPayload successful, buffer allocated

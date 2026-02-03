@@ -4,7 +4,7 @@ go 1.25.0
 
 replace github.com/fido-device-onboard/go-fdo/sqlite => ../sqlite
 
-replace github.com/fido-device-onboard/go-fdo => ..
+replace github.com/fido-device-onboard/go-fdo => ../.
 
 replace github.com/fido-device-onboard/go-fdo/fsim => ../fsim
 

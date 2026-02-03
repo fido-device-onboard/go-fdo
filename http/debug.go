@@ -25,7 +25,7 @@ func tryDebugNotation(b []byte) string {
 }
 
 func debugUnencryptedMessage(msgType uint8, msg any) {
-	if debugEnabled() {
+	if !debugEnabled() {
 		return
 	}
 	body, _ := cbor.Marshal(msg)
@@ -33,7 +33,7 @@ func debugUnencryptedMessage(msgType uint8, msg any) {
 }
 
 func debugDecryptedMessage(msgType uint8, decrypted []byte) {
-	if debugEnabled() {
+	if !debugEnabled() {
 		return
 	}
 	slog.Debug("decrypted response", "msg", msgType, "body", tryDebugNotation(decrypted))
