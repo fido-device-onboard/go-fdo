@@ -165,10 +165,6 @@ func init() {
 }
 
 func client(ctx context.Context) error {
-	if debug {
-		level.Set(slog.LevelDebug)
-	}
-
 	// Perform DI if given a URL
 	if diURL != "" {
 		return di(ctx)

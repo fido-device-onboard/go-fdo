@@ -182,12 +182,6 @@ func validateFiles() error {
 }
 
 func server(ctx context.Context) error { //nolint:gocyclo
-	fmt.Println("=== STUPID DEBUG: SERVER FUNCTION CALLED ===")
-
-	if debug {
-		level.Set(slog.LevelDebug)
-	}
-
 	if dbPath == "" {
 		return errors.New("db flag is required")
 	}

@@ -3,17 +3,6 @@
 
 package main
 
-import (
-	"log/slog"
-	"os"
-
-	"hermannm.dev/devlog"
-)
-
-var level slog.LevelVar
-
-func init() {
-	slog.SetDefault(slog.New(devlog.NewHandler(os.Stdout, &devlog.Options{
-		Level: &level,
-	})))
-}
+// Note: init() function removed to prevent forcing debug logging globally.
+// Applications using this library should set up their own logging configuration.
+// The library respects the application's slog.Default() configuration.

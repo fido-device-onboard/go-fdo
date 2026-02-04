@@ -18,7 +18,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log/slog"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -428,10 +427,6 @@ ownerKeyTypes - See "Key types"
 
 //nolint:gocyclo
 func delegate(args []string) error {
-	if debug {
-		level.Set(slog.LevelDebug)
-	}
-
 	if dbPath == "" {
 		return errors.New("db flag is required")
 	}
