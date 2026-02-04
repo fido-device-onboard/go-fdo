@@ -44,7 +44,8 @@ type DIServer[T any] struct {
 	// Optional callback for before a new voucher is persisted. This
 	// modification only applies to vouchers created with DI. Vouchers created
 	// at the end of TO2 will be persisted unmodified.
-	BeforeVoucherPersist func(context.Context, *Voucher) error
+	// Returns (shouldPersist, error) - if shouldPersist is false, voucher is not stored.
+	BeforeVoucherPersist func(context.Context, *Voucher) (bool, error)
 
 	// Optional callback for immediately after a new voucher is persisted.
 	// There is no guarantee that the device will receive and process the Done

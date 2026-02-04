@@ -384,13 +384,20 @@ func (s *DIServer[T]) diDone(ctx context.Context, msg io.Reader) (struct{}, erro
 		Entries:   nil,
 	}
 	if s.BeforeVoucherPersist != nil {
-		if err := s.BeforeVoucherPersist(ctx, ov); err != nil {
+		shouldPersist, err := s.BeforeVoucherPersist(ctx, ov)
+		if err != nil {
 			return struct{}{}, fmt.Errorf("error in callback before new voucher is persisted: %w", err)
+		}
+		if !shouldPersist {
+			// Skip persistence but still emit DI completed event
+			goto emitCompleted
 		}
 	}
 	if err := s.Vouchers.AddVoucher(ctx, ov); err != nil {
 		return struct{}{}, fmt.Errorf("error storing voucher: %w", err)
 	}
+
+emitCompleted:
 
 	// Emit DI completed event with device GUID and info
 	EmitDICompleted(ctx, ovh.GUID, ovh.DeviceInfo)
