@@ -603,43 +603,6 @@ func (db *DB) SetDeviceSelfInfo(ctx context.Context, info *custom.DeviceMfgInfo)
 	return nil
 }
 
-// DeviceSelfInfo retrieves device info from the current session.
-func (db *DB) DeviceSelfInfo(ctx context.Context) (*custom.DeviceMfgInfo, error) {
-	sessID, ok := db.sessionID(ctx)
-	if !ok {
-		return nil, fdo.ErrInvalidSession
-	}
-
-	var keyType, keyEncoding int
-	var serialNumber, infoString string
-	var csrBytes []byte
-
-	if err := db.query(ctx, "device_info", []string{
-		"key_type", "key_encoding", "serial_number", "info_string", "csr",
-	}, map[string]any{
-		"session": sessID,
-	}, &keyType, &keyEncoding, &serialNumber, &infoString, &csrBytes); err != nil {
-		return nil, err
-	}
-
-	// Check if we found any data
-	if serialNumber == "" && infoString == "" {
-		return nil, fdo.ErrNotFound
-	}
-
-	// For now, skip CSR parsing as it's causing issues
-	// TODO: Fix CSR unmarshaling properly
-	var csr cbor.X509CertificateRequest
-
-	return &custom.DeviceMfgInfo{
-		KeyType:      protocol.KeyType(keyType),
-		KeyEncoding:  protocol.KeyEncoding(keyEncoding),
-		SerialNumber: serialNumber,
-		DeviceInfo:   infoString,
-		CertInfo:     csr,
-	}, nil
-}
-
 func derEncode(certs []*x509.Certificate) (der []byte) {
 	for _, cert := range certs {
 		der = append(der, cert.Raw...)

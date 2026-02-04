@@ -57,7 +57,7 @@ type AllInOne struct {
 // voucher.
 //
 // This function is meant to be used as a callback in DIServer.
-func (aio AllInOne) Extend(ctx context.Context, ov *Voucher) (bool, error) {
+func (aio AllInOne) Extend(ctx context.Context, ov *Voucher) error {
 	if aio.DIAndOwner == nil {
 		panic("DIAndOwner must be set")
 	}
@@ -66,39 +66,39 @@ func (aio AllInOne) Extend(ctx context.Context, ov *Voucher) (bool, error) {
 	keyType, rsaBits := mfgKey.Type, mfgKey.RsaBits()
 	owner, _, err := aio.DIAndOwner.ManufacturerKey(ctx, keyType, rsaBits)
 	if err != nil {
-		return false, fmt.Errorf("auto extend: error getting %s manufacturer key: %w", keyType, err)
+		return fmt.Errorf("auto extend: error getting %s manufacturer key: %w", keyType, err)
 	}
 	nextOwner, _, err := aio.DIAndOwner.OwnerKey(ctx, keyType, rsaBits)
 	if err != nil {
-		return false, fmt.Errorf("auto extend: error getting %s owner key: %w", keyType, err)
+		return fmt.Errorf("auto extend: error getting %s owner key: %w", keyType, err)
 	}
 	switch owner.Public().(type) {
 	case *ecdsa.PublicKey:
 		nextOwner, ok := nextOwner.Public().(*ecdsa.PublicKey)
 		if !ok {
-			return false, fmt.Errorf("auto extend: owner key must be %s", keyType)
+			return fmt.Errorf("auto extend: owner key must be %s", keyType)
 		}
 		extended, err := ExtendVoucher(ov, owner, nextOwner, nil)
 		if err != nil {
-			return false, err
+			return err
 		}
 		*ov = *extended
-		return true, nil
+		return nil
 
 	case *rsa.PublicKey:
 		nextOwner, ok := nextOwner.Public().(*rsa.PublicKey)
 		if !ok {
-			return false, fmt.Errorf("auto extend: owner key must be %s", keyType)
+			return fmt.Errorf("auto extend: owner key must be %s", keyType)
 		}
 		extended, err := ExtendVoucher(ov, owner, nextOwner, nil)
 		if err != nil {
-			return false, err
+			return err
 		}
 		*ov = *extended
-		return true, nil
+		return nil
 
 	default:
-		return false, fmt.Errorf("auto extend: invalid key type %T", owner)
+		return fmt.Errorf("auto extend: invalid key type %T", owner)
 	}
 }
 
