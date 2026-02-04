@@ -647,7 +647,7 @@ func exchangeServiceInfo20(ctx context.Context, transport Transport, proveOVNonc
 			// If device modules produced responses, save them for next request
 			if len(responseKVs) > 0 {
 				pendingResponses = append(pendingResponses, responseKVs...)
-				slog.Info("FDO 2.0 device modules produced responses", "count", len(responseKVs))
+				slog.Debug("FDO 2.0 device modules produced responses", "count", len(responseKVs))
 			}
 
 			// Check if done
@@ -763,7 +763,7 @@ func processOwnerServiceInfo20(ctx context.Context, serviceInfo []*serviceinfo.K
 					Val: buf.Bytes(),
 				})
 			}
-			slog.Info("FDO 2.0 transitioned module", "module", moduleName, "active", newActive)
+			slog.Debug("FDO 2.0 transitioned module", "module", moduleName, "active", newActive)
 			continue
 		}
 
@@ -797,7 +797,7 @@ func processOwnerServiceInfo20(ctx context.Context, serviceInfo []*serviceinfo.K
 		for _, w := range writers {
 			w.Flush()
 		}
-		slog.Info("FDO 2.0 successfully processed message", "module", moduleName, "message", messageName)
+		slog.Debug("FDO 2.0 successfully processed message", "module", moduleName, "message", messageName)
 	}
 	return responseKVs, nil
 }
