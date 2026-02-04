@@ -92,7 +92,10 @@ func (s *DIServer[T]) Respond(ctx context.Context, msgType uint8, msg io.Reader)
 }
 
 // HandleError performs session cleanup before the token is invalidated.
-func (s *DIServer[T]) HandleError(ctx context.Context, errMsg protocol.ErrorMessage) {}
+func (s *DIServer[T]) HandleError(ctx context.Context, errMsg protocol.ErrorMessage) {
+	// Emit DI failed event
+	EmitDIFailed(ctx, fmt.Errorf("DI error: %s", errMsg))
+}
 
 // TO0Server implements the TO0 protocol.
 type TO0Server struct {

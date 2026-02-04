@@ -393,13 +393,156 @@ fdo.RegisterEventHandler(NewRVMonitor(db, alerting))
 
 A manufacturing service needs to:
 
-- Track voucher creation
+- Track voucher creation and device initialization
 - Monitor DI success rates by production line
 - Integrate with MES (Manufacturing Execution System)
+- Capture device GUIDs for inventory management
+- Real-time monitoring of production line health
 
 ```go
 fdo.RegisterEventHandler(NewManufacturingIntegration(mes, metrics))
 ```
+
+#### DI Events for Manufacturing Systems
+
+The DI (Device Initialization) events are particularly valuable for manufacturing systems doing their own DI implementation:
+
+**Key DI Events:**
+- `EventTypeDIStarted` - Device begins initialization (useful for tracking start times)
+- `EventTypeDICompleted` - Device successfully initialized with GUID and device info
+- `EventTypeDIFailed` - DI failed with detailed error information
+
+**Manufacturing Use Cases:**
+
+1. **Production Line Tracking:**
+```go
+type ManufacturingTracker struct {
+    productionLineID string
+    mes             *ManufacturingExecutionSystem
+    metrics         *ProductionMetrics
+}
+
+func (m *ManufacturingTracker) HandleEvent(ctx context.Context, event fdo.Event) {
+    switch event.Type {
+    case fdo.EventTypeDIStarted:
+        // Track when device enters DI station
+        m.metrics.DeviceStarted(event.Timestamp)
+        
+    case fdo.EventTypeDICompleted:
+        if event.GUID != nil {
+            // Success: Record device GUID and update inventory
+            deviceGUID := fmt.Sprintf("%x", *event.GUID)
+            
+            // Extract device info for manufacturing records
+            if data, ok := event.Data.(fdo.DIEventData); ok {
+                m.mes.RecordDeviceInitialization(&DeviceRecord{
+                    GUID:         deviceGUID,
+                    DeviceInfo:  data.DeviceInfo,
+                    Timestamp:   event.Timestamp,
+                    ProductionLine: m.productionLineID,
+                    Status:      "INITIALIZED",
+                })
+            }
+            
+            // Update production metrics
+            m.metrics.DeviceCompleted(event.Timestamp)
+        }
+        
+    case fdo.EventTypeDIFailed:
+        // Failure: Record failure details for quality control
+        if event.Error != nil {
+            m.mes.RecordFailure(&FailureRecord{
+                Timestamp:   event.Timestamp,
+                ProductionLine: m.productionLineID,
+                Error:       event.Error.Error(),
+                Stage:       "DEVICE_INITIALIZATION",
+            })
+            m.metrics.DeviceFailed(event.Timestamp)
+        }
+    }
+}
+```
+
+2. **Real-Time Production Monitoring:**
+```go
+type ProductionMonitor struct {
+    websocketHub *WebSocketHub
+    alertSystem  *AlertSystem
+}
+
+func (p *ProductionMonitor) HandleEvent(ctx context.Context, event fdo.Event) {
+    // Real-time dashboard updates
+    if event.Type == fdo.EventTypeDICompleted && event.GUID != nil {
+        p.websocketHub.Broadcast(&ProductionUpdate{
+            Type:        "DEVICE_INITIALIZED",
+            GUID:        fmt.Sprintf("%x", *event.GUID),
+            Timestamp:   event.Timestamp,
+            ProductionLine: getProductionLineFromContext(ctx),
+        })
+    }
+    
+    // Alert on high failure rates
+    if event.Type == fdo.EventTypeDIFailed {
+        failureRate := p.calculateRecentFailureRate()
+        if failureRate > 0.05 { // 5% failure rate threshold
+            p.alertSystem.Trigger(&Alert{
+                Level:   "WARNING",
+                Message: fmt.Sprintf("High DI failure rate: %.1f%%", failureRate*100),
+                Timestamp: event.Timestamp,
+            })
+        }
+    }
+}
+```
+
+3. **Inventory and Asset Management:**
+```go
+type InventoryManager struct {
+    inventoryDB *InventoryDatabase
+    erpSystem  *ERPIntegration
+}
+
+func (i *InventoryManager) HandleEvent(ctx context.Context, event fdo.Event) {
+    if event.Type == fdo.EventTypeDICompleted && event.GUID != nil {
+        deviceGUID := fmt.Sprintf("%x", *event.GUID)
+        
+        // Create inventory record
+        inventoryRecord := &InventoryItem{
+            DeviceGUID:    deviceGUID,
+            Status:        "READY_FOR_ONBOARDING",
+            InitializationTime: event.Timestamp,
+            ManufacturingSite: getSiteFromContext(ctx),
+        }
+        
+        // Add to inventory database
+        i.inventoryDB.AddItem(inventoryRecord)
+        
+        // Notify ERP system
+        i.erpSystem.CreateAsset(&ERPAsset{
+            AssetID:      deviceGUID,
+            AssetType:    "IOT_DEVICE",
+            Status:       "MANUFACTURED",
+            CreatedAt:    event.Timestamp,
+        })
+    }
+}
+```
+
+**Benefits for Manufacturing:**
+
+✅ **Real-time Production Visibility** - Track devices as they move through DI stations  
+✅ **GUID Capture** - Automatically capture device GUIDs for inventory management  
+✅ **Quality Control** - Immediate notification of DI failures for root cause analysis  
+✅ **MES Integration** - Feed device data directly into Manufacturing Execution Systems  
+✅ **Production Analytics** - Calculate success rates, cycle times, and yield metrics  
+✅ **Traceability** - Complete audit trail from device initialization to deployment  
+
+**Implementation Tips:**
+
+- Use context to pass production line information to event handlers
+- Store device GUIDs immediately upon DI completion for later tracking
+- Implement retry logic for MES/ERP integrations to handle temporary failures
+- Set up alerts for abnormal failure patterns or production line issues
 
 ## Testing
 

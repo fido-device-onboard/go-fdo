@@ -191,6 +191,9 @@ type setCredentialsMsg struct {
 //
 //nolint:gocyclo // Protocol handling requires multiple conditional branches
 func (s *DIServer[T]) setCredentials(ctx context.Context, msg io.Reader) (*setCredentialsMsg, error) {
+	// Emit DI started event
+	EmitDIStarted(ctx)
+
 	// Decode proprietary device mfg info from app start
 	// FDO 2.0 includes CapabilityFlags, FDO 1.1 does not
 	version := protocol.VersionFromContext(ctx)
@@ -372,6 +375,10 @@ func (s *DIServer[T]) diDone(ctx context.Context, msg io.Reader) (struct{}, erro
 	if err := s.Vouchers.AddVoucher(ctx, ov); err != nil {
 		return struct{}{}, fmt.Errorf("error storing voucher: %w", err)
 	}
+
+	// Emit DI completed event with device GUID and info
+	EmitDICompleted(ctx, ovh.GUID, ovh.DeviceInfo)
+
 	if s.AfterVoucherPersist != nil {
 		if err := s.AfterVoucherPersist(ctx, *ov); err != nil {
 			return struct{}{}, fmt.Errorf("error in callback after new voucher is persisted: %w", err)

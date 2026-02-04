@@ -134,7 +134,54 @@ See [ENHANCED_CERT_VALIDATION.md](ENHANCED_CERT_VALIDATION.md) for implementatio
 
 Production deployments should implement event callbacks to integrate FDO operations with external systems such as databases, monitoring systems, user interfaces, and alerting platforms. Event callbacks provide real-time notifications about protocol events, enabling proper tracking, monitoring, and operational visibility.
 
-See [EVENT_CALLBACKS.md](EVENT_CALLBACKS.md) for complete implementation guide with examples for databases, metrics, webhooks, and UI integration.
+**DI Events for Manufacturing Systems**
+
+For manufacturing systems implementing their own DI (Device Initialization) servers, the DI event callbacks are particularly valuable:
+
+- **Device GUID Capture**: Automatically receive device GUIDs when DI completes, enabling inventory management and asset tracking
+- **Production Line Monitoring**: Track DI success/failure rates by production line for quality control
+- **MES Integration**: Feed device initialization data directly into Manufacturing Execution Systems
+- **Real-time Alerts**: Immediate notification of DI failures for root cause analysis
+- **Traceability**: Complete audit trail from device initialization through deployment
+
+```go
+// Example: Manufacturing DI server with event callbacks
+fdo.RegisterEventHandler(fdo.EventHandlerFunc(func(ctx context.Context, event fdo.Event) {
+    switch event.Type {
+    case fdo.EventTypeDIStarted:
+        // Track device entering DI station
+        logProductionEvent("DI_STARTED", getProductionLine(ctx), event.Timestamp)
+        
+    case fdo.EventTypeDICompleted:
+        if event.GUID != nil {
+            deviceGUID := fmt.Sprintf("%x", *event.GUID)
+            
+            // Update inventory system
+            inventoryDB.CreateDevice(&DeviceRecord{
+                GUID:       deviceGUID,
+                Status:     "INITIALIZED", 
+                Timestamp:  event.Timestamp,
+                LineID:     getProductionLine(ctx),
+            })
+            
+            // Notify MES system
+            mes.RecordDeviceInitialization(deviceGUID, event.Timestamp)
+        }
+        
+    case fdo.EventTypeDIFailed:
+        // Alert on DI failures for quality control
+        if event.Error != nil {
+            alertSystem.Trigger(&Alert{
+                Level:   "ERROR",
+                Message: fmt.Sprintf("DI failed on line %s: %v", getProductionLine(ctx), event.Error),
+                Timestamp: event.Timestamp,
+            })
+        }
+    }
+}))
+```
+
+See [EVENT_CALLBACKS.md](EVENT_CALLBACKS.md) for complete implementation guide with detailed manufacturing examples, including production line tracking, inventory management, and MES integration.
 
 ### Rendezvous Service Security
 
