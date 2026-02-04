@@ -132,11 +132,11 @@ func appStart(ctx context.Context, transport Transport, info any) (*VoucherHeade
 	if version == protocol.Version200 {
 		// FDO 2.0: Include CapabilityFlags
 		var msg struct {
-			DeviceMfgInfo *cbor.Bstr[any]
-			CapabilityFlags
+			Info            *cbor.Bstr[any]
+			CapabilityFlags CapabilityFlags
 		}
 		if info != nil {
-			msg.DeviceMfgInfo = cbor.NewBstr(info)
+			msg.Info = cbor.NewBstr(info)
 		}
 		msg.CapabilityFlags = GlobalCapabilityFlags
 
@@ -199,8 +199,8 @@ func (s *DIServer[T]) setCredentials(ctx context.Context, msg io.Reader) (*setCr
 	if version == protocol.Version200 {
 		// FDO 2.0: AppStart includes CapabilityFlags
 		var appStart struct {
-			Info *cbor.Bstr[T]
-			CapabilityFlags
+			Info            *cbor.Bstr[T]
+			CapabilityFlags CapabilityFlags
 		}
 		if err := cbor.NewDecoder(msg).Decode(&appStart); err != nil {
 			return nil, fmt.Errorf("error decoding device manufacturing info: %w", err)

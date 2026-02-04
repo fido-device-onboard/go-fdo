@@ -529,8 +529,20 @@ X509CertRequest = {
     -1: credential_id: tstr
     -2: credential_type: CredentialType  ; 3=x509_cert, 4=server_generated_key (for enrolled)
     ? -4: endpoint_url: tstr     ; Service endpoint URL where credential is used (server-specified)
+    ? -5: error_message: tstr    ; Error description if total_size is 0 (must not violate MTU)
 }
 ```
+
+**Error Handling:**
+
+- If `total_size` is 0, this indicates an error condition
+- The owner may optionally include `error_message` (key -5) with details:
+  - "credential_id not recognized"
+  - "Invalid format of CSR"
+  - "Security violation in CSR (requested scope not allowed)"
+  - "Certificate authority unavailable"
+  - "Quota exceeded for credential type"
+- Device should handle zero-size responses as errors and log the optional error_message if provided
 
 ### Response Data Format
 
@@ -587,6 +599,38 @@ fdo.credentials:response-end = {
 
 Device → Owner:
 fdo.credentials:response-result = [0, "Certificate installed"]
+```
+
+### Example: Enrolled Credentials - Error Response
+
+```
+Device → Owner:
+fdo.credentials:request-begin = {
+    0: 1024,
+    1: -16,                    ; SHA-256
+    -1: "device-mtls-cert",
+    -2: "x509_cert"
+}
+
+Device → Owner:
+fdo.credentials:request-data-0 = <CBOR bstr containing X509CertRequest: {"csr": "-----BEGIN CERTIFICATE REQUEST-----\n...\n-----END CERTIFICATE REQUEST-----"}>
+
+Device → Owner:
+fdo.credentials:request-end = {
+    0: 0,
+    1: h'csr-hash...'
+}
+
+Owner → Device:
+fdo.credentials:response-begin = {
+    0: 0,                      ; Zero size indicates error
+    -1: "device-mtls-cert",
+    -2: "x509_cert",
+    -5: "credential_id not recognized"
+}
+
+Device → Owner:
+fdo.credentials:response-result = [1, "Credential request failed: credential_id not recognized"]
 ```
 
 ## Registered Credentials Flow

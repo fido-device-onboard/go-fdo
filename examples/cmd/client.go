@@ -294,7 +294,8 @@ func di(ctx context.Context) (err error) { //nolint:gocyclo
 	default:
 		return fmt.Errorf("unsupported key encoding: %s", diKeyEnc)
 	}
-	cred, err := fdo.DI(ctx, tlsTransport(diURL, nil), custom.DeviceMfgInfo{
+	version := protocol.Version(fdoVersion) //#nosec G115 -- fdoVersion is validated in flag parsing
+	cred, err := fdo.DI(ctx, tlsTransportWithVersion(diURL, nil, version), custom.DeviceMfgInfo{
 		KeyType:      keyType,
 		KeyEncoding:  keyEncoding,
 		SerialNumber: strconv.FormatInt(sn.Int64(), 10),
@@ -345,7 +346,8 @@ TO1:
 
 		for _, url := range directive.URLs {
 			var err error
-			to1d, err = fdo.TO1(ctx, tlsTransport(url.String(), nil), conf.Cred, conf.Key, nil)
+			version := protocol.Version(fdoVersion) //#nosec G115 -- fdoVersion is validated in flag parsing
+			to1d, err = fdo.TO1(ctx, tlsTransportWithVersion(url.String(), nil, version), conf.Cred, conf.Key, nil)
 			if err != nil {
 				slog.Error("TO1 failed", "base URL", url.String(), "error", err)
 				continue
