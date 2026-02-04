@@ -24,11 +24,18 @@ Events are categorized by protocol stage:
 
 #### DI (Device Initialization) Events
 
-- `EventTypeDIStarted` - DI protocol started
-- `EventTypeDIAppStartReceived` - Device info received
-- `EventTypeDIVoucherCreated` - Ownership voucher created
-- `EventTypeDICompleted` - DI completed successfully
-- `EventTypeDIFailed` - DI failed with error
+DI events are emitted from both **server-side** (manufacturing DI servers) and **client-side** (device DI clients) perspectives:
+
+- `EventTypeDIStarted` - DI protocol started (both client and server)
+- `EventTypeDIAppStartReceived` - Device info received (server only)
+- `EventTypeDIVoucherCreated` - Ownership voucher created (server only)
+- `EventTypeDICompleted` - DI completed successfully with GUID and device info (both client and server)
+- `EventTypeDIFailed` - DI failed with error information (both client and server)
+
+**Client vs Server Events:**
+- **Client events** are emitted when a device performs DI against a manufacturing server
+- **Server events** are emitted when a manufacturing server processes DI requests from devices
+- Both provide the same event types but from different perspectives
 
 #### TO0 (Owner to Rendezvous) Events
 
@@ -543,6 +550,42 @@ func (i *InventoryManager) HandleEvent(ctx context.Context, event fdo.Event) {
 - Store device GUIDs immediately upon DI completion for later tracking
 - Implement retry logic for MES/ERP integrations to handle temporary failures
 - Set up alerts for abnormal failure patterns or production line issues
+
+### Client-Side DI Events
+
+Client applications (devices performing DI) can also register event handlers to track their own DI process:
+
+```go
+// Client-side DI event tracking
+fdo.RegisterEventHandler(fdo.EventHandlerFunc(func(ctx context.Context, event fdo.Event) {
+    switch event.Type {
+    case fdo.EventTypeDIStarted:
+        log.Printf("Device starting DI process")
+        
+    case fdo.EventTypeDICompleted:
+        if event.GUID != nil {
+            log.Printf("Device successfully initialized with GUID: %x", *event.GUID)
+            // Store GUID for later use in TO1/TO2
+            deviceConfig.SetGUID(*event.GUID)
+        }
+        
+    case fdo.EventTypeDIFailed:
+        log.Printf("DI process failed: %v", event.Error)
+        // Implement retry logic or user notification
+    }
+}))
+
+// Perform DI - events will be emitted automatically
+cred, err := fdo.DI(ctx, transport, deviceInfo, diConfig)
+```
+
+**Client-Side Use Cases:**
+
+- **Device Configuration Management** - Store GUID and device info after successful DI
+- **Retry Logic** - Implement intelligent retry on DI failures
+- **User Interface** - Show progress to device operators
+- **Diagnostics** - Collect timing and success/failure metrics
+- **Local Logging** - Maintain device-side audit trail
 
 ## Testing
 

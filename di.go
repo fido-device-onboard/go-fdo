@@ -73,19 +73,28 @@ type DIConfig struct {
 func DI(ctx context.Context, transport Transport, info any, c DIConfig) (*DeviceCredential, error) {
 	ctx = contextWithErrMsg(ctx)
 
+	// Emit DI started event for client-side tracking
+	EmitDIStarted(ctx)
+
 	ovh, err := appStart(ctx, transport, info)
 	if err != nil {
 		errorMsg(ctx, transport, err)
+		// Emit DI failed event for client-side tracking
+		EmitDIFailed(ctx, err)
 		return nil, err
 	}
 
 	// Select the appropriate hash algorithm
 	ownerPubKey, err := ovh.ManufacturerKey.Public()
 	if err != nil {
+		// Emit DI failed event for client-side tracking
+		EmitDIFailed(ctx, err)
 		return nil, fmt.Errorf("error parsing manufacturer public key type from received ownership voucher header: %w", err)
 	}
 	alg, err := hashAlgFor(c.Key.Public(), ownerPubKey)
 	if err != nil {
+		// Emit DI failed event for client-side tracking
+		EmitDIFailed(ctx, err)
 		return nil, fmt.Errorf("error selecting the appropriate hash algorithm: %w", err)
 	}
 
@@ -94,6 +103,8 @@ func DI(ctx context.Context, transport Transport, info any, c DIConfig) (*Device
 	if err := cbor.NewEncoder(ownerKeyDigest).Encode(ovh.ManufacturerKey); err != nil {
 		err = fmt.Errorf("error computing hash of initial owner (manufacturer) key: %w", err)
 		errorMsg(ctx, transport, err)
+		// Emit DI failed event for client-side tracking
+		EmitDIFailed(ctx, err)
 		return nil, err
 	}
 	ownerKeyHash := protocol.Hash{Algorithm: alg, Value: ownerKeyDigest.Sum(nil)[:]}
@@ -107,8 +118,13 @@ func DI(ctx context.Context, transport Transport, info any, c DIConfig) (*Device
 	}
 	if err := setHmac(ctx, transport, hmac, ovh); err != nil {
 		errorMsg(ctx, transport, err)
+		// Emit DI failed event for client-side tracking
+		EmitDIFailed(ctx, err)
 		return nil, err
 	}
+
+	// Emit DI completed event for client-side tracking
+	EmitDICompleted(ctx, ovh.GUID, ovh.DeviceInfo)
 
 	return &DeviceCredential{
 		Version:       ovh.Version,
