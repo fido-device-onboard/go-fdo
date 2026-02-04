@@ -355,7 +355,6 @@ func (s *TO2Server) Respond(ctx context.Context, msgType uint8, msg io.Reader) (
 		respType = protocol.TO2SetupDevice20MsgType
 		resp, err = s.setupDevice20(ctx, msg)
 	case protocol.TO2DeviceSvcInfo20MsgType:
-		fmt.Printf("=== STUPID DEBUG: TO2DeviceSvcInfo20MsgType RECEIVED ===\n")
 		respType = protocol.TO2OwnerSvcInfo20MsgType
 		var req DeviceSvcInfo20Msg
 		if err := cbor.NewDecoder(msg).Decode(&req); err != nil {
@@ -413,22 +412,16 @@ func (s *TO2Server) ownerServiceInfo20(ctx context.Context, req *DeviceSvcInfo20
 		IsMoreServiceInfo: req.IsMoreServiceInfo,
 	}
 
-	fmt.Printf("=== DEBUG: Converted to 1.0.1 format with %d entries, more=%t ===\n", len(deviceInfo.ServiceInfo), deviceInfo.IsMoreServiceInfo)
-
 	var deviceInfoBuf bytes.Buffer
 	if err := cbor.NewEncoder(&deviceInfoBuf).Encode(&deviceInfo); err != nil {
 		return nil, fmt.Errorf("error encoding device service info: %w", err)
 	}
 
-	fmt.Printf("=== DEBUG: Calling 1.0.1 ownerServiceInfo ===\n")
 	// Call the existing 1.0.1 ownerServiceInfo method
 	ownerInfo, err := s.ownerServiceInfo(ctx, &deviceInfoBuf)
 	if err != nil {
 		return nil, err
 	}
-
-	fmt.Printf("=== DEBUG: 1.0.1 returned: more=%t, done=%t, entries=%d ===\n",
-		ownerInfo.IsMoreServiceInfo, ownerInfo.IsDone, len(ownerInfo.ServiceInfo))
 
 	// Convert 1.0.1 response to 2.0 format
 	result := &OwnerSvcInfo20Msg{
@@ -436,9 +429,6 @@ func (s *TO2Server) ownerServiceInfo20(ctx context.Context, req *DeviceSvcInfo20
 		IsDone:            ownerInfo.IsDone,
 		ServiceInfo:       ownerInfo.ServiceInfo,
 	}
-
-	fmt.Printf("=== DEBUG: Returning 2.0 response: more=%t, done=%t, entries=%d ===\n",
-		result.IsMoreServiceInfo, result.IsDone, len(result.ServiceInfo))
 
 	return result, nil
 }

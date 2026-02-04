@@ -221,12 +221,14 @@ func TO2(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1
 	proveDeviceNonce, ownerPublicKey, originalOwnerKey, originalOVH, sess, err := verifyOwner(ctx, transport, to1d, &c)
 	if err != nil {
 		errorMsg(ctx, transport, err)
+		EmitProtocolError(ctx, &c.Cred.GUID, 0, protocol.InternalServerErrCode, err)
 		return nil, err
 	}
 	defer sess.Destroy()
 	setupDeviceNonce, partialOVH, err := proveDevice(ctx, transport, proveDeviceNonce, ownerPublicKey, originalOwnerKey, sess, &c)
 	if err != nil {
 		errorMsg(ctx, transport, err)
+		EmitProtocolError(ctx, &c.Cred.GUID, 0, protocol.InternalServerErrCode, err)
 		return nil, err
 	}
 

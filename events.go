@@ -275,6 +275,7 @@ func UnregisterAllEventHandlers() {
 	globalDispatcher.handlers = make([]EventHandler, 0)
 }
 
+// EventFlushWaitGroup can be used to wait for all async events to be processed
 var EventFlushWaitGroup sync.WaitGroup
 
 // emitEvent dispatches an event to all registered handlers

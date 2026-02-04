@@ -1271,7 +1271,7 @@ test_bmo_multi_asset() {
 	BMO_EFI="$EPHEMERAL_DIR/test_boot.efi"
 	BMO_ISO="$EPHEMERAL_DIR/test_boot.iso"
 	BMO_RAW="$EPHEMERAL_DIR/test_boot.raw"
-	RECEIVED_FILE="examples/bmo-test_boot.efi"  # EFI should be accepted
+	RECEIVED_FILE="examples/bmo-test_boot.efi" # EFI should be accepted
 
 	log_step "Creating test boot images in preference order"
 	dd if=/dev/urandom of="$BMO_EFI" bs=1024 count=3 2>/dev/null

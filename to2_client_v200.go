@@ -33,7 +33,6 @@ import (
 
 // TO2v200 implements the FDO 2.0 TO2 protocol
 func TO2v200(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1d, []byte], c *TO2Config) (*DeviceCredential, error) {
-	fmt.Printf("[DEBUG] TO2v200 starting!\n")
 	ctx = contextWithErrMsg(ctx)
 
 	// Configure defaults (same as 1.01)
@@ -130,12 +129,6 @@ func TO2v200(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol
 
 	serviceInfoReader, serviceInfoWriter := serviceinfo.NewChunkOutPipe(0)
 	defer func() { _ = serviceInfoWriter.Close() }()
-
-	// Debug: log what device modules we have
-	fmt.Printf("[DEBUG FDO 2.0] DeviceModules: %v\n", c.DeviceModules)
-	for name := range c.DeviceModules {
-		fmt.Printf("[DEBUG FDO 2.0]   Module: %s\n", name)
-	}
 
 	go c.Devmod.Write(ctx, c.DeviceModules, sendMTU, serviceInfoWriter)
 
@@ -602,7 +595,6 @@ func exchangeServiceInfo20(ctx context.Context, transport Transport, proveOVNonc
 		// Include any pending responses from previous round
 		if len(pendingResponses) > 0 {
 			kvs = append(kvs, pendingResponses...)
-			fmt.Printf("[DEBUG FDO 2.0] Including %d pending responses in request\n", len(pendingResponses))
 			pendingResponses = nil
 		}
 
@@ -610,21 +602,16 @@ func exchangeServiceInfo20(ctx context.Context, transport Transport, proveOVNonc
 			kv, err := serviceInfoReader.ReadChunk(sendMTU)
 			if err != nil {
 				if errors.Is(err, io.EOF) {
-					fmt.Printf("[DEBUG FDO 2.0] Got EOF, device done\n")
 					deviceDone = true
 				} else if strings.Contains(err.Error(), "not enough size for chunk") {
-					fmt.Printf("[DEBUG FDO 2.0] Got size error, retrying: %v\n", err)
 					time.Sleep(10 * time.Millisecond)
 					continue
 				} else {
-					fmt.Printf("[DEBUG FDO 2.0] Got error reading chunk: %v, treating as done\n", err)
 					deviceDone = true
 				}
 			} else if kv != nil {
 				kvs = append(kvs, kv)
-				fmt.Printf("[DEBUG FDO 2.0] Read chunk: %s, size: %d\n", kv.Key, kv.Size())
 			} else {
-				fmt.Printf("[DEBUG FDO 2.0] Got nil chunk, waiting a bit...\n")
 				time.Sleep(10 * time.Millisecond)
 			}
 		}
@@ -632,12 +619,6 @@ func exchangeServiceInfo20(ctx context.Context, transport Transport, proveOVNonc
 		req := DeviceSvcInfo20Msg{
 			IsMoreServiceInfo: !deviceDone,
 			ServiceInfo:       kvs,
-		}
-
-		// Debug: log what we're sending
-		fmt.Printf("[DEBUG FDO 2.0] Sending DeviceSvcInfo20: IsMoreServiceInfo=%t, ServiceInfo count=%d\n", req.IsMoreServiceInfo, len(req.ServiceInfo))
-		for i, kv := range req.ServiceInfo {
-			fmt.Printf("[DEBUG FDO 2.0]   KV[%d]: %s = %s\n", i, kv.Key, string(kv.Val))
 		}
 
 		typ, resp, err := transport.Send(ctx, protocol.TO2DeviceSvcInfo20MsgType, req, sess)
@@ -667,7 +648,6 @@ func exchangeServiceInfo20(ctx context.Context, transport Transport, proveOVNonc
 			if len(responseKVs) > 0 {
 				pendingResponses = append(pendingResponses, responseKVs...)
 				slog.Info("FDO 2.0 device modules produced responses", "count", len(responseKVs))
-				fmt.Printf("[DEBUG FDO 2.0] Saved %d responses for next request\n", len(responseKVs))
 			}
 
 			// Check if done
@@ -816,15 +796,6 @@ func processOwnerServiceInfo20(ctx context.Context, serviceInfo []*serviceinfo.K
 		// Flush all response writers after Receive completes
 		for _, w := range writers {
 			w.Flush()
-			if w.buf.Len() > 0 || len(*w.responseKVs) > 0 {
-				fmt.Printf("[DEBUG FDO 2.0] Flushed response writer: key=%s, bufLen=%d, totalResponses=%d\n", w.key, w.buf.Len(), len(*w.responseKVs))
-			}
-		}
-		if len(responseKVs) > 0 {
-			fmt.Printf("[DEBUG FDO 2.0] After processing %s:%s, have %d response KVs\n", moduleName, messageName, len(responseKVs))
-			for i, kv := range responseKVs {
-				fmt.Printf("[DEBUG FDO 2.0]   Response[%d]: %s\n", i, kv.Key)
-			}
 		}
 		slog.Info("FDO 2.0 successfully processed message", "module", moduleName, "message", messageName)
 	}

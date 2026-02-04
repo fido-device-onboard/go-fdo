@@ -744,7 +744,7 @@ func transferOwnership2(ctx context.Context, transport fdo.Transport, to1d *cose
 	var cred *fdo.DeviceCredential
 	var err error
 	if fdoVersion == 200 {
-		cred, err = fdo.TO2v200(ctx, transport, to1d, conf)
+		cred, err = fdo.TO2v200(ctx, transport, to1d, &conf)
 	} else {
 		cred, err = fdo.TO2(ctx, transport, to1d, conf)
 	}

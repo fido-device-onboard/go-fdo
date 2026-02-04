@@ -47,7 +47,7 @@ const timeout = 10 * time.Second
 // runTO2 calls the appropriate TO2 function based on protocol version
 func runTO2(ctx context.Context, transport fdo.Transport, to1d *cose.Sign1[protocol.To1d, []byte], config fdo.TO2Config, version protocol.Version) (*fdo.DeviceCredential, error) {
 	if version == protocol.Version200 {
-		return fdo.TO2v200(ctx, transport, to1d, config)
+		return fdo.TO2v200(ctx, transport, to1d, &config)
 	}
 	return fdo.TO2(ctx, transport, to1d, config)
 }

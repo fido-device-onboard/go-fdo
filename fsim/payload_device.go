@@ -113,15 +113,12 @@ func (p *Payload) Transition(active bool) error {
 
 // Receive implements serviceinfo.DeviceModule.
 func (p *Payload) Receive(ctx context.Context, messageName string, messageBody io.Reader, respond func(string) io.Writer, yield func()) error {
-	fmt.Printf("[PayloadDevice] Receive called: messageName=%s\n", messageName)
 
 	// Handle chunked payload messages
 	if strings.HasPrefix(messageName, "payload-") {
-		fmt.Printf("[PayloadDevice] Handling chunked message: %s\n", messageName)
 		return p.handleChunkedMessage(ctx, messageName, messageBody, respond)
 	}
 
-	fmt.Printf("[PayloadDevice] Ignoring unknown message: %s\n", messageName)
 	// Silently ignore unknown messages for protocol compatibility
 	return nil
 }
@@ -188,7 +185,6 @@ func (p *Payload) handleChunkedMessage(ctx context.Context, messageName string, 
 
 	// After begin message with RequireAck, send payload-ack
 	if strings.HasSuffix(messageName, "-begin") && p.receiver.IsAckPending() {
-		fmt.Printf("[PayloadDevice] Sending payload-ack (accepted=%v)\n", p.receiver.IsAckAccepted())
 		if err := p.receiver.SendAck(respond); err != nil {
 			return fmt.Errorf("failed to send ack: %w", err)
 		}
@@ -201,7 +197,6 @@ func (p *Payload) handleChunkedMessage(ctx context.Context, messageName string, 
 
 	// After successful end message, send result per fdo.payload.md
 	if strings.HasSuffix(messageName, "-end") && !p.receiver.IsReceiving() {
-		fmt.Printf("[PayloadDevice] Received end message, sending result\n")
 		// Send payload-result as array [status_code, ?message]
 		result := chunking.ResultMessage{
 			StatusCode: p.resultStatus,
@@ -209,16 +204,13 @@ func (p *Payload) handleChunkedMessage(ctx context.Context, messageName string, 
 		}
 		resultData, err := result.MarshalCBOR()
 		if err != nil {
-			fmt.Printf("[PayloadDevice] ERROR: failed to encode result: %v\n", err)
 			return fmt.Errorf("failed to encode result: %w", err)
 		}
 
 		w := respond("payload-result")
 		if _, err := w.Write(resultData); err != nil {
-			fmt.Printf("[PayloadDevice] ERROR: failed to send result: %v\n", err)
 			return fmt.Errorf("failed to send result: %w", err)
 		}
-		fmt.Printf("[PayloadDevice] Sent result successfully\n")
 
 		p.receiver = nil
 	}

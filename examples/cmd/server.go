@@ -140,6 +140,47 @@ func init() {
 	serverFlags.BoolVar(&singleSidedWiFi, "single-sided-wifi", false, "Run as single-sided WiFi setup service (owner not verified by device)")
 }
 
+// validateFiles checks that all payload and BMO files exist before starting the server
+func validateFiles() error {
+	// Validate payload files
+	if payloadFile != "" {
+		if _, err := os.Stat(payloadFile); err != nil {
+			return fmt.Errorf("payload file not found: %s", payloadFile)
+		}
+	}
+
+	for _, payloadSpec := range payloadFiles {
+		parts := strings.SplitN(payloadSpec, ":", 2)
+		if len(parts) != 2 {
+			return fmt.Errorf("invalid payload specification %q: expected type:file format", payloadSpec)
+		}
+		filePath := parts[1]
+		if _, err := os.Stat(filePath); err != nil {
+			return fmt.Errorf("payload file not found: %s", filePath)
+		}
+	}
+
+	// Validate BMO files
+	if bmoFile != "" {
+		if _, err := os.Stat(bmoFile); err != nil {
+			return fmt.Errorf("BMO file not found: %s", bmoFile)
+		}
+	}
+
+	for _, bmoSpec := range bmoFiles {
+		parts := strings.SplitN(bmoSpec, ":", 2)
+		if len(parts) != 2 {
+			return fmt.Errorf("invalid BMO specification %q: expected type:file format", bmoSpec)
+		}
+		filePath := parts[1]
+		if _, err := os.Stat(filePath); err != nil {
+			return fmt.Errorf("BMO file not found: %s", filePath)
+		}
+	}
+
+	return nil
+}
+
 func server(ctx context.Context) error { //nolint:gocyclo
 	fmt.Println("=== STUPID DEBUG: SERVER FUNCTION CALLED ===")
 
@@ -161,6 +202,11 @@ func server(ctx context.Context) error { //nolint:gocyclo
 		if err := generateKeys(state); err != nil {
 			return err
 		}
+	}
+
+	// Validate payload and BMO files exist before starting server
+	if err := validateFiles(); err != nil {
+		return fmt.Errorf("file validation failed: %w", err)
 	}
 
 	// If printing owner public key, do so and exit
@@ -846,7 +892,6 @@ func (s moduleStateMachines) NextModule(ctx context.Context) (bool, error) {
 		if err != nil {
 			return false, fmt.Errorf("error getting devmod: %w", err)
 		}
-		fmt.Printf("[DEBUG] Device declared modules: %v\n", modules)
 		next, stop := iter.Pull2(ownerModules(modules))
 		module = &moduleStateMachineState{
 			Next: next,
