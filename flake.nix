@@ -117,6 +117,7 @@
             go_1_25
             gotools
             gomod2nix.packages.${system}.default
+            golangci-lint
           ];
           nativeBuildInputs = with pkgs; [
             openssl
@@ -129,6 +130,7 @@
             go_1_25
             gotools
             gomod2nix.packages.${system}.default
+            golangci-lint
           ];
           nativeBuildInputs = with pkgs; [
             openssl
