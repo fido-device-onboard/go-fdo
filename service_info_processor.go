@@ -62,7 +62,7 @@ func (p *ServiceInfoProcessor) ProcessServiceInfo(ctx context.Context, deviceInf
 		}
 		ov, err := p.Vouchers.Voucher(ctx, guid)
 		if err != nil {
-			return nil, fmt.Errorf("error retrieving voucher for device %x: %w", guid, err)
+			return nil, fmt.Errorf("error retrieving voucher for device %s: %w", guid.String(), err)
 		}
 		var deviceCertChain []*x509.Certificate
 		if ov.CertChain != nil {
