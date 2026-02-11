@@ -22,6 +22,7 @@
 - [✅] Document voucher management commands with examples
 - [✅] Document server configuration options
 - [✅] Document client configuration options
+
 - [✅] Document delegate commands and workflows
 - [✅] Document attested payload commands
 - [ ] Create CLI command reference cheat sheet
@@ -31,11 +32,13 @@
 - [✅] Fix goimports formatting issues in examples/cmd/client.go
 - [ ] Add comprehensive error handling for CLI commands
 - [ ] Add input validation for CLI flags
+
 - [ ] Improve help text consistency across commands
 
 ### Testing
 
 - [✅] Integration tests working (basic, basic-reuse, kex tests passing)
+
 - [ ] Add integration tests for voucher management commands
 - [ ] Add CLI command unit tests
 - [ ] Test edge cases for voucher export (empty database, invalid GUIDs, etc.)
@@ -47,6 +50,7 @@
 - [ ] Add voucher search by date range
 - [ ] Add voucher export in multiple formats simultaneously
 - [ ] Add batch voucher operations
+
 - [ ] Add voucher statistics and reporting
 - [ ] Add voucher validation commands
 

@@ -110,8 +110,10 @@ go run ./cmd client -voucher-export - -db fdo.db -voucher-format cbor
 ```
 -----BEGIN OWNERSHIP VOUCHER-----
 hRhlWPKGGGVQd9AvCGowrcwks6WY+NeGr4KBgg1BAIOCDEEBggJRUAAAAAAAAAAAAAD//38AAAGC
+
 ...
 -----END OWNERSHIP VOUCHER-----
+
 ```
 
 **JSON Format:**
@@ -170,6 +172,7 @@ go run ./cmd client -upload /path/to/file1,/path/to/file2
 
 # Download files from owner (for configuration updates or software distribution)
 go run ./cmd client -download /path/to/download
+
 
 # Execute commands on device (for remote management)
 go run ./cmd client -echo-commands
@@ -316,6 +319,7 @@ go run ./cmd server -request-pubkey ssh_public_key:device-ssh-key:ssh://admin.ex
 
 - Automated device provisioning with various credential types
 - SSH key management for secure remote access
+
 - Integration with enterprise authentication systems
 
 #### Data Transfer FSIMs

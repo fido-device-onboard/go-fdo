@@ -32,7 +32,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/blob"
 	"github.com/fido-device-onboard/go-fdo/cbor"
