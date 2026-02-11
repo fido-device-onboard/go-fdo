@@ -57,7 +57,8 @@ When the server presents multiple boot assets:
 | 3 (Fallback) | `application/x-raw-disk-image` | Raw disk images (most cumbersome) |
 
 **Example preference hierarchy:**
-```
+
+```text
 1. UEFI App (application/efi)
    ↓ NAK if not supported
 2. ISO Image (application/x-iso9660-image)  
@@ -78,6 +79,7 @@ When the server presents multiple boot assets:
 - **FDO session ends** - no further FSIM processing occurs
 
 This ensures that:
+
 - **Only one boot asset is ever executed** per FDO session
 - **The best available option is used** (first in preference order)
 - **No unnecessary transfers occur** after successful boot

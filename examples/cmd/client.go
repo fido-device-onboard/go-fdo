@@ -43,7 +43,6 @@ import (
 	"github.com/fido-device-onboard/go-fdo/protocol"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 	"github.com/fido-device-onboard/go-fdo/tpm"
-	_ "github.com/ncruces/go-sqlite3"
 )
 
 var clientFlags = flag.NewFlagSet("client", flag.ContinueOnError)

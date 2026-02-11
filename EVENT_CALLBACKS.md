@@ -33,6 +33,7 @@ DI events are emitted from both **server-side** (manufacturing DI servers) and *
 - `EventTypeDIFailed` - DI failed with error information (both client and server)
 
 **Client vs Server Events:**
+
 - **Client events** are emitted when a device performs DI against a manufacturing server
 - **Server events** are emitted when a manufacturing server processes DI requests from devices
 - Both provide the same event types but from different perspectives
@@ -415,6 +416,7 @@ fdo.RegisterEventHandler(NewManufacturingIntegration(mes, metrics))
 The DI (Device Initialization) events are particularly valuable for manufacturing systems doing their own DI implementation:
 
 **Key DI Events:**
+
 - `EventTypeDIStarted` - Device begins initialization (useful for tracking start times)
 - `EventTypeDICompleted` - Device successfully initialized with GUID and device info
 - `EventTypeDIFailed` - DI failed with detailed error information
@@ -422,6 +424,7 @@ The DI (Device Initialization) events are particularly valuable for manufacturin
 **Manufacturing Use Cases:**
 
 1. **Production Line Tracking:**
+
 ```go
 type ManufacturingTracker struct {
     productionLineID string
@@ -470,7 +473,8 @@ func (m *ManufacturingTracker) HandleEvent(ctx context.Context, event fdo.Event)
 }
 ```
 
-2. **Real-Time Production Monitoring:**
+1. **Real-Time Production Monitoring:**
+
 ```go
 type ProductionMonitor struct {
     websocketHub *WebSocketHub
@@ -502,7 +506,8 @@ func (p *ProductionMonitor) HandleEvent(ctx context.Context, event fdo.Event) {
 }
 ```
 
-3. **Inventory and Asset Management:**
+1. **Inventory and Asset Management:**
+
 ```go
 type InventoryManager struct {
     inventoryDB *InventoryDatabase

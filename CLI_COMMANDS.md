@@ -5,6 +5,7 @@ This document provides comprehensive documentation for all FDO (FIDO Device Onbo
 ## Overview
 
 The FDO CLI provides four main commands:
+
 - `client` - Device-side operations (DI, TO1, TO2, voucher management)
 - `server` - Owner-side operations (DI server, TO2 server, rendezvous)
 - `delegate` - Delegate certificate management
@@ -56,6 +57,7 @@ go run ./cmd client -allow-single-sided
 **Single-sided attestation:** Used for WiFi-only onboarding by untrusted manufacturing services. In this mode, the device doesn't verify the owner's identity, allowing onboarding in scenarios where the owner cannot be fully authenticated (e.g., public WiFi hotspots, untrusted manufacturing environments). This should only be used when full owner verification is not possible.
 
 **Real-world context:** The test suite demonstrates different scenarios:
+
 - Basic TO1/TO2 for standard onboarding
 - FDO 2.0 protocol for newer devices
 - Credential reuse for multiple onboarding cycles
@@ -104,6 +106,7 @@ go run ./cmd client -voucher-export - -db fdo.db -voucher-format cbor
 #### Export Formats
 
 **PEM Format (Default):**
+
 ```
 -----BEGIN OWNERSHIP VOUCHER-----
 hRhlWPKGGGVQd9AvCGowrcwks6WY+NeGr4KBgg1BAIOCDEEBggJRUAAAAAAAAAAAAAD//38AAAGC
@@ -112,6 +115,7 @@ hRhlWPKGGGVQd9AvCGowrcwks6WY+NeGr4KBgg1BAIOCDEEBggJRUAAAAAAAAAAAAAD//38AAAGC
 ```
 
 **JSON Format:**
+
 ```json
 {
   "guid": "3737643032663038366133306164636332346233613539386638643738366166",
@@ -175,6 +179,7 @@ go run ./cmd client -wget-dir /downloads
 ```
 
 **Real-world context:** The test suite demonstrates various FSIM scenarios:
+
 - **Payload FSIM:** File transfer for firmware and configuration
 - **BMO FSIM:** Boot image management for device updates
 - **Sysconfig FSIM:** System configuration (hostname, timezone, NTP)
@@ -194,10 +199,10 @@ go run ./cmd client -enroll-csr device-mtls-cert:-----BEGIN CERTIFICATE REQUEST-
 ```
 
 **Real-world context:** The test suite shows these being used for:
+
 - SSH key registration for device remote access
 - CSR enrollment for certificate-based authentication
 - Integration with enterprise PKI systems
-
 
 ### Cryptographic Configuration
 
@@ -215,6 +220,7 @@ go run ./cmd client -insecure-tls
 ```
 
 **Real-world context:** The test suite shows:
+
 - RSA2048 keys for encryption scenarios
 - ASYMKEX2048 for key exchange testing
 - Different cipher suites for compatibility testing
@@ -246,6 +252,7 @@ go run ./cmd server -http "0.0.0.0:9999" -db fdo.db -ext-http "fdo.example.com:9
 ```
 
 **Real-world context:** The test suite uses various server configurations:
+
 - Basic servers for simple testing
 - Owner certificates for manufacturing environments
 - TLS for secure communication testing
@@ -264,6 +271,7 @@ go run ./cmd server -initOnly -db fdo.db
 ```
 
 **Real-world context:** Used for:
+
 - Database setup during initial deployment
 - Security configuration for production environments
 - Database maintenance and backup procedures
@@ -305,6 +313,7 @@ go run ./cmd server -request-pubkey ssh_public_key:device-ssh-key:ssh://admin.ex
 ```
 
 **Real-world context:** Used in enterprise environments for:
+
 - Automated device provisioning with various credential types
 - SSH key management for secure remote access
 - Integration with enterprise authentication systems
@@ -325,6 +334,7 @@ go run ./cmd server -upload-dir /uploads
 ```
 
 **Real-world context:** The test suite demonstrates comprehensive FSIM usage:
+
 - **Payload transfer** for firmware and configuration distribution
 - **BMO** for boot image management and OTA updates
 - **Sysconfig** for device initialization parameters
@@ -353,6 +363,7 @@ go run ./cmd server -rv-replacement-policy manufacturer-key-consistency
 ```
 
 **Real-world context:** Used in large-scale deployments for:
+
 - Distributed manufacturing with separate rendezvous infrastructure
 - Load balancing and device registration management
 - Security policy enforcement for voucher replacement
@@ -370,6 +381,7 @@ go run ./cmd server -rvDelegate myDelegate
 ```
 
 **Real-world context:** The test suite demonstrates delegate usage for:
+
 - Multi-owner device handoffs in manufacturing
 - Delegated manufacturing scenarios
 - Complex ownership transfer workflows
@@ -397,6 +409,7 @@ go run ./cmd server -print-owner-public ec384
 ```
 
 **Real-world context:** Used for:
+
 - Manual voucher management in edge cases
 - Device resale and second-owner scenarios
 - Supply chain voucher operations
@@ -431,6 +444,7 @@ go run ./cmd delegate -db fdo.db -print-delegate-private ec384
 ```
 
 **Real-world context:** The test suite shows delegate usage for:
+
 - Multi-owner device handoffs in manufacturing
 - Delegated credential provisioning
 - Complex supply chain operations with multiple stakeholders
@@ -484,6 +498,7 @@ go run ./cmd attestpayload -db fdo.db -voucher voucher.pem -payload "Config v2" 
 ```
 
 **Real-world context:** The test suite shows attested payload usage for:
+
 - Secure data transfer between device and owner
 - Firmware and configuration distribution with cryptographic verification
 - Delegate-signed payloads for supply chain verification
@@ -529,24 +544,28 @@ go run ./cmd attestpayload --help
 ### Common Errors and Solutions
 
 **Database not found:**
+
 ```bash
 Error: database file not found: fdo.db
 Solution: Ensure database file exists or create it with -initOnly
 ```
 
 **Invalid GUID format:**
+
 ```bash
 Error: invalid GUID format
 Solution: Use 32-character hex string (e.g., 3737643032663038366133306164636332346233613539386638643738366166)
 ```
 
 **No voucher found:**
+
 ```bash
 Error: no voucher found matching criteria
 Solution: Check GUID/serial number or use -list-vouchers to see available vouchers
 ```
 
 **Connection refused:**
+
 ```bash
 Error: connection refused
 Solution: Ensure server is running and accessible on specified port

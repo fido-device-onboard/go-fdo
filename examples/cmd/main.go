@@ -86,7 +86,6 @@ func options(flags *flag.FlagSet) string {
 
 //nolint:gocyclo
 func main() {
-	fmt.Println("=== STUPID DEBUG: MAIN FUNCTION CALLED ===")
 
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		usage()
