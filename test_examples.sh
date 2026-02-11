@@ -30,7 +30,16 @@ cleanup() {
 		kill "$SERVER_PID" 2>/dev/null || true
 		wait "$SERVER_PID" 2>/dev/null || true
 	fi
+	# Kill any remaining server processes more aggressively
 	pkill -f "go-build.*server" 2>/dev/null || true
+	pkill -f "examples/cmd server" 2>/dev/null || true
+	pkill -f "cmd server" 2>/dev/null || true
+
+	# Force kill if still running after 2 seconds
+	sleep 2
+	pkill -9 -f "go-build.*server" 2>/dev/null || true
+	pkill -9 -f "examples/cmd server" 2>/dev/null || true
+	pkill -9 -f "cmd server" 2>/dev/null || true
 }
 
 # Clean up ephemeral files from previous test runs
@@ -95,10 +104,20 @@ start_server() {
 	local flags="$1"
 	log_step "Starting server with flags: $flags"
 
-	# Kill any existing server processes
+	# Kill any existing server processes and wait for port to be released
 	pkill -f "go-build.*server" 2>/dev/null || true
 	pkill -f "examples/cmd server" 2>/dev/null || true
-	sleep 1
+	sleep 2
+
+	# Wait for port to be released
+	local retries=5
+	while [ $retries -gt 0 ]; do
+		if ! lsof -i :9999 >/dev/null 2>&1 && ! netstat -tulpn 2>/dev/null | grep :9999 >/dev/null; then
+			break
+		fi
+		sleep 1
+		retries=$((retries - 1))
+	done
 
 	# Create ephemeral test files directory
 	mkdir -p "$EPHEMERAL_DIR"
@@ -111,7 +130,7 @@ start_server() {
 	SERVER_PID=$!
 
 	# Wait for server to start listening
-	local retries=10
+	local retries=15
 	while [ $retries -gt 0 ]; do
 		if grep -q "Listening" /tmp/fdo_server.log 2>/dev/null; then
 			log_success "Server started (PID: $SERVER_PID)"
@@ -139,7 +158,19 @@ stop_server() {
 		wait "$SERVER_PID" 2>/dev/null || true
 	fi
 	pkill -f "go-build.*server" 2>/dev/null || true
+	pkill -f "examples/cmd server" 2>/dev/null || true
 	SERVER_PID=""
+
+	# Wait for port to be released
+	local retries=5
+	while [ $retries -gt 0 ]; do
+		if ! lsof -i :9999 >/dev/null 2>&1 && ! netstat -tulpn 2>/dev/null | grep :9999 >/dev/null; then
+			break
+		fi
+		sleep 1
+		retries=$((retries - 1))
+	done
+
 	sleep 1
 	log_success "Server stopped"
 }

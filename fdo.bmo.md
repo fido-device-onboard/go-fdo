@@ -26,64 +26,7 @@ limitations under the License.
 **Version**: 1.0  
 **Status**: Draft
 
-The `fdo.bmo` (Bare Metal Onboarding) FSIM enables delivery of bootable images to device firmware for OS installation. This module is functionally similar to `fdo.payload` but serves a distinct purpose: **its presence signals to the server that the client is firmware capable of booting EFI applications or ISO images**.
-
-## Relationship to fdo.payload
-
-**`fdo.bmo` and `fdo.payload` are functionally identical.** Both FSIMs use the same chunking strategy, message formats, acknowledgment gate, and result handling. The *only* difference is **intent and deployment context**:
-
-| FSIM | Client Type | Payload Purpose | Implementation Complexity |
-|------|-------------|-----------------|--------------------------|
-| `fdo.bmo` | UEFI firmware | Boot images (EFI, ISO) to chainload | Minimal - limited capabilities |
-| `fdo.payload` | OS/Installer/Application | Scripts, configs, packages to execute/apply | Full - advanced configuration support |
-
-### Why Separate FSIMs?
-
-The separation serves multiple strategic purposes:
-
-#### 1. **Capability-Based Simplification**
-- **Firmware clients** (UEFI, BIOS) have extremely limited capabilities - they can only handle boot images
-- By advertising **only** `fdo.bmo`, firmware signals: "I can only boot images, don't send me complex configurations"
-- This prevents firmware from receiving payloads it cannot possibly understand or process
-
-#### 2. **Intent-Based Phase Detection**
-FSIM advertisement serves as **implicit phase signaling** to the onboarding service:
-
-- **Only `fdo.bmo` advertised**: "I am firmware pre-OS, send me a boot image"
-- **Only `fdo.payload` advertised**: "I am booted OS/installer, send me configuration payloads"
-- **Both advertised**: "I can handle either" (unusual, but permitted)
-
-#### 3. **Server Steering and Optimization**
-The onboarding service can use FSIM advertisement to **steer the provisioning flow**:
-
-- **Sees `fdo.bmo` only**: Concludes this is firmware, simplifies its approach, sends only boot images
-- **Sees `fdo.payload` only**: Concludes this is a booted system, sends configuration payloads
-- **Sees both**: May need to determine context through other means
-
-This **bi-directional simplification** benefits both sides:
-- **Device work simplified**: Only receives payloads it can actually handle
-- **Server work simplified**: Knows exactly what type of client it's talking to
-
-### Implementation Note
-
-Because `fdo.bmo` and `fdo.payload` are wire-compatible, implementations MAY:
-
-- Share underlying chunking code between both FSIMs
-- Use a single generic payload delivery library with different FSIM name prefixes
-- Theoretically merge them into a single FSIM (though this loses the phase detection benefit)
-
-The MIME type in the payload's `image_type` or `mime_type` field provides the semantic distinction between boot images and configuration payloads.
-
-### Phase Detection Summary
-
-When a server sees a client advertising:
-
-- **Only `fdo.bmo`**: Client is firmware waiting for a boot image
-- **Only `fdo.payload`**: Client is OS/installer wanting configuration payloads
-- **Both**: Client can receive either (unusual, but permitted)
-- **Neither**: Client doesn't want any payloads
-
-This enables a single onboarding service to handle multiple phases of device provisioning without explicit phase negotiation.
+The `fdo.bmo` (Bare Metal Onboarding) FSIM enables delivery of bootable images and BIOS configuration to device firmware. It combines payload delivery (like `fdo.payload`) with firmware settings (like `fdo.sysconfig`), but is designed exclusively for pre-OS firmware environments.
 
 ## Multi-Asset Handling and NAK Fallback
 
@@ -165,15 +108,34 @@ Device → Owner: image-result [0, "Booting EFI app..."]
 
 ## Key-Value Pairs
 
+### Module Activation
+
 | Key | Direction | Type | Description |
 | --- | --------- | ---- | ----------- |
 | `fdo.bmo:active` | Bidirectional | Boolean | Module activation status |
-| `fdo.bmo:image-begin` | Owner → Device | Map | Announces boot image transfer |
-| `fdo.bmo:image-ack` | Device → Owner | Array | Accept/reject image before transfer (when `require_ack` is set) |
-| `fdo.bmo:image-data-<n>` | Owner → Device | Byte string | Image data chunk `n` (0-based) |
-| `fdo.bmo:image-end` | Owner → Device | Map | Signals completion of image transfer |
-| `fdo.bmo:image-result` | Device → Owner | Array | Final result with status/message |
-| `fdo.bmo:error` | Device → Owner | Object | Error during transfer |
+
+### Image Transfer (Boot Images, Certificates)
+
+| Key | Direction | Type | Description |
+| --- | --------- | ---- | ----------- |
+| `fdo.bmo:image-begin` | Owner → Device | Map | Announces image/certificate transfer |
+| `fdo.bmo:image-ack` | Device → Owner | Array | Accept/reject before transfer (when `require_ack` is set) |
+| `fdo.bmo:image-data-<n>` | Owner → Device | Byte string | Data chunk `n` (0-based) |
+| `fdo.bmo:image-end` | Owner → Device | Map | Signals completion of transfer |
+| `fdo.bmo:image-result` | Device → Owner | Array | Final result `[status, ?message]` |
+
+### BIOS/Firmware Configuration
+
+| Key | Direction | Type | Description |
+| --- | --------- | ---- | ----------- |
+| `fdo.bmo:set` | Owner → Device | Array | Set one or more BIOS parameters |
+| `fdo.bmo:response` | Device → Owner | Array | Result `[status, ?message]` per parameter |
+
+### Error Handling
+
+| Key | Direction | Type | Description |
+| --- | --------- | ---- | ----------- |
+| `fdo.bmo:error` | Device → Owner | Object | Error during any operation |
 
 ## Data Structures
 
@@ -186,12 +148,10 @@ Boot image transfers use the generic chunking strategy. `fdo.bmo` reserves the f
   0: 524288000,                    / total_size: 500MB ISO /
   1: "sha256",                     / hash algorithm /
   -1: "application/x-iso9660-image", / image_type (required) /
-  -2: "rhel-9.3-installer.iso",   / image name (optional) /
-  -3: {                           / image metadata (optional) /
-    "description": "RHEL 9.3 Installer",
-    "version": "9.3",
-    "boot_args": "inst.ks=..."
-  }
+  -2: "inst.ks=http://... quiet",  / boot_args (optional) /
+  -3: "rhel-9.3-installer.iso",   / name (optional) /
+  -4: "9.3",                       / version (optional) /
+  -5: "RHEL 9.3 Installer"         / description (optional) /
 }
 ```
 
@@ -200,8 +160,16 @@ Boot image transfers use the generic chunking strategy. `fdo.bmo` reserves the f
 | Key | Name | Type | Requirement | Description |
 | --- | ---- | ---- | ----------- | ----------- |
 | `-1` | image_type | tstr | **Required** | MIME type of the boot image |
-| `-2` | name | tstr | Optional | Descriptive name for the image |
-| `-3` | metadata | map | Optional | Boot arguments, version info, etc. |
+| `-2` | boot_args | tstr | Optional | Kernel/boot arguments to pass when booting the image |
+| `-3` | name | tstr | Optional | Descriptive name for the image (informational) |
+| `-4` | version | tstr | Optional | Version string (informational) |
+| `-5` | description | tstr | Optional | Human-readable description (informational) |
+
+**Notes:**
+
+- Only `image_type` is required; all other fields are optional
+- `boot_args` is the most commonly used optional field - it passes kernel command line arguments (e.g., kickstart URLs, installer options)
+- `name`, `version`, and `description` are informational only - implementations may log them but are not required to act on them
 
 ### ImageAck
 
@@ -226,7 +194,138 @@ ImageAck = [
 ]
 ```
 
+### BiosParam (set message)
+
+The `set` message carries a CBOR array of parameter name/value pairs for BIOS configuration:
+
+```cbor
+[
+  ["secure-boot", true],
+  ["bios-password", "EnterpriseKey"]
+]
+```
+
+Each pair is exactly two CBOR elements: parameter name (tstr) and parameter value (type depends on parameter).
+
+### BiosResponse (response message)
+
+One CBOR response per parameter in the corresponding `set` message:
+
+```cbor
+[
+  0,                    / status_code: 0=success, 1=warning, 2=error /
+  "Secure Boot enabled" / optional message /
+]
+```
+
+### Atomicity and Error Handling
+
+When a `set` message contains multiple parameters, firmware SHOULD apply them atomically (all-or-nothing):
+
+- If **any** parameter fails validation or application, **all** parameters in that message SHOULD be rolled back
+- This ensures the device is not left in a partially-configured state
+
+Because atomic behavior may be difficult to guarantee in all firmware implementations, **owners SHOULD issue single key-value commands** for critical settings. This allows:
+
+- Clear disambiguation of which parameter failed
+- Simpler error handling and retry logic
+- More predictable behavior across diverse firmware implementations
+
+**Recommended pattern for critical settings:**
+
+```
+fdo.bmo:set = [["secure-boot", true]]
+fdo.bmo:response = [0, "Secure Boot enabled"]
+
+fdo.bmo:set = [["bios-password", "EnterpriseKey"]]
+fdo.bmo:response = [0, "Password set"]
+```
+
+Rather than combining them in a single message.
+
+## BIOS/Firmware Configuration
+
+The BMO FSIM includes BIOS configuration capabilities alongside image transfer. This allows a single FSIM to handle the complete bare-metal onboarding flow: certificate enrollment, Secure Boot configuration, and boot image delivery.
+
+**Note:** All BMO messages use CBOR encoding, consistent with the FDO protocol.
+
+### Standard BIOS Parameters
+
+| Parameter | Value Type | Purpose |
+| --------- | ---------- | ------- |
+| `secure-boot` | bool | Enable (`true`) or disable (`false`) UEFI Secure Boot |
+| `bios-password` | tstr / null | Set password (string) or clear it (`null`) |
+| `boot-order` | array | Set boot device priority order |
+
+### secure-boot
+
+Enables or disables UEFI Secure Boot.
+
+- **Parameter name**: `secure-boot`
+- **Value type**: Boolean
+- **Values**: `true` (enable) or `false` (disable)
+
+**Example:**
+
+```
+fdo.bmo:set = [["secure-boot", true]]
+fdo.bmo:response = [0, "Secure Boot enabled"]
+```
+
+**Implementation notes:**
+
+- Firmware MUST verify that enabling Secure Boot will not render the system unbootable
+- If no valid boot path exists with Secure Boot enabled, firmware SHOULD reject with error
+- Enabling Secure Boot typically requires valid certificates in the DB first
+
+### bios-password
+
+Sets or clears the BIOS/UEFI setup password.
+
+- **Parameter name**: `bios-password`
+- **Value type**: Text string or null
+- **Values**: `"password-string"` (set) or `null` (clear/unlock)
+
+**Example:**
+
+```
+fdo.bmo:set = [["bios-password", "SecureP@ss123"]]
+fdo.bmo:response = [0, "Password set"]
+```
+
+**Implementation notes:**
+
+- Password is transmitted over the already-encrypted FDO channel
+- Setting a password "locks" the BIOS - users cannot modify settings without it
+- Clearing the password (`null`) "unlocks" the BIOS for user modification
+- Owner SHOULD set BIOS password as final step after all other configuration
+
+### boot-order
+
+Sets the boot device priority order.
+
+- **Parameter name**: `boot-order`
+- **Value type**: Array of strings (device identifiers)
+
+**Example:**
+
+```
+fdo.bmo:set = [["boot-order", ["NVMe0", "PXE", "USB"]]]
+fdo.bmo:response = [0, "Boot order set"]
+```
+
+### Vendor-Specific Parameters
+
+Vendor-specific BIOS parameters use reverse-DNS notation:
+
+- `com.dell.asset-tag` → `"ASSET12345"`
+- `com.hp.virtualization` → `true`
+
+Unknown parameters MUST be rejected with an error response.
+
 ## Supported Image Types
+
+### Boot Images
 
 | MIME Type | Description |
 |-----------|-------------|
@@ -236,6 +335,68 @@ ImageAck = [
 | `application/x-raw-disk-image` | Raw disk image |
 | `application/x-pxe` | PXE boot image |
 | `application/x-ipxe-script` | iPXE boot script |
+
+### UEFI Secure Boot Database Operations
+
+These image types enable enrollment of certificates into UEFI Secure Boot databases. Firmware that does not support database modification SHOULD NAK these with error code 7 (DB Modification Not Supported).
+
+| MIME Type | Description |
+|-----------|-------------|
+| `application/x-uefi-db-cert` | Enroll certificate into Secure Boot DB (allowed signatures) |
+| `application/x-uefi-dbx-hash` | Enroll hash into Secure Boot DBX (forbidden signatures) |
+| `application/x-uefi-dbx-cert` | Enroll certificate into Secure Boot DBX (revoked certificates) |
+
+#### DB vs DBX
+
+| Database | Purpose | Effect | Use Case |
+|----------|---------|--------|----------|
+| **DB** | Allowed Signature Database | Certificates/hashes that ARE trusted for boot | Enroll enterprise signing cert to allow custom EFI apps |
+| **DBX** | Forbidden Signature Database | Certificates/hashes that are REVOKED/blocked | Revoke compromised bootloaders, block known-bad hashes |
+
+#### Certificate Enrollment Payload Format
+
+For `application/x-uefi-db-cert` and `application/x-uefi-dbx-cert`, the payload is a DER-encoded X.509 certificate.
+
+For `application/x-uefi-dbx-hash`, the payload is a raw SHA-256 hash (32 bytes) of the image to be blocked.
+
+#### Security Considerations for DB/DBX Modification
+
+**DB Enrollment** (`application/x-uefi-db-cert`):
+
+- Adds a trusted signing certificate
+- Images signed by this certificate will be allowed to boot
+- **Risk**: Enrolling an untrusted cert allows arbitrary code execution
+- **Mitigation**: FDO channel is authenticated; only legitimate owner can enroll
+
+**DBX Enrollment** (`application/x-uefi-dbx-hash`, `application/x-uefi-dbx-cert`):
+
+- Blocks specific hashes or revokes certificates
+- Prevents boot of images matching the hash or signed by the revoked cert
+- **Risk**: Incorrect DBX entry could brick the device (block legitimate bootloader)
+- **Mitigation**: Firmware SHOULD validate that at least one valid boot path remains
+
+#### Protocol Example: Certificate Enrollment
+
+```
+Owner → Device: fdo.bmo:image-begin {
+  0: 1245,                           / cert size /
+  -1: "application/x-uefi-db-cert"   / enroll to DB /
+}
+Device → Owner: fdo.bmo:image-ack [true]
+
+[Transfer DER certificate...]
+
+Device → Owner: fdo.bmo:image-result [0, "Certificate enrolled in DB"]
+```
+
+#### NAK for Unsupported DB Modification
+
+```
+Owner → Device: fdo.bmo:image-begin {
+  -1: "application/x-uefi-db-cert"
+}
+Device → Owner: fdo.bmo:image-ack [false, 7, "DB modification not supported"]
+```
 
 ## Error Codes
 
@@ -247,6 +408,8 @@ ImageAck = [
 | 4 | Boot Failed | Chainload/boot attempt failed |
 | 5 | Transfer Error | Error during data transfer |
 | 6 | Secure Boot Violation | Image fails Secure Boot verification |
+| 7 | DB Modification Not Supported | Firmware cannot modify Secure Boot DB/DBX |
+| 8 | DB Modification Failed | DB/DBX enrollment failed (e.g., invalid cert, policy violation) |
 
 ## Protocol Flow
 
@@ -334,6 +497,62 @@ Device → Owner: fdo.bmo:image-ack [false, 1, "Image type not supported"]
 
 Owner MAY then attempt a different image type if firmware supports alternatives.
 
+### Complete Onboarding Flow (BIOS + Boot Image)
+
+This example shows a complete bare-metal onboarding using a single BMO FSIM session:
+
+```
+Owner                           Device (Firmware)
+  |                               |
+  | fdo.bmo:active = true         |
+  |<------------------------------|
+  |                               |
+  |  Step 1: Enroll certificate to Secure Boot DB
+  |                               |
+  | fdo.bmo:image-begin           |
+  | { -1: "application/x-uefi-db-cert" } |
+  |------------------------------>|
+  | fdo.bmo:image-ack [true]      |
+  |<------------------------------|
+  | fdo.bmo:image-data-0 (cert)   |
+  |------------------------------>|
+  | fdo.bmo:image-end             |
+  |------------------------------>|
+  | fdo.bmo:image-result [0]      |
+  |<------------------------------|
+  |                               |
+  |  Step 2: Enable Secure Boot
+  |                               |
+  | fdo.bmo:set [["secure-boot", true]] |
+  |------------------------------>|
+  | fdo.bmo:response [0, "Secure Boot enabled"] |
+  |<------------------------------|
+  |                               |
+  |  Step 3: Set BIOS password (lock config)
+  |                               |
+  | fdo.bmo:set [["bios-password", "EnterpriseKey"]] |
+  |------------------------------>|
+  | fdo.bmo:response [0, "Password set"] |
+  |<------------------------------|
+  |                               |
+  |  Step 4: Deliver signed boot image
+  |                               |
+  | fdo.bmo:image-begin           |
+  | { -1: "application/efi" }     |
+  |------------------------------>|
+  | fdo.bmo:image-ack [true]      |
+  |<------------------------------|
+  | fdo.bmo:image-data-0..N       |
+  |------------------------------>|
+  | fdo.bmo:image-end             |
+  |------------------------------>|
+  | fdo.bmo:image-result [0, "Booting..."] |
+  |<------------------------------|
+  |                               |
+  |         [FDO session ends]    |
+  |         [Firmware boots EFI]  |
+```
+
 ## Implementation Requirements
 
 ### Device (Firmware) Requirements
@@ -344,16 +563,21 @@ Owner MAY then attempt a different image type if firmware supports alternatives.
 - Validate image type before accepting data
 - Verify hash when provided in `image-end`
 - Report errors with appropriate codes
+- Validate BIOS parameter names and values before applying
+- Return appropriate response codes for each BIOS parameter
 
 **SHOULD**:
 
 - Support at least `application/efi` and `application/x-iso9660-image`
+- Support at least `secure-boot` and `bios-password` BIOS parameters
 - Validate Secure Boot signatures when Secure Boot is enabled
+- Verify Secure Boot enablement won't brick the device
 - Provide meaningful error messages
 
 **MAY**:
 
 - Support additional image types
+- Support additional BIOS parameters (boot-order, vendor-specific)
 - Provide boot progress indication
 
 ### Owner (Server) Requirements
@@ -364,6 +588,8 @@ Owner MAY then attempt a different image type if firmware supports alternatives.
 - Specify valid image type in `image-begin`
 - Send data in appropriate chunk sizes for firmware memory constraints
 - Set `require_ack: true` for all image-begin messages to enable NAK fallback
+- Handle BIOS response codes appropriately (especially errors)
+- Enroll required certificates before enabling Secure Boot
 
 **SHOULD**:
 
@@ -371,6 +597,8 @@ Owner MAY then attempt a different image type if firmware supports alternatives.
 - Include descriptive metadata (name, version)
 - **Present multiple boot assets in preference order** (EFI → ISO → Raw disk)
 - **Implement NAK fallback** - if firmware rejects first asset, try next preferred option
+- Set BIOS password as final configuration step
+- Log all BIOS configuration changes for audit
 
 **Multi-Asset Strategy**:
 
@@ -396,25 +624,3 @@ The image is delivered over the FDO TO2 encrypted channel from an authenticated 
 - Log image metadata for audit purposes
 - Verify image signatures when applicable
 - Reject images that fail integrity checks
-
-## Relationship to fdo.payload
-
-`fdo.bmo` and `fdo.payload` share the same chunking mechanism but serve different purposes:
-
-```
-                    ┌─────────────────────────────────────────┐
-                    │         Onboarding Service              │
-                    │  (has boot image AND config payloads)   │
-                    └─────────────────────────────────────────┘
-                              │                     │
-            Client advertises │                     │ Client advertises
-               fdo.bmo        │                     │    fdo.payload
-                              ▼                     ▼
-                    ┌─────────────┐       ┌─────────────────┐
-                    │  Firmware   │       │  OS/Installer   │
-                    │  receives   │       │    receives     │
-                    │ boot image  │       │  config payload │
-                    └─────────────┘       └─────────────────┘
-```
-
-A server with complete device configuration can serve both firmware (via `fdo.bmo`) and installers (via `fdo.payload`) based solely on which FSIM each client advertises.
