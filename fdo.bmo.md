@@ -402,6 +402,8 @@ Device → Owner: fdo.bmo:image-ack [false, 7, "DB modification not supported"]
 
 ## Error Codes
 
+### Image Operation Error Codes
+
 | Code | Name | Description |
 | ---- | ---- | ----------- |
 | 1 | Unknown Image Type | Firmware does not support the image type |
@@ -412,6 +414,19 @@ Device → Owner: fdo.bmo:image-ack [false, 7, "DB modification not supported"]
 | 6 | Secure Boot Violation | Image fails Secure Boot verification |
 | 7 | DB Modification Not Supported | Firmware cannot modify Secure Boot DB/DBX |
 | 8 | DB Modification Failed | DB/DBX enrollment failed (e.g., invalid cert, policy violation) |
+
+### BIOS Parameter Error Codes
+
+| Code | Name | Description |
+| ---- | ---- | ----------- |
+| 0 | Success | Parameter set successfully |
+| 1 | Unknown Parameter | Parameter name not recognized |
+| 2 | Invalid Value | Parameter value is invalid |
+| 3 | Permission Denied | Insufficient permissions |
+| 4 | Operation Failed | Generic failure |
+| 5 | Not Supported | Parameter not supported by firmware |
+
+**Note**: BIOS parameter error codes are mapped to the basic BMO response status codes (0=success, 1=warning, 2=error) in the protocol. Specific error details should be provided in the optional message field.
 
 ## Protocol Flow
 

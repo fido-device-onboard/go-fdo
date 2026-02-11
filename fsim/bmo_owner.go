@@ -23,13 +23,19 @@ type BMOOwner struct {
 	// Images to send to the device
 	images []ImageToSend
 
+	// BIOS parameters to send to the device
+	biosParams []BiosParam
+
 	// Internal state
-	currentSender *chunking.ChunkSender
-	currentIndex  int
-	sendState     bmoSendState
-	sentActive    bool
-	lastResult    *ImageResult
-	lastError     *ImageErrorInfo
+	currentSender   *chunking.ChunkSender
+	currentIndex    int
+	sendState       bmoSendState
+	sentActive      bool
+	lastResult      *ImageResult
+	lastError       *ImageErrorInfo
+	biosParamIndex  int
+	biosSendState   bmoBiosSendState
+	pendingResponse *pendingBiosResponse
 }
 
 type bmoSendState int
@@ -42,6 +48,20 @@ const (
 	bmoStateSendingEnd
 	bmoStateWaitingResult
 )
+
+type bmoBiosSendState int
+
+const (
+	bmoBiosStateIdle bmoBiosSendState = iota
+	bmoBiosStateSending
+	bmoBiosStateWaitingResponse
+)
+
+type pendingBiosResponse struct {
+	messageType string
+	data        []byte
+	errorCode   *int
+}
 
 // ImageToSend represents a boot image to be sent to the device per fdo.bmo.md.
 type ImageToSend struct {
@@ -102,6 +122,14 @@ func (b *BMOOwner) AddImageWithAck(imageType, name string, data []byte, metadata
 	})
 }
 
+// AddBiosParam adds a BIOS parameter to be set on the device.
+func (b *BMOOwner) AddBiosParam(name, value string) {
+	b.biosParams = append(b.biosParams, BiosParam{
+		Name:  name,
+		Value: value,
+	})
+}
+
 // Transition implements serviceinfo.OwnerModule.
 func (b *BMOOwner) Transition(active bool) error {
 	if !active {
@@ -117,6 +145,9 @@ func (b *BMOOwner) reset() {
 	b.sendState = bmoStateIdle
 	b.lastResult = nil
 	b.lastError = nil
+	b.biosParamIndex = 0
+	b.biosSendState = bmoBiosStateIdle
+	b.pendingResponse = nil
 }
 
 // produceInfo generates messages to send to the device using the chunking library.
@@ -241,6 +272,50 @@ func (b *BMOOwner) produceInfo(ctx context.Context, producer *serviceinfo.Produc
 		return false, false, nil
 	}
 
+	// Handle BIOS parameter sending after images are done
+	if b.currentIndex >= len(b.images) && b.sendState == bmoStateIdle {
+		// Send active message for BIOS parameters if not already sent
+		if !b.sentActive && len(b.biosParams) > 0 {
+			if err := producer.WriteChunk("active", []byte{0xf5}); err != nil { // 0xf5 is CBOR true
+				return false, false, fmt.Errorf("error sending active message for BIOS: %w", err)
+			}
+			b.sentActive = true
+			return false, false, nil
+		}
+
+		// Send BIOS parameters
+		if b.biosParamIndex < len(b.biosParams) {
+			if b.biosSendState == bmoBiosStateIdle {
+				// Send all BIOS parameters in one message
+				params := make([][]any, len(b.biosParams))
+				for i, param := range b.biosParams {
+					params[i] = []any{param.Name, param.Value}
+				}
+
+				paramsData, err := cbor.Marshal(params)
+				if err != nil {
+					return false, false, fmt.Errorf("failed to encode BIOS parameters: %w", err)
+				}
+
+				if err := producer.WriteChunk("set", paramsData); err != nil {
+					return false, false, fmt.Errorf("failed to send BIOS set: %w", err)
+				}
+
+				if debugEnabled() {
+					slog.Debug("fdo.bmo: sent BIOS parameters", "count", len(params))
+				}
+
+				b.biosSendState = bmoBiosStateSending
+				return false, false, nil
+			}
+		}
+
+		// Check if we're done with BIOS parameters too
+		if b.biosParamIndex >= len(b.biosParams) && b.biosSendState == bmoBiosStateIdle {
+			return false, true, nil
+		}
+	}
+
 	return false, false, nil
 }
 
@@ -332,6 +407,41 @@ func (b *BMOOwner) receive(ctx context.Context, key string, messageBody io.Reade
 		b.sendState = bmoStateIdle
 
 		return fmt.Errorf("bmo error %d: %s", code, message)
+
+	case "response":
+		// Handle BIOS parameter response from device
+		var responseData []any
+		if err := cbor.NewDecoder(messageBody).Decode(&responseData); err != nil {
+			return fmt.Errorf("error decoding BIOS response: %w", err)
+		}
+
+		if len(responseData) >= 1 {
+			statusCode, _ := responseData[0].(int)
+			message := ""
+			if len(responseData) >= 2 {
+				message, _ = responseData[1].(string)
+			}
+
+			if debugEnabled() {
+				slog.Debug("fdo.bmo: received BIOS response", "status", statusCode, "message", message)
+			}
+
+			// Store response for pending response handling
+			responseDataBytes, err := cbor.Marshal(responseData)
+			if err != nil {
+				return fmt.Errorf("failed to encode BIOS response: %w", err)
+			}
+			b.pendingResponse = &pendingBiosResponse{
+				messageType: "response",
+				data:        responseDataBytes,
+				errorCode:   nil,
+			}
+
+			// If status is an error, we might want to stop sending BIOS parameters
+			if statusCode == 2 {
+				b.biosSendState = bmoBiosStateIdle
+			}
+		}
 
 	default:
 		if debugEnabled() {

@@ -80,6 +80,8 @@ var (
 	bmoFile              string
 	bmoImageType         string
 	bmoFiles             stringList // Multiple BMO files with types (format: type:file)
+	bmoSetParams         stringList // BIOS parameters to set (format: key=value)
+	bmoSetFile           string     // BIOS parameters from file
 	payloadFiles         stringList // Multiple payload files with types (format: type:file)
 	wifiConfigFile       string
 	credentials          stringList
@@ -132,6 +134,8 @@ func init() {
 	serverFlags.StringVar(&bmoFile, "bmo-file", "", "Use fdo.bmo FSIM to send boot image `file` to device")
 	serverFlags.StringVar(&bmoImageType, "bmo-type", "application/x-iso9660-image", "Image type for BMO file")
 	serverFlags.Var(&bmoFiles, "bmo", "Use fdo.bmo FSIM with `type:file` format with RequireAck (flag may be used multiple times for NAK testing)")
+	serverFlags.Var(&bmoSetParams, "bmo-set", "Use fdo.bmo FSIM to set BIOS parameters with `key=value` pairs (flag may be used multiple times)")
+	serverFlags.StringVar(&bmoSetFile, "bmo-set-file", "", "Use fdo.bmo FSIM to set BIOS parameters from `file` (one key=value per line)")
 	serverFlags.Var(&payloadFiles, "payload", "Use fdo.payload FSIM with `type:file` format with RequireAck (flag may be used multiple times for NAK testing)")
 	serverFlags.StringVar(&wifiConfigFile, "wifi-config", "", "Use fdo.wifi FSIM with network config from JSON `file`")
 	serverFlags.Var(&credentials, "credential", "Use fdo.credentials FSIM with `type:id:data[:endpoint_url]` format (flag may be used multiple times)")
@@ -175,6 +179,13 @@ func validateFiles() error {
 		filePath := parts[1]
 		if _, err := os.Stat(filePath); err != nil {
 			return fmt.Errorf("BMO file not found: %s", filePath)
+		}
+	}
+
+	// Validate BMO set file
+	if bmoSetFile != "" {
+		if _, err := os.Stat(bmoSetFile); err != nil {
+			return fmt.Errorf("BMO set file not found: %s", bmoSetFile)
 		}
 	}
 
@@ -1034,6 +1045,41 @@ func ownerModules(modules []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 					log.Fatalf("error reading BMO file %q: %v", bmoFile, err)
 				}
 				bmoOwner.AddImage(bmoImageType, filepath.Base(bmoFile), data, nil)
+			}
+
+			// Add BIOS parameters if specified
+			if len(bmoSetParams) > 0 {
+				for _, param := range bmoSetParams {
+					parts := strings.SplitN(param, "=", 2)
+					if len(parts) != 2 {
+						log.Fatalf("invalid BMO BIOS parameter %q: expected key=value format", param)
+					}
+					key, value := parts[0], parts[1]
+					bmoOwner.AddBiosParam(key, value)
+					log.Printf("BMO: Added BIOS parameter: %s=%s", key, value)
+				}
+			}
+
+			// Add BIOS parameters from file if specified
+			if bmoSetFile != "" {
+				data, err := os.ReadFile(bmoSetFile)
+				if err != nil {
+					log.Fatalf("error reading BMO set file %q: %v", bmoSetFile, err)
+				}
+				lines := strings.Split(string(data), "\n")
+				for _, line := range lines {
+					line = strings.TrimSpace(line)
+					if line == "" || strings.HasPrefix(line, "#") {
+						continue // Skip empty lines and comments
+					}
+					parts := strings.SplitN(line, "=", 2)
+					if len(parts) != 2 {
+						log.Fatalf("invalid BMO BIOS parameter in file %q: %s (expected key=value format)", bmoSetFile, line)
+					}
+					key, value := parts[0], parts[1]
+					bmoOwner.AddBiosParam(key, value)
+					log.Printf("BMO: Added BIOS parameter from file: %s=%s", key, value)
+				}
 			}
 
 			if !yield("fdo.bmo", bmoOwner) {

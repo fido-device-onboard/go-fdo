@@ -74,6 +74,25 @@ type ImageAckHandler interface {
 	AcceptImage(imageType, name string, size uint64, metadata map[string]any) (accepted bool, reasonCode int, message string)
 }
 
+// BiosParamHandler is called when the owner sends BIOS parameters to set.
+// This allows the application to handle BIOS configuration with success/error responses.
+type BiosParamHandler interface {
+	// SetBiosParameter sets a BIOS parameter and returns the result.
+	// name: Parameter name (e.g., "secure-boot", "bios-password", "boot-order")
+	// value: Parameter value as string (parsed according to parameter type)
+	// Returns: (statusCode, message, error)
+	// statusCode: 0=success, 1=warning, 2=error (per BMO spec)
+	// message: Human-readable result message
+	// error: Internal error (should not be sent to owner)
+	SetBiosParameter(name, value string) (statusCode int, message string, err error)
+}
+
+// BiosParam represents a BIOS parameter name/value pair.
+type BiosParam struct {
+	Name  string `cbor:"name"`
+	Value string `cbor:"value"`
+}
+
 // BMO implements the fdo.bmo FSIM for device-side boot image delivery.
 // It follows the specification in fdo.bmo.md and uses the generic chunking strategy.
 // This is functionally identical to Payload but uses different message names
@@ -92,6 +111,10 @@ type BMO struct {
 	// If nil and RequireAck=true, images are automatically accepted.
 	AckHandler ImageAckHandler
 
+	// Optional: Handler for BIOS parameter setting
+	// If nil, BIOS set messages will be ignored.
+	BiosParamHandler BiosParamHandler
+
 	// Active indicates if the module is active
 	Active bool
 
@@ -101,6 +124,15 @@ type BMO struct {
 	begin        chunking.BeginMessage
 	resultStatus int
 	resultMsg    string
+
+	// BIOS parameter state
+	pendingBiosResponses []BiosResponse
+}
+
+// BiosResponse represents a BIOS parameter response to be sent to the owner.
+type BiosResponse struct {
+	StatusCode int    // 0=success, 1=warning, 2=error
+	Message    string // Optional message
 }
 
 var _ serviceinfo.DeviceModule = (*BMO)(nil)
@@ -123,12 +155,44 @@ func (b *BMO) Receive(ctx context.Context, messageName string, messageBody io.Re
 		return b.handleChunkedMessage(ctx, messageName, messageBody, respond)
 	}
 
+	// Handle BIOS parameter messages
+	switch messageName {
+	case "set":
+		fmt.Printf("[BMODevice] Handling BIOS set message\n")
+		return b.handleBiosSet(messageBody, respond)
+	case "response":
+		fmt.Printf("[BMODevice] Handling BIOS response message\n")
+		return b.handleBiosResponse(messageBody, respond)
+	}
+
 	fmt.Printf("[BMODevice] Ignoring unknown message: %s\n", messageName)
 	return nil
 }
 
 // Yield implements serviceinfo.DeviceModule.
 func (b *BMO) Yield(ctx context.Context, respond func(string) io.Writer, yield func()) error {
+	// Send pending BIOS responses
+	if len(b.pendingBiosResponses) > 0 {
+		for _, response := range b.pendingBiosResponses {
+			responseData := []any{response.StatusCode}
+			if response.Message != "" {
+				responseData = append(responseData, response.Message)
+			}
+
+			w := respond("response")
+			if err := cbor.NewEncoder(w).Encode(responseData); err != nil {
+				return fmt.Errorf("failed to encode BIOS response: %w", err)
+			}
+
+			if debugEnabled() {
+				slog.Debug("fdo.bmo: sent BIOS response", "status", response.StatusCode, "message", response.Message)
+			}
+		}
+
+		// Clear pending responses
+		b.pendingBiosResponses = nil
+	}
+
 	return nil
 }
 
@@ -139,6 +203,7 @@ func (b *BMO) reset() {
 	}
 	b.receiver = nil
 	b.buffer = nil
+	b.pendingBiosResponses = nil
 }
 
 // handleChunkedMessage processes image-begin, image-data-<n>, and image-end messages.
@@ -364,5 +429,92 @@ func (b *BMO) sendError(respond func(string) io.Writer, code int, message, detai
 		return fmt.Errorf("failed to encode error: %w", err)
 	}
 
+	return nil
+}
+
+// handleBiosSet handles BIOS parameter set messages from the owner.
+func (b *BMO) handleBiosSet(messageBody io.Reader, respond func(string) io.Writer) error {
+	// If no BIOS handler is configured, ignore the message
+	if b.BiosParamHandler == nil {
+		if debugEnabled() {
+			slog.Debug("fdo.bmo: no BiosParamHandler configured, ignoring set message")
+		}
+		return nil
+	}
+
+	// Decode the set message (array of [name, value] pairs)
+	var params [][]any
+	if err := cbor.NewDecoder(messageBody).Decode(&params); err != nil {
+		return fmt.Errorf("error decoding BIOS set message: %w", err)
+	}
+
+	if debugEnabled() {
+		slog.Debug("fdo.bmo: received BIOS parameters", "count", len(params))
+	}
+
+	// Process each parameter and collect responses
+	var responses []BiosResponse
+
+	for _, param := range params {
+		if len(param) != 2 {
+			response := BiosResponse{
+				StatusCode: 2, // Error
+				Message:    "Invalid parameter format, expected [name, value]",
+			}
+			responses = append(responses, response)
+			continue
+		}
+
+		name, nameOk := param[0].(string)
+		value, valueOk := param[1].(string)
+		if !nameOk || !valueOk {
+			response := BiosResponse{
+				StatusCode: 2, // Error
+				Message:    "Invalid parameter types, expected string name and value",
+			}
+			responses = append(responses, response)
+			continue
+		}
+
+		// Call the BIOS parameter handler
+		statusCode, message, err := b.BiosParamHandler.SetBiosParameter(name, value)
+		if err != nil {
+			// Internal error - don't send to owner, just log
+			slog.Error("fdo.bmo: internal error setting BIOS parameter", "parameter", name, "error", err)
+			response := BiosResponse{
+				StatusCode: 2, // Error
+				Message:    "Internal error processing parameter",
+			}
+			responses = append(responses, response)
+			continue
+		}
+
+		response := BiosResponse{
+			StatusCode: statusCode,
+			Message:    message,
+		}
+		responses = append(responses, response)
+
+		if debugEnabled() {
+			slog.Debug("fdo.bmo: processed BIOS parameter", "parameter", name, "value", value, "status", statusCode, "message", message)
+		}
+	}
+
+	// Store responses for Yield() to send
+	b.pendingBiosResponses = responses
+
+	// If there was an error and atomic behavior is expected, we could rollback here
+	// For now, we send individual responses as per the protocol
+
+	return nil
+}
+
+// handleBiosResponse handles BIOS parameter response messages (for owner side).
+func (b *BMO) handleBiosResponse(messageBody io.Reader, respond func(string) io.Writer) error {
+	// This is typically handled on the owner side, but we include it for completeness
+	// On the device side, this would be used for acknowledging responses
+	if debugEnabled() {
+		slog.Debug("fdo.bmo: received BIOS response (device side)")
+	}
 	return nil
 }

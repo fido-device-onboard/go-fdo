@@ -796,15 +796,27 @@ EOF
 	start_server "-reuse-cred -wifi-config ../$WIFI_CONFIG"
 
 	log_step "Running DI"
-	run_cmd go run ./cmd client -di "$SERVER_URL"
+	if ! run_cmd go run ./cmd client -di "$SERVER_URL"; then
+		log_error "DI failed"
+		rm -f "$WIFI_CONFIG"
+		return 1
+	fi
 	log_success "DI completed"
 
 	log_step "Running TO1/TO2 with FDO 2.0 and WiFi configuration"
-	run_cmd go run ./cmd client -fdo-version 200
+	if ! run_cmd go run ./cmd client -fdo-version 200; then
+		log_error "TO1/TO2 failed with FDO 2.0"
+		rm -f "$WIFI_CONFIG"
+		return 1
+	fi
 	log_success "TO1/TO2 completed with FDO 2.0 and WiFi configuration"
 
 	log_step "Running TO1/TO2 again with FDO 2.0 (credential reuse)"
-	run_cmd go run ./cmd client -fdo-version 200
+	if ! run_cmd go run ./cmd client -fdo-version 200; then
+		log_error "TO1/TO2 failed with FDO 2.0 (reuse)"
+		rm -f "$WIFI_CONFIG"
+		return 1
+	fi
 	log_success "TO1/TO2 completed with FDO 2.0 (reuse)"
 
 	stop_server
