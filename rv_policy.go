@@ -126,7 +126,7 @@ func checkManufacturerKeyConsistency(newVoucher, existingVoucher *Voucher) error
 	}
 
 	if existingMfgHash != newMfgHash {
-		return fmt.Errorf("manufacturer key mismatch: GUID %x already registered with different manufacturer", newVoucher.Header.Val.GUID)
+		return fmt.Errorf("manufacturer key mismatch: GUID %s already registered with different manufacturer", newVoucher.Header.Val.GUID.String())
 	}
 
 	return nil
@@ -136,7 +136,7 @@ func checkManufacturerKeyConsistency(newVoucher, existingVoucher *Voucher) error
 func checkFirstRegistrationLock(existingVoucher *Voucher) error {
 	// The existence of a non-expired voucher means we should reject
 	// (RVBlob already filtered out expired entries)
-	return fmt.Errorf("GUID %x is locked to first registration until expiration", existingVoucher.Header.Val.GUID)
+	return fmt.Errorf("GUID %s is locked to first registration until expiration", existingVoucher.Header.Val.GUID.String())
 }
 
 // checkOwnerKeyConsistency verifies that the owner key (final voucher entry) matches.
@@ -162,7 +162,7 @@ func checkOwnerKeyConsistency(newVoucher, existingVoucher *Voucher) error {
 	}
 
 	if existingOwnerHash != newOwnerHash {
-		return fmt.Errorf("owner key mismatch: GUID %x already registered with different owner", newVoucher.Header.Val.GUID)
+		return fmt.Errorf("owner key mismatch: GUID %s already registered with different owner", newVoucher.Header.Val.GUID.String())
 	}
 
 	return nil

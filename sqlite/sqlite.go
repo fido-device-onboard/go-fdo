@@ -643,10 +643,10 @@ func (db *DB) SetIncompleteVoucherHeader(ctx context.Context, ovh *fdo.VoucherHe
 		return fmt.Errorf("error marshaling ownership voucher header: %w", err)
 	}
 
-	return db.insert(ctx, "incomplete_vouchers", map[string]any{
+	return db.insertOrIgnore(ctx, "incomplete_vouchers", map[string]any{
 		"session": sessID,
 		"header":  ovhCBOR,
-	}, nil)
+	})
 }
 
 // IncompleteVoucherHeader gets an incomplete (missing HMAC) voucher header
@@ -671,6 +671,7 @@ func (db *DB) IncompleteVoucherHeader(ctx context.Context) (*fdo.VoucherHeader, 
 	if err := cbor.Unmarshal(ovhCBOR, &ovh); err != nil {
 		return nil, fmt.Errorf("error unmarshaling ownership voucher header from DB: %w", err)
 	}
+
 	return &ovh, nil
 }
 

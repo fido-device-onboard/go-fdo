@@ -45,7 +45,7 @@ func (s *TO2Server) helloDeviceAck20(ctx context.Context, msg io.Reader) (*Hello
 	ov, err := s.Vouchers.Voucher(ctx, probe.GUID)
 	if err != nil || len(ov.Entries) == 0 {
 		captureErr(ctx, protocol.ResourceNotFound, "")
-		return nil, fmt.Errorf("error retrieving voucher for device %x: %w", probe.GUID, err)
+		return nil, fmt.Errorf("error retrieving voucher for device %s: %w", probe.GUID.String(), err)
 	}
 
 	// Generate nonce for ProveDevice20
@@ -428,7 +428,7 @@ func (s *TO2Server) doneAck20(ctx context.Context, msg io.Reader) (*DoneAck20Msg
 	}
 	currentOV, err := s.Vouchers.Voucher(ctx, currentGUID)
 	if err != nil || len(currentOV.Entries) == 0 {
-		return nil, fmt.Errorf("error retrieving voucher for device %x: %w", currentGUID, err)
+		return nil, fmt.Errorf("error retrieving voucher for device %s: %w", currentGUID.String(), err)
 	}
 	rvInfo, err := s.Session.RvInfo(ctx)
 	if err != nil {
