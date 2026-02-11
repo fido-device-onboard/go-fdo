@@ -15,6 +15,10 @@ import (
 	"crypto/sha512"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"database/sql"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -39,6 +43,7 @@ import (
 	"github.com/fido-device-onboard/go-fdo/protocol"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 	"github.com/fido-device-onboard/go-fdo/tpm"
+	_ "github.com/ncruces/go-sqlite3"
 )
 
 var clientFlags = flag.NewFlagSet("client", flag.ContinueOnError)
@@ -63,6 +68,14 @@ var (
 	bmoSupportedTypes     string // Comma-separated list of supported BMO MIME types (empty = accept all)
 	payloadSupportedTypes string // Comma-separated list of supported Payload MIME types (empty = accept all)
 	allowSingleSided      bool   // Allow single-sided attestation (WiFi-only mode)
+	clientDBPath          string // SQLite database file path (matches server -db flag)
+
+	// Voucher management flags
+	listVouchers  bool   // List vouchers in database
+	voucherGUID   string // GUID for voucher operations
+	voucherSerial string // Serial number for voucher operations
+	voucherExport string // Export voucher to file
+	voucherFormat string // Export format (pem, json, cbor)
 )
 
 type fsVar map[string]string
@@ -162,11 +175,24 @@ func init() {
 	clientFlags.StringVar(&bmoSupportedTypes, "bmo-supported-types", "", "Comma-separated list of supported BMO MIME `types` (empty = accept all)")
 	clientFlags.StringVar(&payloadSupportedTypes, "payload-supported-types", "", "Comma-separated list of supported Payload MIME `types` (empty = accept all)")
 	clientFlags.BoolVar(&allowSingleSided, "allow-single-sided", false, "Allow single-sided attestation (WiFi-only mode, owner not verified)")
+	clientFlags.StringVar(&clientDBPath, "db", "", "SQLite database file path")
+
+	// Voucher management flags
+	clientFlags.BoolVar(&listVouchers, "list-vouchers", false, "List vouchers in database")
+	clientFlags.StringVar(&voucherGUID, "voucher-guid", "", "GUID for voucher operations (hex string)")
+	clientFlags.StringVar(&voucherSerial, "voucher-serial", "", "Serial number for voucher operations")
+	clientFlags.StringVar(&voucherExport, "voucher-export", "", "Export voucher to file")
+	clientFlags.StringVar(&voucherFormat, "voucher-format", "pem", "Export format (pem, json, cbor)")
 }
 
 func client(ctx context.Context) error {
 	if debug {
 		level.Set(slog.LevelDebug)
+	}
+
+	// Handle voucher management operations
+	if listVouchers || voucherExport != "" {
+		return handleVoucherOperations()
 	}
 
 	// Perform DI if given a URL
@@ -755,4 +781,278 @@ func transferOwnership2(ctx context.Context, transport fdo.Transport, to1d *cose
 		return nil, err
 	}
 	return cred, nil
+}
+
+// handleVoucherOperations handles voucher listing and export operations
+func handleVoucherOperations() error {
+	// Check if database exists
+	if clientDBPath == "" {
+		return fmt.Errorf("database file not specified: use -db flag")
+	}
+
+	if _, err := os.Stat(clientDBPath); os.IsNotExist(err) {
+		return fmt.Errorf("database file not found: %s", clientDBPath)
+	}
+
+	// Open database
+	db, err := sql.Open("sqlite3", clientDBPath)
+	if err != nil {
+		return fmt.Errorf("failed to open database: %w", err)
+	}
+	defer func() {
+		if closeErr := db.Close(); closeErr != nil {
+			slog.Error("failed to close database", "error", closeErr)
+		}
+	}()
+
+	// List vouchers
+	if listVouchers {
+		return listVouchersFromDB(db)
+	}
+
+	// Export voucher
+	if voucherExport != "" {
+		return exportVoucherFromDB(db)
+	}
+
+	return fmt.Errorf("no voucher operation specified")
+}
+
+// listVouchersFromDB lists all vouchers in the database
+func listVouchersFromDB(db *sql.DB) error {
+	fmt.Printf("Vouchers in database %s:\n", clientDBPath)
+	fmt.Println(strings.Repeat("=", 50))
+
+	rows, err := db.Query(`
+		SELECT 
+			guid,
+			device_info,
+			created_at
+		FROM vouchers 
+		ORDER BY created_at DESC
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to query vouchers: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			slog.Error("failed to close rows", "error", closeErr)
+		}
+	}()
+
+	count := 0
+	for rows.Next() {
+		var guidBytes []byte
+		var deviceInfo string
+		var createdAt int64
+
+		if err := rows.Scan(&guidBytes, &deviceInfo, &createdAt); err != nil {
+			return fmt.Errorf("failed to scan voucher row: %w", err)
+		}
+
+		// Parse GUID
+		var guid protocol.GUID
+		if len(guidBytes) == 16 {
+			copy(guid[:], guidBytes)
+		}
+
+		// Convert Unix timestamp to time
+		createdTime := time.Unix(createdAt/1000000, (createdAt%1000000)*1000)
+
+		fmt.Printf("GUID: %x\n", guid)
+		fmt.Printf("  Device Info: %s\n", deviceInfo)
+		fmt.Printf("  Created: %s\n", createdTime.Format(time.RFC3339))
+		fmt.Println()
+		count++
+	}
+
+	if count == 0 {
+		fmt.Println("No vouchers found in database")
+	} else {
+		fmt.Printf("Total: %d voucher(s)\n", count)
+	}
+
+	return nil
+}
+
+// exportVoucherFromDB exports a specific voucher from the database
+func exportVoucherFromDB(db *sql.DB) error {
+	var query string
+	var args []interface{}
+
+	// Build query based on filter criteria
+	if voucherGUID != "" {
+		// Convert GUID hex string to bytes for comparison
+		guidBytes, err := hex.DecodeString(voucherGUID)
+		if err != nil {
+			return fmt.Errorf("invalid GUID format: %w", err)
+		}
+		query = `SELECT cbor FROM vouchers WHERE guid = ?`
+		args = append(args, guidBytes)
+	} else if voucherSerial != "" {
+		// Search device_info for serial number
+		query = `SELECT cbor FROM vouchers WHERE device_info LIKE ?`
+		args = append(args, "%"+voucherSerial+"%")
+	} else {
+		// Export the most recent voucher
+		query = `SELECT cbor FROM vouchers ORDER BY created_at DESC LIMIT 1`
+	}
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return fmt.Errorf("failed to query voucher: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			slog.Error("failed to close rows", "error", closeErr)
+		}
+	}()
+
+	if !rows.Next() {
+		return fmt.Errorf("no voucher found matching criteria")
+	}
+
+	var cborBytes []byte
+	if err := rows.Scan(&cborBytes); err != nil {
+		return fmt.Errorf("failed to scan voucher: %w", err)
+	}
+
+	// Export in requested format
+	switch voucherFormat {
+	case "pem":
+		return exportVoucherPEM(cborBytes)
+	case "json":
+		return exportVoucherJSON(cborBytes)
+	case "cbor":
+		return exportVoucherCBOR(cborBytes)
+	default:
+		return fmt.Errorf("unsupported export format: %s", voucherFormat)
+	}
+}
+
+// exportVoucherPEM exports voucher in PEM format
+func exportVoucherPEM(cborBytes []byte) error {
+	var outputFile *os.File
+	var err error
+
+	if voucherExport == "-" {
+		outputFile = os.Stdout
+	} else {
+		outputFile, err = os.Create(voucherExport)
+		if err != nil {
+			return fmt.Errorf("failed to create output file: %w", err)
+		}
+		defer func() {
+			if closeErr := outputFile.Close(); closeErr != nil {
+				slog.Error("failed to close output file", "error", closeErr)
+			}
+		}()
+	}
+
+	if _, err := fmt.Fprintf(outputFile, "-----BEGIN OWNERSHIP VOUCHER-----\n"); err != nil {
+		return fmt.Errorf("failed to write PEM header: %w", err)
+	}
+
+	encoded := base64.StdEncoding.EncodeToString(cborBytes)
+
+	// Wrap base64 output at 76 characters per line
+	for i := 0; i < len(encoded); i += 76 {
+		end := i + 76
+		if end > len(encoded) {
+			end = len(encoded)
+		}
+		if _, err := fmt.Fprintf(outputFile, "%s\n", encoded[i:end]); err != nil {
+			return fmt.Errorf("failed to write PEM data: %w", err)
+		}
+	}
+
+	if _, err := fmt.Fprintf(outputFile, "-----END OWNERSHIP VOUCHER-----\n"); err != nil {
+		return fmt.Errorf("failed to write PEM footer: %w", err)
+	}
+
+	if voucherExport != "-" {
+		fmt.Printf("Voucher exported to: %s\n", voucherExport)
+	}
+
+	return nil
+}
+
+// exportVoucherJSON exports voucher in JSON format
+func exportVoucherJSON(cborBytes []byte) error {
+	// Parse the voucher to extract structured information
+	var voucher fdo.Voucher
+	if err := cbor.Unmarshal(cborBytes, &voucher); err != nil {
+		return fmt.Errorf("failed to unmarshal voucher: %w", err)
+	}
+
+	// Create JSON representation
+	voucherJSON := map[string]interface{}{
+		"guid":        fmt.Sprintf("%x", voucher.Header.Val.GUID),
+		"device_info": voucher.Header.Val.DeviceInfo,
+		"rv_info":     voucher.Header.Val.RvInfo,
+		"manufacturer_key": map[string]interface{}{
+			"type": voucher.Header.Val.ManufacturerKey.Type,
+		},
+		"entries_count": len(voucher.Entries),
+	}
+
+	jsonBytes, err := json.MarshalIndent(voucherJSON, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal JSON: %w", err)
+	}
+
+	var outputFile *os.File
+	if voucherExport == "-" {
+		outputFile = os.Stdout
+	} else {
+		outputFile, err = os.Create(voucherExport)
+		if err != nil {
+			return fmt.Errorf("failed to create output file: %w", err)
+		}
+		defer func() {
+			if closeErr := outputFile.Close(); closeErr != nil {
+				slog.Error("failed to close output file", "error", closeErr)
+			}
+		}()
+	}
+
+	if _, err := fmt.Fprintf(outputFile, "%s\n", jsonBytes); err != nil {
+		return fmt.Errorf("failed to write JSON: %w", err)
+	}
+
+	if voucherExport != "-" {
+		fmt.Printf("Voucher exported to: %s\n", voucherExport)
+	}
+
+	return nil
+}
+
+// exportVoucherCBOR exports voucher in raw CBOR format
+func exportVoucherCBOR(cborBytes []byte) error {
+	var outputFile *os.File
+	var err error
+
+	if voucherExport == "-" {
+		outputFile = os.Stdout
+	} else {
+		outputFile, err = os.Create(voucherExport)
+		if err != nil {
+			return fmt.Errorf("failed to create output file: %w", err)
+		}
+		defer func() {
+			if closeErr := outputFile.Close(); closeErr != nil {
+				slog.Error("failed to close output file", "error", closeErr)
+			}
+		}()
+	}
+
+	if _, err := outputFile.Write(cborBytes); err != nil {
+		return fmt.Errorf("failed to write CBOR: %w", err)
+	}
+
+	if voucherExport != "-" {
+		fmt.Printf("Voucher exported to: %s\n", voucherExport)
+	}
+
+	return nil
 }
