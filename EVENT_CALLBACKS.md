@@ -121,7 +121,7 @@ func (h *MyEventHandler) HandleEvent(ctx context.Context, event fdo.Event) {
         "guid", event.GUID,
         "timestamp", event.Timestamp,
     )
-    
+
     // Update database, send metrics, etc.
     if event.GUID != nil {
         h.updateDeviceState(*event.GUID, event.Type)
@@ -137,9 +137,9 @@ func main() {
         db:     db,
         logger: logger,
     }
-    
+
     fdo.RegisterEventHandler(handler)
-    
+
     // Now all FDO protocol operations will emit events to your handler
 }
 ```
@@ -169,7 +169,7 @@ func (d *DatabaseEventLogger) HandleEvent(ctx context.Context, event fdo.Event) 
     if event.GUID == nil {
         return
     }
-    
+
     switch event.Type {
     case fdo.EventTypeDICompleted:
         d.db.Exec("INSERT INTO devices (guid, state, timestamp) VALUES (?, ?, ?)",
@@ -229,16 +229,16 @@ type WebhookNotifier struct {
 
 func (w *WebhookNotifier) HandleEvent(ctx context.Context, event fdo.Event) {
     // Only notify on critical events
-    if event.Type == fdo.EventTypeTO2Failed || 
+    if event.Type == fdo.EventTypeTO2Failed ||
        event.Type == fdo.EventTypeCertValidationFailed {
-        
+
         payload := map[string]interface{}{
             "event_type": event.Type.String(),
             "guid":       event.GUID,
             "timestamp":  event.Timestamp,
             "error":      event.Error.Error(),
         }
-        
+
         jsonData, _ := json.Marshal(payload)
         w.client.Post(w.webhookURL, "application/json", bytes.NewBuffer(jsonData))
     }
@@ -267,16 +267,16 @@ func (u *UIStateManager) HandleEvent(ctx context.Context, event fdo.Event) {
     if event.GUID == nil {
         return
     }
-    
+
     guidStr := fmt.Sprintf("%x", *event.GUID)
-    
+
     u.mu.Lock()
     state := u.devices[guidStr]
     if state == nil {
         state = &DeviceState{GUID: guidStr}
         u.devices[guidStr] = state
     }
-    
+
     // Update progress based on protocol stage
     switch event.Type {
     case fdo.EventTypeDICompleted:
@@ -293,7 +293,7 @@ func (u *UIStateManager) HandleEvent(ctx context.Context, event fdo.Event) {
         state.Progress = 100
     }
     u.mu.Unlock()
-    
+
     // Notify UI via WebSocket or SSE
     u.updates <- *state
 }
@@ -309,10 +309,10 @@ Event handlers are called asynchronously in goroutines, but should still avoid l
 func (h *MyHandler) HandleEvent(ctx context.Context, event fdo.Event) {
     // Good: Quick operations
     h.metrics.Inc()
-    
+
     // Good: Async processing
     go h.processEventAsync(event)
-    
+
     // Bad: Long-blocking operation
     // time.Sleep(10 * time.Second)
 }
@@ -329,7 +329,7 @@ func (h *MyHandler) HandleEvent(ctx context.Context, event fdo.Event) {
             log.Printf("Event handler panic: %v", r)
         }
     }()
-    
+
     // Handler logic
 }
 ```
@@ -361,7 +361,7 @@ func (h *MyHandler) HandleEvent(ctx context.Context, event fdo.Event) {
     if event.Type < fdo.EventTypeTO2Started || event.Type > fdo.EventTypeTO2Failed {
         return
     }
-    
+
     // Process TO2 events
 }
 ```
@@ -415,15 +415,15 @@ fdo.RegisterEventHandler(NewManufacturingIntegration(mes, metrics))
 
 The DI (Device Initialization) events are particularly valuable for manufacturing systems doing their own DI implementation:
 
-**Key DI Events:**
+##### Key DI Events
 
 - `EventTypeDIStarted` - Device begins initialization (useful for tracking start times)
 - `EventTypeDICompleted` - Device successfully initialized with GUID and device info
 - `EventTypeDIFailed` - DI failed with detailed error information
 
-**Manufacturing Use Cases:**
+##### Manufacturing Use Cases
 
-1. **Production Line Tracking:**
+Manufacturing systems can use DI events to track device initialization and monitor production line health. They can also integrate with MES and ERP systems to capture device GUIDs and update inventory records.
 
 ```go
 type ManufacturingTracker struct {
@@ -437,12 +437,12 @@ func (m *ManufacturingTracker) HandleEvent(ctx context.Context, event fdo.Event)
     case fdo.EventTypeDIStarted:
         // Track when device enters DI station
         m.metrics.DeviceStarted(event.Timestamp)
-        
+
     case fdo.EventTypeDICompleted:
         if event.GUID != nil {
             // Success: Record device GUID and update inventory
             deviceGUID := fmt.Sprintf("%x", *event.GUID)
-            
+
             // Extract device info for manufacturing records
             if data, ok := event.Data.(fdo.DIEventData); ok {
                 m.mes.RecordDeviceInitialization(&DeviceRecord{
@@ -453,11 +453,11 @@ func (m *ManufacturingTracker) HandleEvent(ctx context.Context, event fdo.Event)
                     Status:      "INITIALIZED",
                 })
             }
-            
+
             // Update production metrics
             m.metrics.DeviceCompleted(event.Timestamp)
         }
-        
+
     case fdo.EventTypeDIFailed:
         // Failure: Record failure details for quality control
         if event.Error != nil {
@@ -471,11 +471,7 @@ func (m *ManufacturingTracker) HandleEvent(ctx context.Context, event fdo.Event)
         }
     }
 }
-```
 
-1. **Real-Time Production Monitoring:**
-
-```go
 type ProductionMonitor struct {
     websocketHub *WebSocketHub
     alertSystem  *AlertSystem
@@ -491,7 +487,7 @@ func (p *ProductionMonitor) HandleEvent(ctx context.Context, event fdo.Event) {
             ProductionLine: getProductionLineFromContext(ctx),
         })
     }
-    
+
     // Alert on high failure rates
     if event.Type == fdo.EventTypeDIFailed {
         failureRate := p.calculateRecentFailureRate()
@@ -504,11 +500,7 @@ func (p *ProductionMonitor) HandleEvent(ctx context.Context, event fdo.Event) {
         }
     }
 }
-```
 
-1. **Inventory and Asset Management:**
-
-```go
 type InventoryManager struct {
     inventoryDB *InventoryDatabase
     erpSystem  *ERPIntegration
@@ -517,7 +509,7 @@ type InventoryManager struct {
 func (i *InventoryManager) HandleEvent(ctx context.Context, event fdo.Event) {
     if event.Type == fdo.EventTypeDICompleted && event.GUID != nil {
         deviceGUID := fmt.Sprintf("%x", *event.GUID)
-        
+
         // Create inventory record
         inventoryRecord := &InventoryItem{
             DeviceGUID:    deviceGUID,
@@ -525,10 +517,10 @@ func (i *InventoryManager) HandleEvent(ctx context.Context, event fdo.Event) {
             InitializationTime: event.Timestamp,
             ManufacturingSite: getSiteFromContext(ctx),
         }
-        
+
         // Add to inventory database
         i.inventoryDB.AddItem(inventoryRecord)
-        
+
         // Notify ERP system
         i.erpSystem.CreateAsset(&ERPAsset{
             AssetID:      deviceGUID,
@@ -538,16 +530,15 @@ func (i *InventoryManager) HandleEvent(ctx context.Context, event fdo.Event) {
         })
     }
 }
-```
 
 **Benefits for Manufacturing:**
 
-✅ **Real-time Production Visibility** - Track devices as they move through DI stations  
-✅ **GUID Capture** - Automatically capture device GUIDs for inventory management  
-✅ **Quality Control** - Immediate notification of DI failures for root cause analysis  
-✅ **MES Integration** - Feed device data directly into Manufacturing Execution Systems  
-✅ **Production Analytics** - Calculate success rates, cycle times, and yield metrics  
-✅ **Traceability** - Complete audit trail from device initialization to deployment  
+✅ **Real-time Production Visibility** - Track devices as they move through DI stations
+✅ **GUID Capture** - Automatically capture device GUIDs for inventory management
+✅ **Quality Control** - Immediate notification of DI failures for root cause analysis
+✅ **MES Integration** - Feed device data directly into Manufacturing Execution Systems
+✅ **Production Analytics** - Calculate success rates, cycle times, and yield metrics
+✅ **Traceability** - Complete audit trail from device initialization to deployment
 
 **Implementation Tips:**
 
@@ -566,14 +557,14 @@ fdo.RegisterEventHandler(fdo.EventHandlerFunc(func(ctx context.Context, event fd
     switch event.Type {
     case fdo.EventTypeDIStarted:
         log.Printf("Device starting DI process")
-        
+
     case fdo.EventTypeDICompleted:
         if event.GUID != nil {
             log.Printf("Device successfully initialized with GUID: %x", *event.GUID)
             // Store GUID for later use in TO1/TO2
             deviceConfig.SetGUID(*event.GUID)
         }
-        
+
     case fdo.EventTypeDIFailed:
         log.Printf("DI process failed: %v", event.Error)
         // Implement retry logic or user notification
@@ -619,10 +610,10 @@ func TestDIProtocol(t *testing.T) {
     mock := &MockEventHandler{}
     fdo.RegisterEventHandler(mock)
     defer fdo.UnregisterAllEventHandlers()
-    
+
     // Run DI protocol
     // ...
-    
+
     events := mock.GetEvents()
     assert.Contains(t, events, fdo.EventTypeDICompleted)
 }
@@ -655,11 +646,11 @@ Handlers should:
 
 If you're currently scraping logs, the event system provides:
 
-✅ **Structured data** instead of parsing log strings  
-✅ **Real-time notifications** instead of polling  
-✅ **Type safety** with Go interfaces  
-✅ **Guaranteed delivery** to registered handlers  
-✅ **Context preservation** (GUID, protocol version, etc.)  
+✅ **Structured data** instead of parsing log strings
+✅ **Real-time notifications** instead of polling
+✅ **Type safety** with Go interfaces
+✅ **Guaranteed delivery** to registered handlers
+✅ **Context preservation** (GUID, protocol version, etc.)
 
 ## Future Enhancements
 

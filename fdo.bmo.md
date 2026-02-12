@@ -1,6 +1,6 @@
 # FDO Service Info Module: fdo.bmo
 
-**Version:** 1.0 (Draft)  
+**Version:** 1.0 (Draft)
 **Status:** Specification Draft
 
 Copyright &copy; 2026 Dell Technologies and FIDO Alliance
@@ -22,8 +22,8 @@ limitations under the License.
 
 ## Overview
 
-**Module Name**: `fdo.bmo`  
-**Version**: 1.0  
+**Module Name**: `fdo.bmo`
+**Version**: 1.0
 **Status**: Draft
 
 The `fdo.bmo` (Bare Metal Onboarding) FSIM enables delivery of bootable images and BIOS configuration to device firmware. It combines payload delivery (like `fdo.payload`) with firmware settings (like `fdo.sysconfig`), but is designed exclusively for pre-OS firmware environments.
@@ -61,7 +61,7 @@ When the server presents multiple boot assets:
 ```text
 1. UEFI App (application/efi)
    ↓ NAK if not supported
-2. ISO Image (application/x-iso9660-image)  
+2. ISO Image (application/x-iso9660-image)
    ↓ NAK if not supported
 3. Raw Disk (application/x-raw-disk-image)
    ↓ NAK if not supported
@@ -99,7 +99,7 @@ This multi-asset approach provides:
 Owner → Device: image-begin { -1: "application/x-iso9660-image", 3: true }
 Device → Owner: image-ack [false, 1, "ISO not supported"]
 
-Owner → Device: image-begin { -1: "application/efi", 3: true }  
+Owner → Device: image-begin { -1: "application/efi", 3: true }
 Device → Owner: image-ack [true]
 
 [Transfer EFI application...]

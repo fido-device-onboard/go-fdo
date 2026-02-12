@@ -113,7 +113,6 @@ hRhlWPKGGGVQd9AvCGowrcwks6WY+NeGr4KBgg1BAIOCDEEBggJRUAAAAAAAAAAAAAD//38AAAGC
 
 ...
 -----END OWNERSHIP VOUCHER-----
-
 ```
 
 **JSON Format:**
@@ -172,7 +171,6 @@ go run ./cmd client -upload /path/to/file1,/path/to/file2
 
 # Download files from owner (for configuration updates or software distribution)
 go run ./cmd client -download /path/to/download
-
 
 # Execute commands on device (for remote management)
 go run ./cmd client -echo-commands
