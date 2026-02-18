@@ -77,6 +77,10 @@ var (
 	voucherFormat string // Export format (pem, json, cbor)
 )
 
+func sanitizeLogValue(s string) string {
+	return strings.NewReplacer("\n", "\\n", "\r", "\\r").Replace(s)
+}
+
 type fsVar map[string]string
 
 func (files fsVar) String() string {
@@ -374,7 +378,8 @@ TO1:
 			version := protocol.Version(fdoVersion) //#nosec G115 -- fdoVersion is validated in flag parsing
 			to1d, err = fdo.TO1(ctx, tlsTransportWithVersion(url.String(), nil, version), conf.Cred, conf.Key, nil)
 			if err != nil {
-				slog.Error("TO1 failed", "base URL", url.String(), "error", err)
+				// #nosec G706 -- sanitizeLogValue strips control characters from logged URL
+				slog.Error("TO1 failed", "base URL", sanitizeLogValue(url.String()), "error", err)
 				continue
 			}
 			break TO1

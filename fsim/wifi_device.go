@@ -39,17 +39,19 @@ type WiFiHandler interface {
 
 // WiFiNetwork represents a WiFi network configuration per fdo.wifi-setup.md.
 type WiFiNetwork struct {
-	Version     string         // Key 0: Version (e.g., "1.0")
-	NetworkID   string         // Key 1: Network identifier
-	SSID        string         // Key 2: SSID
-	AuthType    int            // Key 3: Authentication type (0=open, 1=wpa2-psk, 2=wpa3-psk, 3=wpa3-enterprise)
+	Version   string // Key 0: Version (e.g., "1.0")
+	NetworkID string // Key 1: Network identifier
+	SSID      string // Key 2: SSID
+	AuthType  int    // Key 3: Authentication type (0=open, 1=wpa2-psk, 2=wpa3-psk, 3=wpa3-enterprise)
+	// #nosec G117 -- field mirrors the FDO wifi schema definition
 	Password    []byte         // Key 4: Password (for PSK) or EAP method (for enterprise)
 	CACerts     [][]byte       // Key 5: CA certificates (for enterprise)
 	TrustLevel  int            // Key 6: Trust level (0=onboard-only, 1=full-access)
 	FastRoaming map[string]any // Key 7: Fast roaming configuration (optional)
 	Hotspot2    map[string]any // Key 8: Hotspot 2.0 configuration (optional)
 	EAPUsername string         // Key 9: EAP username (optional)
-	EAPPassword []byte         // Key 10: EAP password (optional)
+	// #nosec G117 -- field mirrors the FDO wifi schema definition
+	EAPPassword []byte // Key 10: EAP password (optional)
 }
 
 // WiFi implements the fdo.wifi FSIM for device-side WiFi configuration.
@@ -82,6 +84,27 @@ type WiFi struct {
 }
 
 var _ serviceinfo.DeviceModule = (*WiFi)(nil)
+
+func safeUint64FromInt(i int) (uint64, bool) {
+	if i < 0 {
+		return 0, false
+	}
+	return uint64(i), true
+}
+
+func safeByteFromInt(i int) (byte, bool) {
+	if i < 0 || i > math.MaxUint8 {
+		return 0, false
+	}
+	return byte(i), true
+}
+
+func safeByteFromUint64(i uint64) (byte, bool) {
+	if i > math.MaxUint8 {
+		return 0, false
+	}
+	return byte(i), true
+}
 
 // Transition implements serviceinfo.DeviceModule.
 func (w *WiFi) Transition(active bool) error {
@@ -160,8 +183,8 @@ func (w *WiFi) handleNetworkAdd(messageBody io.Reader, respond func(string) io.W
 		networkMap = make(map[uint64]any)
 		for k, v := range networkMapAny {
 			if ki, ok := k.(int); ok {
-				if ki >= 0 {
-					networkMap[uint64(ki)] = v
+				if key, ok := safeUint64FromInt(ki); ok {
+					networkMap[key] = v
 				}
 			} else if ku, ok := k.(uint64); ok {
 				networkMap[ku] = v
@@ -221,9 +244,13 @@ func (w *WiFi) handleNetworkAdd(messageBody io.Reader, respond func(string) io.W
 		network.Password = v
 	} else if v, ok := networkMap[4].(int); ok {
 		// EAP method for enterprise networks
-		network.Password = []byte{byte(v)}
+		if b, ok := safeByteFromInt(v); ok {
+			network.Password = []byte{b}
+		}
 	} else if v, ok := networkMap[4].(uint64); ok {
-		network.Password = []byte{byte(v)}
+		if b, ok := safeByteFromUint64(v); ok {
+			network.Password = []byte{b}
+		}
 	}
 
 	// Key 5: CA certificates (array of bstr)

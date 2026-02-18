@@ -16,6 +16,7 @@ import (
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/pem"
+	"fmt"
 	"math"
 	"math/big"
 	"os"
@@ -29,6 +30,16 @@ import (
 // ecdsaSignature represents an ECDSA signature for ASN.1 encoding
 type ecdsaSignature struct {
 	R, S *big.Int
+}
+
+func safeUint32Len(n int) (uint32, error) {
+	if n < 0 {
+		return 0, fmt.Errorf("length %d is negative", n)
+	}
+	if n > math.MaxUint32 {
+		return 0, fmt.Errorf("length %d exceeds uint32 max", n)
+	}
+	return uint32(n), nil
 }
 
 // signPayload signs a payload with the given key using SHA-384 and length-prefixed format
@@ -1129,10 +1140,15 @@ func TestBuildSignedDataLengthPrefix(t *testing.T) {
 		t.Fatalf("ToJSON failed: %v", err)
 	}
 	actualLen := len(validityJSON)
-	if validityLen != 0 && actualLen > math.MaxUint32 {
-		t.Errorf("validity length %d exceeds uint32 max", actualLen)
-	} else if validityLen != uint32(actualLen) {
-		t.Errorf("expected validity length %d, got %d", actualLen, validityLen)
+	if validityLen != 0 {
+		actualLen32, err := safeUint32Len(actualLen)
+		if err != nil {
+			// Should never happen because len() cannot exceed addressable memory
+			t.Fatalf("convert validity length: %v", err)
+		}
+		if validityLen != actualLen32 {
+			t.Errorf("expected validity length %d, got %d", actualLen, validityLen)
+		}
 	}
 
 	t.Logf("BuildSignedData correctly uses length prefixes")

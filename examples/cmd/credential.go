@@ -94,6 +94,7 @@ func saveCred(dc any) error {
 
 	// Rename temp file to given blob path
 	_ = tmp.Close()
+	// #nosec G703 -- blobPath is user-provided flag pointing within working directory
 	if err := os.Rename(tmp.Name(), blobPath); err != nil {
 		return fmt.Errorf("error renaming temp blob credential to %q: %w", blobPath, err)
 	}

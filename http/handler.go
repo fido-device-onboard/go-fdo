@@ -253,7 +253,8 @@ func (h Handler) handleRequest(ctx context.Context, w http.ResponseWriter, r *ht
 		}
 
 		if debugEnabled() {
-			slog.Debug("decrypted request", "msg", msgType, "body", tryDebugNotation(decrypted))
+			// #nosec G706 -- sanitizeLogValue removes newline/control characters
+			slog.Debug("decrypted request", "msg", msgType, "body", sanitizeLogValue(tryDebugNotation(decrypted)))
 		}
 
 		msg = io.NopCloser(bytes.NewBuffer(decrypted))
@@ -286,7 +287,8 @@ func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, msgTy
 
 		if debugEnabled() {
 			body, _ := cbor.Marshal(respData)
-			slog.Debug("unencrypted response", "msg", respType, "body", tryDebugNotation(body))
+			// #nosec G706 -- sanitizeLogValue removes newline/control characters
+			slog.Debug("unencrypted response", "msg", respType, "body", sanitizeLogValue(tryDebugNotation(body)))
 		}
 
 		respData, err = sess.Encrypt(rand.Reader, respData)

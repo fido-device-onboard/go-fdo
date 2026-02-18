@@ -19,6 +19,7 @@ const (
 )
 
 // CredentialTypeNames maps credential type IDs to human-readable names
+// #nosec G101 -- values are enumeration labels defined by the FDO spec
 var CredentialTypeNames = map[int]string{
 	CredentialTypePassword:           "password",
 	CredentialTypeSecret:             "secret",
@@ -34,6 +35,7 @@ func IsValidCredentialType(credentialType int) bool {
 }
 
 // CredentialTypeFlow maps credential types to their protocol flow
+// #nosec G101 -- flow labels are descriptive metadata, not credentials
 var CredentialTypeFlow = map[int]string{
 	CredentialTypePassword:           "provisioned",
 	CredentialTypeSecret:             "provisioned",

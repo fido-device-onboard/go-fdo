@@ -10,7 +10,8 @@ import (
 // PasswordCredential represents a username/password credential
 // Uses negative CBOR keys as per fdo.credentials.md specification
 type PasswordCredential struct {
-	Username  string `cbor:"-1,keyasint"`           // Username for authentication
+	Username string `cbor:"-1,keyasint"` // Username for authentication
+	// #nosec G117 -- field name mandated by FDO credential schema
 	Password  string `cbor:"-2,keyasint"`           // Password (hashed or plaintext)
 	HashAlgo  string `cbor:"-3,keyasint,omitempty"` // bcrypt, pbkdf2, scrypt, argon2
 	Scope     string `cbor:"-4,keyasint,omitempty"` // Usage scope (e.g., "sudoers", "api.example.com")
@@ -21,6 +22,7 @@ type PasswordCredential struct {
 // Consolidates API keys, OAuth secrets, bearer tokens, etc.
 type SecretCredential struct {
 	ClientID string `cbor:"-1,keyasint,omitempty"` // Client identifier (optional)
+	// #nosec G117 -- field name mandated by FDO credential schema
 	Secret   string `cbor:"-2,keyasint"`           // Opaque secret string
 	Type     string `cbor:"-3,keyasint,omitempty"` // api_key, oauth2_client_secret, bootstrap_token, bearer_token, basic_auth
 	Endpoint string `cbor:"-4,keyasint,omitempty"` // Service endpoint URL (optional)
@@ -47,6 +49,7 @@ type ServerKeyRequest struct {
 
 // ServerKeyResponse represents a server-generated key response
 type ServerKeyResponse struct {
+	// #nosec G117 -- field name mandated by FDO credential schema
 	PrivateKey  string   `cbor:"-1,keyasint"`           // PKCS#8 encoded private key
 	Certificate string   `cbor:"-2,keyasint"`           // PEM or DER encoded X.509 certificate
 	CABundle    []string `cbor:"-3,keyasint,omitempty"` // Array of CA certificates (optional)

@@ -87,6 +87,7 @@ func TestCredentialTypeConstants(t *testing.T) {
 	// Test all credential type constants and mappings
 
 	// Test constants
+	// #nosec G101 -- values are descriptive labels defined by FDO spec
 	expectedConstants := map[int]string{
 		CredentialTypePassword:     "password",
 		CredentialTypeSecret:       "secret",
@@ -101,6 +102,7 @@ func TestCredentialTypeConstants(t *testing.T) {
 	}
 
 	// Test flows
+	// #nosec G101 -- flow labels are descriptive spec terms, not credentials
 	expectedFlows := map[int]string{
 		CredentialTypePassword:     "provisioned",
 		CredentialTypeSecret:       "provisioned",

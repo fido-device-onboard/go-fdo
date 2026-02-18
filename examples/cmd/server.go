@@ -1227,10 +1227,11 @@ func ownerModules(modules []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 
 // WiFiConfigEntry represents a single WiFi network in the JSON config file
 type WiFiConfigEntry struct {
-	Version    string `json:"version"`
-	NetworkID  string `json:"network_id"`
-	SSID       string `json:"ssid"`
-	AuthType   int    `json:"auth_type"`
+	Version   string `json:"version"`
+	NetworkID string `json:"network_id"`
+	SSID      string `json:"ssid"`
+	AuthType  int    `json:"auth_type"`
+	// #nosec G117 -- field mirrors WiFi configuration schema
 	Password   string `json:"password"`
 	TrustLevel int    `json:"trust_level"`
 	NeedsCert  bool   `json:"needs_cert"`
