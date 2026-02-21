@@ -364,3 +364,156 @@ func TestFingerprint(t *testing.T) {
 		t.Error("different keys should produce different fingerprints")
 	}
 }
+
+// Negative tests
+
+func TestMint_InvalidKeyType(t *testing.T) {
+	_, err := did.Mint("example.com", "", "", did.KeyConfig{Type: "INVALID"})
+	if err == nil {
+		t.Fatal("expected error for invalid key type")
+	}
+	t.Logf("Expected error: %v", err)
+}
+
+func TestMint_InvalidCurve(t *testing.T) {
+	_, err := did.Mint("example.com", "", "", did.KeyConfig{Type: "EC", Curve: "P-999"})
+	if err == nil {
+		t.Fatal("expected error for invalid curve")
+	}
+	t.Logf("Expected error: %v", err)
+}
+
+func TestMint_InvalidRSABits(t *testing.T) {
+	_, err := did.Mint("example.com", "", "", did.KeyConfig{Type: "RSA", Bits: 512})
+	if err == nil {
+		t.Fatal("expected error for invalid RSA bits (too small)")
+	}
+	t.Logf("Expected error: %v", err)
+}
+
+func TestWebDIDToURL_InvalidDID(t *testing.T) {
+	invalidDIDs := []string{
+		"",
+		"did:key:z6Mkf5rGMoatrSj1f4CyvuHBeXJELe9RPdzo2PKGNCKVtZxP",
+		"not-a-did",
+	}
+
+	for _, d := range invalidDIDs {
+		_, err := did.WebDIDToURL(d)
+		if err == nil {
+			t.Errorf("expected error for invalid DID: %q", d)
+		}
+	}
+}
+
+func TestJWKToPublicKey_InvalidJWK(t *testing.T) {
+	// Invalid kty
+	_, err := did.JWKToPublicKey(&did.JWK{Kty: "INVALID"})
+	if err == nil {
+		t.Fatal("expected error for invalid kty")
+	}
+
+	// EC with missing coordinates
+	_, err = did.JWKToPublicKey(&did.JWK{Kty: "EC", Crv: "P-256"})
+	if err == nil {
+		t.Fatal("expected error for EC JWK with missing coordinates")
+	}
+}
+
+func TestLoadPrivateKeyPEM_InvalidPEM(t *testing.T) {
+	invalidPEMs := [][]byte{
+		nil,
+		[]byte("not a pem"),
+		[]byte("-----BEGIN INVALID-----\nYWJj\n-----END INVALID-----"),
+	}
+
+	for i, pem := range invalidPEMs {
+		_, err := did.LoadPrivateKeyPEM(pem)
+		if err == nil {
+			t.Errorf("case %d: expected error for invalid PEM", i)
+		}
+	}
+}
+
+func TestHandler_ServesDIDDocument(t *testing.T) {
+	// Test that handler serves valid document
+	result, err := did.Mint("test.example.com", "", "", did.DefaultKeyConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	handler, err := did.NewHandler(result.DIDDocument)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mux := http.NewServeMux()
+	handler.RegisterHandlers(mux, "")
+
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/.well-known/did.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Logf("Error closing response body: %v", err)
+		}
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200, got %d", resp.StatusCode)
+	}
+}
+
+func TestResolver_InvalidDIDMethod(t *testing.T) {
+	resolver := &did.Resolver{}
+
+	// did:key is not supported (only did:web)
+	_, err := resolver.Resolve(context.Background(), "did:key:z6Mkf5rGMoatrSj1f4CyvuHBeXJELe9RPdzo2PKGNCKVtZxP")
+	if err == nil {
+		t.Fatal("expected error for unsupported DID method")
+	}
+	t.Logf("Expected error: %v", err)
+}
+
+func TestNewDocument_ValidDocument(t *testing.T) {
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	doc, err := did.NewDocument("did:web:example.com", key.Public(), "https://example.com/vouchers")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if doc.ID != "did:web:example.com" {
+		t.Errorf("unexpected document ID: %s", doc.ID)
+	}
+	if len(doc.VerificationMethod) != 1 {
+		t.Errorf("expected 1 verification method, got %d", len(doc.VerificationMethod))
+	}
+	if len(doc.Service) != 1 {
+		t.Errorf("expected 1 service, got %d", len(doc.Service))
+	}
+}
+
+func TestNewDocument_NilKey(t *testing.T) {
+	_, err := did.NewDocument("did:web:example.com", nil, "")
+	if err == nil {
+		t.Fatal("expected error for nil public key")
+	}
+}
+
+func TestExportPublicKeyPEM_NilKey(t *testing.T) {
+	_, err := did.ExportPublicKeyPEM(nil)
+	if err == nil {
+		t.Fatal("expected error for nil public key")
+	}
+}
+
+func TestExportPrivateKeyPEM_NilKey(t *testing.T) {
+	_, err := did.ExportPrivateKeyPEM(nil)
+	if err == nil {
+		t.Fatal("expected error for nil private key")
+	}
+}
