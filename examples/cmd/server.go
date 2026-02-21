@@ -237,6 +237,11 @@ func server(ctx context.Context) error { //nolint:gocyclo
 		return doImportVoucher(ctx, state)
 	}
 
+	// If initOnly flag is set, exit after database/key initialization
+	if initOnly {
+		return nil
+	}
+
 	// Normalize address flags
 	useTLS = insecureTLS
 	if extAddr == "" {

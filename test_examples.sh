@@ -1431,15 +1431,22 @@ test_credentials() {
 
 	rm -f "$DB_FILE" "$CRED_FILE"
 
+	log_step "Creating database with owner certs"
+	run_cmd go run ./cmd server -initOnly -http "$SERVER_ADDR" -db "$DB_FILE" -owner-certs
+
 	log_step "Starting server with credential provisioning"
 	start_server "-credential password:admin-creds:admin:SecurePass123:https://mgmt.example.com/api -credential api_key:prod-api:sk_live_abc123xyz:https://api.example.com/v1 -credential oauth2_client_secret:oauth-app:client_secret_xyz789:https://oauth.example.com/token"
 
 	log_step "Running DI"
-	run_cmd go run ./cmd client -di "$SERVER_URL"
+	if ! run_cmd go run ./cmd client -di "$SERVER_URL"; then
+		return 1
+	fi
 	log_success "DI completed"
 
 	log_step "Running TO1/TO2 with credential provisioning"
-	run_cmd go run ./cmd client
+	if ! run_cmd go run ./cmd client; then
+		return 1
+	fi
 	log_success "TO1/TO2 completed with credentials provisioned"
 
 	stop_server
@@ -1454,11 +1461,15 @@ test_credentials() {
 	start_server "-request-pubkey ssh_public_key:device-ssh-key:ssh://admin.example.com:22"
 
 	log_step "Running DI"
-	run_cmd go run ./cmd client -di "$SERVER_URL"
+	if ! run_cmd go run ./cmd client -di "$SERVER_URL"; then
+		return 1
+	fi
 	log_success "DI completed"
 
 	log_step "Running TO1/TO2 with SSH public key registration"
-	run_cmd go run ./cmd client -register-ssh-key "device-ssh-key:ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDevicePublicKeyExample"
+	if ! run_cmd go run ./cmd client -register-ssh-key "device-ssh-key:ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDevicePublicKeyExample"; then
+		return 1
+	fi
 	log_success "TO1/TO2 completed with public key registered"
 
 	# Show server log to verify public key was received
@@ -1477,11 +1488,17 @@ test_credentials() {
 	start_server ""
 
 	log_step "Running DI"
-	run_cmd go run ./cmd client -di "$SERVER_URL"
+	if ! run_cmd go run ./cmd client -di "$SERVER_URL"; then
+		log_error "DI failed"
+		return 1
+	fi
 	log_success "DI completed"
 
 	log_step "Running TO1/TO2 with CSR enrollment"
-	run_cmd go run ./cmd client -enroll-csr "device-mtls-cert:-----BEGIN CERTIFICATE REQUEST-----FAKECSR-----END CERTIFICATE REQUEST-----"
+	if ! run_cmd go run ./cmd client -enroll-csr "device-mtls-cert:-----BEGIN CERTIFICATE REQUEST-----FAKECSR-----END CERTIFICATE REQUEST-----"; then
+		log_error "TO1/TO2 failed with CSR enrollment"
+		return 1
+	fi
 	log_success "TO1/TO2 completed with CSR enrollment"
 
 	# Show server received CSR
