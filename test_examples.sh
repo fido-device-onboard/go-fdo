@@ -129,12 +129,22 @@ start_server() {
 	(cd examples && go run ./cmd server -http "$SERVER_ADDR" -db "../$DB_FILE" $flags >/tmp/fdo_server.log 2>&1) &
 	SERVER_PID=$!
 
-	# Wait for server to start listening
+	# Wait for server to start listening AND verify it's actually accepting connections
 	local retries=15
 	while [ $retries -gt 0 ]; do
 		if grep -q "Listening" /tmp/fdo_server.log 2>/dev/null; then
-			log_success "Server started (PID: $SERVER_PID)"
-			return 0
+			# Log says listening - now verify the port is actually open
+			sleep 0.5
+			if nc -z 127.0.0.1 9999 2>/dev/null || (echo >/dev/tcp/127.0.0.1/9999) 2>/dev/null; then
+				log_success "Server started (PID: $SERVER_PID)"
+				return 0
+			fi
+			# Port not open yet, check if process died
+			if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+				log_error "Server process died after logging Listening"
+				cat /tmp/fdo_server.log 2>/dev/null || true
+				return 1
+			fi
 		fi
 		if ! kill -0 "$SERVER_PID" 2>/dev/null; then
 			log_error "Server process died"
