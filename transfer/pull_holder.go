@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // TokenValidator validates a Bearer token and returns the owner key fingerprint
@@ -43,13 +45,9 @@ func (h *HTTPPullHolder) HandleListVouchers(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	continuation := r.URL.Query().Get("continuation")
-	limit := h.DefaultPageSize
-	if limit <= 0 {
-		limit = 50
-	}
+	filter := h.parseListFilter(r)
 
-	listResp, err := h.Store.List(r.Context(), fingerprint, continuation, limit)
+	listResp, err := h.Store.List(r.Context(), fingerprint, filter)
 	if err != nil {
 		slog.Error("pull holder: list vouchers failed", "error", err)
 		h.writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
@@ -59,8 +57,43 @@ func (h *HTTPPullHolder) HandleListVouchers(w http.ResponseWriter, r *http.Reque
 	h.writeJSON(w, http.StatusOK, map[string]interface{}{
 		"vouchers":     listResp.Vouchers,
 		"continuation": listResp.Continuation,
+		"has_more":     listResp.HasMore,
 		"total_count":  listResp.TotalCount,
 	})
+}
+
+// parseListFilter extracts ListFilter from query parameters.
+func (h *HTTPPullHolder) parseListFilter(r *http.Request) ListFilter {
+	q := r.URL.Query()
+	filter := ListFilter{
+		Continuation: q.Get("continuation"),
+		Status:       q.Get("status"),
+	}
+
+	if sinceStr := q.Get("since"); sinceStr != "" {
+		if t, err := time.Parse(time.RFC3339, sinceStr); err == nil {
+			filter.Since = &t
+		}
+	}
+	if untilStr := q.Get("until"); untilStr != "" {
+		if t, err := time.Parse(time.RFC3339, untilStr); err == nil {
+			filter.Until = &t
+		}
+	}
+	if limitStr := q.Get("limit"); limitStr != "" {
+		if n, err := strconv.Atoi(limitStr); err == nil && n > 0 {
+			filter.Limit = n
+		}
+	}
+
+	if filter.Limit <= 0 {
+		filter.Limit = h.DefaultPageSize
+		if filter.Limit <= 0 {
+			filter.Limit = 50
+		}
+	}
+
+	return filter
 }
 
 // HandleDownloadVoucher handles GET /api/v1/pull/vouchers/{guid}.

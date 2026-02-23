@@ -10,6 +10,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strconv"
+	"time"
 
 	fdo "github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
@@ -31,13 +34,29 @@ func (p *HTTPPullInitiator) Authenticate(ctx context.Context) (*PullAuthClientRe
 }
 
 // ListVouchers retrieves the list of available vouchers using the session token.
-func (p *HTTPPullInitiator) ListVouchers(ctx context.Context, token string, continuation string) (*VoucherListResponse, error) {
-	url := p.Auth.BaseURL + "/api/v1/pull/vouchers"
-	if continuation != "" {
-		url += "?continuation=" + continuation
+func (p *HTTPPullInitiator) ListVouchers(ctx context.Context, token string, filter ListFilter) (*VoucherListResponse, error) {
+	baseURL := p.Auth.BaseURL + "/api/v1/pull/vouchers"
+	params := url.Values{}
+	if filter.Continuation != "" {
+		params.Set("continuation", filter.Continuation)
+	}
+	if filter.Since != nil {
+		params.Set("since", filter.Since.Format(time.RFC3339))
+	}
+	if filter.Until != nil {
+		params.Set("until", filter.Until.Format(time.RFC3339))
+	}
+	if filter.Status != "" {
+		params.Set("status", filter.Status)
+	}
+	if filter.Limit > 0 {
+		params.Set("limit", strconv.Itoa(filter.Limit))
+	}
+	if encoded := params.Encode(); encoded != "" {
+		baseURL += "?" + encoded
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create list request: %w", err)
 	}
@@ -71,6 +90,7 @@ func (p *HTTPPullInitiator) ListVouchers(ctx context.Context, token string, cont
 	var listResp struct {
 		Vouchers     []VoucherInfo `json:"vouchers"`
 		Continuation string        `json:"continuation"`
+		HasMore      bool          `json:"has_more"`
 		TotalCount   uint          `json:"total_count"`
 	}
 	if err := json.Unmarshal(body, &listResp); err != nil {
@@ -80,6 +100,7 @@ func (p *HTTPPullInitiator) ListVouchers(ctx context.Context, token string, cont
 	return &VoucherListResponse{
 		Vouchers:     listResp.Vouchers,
 		Continuation: listResp.Continuation,
+		HasMore:      listResp.HasMore,
 		TotalCount:   listResp.TotalCount,
 	}, nil
 }
@@ -150,9 +171,9 @@ func (p *HTTPPullInitiator) PullAll(ctx context.Context) ([]*VoucherData, error)
 
 	// Step 2: List all vouchers (with pagination)
 	var allVouchers []VoucherInfo
-	continuation := ""
+	filter := ListFilter{}
 	for {
-		listResp, err := p.ListVouchers(ctx, authResult.SessionToken, continuation)
+		listResp, err := p.ListVouchers(ctx, authResult.SessionToken, filter)
 		if err != nil {
 			return nil, fmt.Errorf("pull: list vouchers failed: %w", err)
 		}
@@ -161,7 +182,7 @@ func (p *HTTPPullInitiator) PullAll(ctx context.Context) ([]*VoucherData, error)
 		if listResp.Continuation == "" {
 			break
 		}
-		continuation = listResp.Continuation
+		filter.Continuation = listResp.Continuation
 	}
 
 	slog.Info("pull: listed vouchers", "count", len(allVouchers))

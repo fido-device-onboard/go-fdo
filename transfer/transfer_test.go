@@ -86,7 +86,7 @@ func (s *MemoryVoucherStore) GetVoucher(_ context.Context, ownerKeyFingerprint [
 	return data, nil
 }
 
-func (s *MemoryVoucherStore) List(_ context.Context, ownerKeyFingerprint []byte, _ string, limit int) (*transfer.VoucherListResponse, error) {
+func (s *MemoryVoucherStore) List(_ context.Context, ownerKeyFingerprint []byte, filter transfer.ListFilter) (*transfer.VoucherListResponse, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -106,13 +106,33 @@ func (s *MemoryVoucherStore) List(_ context.Context, ownerKeyFingerprint []byte,
 		}
 	}
 
+	// Apply since/until filters
+	if filter.Since != nil || filter.Until != nil {
+		var filtered []transfer.VoucherInfo
+		for _, v := range vouchers {
+			if filter.Since != nil && v.CreatedAt.Before(*filter.Since) {
+				continue
+			}
+			if filter.Until != nil && v.CreatedAt.After(*filter.Until) {
+				continue
+			}
+			filtered = append(filtered, v)
+		}
+		vouchers = filtered
+	}
+
+	totalCount := uint(len(vouchers))
+	limit := filter.Limit
+	hasMore := false
 	if limit > 0 && len(vouchers) > limit {
 		vouchers = vouchers[:limit]
+		hasMore = true
 	}
 
 	return &transfer.VoucherListResponse{
 		Vouchers:   vouchers,
-		TotalCount: uint(len(vouchers)),
+		HasMore:    hasMore,
+		TotalCount: totalCount,
 	}, nil
 }
 

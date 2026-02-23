@@ -5,6 +5,7 @@ package transfer
 
 import (
 	"context"
+	"time"
 
 	fdo "github.com/fido-device-onboard/go-fdo"
 )
@@ -15,6 +16,7 @@ type VoucherInfo struct {
 	SerialNumber string
 	ModelNumber  string
 	DeviceInfo   string
+	CreatedAt    time.Time
 }
 
 // VoucherData contains a voucher and its metadata for transfer.
@@ -49,7 +51,7 @@ type PullInitiator interface {
 	Authenticate(ctx context.Context) (*PullAuthClientResult, error)
 
 	// ListVouchers retrieves the list of available vouchers using the session token.
-	ListVouchers(ctx context.Context, token string, continuation string) (*VoucherListResponse, error)
+	ListVouchers(ctx context.Context, token string, filter ListFilter) (*VoucherListResponse, error)
 
 	// DownloadVoucher downloads a single voucher by GUID using the session token.
 	DownloadVoucher(ctx context.Context, token string, guid string) (*VoucherData, error)
@@ -59,17 +61,27 @@ type PullInitiator interface {
 	PullAll(ctx context.Context) ([]*VoucherData, error)
 }
 
+// ListFilter contains query parameters for listing vouchers per the Pull API spec.
+type ListFilter struct {
+	Since        *time.Time // return vouchers created after this time
+	Until        *time.Time // return vouchers created before this time
+	Status       string     // filter by status: "pending", "downloaded", "all" (default: "pending")
+	Limit        int        // max vouchers to return; 0 means use server default
+	Continuation string     // opaque continuation token from a previous response
+}
+
 // VoucherListResponse is the response from a voucher list endpoint.
 type VoucherListResponse struct {
 	Vouchers     []VoucherInfo
 	Continuation string // opaque token for pagination; empty if no more pages
+	HasMore      bool   // true if more pages are available
 	TotalCount   uint
 }
 
 // PullHolder serves vouchers to authenticated Recipients.
 type PullHolder interface {
 	// VouchersForKey returns voucher metadata for vouchers signed to the given owner key fingerprint.
-	VouchersForKey(ctx context.Context, ownerKeyFingerprint []byte, continuation string, limit int) (*VoucherListResponse, error)
+	VouchersForKey(ctx context.Context, ownerKeyFingerprint []byte, filter ListFilter) (*VoucherListResponse, error)
 
 	// GetVoucher returns a single voucher by GUID, scoped to the authenticated owner key.
 	GetVoucher(ctx context.Context, ownerKeyFingerprint []byte, guid string) (*VoucherData, error)
@@ -88,8 +100,8 @@ type VoucherStore interface {
 	// Returns an error if the voucher does not exist or does not belong to the owner.
 	GetVoucher(ctx context.Context, ownerKeyFingerprint []byte, guid string) (*VoucherData, error)
 
-	// List returns voucher metadata, optionally filtered by owner key fingerprint.
-	List(ctx context.Context, ownerKeyFingerprint []byte, continuation string, limit int) (*VoucherListResponse, error)
+	// List returns voucher metadata, optionally filtered by owner key fingerprint and ListFilter.
+	List(ctx context.Context, ownerKeyFingerprint []byte, filter ListFilter) (*VoucherListResponse, error)
 
 	// Delete removes a voucher by GUID.
 	Delete(ctx context.Context, guid string) error
