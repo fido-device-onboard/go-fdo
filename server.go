@@ -46,7 +46,7 @@ type DIServer[T any] struct {
 	// modification only applies to vouchers created with DI. Vouchers created
 	// at the end of TO2 will be persisted unmodified.
 	// This is typically where one would customize voucher extension process,
-	// i.e. specifiying specific owner public key for voucher extension or
+	// i.e. specifying specific owner public key for voucher extension or
 	// adding OVEExtraData to the extension.
 	BeforeVoucherPersist func(context.Context, *Voucher) error
 
