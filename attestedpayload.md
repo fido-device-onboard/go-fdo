@@ -125,7 +125,7 @@ go run ./examples/cmd client -di http://127.0.0.1:9999
 After DI, export the voucher to a PEM file:
 
 ```bash
-(echo '-----BEGIN OWNERSHIP VOUCHER-----' ; sqlite3 test.db 'select hex(cbor) from vouchers;' | xxd -r -p | base64 ; echo '-----END OWNERSHIP VOUCHER-----') > voucher.pem
+(echo '-----BEGIN OWNERSHIP VOUCHER-----' ; sqlite3 test.db 'select hex(cbor) from vouchers;' | xxd -r -p | base64 -w 64 ; echo '-----END OWNERSHIP VOUCHER-----') > voucher.pem
 ```
 
 ## Creating an Attested Payload
@@ -233,7 +233,7 @@ openssl pkey -in owner_rsa_pvt.key -pubout > owner_rsa_pub.key
 openssl dgst -sha384 -sign owner_rsa_pvt.key -out sig.bin signed_data.bin
 
 # Assemble the attested payload
-(echo '-----BEGIN OWNERSHIP VOUCHER-----' ; sqlite3 test.db 'select hex(cbor) from vouchers;' | xxd -r -p | base64 ; echo '-----END OWNERSHIP VOUCHER-----') > payload_rsa.fdo
+(echo '-----BEGIN OWNERSHIP VOUCHER-----' ; sqlite3 test.db 'select hex(cbor) from vouchers;' | xxd -r -p | base64 -w 64 ; echo '-----END OWNERSHIP VOUCHER-----') > payload_rsa.fdo
 (echo '-----BEGIN PAYLOAD-----' ; printf '%s' "$PAYLOAD" | base64 ; echo '-----END PAYLOAD-----') >> payload_rsa.fdo
 (echo '-----BEGIN SIGNATURE-----' ; base64 sig.bin; echo '-----END SIGNATURE-----') >> payload_rsa.fdo
 
@@ -260,7 +260,7 @@ openssl pkey -in owner_ec_pvt.key -pubout > owner_ec_pub.key
 openssl dgst -sha384 -sign owner_ec_pvt.key -out sig.bin signed_data.bin
 
 # Assemble the attested payload
-(echo '-----BEGIN OWNERSHIP VOUCHER-----' ; sqlite3 test.db 'select hex(cbor) from vouchers;' | xxd -r -p | base64 ; echo '-----END OWNERSHIP VOUCHER-----') > payload_ec.fdo
+(echo '-----BEGIN OWNERSHIP VOUCHER-----' ; sqlite3 test.db 'select hex(cbor) from vouchers;' | xxd -r -p | base64 -w 64 ; echo '-----END OWNERSHIP VOUCHER-----') > payload_ec.fdo
 (echo '-----BEGIN PAYLOAD-----' ; printf '%s' "$PAYLOAD" | base64 ; echo '-----END PAYLOAD-----') >> payload_ec.fdo
 (echo '-----BEGIN SIGNATURE-----' ; base64 sig.bin; echo '-----END SIGNATURE-----') >> payload_ec.fdo
 
@@ -292,7 +292,7 @@ TYPE_LEN=$(printf '%s' "$PAYLOAD_TYPE" | wc -c)
 openssl dgst -sha384 -sign owner_ec_pvt.key -out sig.bin signed_data.bin
 
 # Assemble
-(echo '-----BEGIN OWNERSHIP VOUCHER-----' ; sqlite3 test.db 'select hex(cbor) from vouchers;' | xxd -r -p | base64 ; echo '-----END OWNERSHIP VOUCHER-----') > payload_typed.fdo
+(echo '-----BEGIN OWNERSHIP VOUCHER-----' ; sqlite3 test.db 'select hex(cbor) from vouchers;' | xxd -r -p | base64 -w 64 ; echo '-----END OWNERSHIP VOUCHER-----') > payload_typed.fdo
 (echo '-----BEGIN PAYLOAD TYPE-----' ; echo "$PAYLOAD_TYPE" ; echo '-----END PAYLOAD TYPE-----') >> payload_typed.fdo
 (echo '-----BEGIN PAYLOAD-----' ; printf '%s' "$PAYLOAD" | base64 ; echo '-----END PAYLOAD-----') >> payload_typed.fdo
 (echo '-----BEGIN SIGNATURE-----' ; base64 sig.bin; echo '-----END SIGNATURE-----') >> payload_typed.fdo
@@ -358,7 +358,7 @@ openssl dgst -sha384 -sign owner_rsa_pvt.key -out sig.bin signed_data.bin
 
 ```bash
 # Start with the ownership voucher
-(echo '-----BEGIN OWNERSHIP VOUCHER-----' ; sqlite3 test.db 'select hex(cbor) from vouchers;' | xxd -r -p | base64 ; echo '-----END OWNERSHIP VOUCHER-----') > encrypted_payload.fdo
+(echo '-----BEGIN OWNERSHIP VOUCHER-----' ; sqlite3 test.db 'select hex(cbor) from vouchers;' | xxd -r -p | base64 -w 64 ; echo '-----END OWNERSHIP VOUCHER-----') > encrypted_payload.fdo
 
 # Add the IV
 (echo "-----BEGIN IV-----" ; echo "$IV" ; echo "-----END IV-----") >> encrypted_payload.fdo
@@ -500,7 +500,7 @@ WEK=$(echo -n "$KEY" | xxd -r -p | openssl pkeyutl -encrypt -pubin -inkey owner_
 openssl dgst -sha384 -sign owner_rsa_pvt.key -out sig.bin signed_data.bin
 
 # Assemble
-(echo '-----BEGIN OWNERSHIP VOUCHER-----' ; sqlite3 test.db 'select hex(cbor) from vouchers;' | xxd -r -p | base64 ; echo '-----END OWNERSHIP VOUCHER-----') > encrypted_payload.fdo
+(echo '-----BEGIN OWNERSHIP VOUCHER-----' ; sqlite3 test.db 'select hex(cbor) from vouchers;' | xxd -r -p | base64 -w 64 ; echo '-----END OWNERSHIP VOUCHER-----') > encrypted_payload.fdo
 (echo "-----BEGIN IV-----" ; echo "$IV" ; echo "-----END IV-----") >> encrypted_payload.fdo
 (echo "-----BEGIN WRAPPED ENCRYPTION KEY-----" ; echo "$WEK" ; echo "-----END WRAPPED ENCRYPTION KEY-----") >> encrypted_payload.fdo
 (echo "-----BEGIN CIPHERTEXT-----" ; echo "$CIPHERTEXT" ; echo "-----END CIPHERTEXT-----") >> encrypted_payload.fdo
