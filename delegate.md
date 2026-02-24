@@ -56,6 +56,128 @@ go run ./examples/cmd server -http 127.0.0.1:9999 -db ./test.db -onboardDelegate
 go run ./examples/cmd client
 ```
 
+## CSR Workflow (Multi-Party Delegate Issuance)
+
+The `delegate create` command above generates both the key AND the certificate in one shot. This is convenient for testing but doesn't work for real multi-party scenarios where one entity holds the owner key and another entity needs a delegate certificate.
+
+The **CSR workflow** separates key generation from certificate signing, which is how production delegate issuance works:
+
+### `create` vs. CSR Workflow
+
+| Aspect | `delegate create` | CSR Workflow |
+| ------ | ----------------- | ------------ |
+| **Key generation** | Single command generates key + cert | Requester generates key + CSR separately |
+| **Who holds private key** | Same entity that signs the cert | Requester holds private key; signer never sees it |
+| **Use case** | Testing, single-org quick setup | Production multi-party, cross-org delegation |
+| **Chain depth** | Supports multi-level intermediate chains | Depth 1 (leaf signed directly by owner key) |
+| **Commands** | 1 command | 3 commands (generate-csr → sign-csr → import-cert) |
+
+### Scenario A: Intra-Org Pull (Others Pull from You)
+
+Your organization holds the owner key. Internal teams need to pull vouchers that are still signed to your key, without a sign-over. You issue them a delegate certificate with `voucher-claim` permission.
+
+```text
+┌──────────────┐                    ┌──────────────┐
+│  Internal    │  1. CSR            │  Owner Key   │
+│  Service     │ ─────────────────▶ │  Holder      │
+│  (requester) │                    │  (signer)    │
+│              │  2. Signed cert    │              │
+│              │ ◀───────────────── │              │
+│              │                    └──────────────┘
+│              │
+│              │  3. PullAuth (delegate)
+│              │ ─────────────────▶  Voucher Holder Service
+│              │  4. Vouchers
+│              │ ◀─────────────────
+└──────────────┘
+```
+
+**Steps:**
+
+```bash
+# 1. Requester generates keypair + CSR (no database needed)
+go run ./examples/cmd delegate generate-csr myService ec384 -key-out myService.key.pem > myService.csr.pem
+
+# 2. Owner-key holder signs the CSR with voucher-claim permission
+go run ./examples/cmd delegate -db owner.db sign-csr myService.csr.pem myDelegate voucher-claim SECP384R1 > signed.pem
+
+# 3. Requester imports the signed cert + their private key
+go run ./examples/cmd delegate -db requester.db import-cert myDelegate signed.pem myService.key.pem
+
+# 4. Requester pulls vouchers using delegate authentication
+fdo-voucher-manager pull -url http://holder:8083 \
+    -owner-pub owner-public.pem \
+    -delegate-key myService.key.pem \
+    -delegate-chain signed.pem \
+    -output ./vouchers/
+```
+
+### Scenario B: Cross-Org Pull (You Pull from Others)
+
+An upstream provider holds the owner key. You need to pull vouchers from them. They issue you a delegate certificate with `voucher-claim` permission.
+
+```bash
+# 1. You generate a CSR
+go run ./examples/cmd delegate generate-csr myOrg ec384 -key-out myOrg.key.pem > myOrg.csr.pem
+# Send myOrg.csr.pem to the upstream provider
+
+# 2. Upstream provider signs it (on their side)
+go run ./examples/cmd delegate -db upstream.db sign-csr myOrg.csr.pem partnerDelegate voucher-claim SECP384R1 > signed.pem
+# They send signed.pem back to you
+
+# 3. You import the signed cert
+go run ./examples/cmd delegate -db local.db import-cert partnerDelegate signed.pem myOrg.key.pem
+
+# 4. You pull vouchers using the delegate cert
+fdo-voucher-manager pull -url http://upstream-holder:8083 \
+    -owner-pub upstream-owner-public.pem \
+    -delegate-key myOrg.key.pem \
+    -delegate-chain signed.pem \
+    -output ./vouchers/
+```
+
+### CSR Workflow CLI Commands
+
+#### `delegate generate-csr`
+
+Generates a new keypair and CSR. The requester runs this command. No database required.
+
+```bash
+go run ./examples/cmd delegate generate-csr <subject-CN> <key-type> [-key-out <path>]
+```
+
+- `subject-CN` — Common Name for the CSR (e.g., `myService`, `myOrg`)
+- `key-type` — `ec256`, `ec384`, `rsa2048`, `rsa3072`
+- `-key-out` — Path to save private key PEM (default: `<subject>.key.pem`)
+- CSR PEM is written to **stdout** (pipe or redirect to file)
+
+#### `delegate sign-csr`
+
+Signs a CSR using the local owner key, producing a delegate certificate with scoped permissions. The owner-key holder runs this command.
+
+```bash
+go run ./examples/cmd delegate -db <db> sign-csr <csr-file> <chain-name> <permissions> <owner-key-type>
+```
+
+- `csr-file` — Path to the CSR PEM file
+- `chain-name` — Name to store the chain under in the database
+- `permissions` — Comma-separated permission strings (see [CLI Permission Parameters](#cli-permission-parameters))
+- `owner-key-type` — `SECP384R1`, `SECP256R1`, `RSAPKCS`, etc.
+- Signed cert PEM is written to **stdout**
+- Chain is also stored in the database (cert-only, no private key) for inspection via `delegate print`
+
+#### `delegate import-cert`
+
+Imports a signed delegate certificate chain and pairs it with a local private key. The requester runs this after receiving the signed cert.
+
+```bash
+go run ./examples/cmd delegate -db <db> import-cert <chain-name> <cert-chain.pem> <private-key.pem>
+```
+
+- `chain-name` — Name to store the chain under in the database
+- `cert-chain.pem` — Signed certificate chain PEM (one or more certificates)
+- `private-key.pem` — Private key PEM (must match the leaf cert's public key)
+
 ## Design Notes
 
 The "key Type" from delegate keys (certs) isn't really authoritative, because cert chains may have a combination of different keys, and because delegate chains will be used for both RV blobs and TO2 services. We have added "names" to allow people to create different chains of different types for use in either of these.
@@ -88,6 +210,7 @@ All permission OIDs are under the base `1.3.6.1.4.1.45724.3.1` (PERM):
 | `PERM.2` | `permit-onboard-new-cred` | Onboard with new credentials | TO2 |
 | `PERM.3` | `permit-onboard-reuse-cred` | Onboard with credential reuse | TO2 |
 | `PERM.4` | `permit-onboard-fdo-disable` | Onboard and disable FDO | TO2 |
+| `PERM.5` | `permit-voucher-claim` | Claim (pull/download) vouchers via PullAuth | Pull API |
 
 Full OIDs:
 
@@ -95,6 +218,7 @@ Full OIDs:
 - `1.3.6.1.4.1.45724.3.1.2` - fdo-ekt-permit-onboard-new-cred
 - `1.3.6.1.4.1.45724.3.1.3` - fdo-ekt-permit-onboard-reuse-cred
 - `1.3.6.1.4.1.45724.3.1.4` - fdo-ekt-permit-onboard-fdo-disable
+- `1.3.6.1.4.1.45724.3.1.5` - fdo-ekt-permit-voucher-claim
 
 ### CLI Permission Parameters
 
@@ -107,8 +231,9 @@ When creating delegate chains via CLI, you can use these permission strings:
 | `onboard-new-cred` | PERM.2 | Onboard with new credentials only |
 | `onboard-reuse-cred` | PERM.3 | Onboard with credential reuse only |
 | `onboard-fdo-disable` | PERM.4 | Onboard and disable FDO only |
-| `claim` | Legacy | Claim permission |
-| `provision` | Legacy | Provision permission |
+| `voucher-claim` | PERM.5 | Claim (pull/download) vouchers via PullAuth |
+| `claim` | Legacy | Legacy claim permission |
+| `provision` | Legacy | Legacy provision permission |
 
 Multiple permissions can be combined with commas, e.g., `onboard,redirect` or `onboard-new-cred,redirect`.
 

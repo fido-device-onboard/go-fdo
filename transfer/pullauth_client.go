@@ -25,7 +25,18 @@ type PullAuthClient struct {
 	// OwnerKey is the Owner's private key used for signing.
 	// If DelegateKey is set, this is only used to identify the Owner
 	// (the public key is sent in PullAuth.Hello) and DelegateKey is used for signing.
+	// When using delegate-based pull, you may set OwnerPublicKey instead of
+	// OwnerKey if you do not have the owner's private key.
 	OwnerKey crypto.Signer
+
+	// OwnerPublicKey is the Owner's public key, used to identify the Owner
+	// in PullAuth.Hello when the Recipient does not possess the Owner's
+	// private key. This is the typical case for delegate-based pull: the
+	// Recipient holds a delegate key+cert issued by the Owner, but only
+	// has the Owner's public key (not private). If both OwnerKey and
+	// OwnerPublicKey are set, OwnerPublicKey takes precedence when
+	// DelegateKey is also set.
+	OwnerPublicKey crypto.PublicKey
 
 	// DelegateKey is an optional Delegate private key. When set, the Recipient
 	// signs with this key instead of OwnerKey, and DelegateChain must also be set.
@@ -60,6 +71,17 @@ type PullAuthClientResult struct {
 // Authenticate performs the full PullAuth handshake with the Holder.
 // On success, returns a session token that can be used for Pull API requests.
 func (c *PullAuthClient) Authenticate() (*PullAuthClientResult, error) {
+	// Validate key configuration
+	if c.OwnerKey == nil && c.OwnerPublicKey == nil {
+		return nil, fmt.Errorf("PullAuth: either OwnerKey or OwnerPublicKey must be set")
+	}
+	if c.DelegateKey != nil && c.DelegateChain == nil {
+		return nil, fmt.Errorf("PullAuth: DelegateChain must be set when DelegateKey is set")
+	}
+	if c.OwnerKey == nil && c.DelegateKey == nil {
+		return nil, fmt.Errorf("PullAuth: DelegateKey must be set when using OwnerPublicKey without OwnerKey")
+	}
+
 	if c.HashAlg == 0 {
 		c.HashAlg = protocol.Sha256Hash
 	}
@@ -179,8 +201,18 @@ func (c *PullAuthClient) Authenticate() (*PullAuthClientResult, error) {
 }
 
 // ownerPublicKey builds the protocol.PublicKey for the Owner's public key.
+// When OwnerPublicKey is set (delegate-based pull without owner private key),
+// it is used directly. Otherwise, the public key is extracted from OwnerKey.
 func (c *PullAuthClient) ownerPublicKey() (*protocol.PublicKey, error) {
-	pub := c.OwnerKey.Public()
+	var pub crypto.PublicKey
+	if c.OwnerPublicKey != nil && c.DelegateKey != nil {
+		pub = c.OwnerPublicKey
+	} else if c.OwnerKey != nil {
+		pub = c.OwnerKey.Public()
+	} else {
+		return nil, fmt.Errorf("no owner key available")
+	}
+
 	keyType, err := protocol.KeyTypeFromPublicKey(pub)
 	if err != nil {
 		return nil, err

@@ -32,6 +32,20 @@ Recipient                              Holder
 
 Recipients can authenticate using a Delegate Key instead of the Owner Key directly. The delegate chain (X.509 certificates) must be rooted at the Owner Key and the leaf certificate must contain the `fdo-ekt-permit-voucher-claim` EKU (OID `1.3.6.1.4.1.45724.3.1.5`).
 
+When using delegate-based pull, the Recipient typically does not possess the Owner's private key — only the Owner's public key. The `PullAuthClient` supports this via the `OwnerPublicKey` field:
+
+```go
+client := &transfer.PullAuthClient{
+    OwnerPublicKey: ownerPublicKey,    // Owner's public key (identifies whose vouchers to pull)
+    DelegateKey:    delegatePrivKey,    // Delegate's private key (used for signing)
+    DelegateChain:  delegateCertChain, // X.509 cert chain (root first, leaf last)
+    BaseURL:        "https://holder.example.com",
+}
+result, err := client.Authenticate()
+```
+
+For how to issue delegate certificates using the CSR workflow, see [delegate.md](../delegate.md#csr-workflow-multi-party-delegate-issuance).
+
 ## Voucher Transceiver
 
 The package provides unified interfaces for both push and pull voucher transfer:

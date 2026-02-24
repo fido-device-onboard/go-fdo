@@ -348,6 +348,63 @@ test_delegate_fdo200() {
 	log_success "Delegate Support (FDO 2.0) test PASSED"
 }
 
+# Test: Delegate CSR Workflow (generate-csr, sign-csr, import-cert)
+test_delegate_csr() {
+	log_section "TEST: Delegate CSR Workflow"
+
+	rm -f "$DB_FILE" "$CRED_FILE"
+	rm -f $EPHEMERAL_DIR/delegate-csr.*
+
+	log_step "Creating database with owner certs"
+	start_server "-owner-certs"
+	stop_server
+
+	# Note: run_cmd does "cd examples" so file paths need "../" prefix for EPHEMERAL_DIR
+	log_step "Generating CSR (requester side, no DB needed)"
+	run_cmd go run ./cmd delegate generate-csr testService ec384 -key-out "../$EPHEMERAL_DIR/delegate-csr.key.pem" >"$EPHEMERAL_DIR/delegate-csr.csr.pem"
+	log_success "CSR generated"
+
+	# Verify CSR file exists and is non-empty
+	if [ ! -s "$EPHEMERAL_DIR/delegate-csr.csr.pem" ]; then
+		log_error "CSR file is empty or missing"
+		exit 1
+	fi
+	if [ ! -s "$EPHEMERAL_DIR/delegate-csr.key.pem" ]; then
+		log_error "Private key file is empty or missing"
+		exit 1
+	fi
+	log_success "CSR and key files verified"
+
+	log_step "Signing CSR with voucher-claim permission (owner side)"
+	run_cmd go run ./cmd delegate -db "../$DB_FILE" sign-csr "../$EPHEMERAL_DIR/delegate-csr.csr.pem" csrDelegate voucher-claim SECP384R1 >"$EPHEMERAL_DIR/delegate-csr.cert.pem"
+	log_success "CSR signed"
+
+	# Verify signed cert file exists and is non-empty
+	if [ ! -s "$EPHEMERAL_DIR/delegate-csr.cert.pem" ]; then
+		log_error "Signed cert file is empty or missing"
+		exit 1
+	fi
+	log_success "Signed cert file verified"
+
+	log_step "Importing signed cert + private key (requester side)"
+	run_cmd go run ./cmd delegate -db "../$DB_FILE" import-cert importedDelegate "../$EPHEMERAL_DIR/delegate-csr.cert.pem" "../$EPHEMERAL_DIR/delegate-csr.key.pem"
+	log_success "Cert imported"
+
+	log_step "Listing delegate chains (should show both csrDelegate and importedDelegate)"
+	run_cmd go run ./cmd delegate -db "../$DB_FILE" list
+	log_success "Delegate chains listed"
+
+	log_step "Printing imported delegate chain"
+	run_cmd go run ./cmd delegate -db "../$DB_FILE" print importedDelegate
+	log_success "Delegate chain printed"
+
+	log_step "Signing CSR with onboard permission (no voucher-claim)"
+	run_cmd go run ./cmd delegate -db "../$DB_FILE" sign-csr "../$EPHEMERAL_DIR/delegate-csr.csr.pem" onboardOnly onboard SECP384R1 >"$EPHEMERAL_DIR/delegate-csr.onboard.pem"
+	log_success "CSR signed with onboard-only permission"
+
+	log_success "Delegate CSR Workflow test PASSED"
+}
+
 # Test: Attested Payload (plaintext)
 test_attested_payload() {
 	log_section "TEST: Attested Payload (Plaintext)"
@@ -1581,6 +1638,7 @@ test_all() {
 	test_fdo200 || failed=1
 	test_delegate || failed=1
 	test_delegate_fdo200 || failed=1
+	test_delegate_csr || failed=1
 	test_attested_payload || failed=1
 	test_attested_payload_encrypted || failed=1
 	test_attested_payload_delegate || failed=1
@@ -1656,6 +1714,9 @@ main() {
 	delegate-fdo200)
 		test_delegate_fdo200
 		;;
+	delegate-csr)
+		test_delegate_csr
+		;;
 	bad-delegate)
 		test_bad_delegate
 		;;
@@ -1721,7 +1782,7 @@ main() {
 		;;
 	*)
 		echo "Unknown test: $test_name"
-		echo "Available tests: basic, basic-reuse, rv-blob, kex, fdo200, delegate, delegate-fdo200, bad-delegate, attested-payload, attested-payload-encrypted, attested-payload-delegate, attested-payload-shell, sysconfig, sysconfig-fdo200, payload, payload-fdo200, payload-multiple-types, payload-selective-rejection, payload-nak, wifi, wifi-fdo200, wifi-single-sided, bmo, bmo-efi, bmo-nak, bmo-multi-asset, credentials, all"
+		echo "Available tests: basic, basic-reuse, rv-blob, kex, fdo200, delegate, delegate-fdo200, delegate-csr, bad-delegate, attested-payload, attested-payload-encrypted, attested-payload-delegate, attested-payload-shell, sysconfig, sysconfig-fdo200, payload, payload-fdo200, payload-multiple-types, payload-selective-rejection, payload-nak, wifi, wifi-fdo200, wifi-single-sided, bmo, bmo-efi, bmo-nak, bmo-multi-asset, credentials, all"
 		exit 1
 		;;
 	esac
