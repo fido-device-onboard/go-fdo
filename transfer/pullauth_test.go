@@ -10,9 +10,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/protocol"
 	"github.com/fido-device-onboard/go-fdo/transfer"
 )
@@ -336,6 +338,169 @@ func TestSessionStore_SingleUse(t *testing.T) {
 	if got != nil {
 		t.Fatal("expected nil on second Get (single-use)")
 	}
+}
+
+func TestHolderInfo_RejectNegativeVoucherCount(t *testing.T) {
+	// Create a CBOR map with negative voucher_count
+	m := map[string]any{
+		"holder_id":     "holder.example.com",
+		"voucher_count": int64(-1), // Invalid negative value
+		"algorithms":    []any{int64(-7), int64(-35)},
+	}
+	data, err := cbor.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var h transfer.HolderInfo
+	err = h.UnmarshalCBOR(data)
+	if err == nil {
+		t.Error("expected error for negative voucher_count")
+	}
+	if !strings.Contains(err.Error(), "voucher_count cannot be negative") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestHolderInfo_CBORMapRoundTrip(t *testing.T) {
+	// Full HolderInfo
+	h := transfer.HolderInfo{
+		HolderID:     "holder.example.com",
+		VoucherCount: 42,
+		Algorithms:   []int{-7, -35},
+	}
+	data, err := h.MarshalCBOR()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// CBOR maps start with major type 5 (0xa0-0xbf). Arrays start with 0x80-0x9f.
+	// Verify it's a map, not an array.
+	if data[0]&0xe0 != 0xa0 {
+		t.Errorf("expected CBOR map (major type 5), got first byte 0x%02x", data[0])
+	}
+
+	var h2 transfer.HolderInfo
+	if err := h2.UnmarshalCBOR(data); err != nil {
+		t.Fatal(err)
+	}
+	if h2.HolderID != h.HolderID {
+		t.Errorf("HolderID = %q, want %q", h2.HolderID, h.HolderID)
+	}
+	if h2.VoucherCount != h.VoucherCount {
+		t.Errorf("VoucherCount = %d, want %d", h2.VoucherCount, h.VoucherCount)
+	}
+	if len(h2.Algorithms) != len(h.Algorithms) {
+		t.Fatalf("Algorithms len = %d, want %d", len(h2.Algorithms), len(h.Algorithms))
+	}
+	for i, a := range h.Algorithms {
+		if h2.Algorithms[i] != a {
+			t.Errorf("Algorithms[%d] = %d, want %d", i, h2.Algorithms[i], a)
+		}
+	}
+
+	// Minimal HolderInfo (only voucher_count)
+	h3 := transfer.HolderInfo{VoucherCount: 5}
+	data3, err := h3.MarshalCBOR()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data3[0]&0xe0 != 0xa0 {
+		t.Errorf("expected CBOR map for minimal HolderInfo, got 0x%02x", data3[0])
+	}
+	var h4 transfer.HolderInfo
+	if err := h4.UnmarshalCBOR(data3); err != nil {
+		t.Fatal(err)
+	}
+	if h4.VoucherCount != 5 {
+		t.Errorf("minimal VoucherCount = %d, want 5", h4.VoucherCount)
+	}
+	if h4.HolderID != "" {
+		t.Errorf("minimal HolderID should be empty, got %q", h4.HolderID)
+	}
+
+	// Empty HolderInfo
+	h5 := transfer.HolderInfo{}
+	data5, _ := h5.MarshalCBOR()
+	if data5[0] != 0xa0 { // empty map
+		t.Errorf("expected empty CBOR map (0xa0), got 0x%02x", data5[0])
+	}
+}
+
+// TestPullAuth_HolderSignatureVerification tests that the client correctly
+// verifies the Holder's COSE_Sign1 signature when HolderPublicKey is set.
+func TestPullAuth_HolderSignatureVerification(t *testing.T) {
+	holderKey := newTestECKey(t)
+	ownerKey := newTestECKey(t)
+
+	ts, _ := setupTestServer(t, holderKey)
+
+	// Case 1: Correct HolderPublicKey — should succeed
+	client := &transfer.PullAuthClient{
+		OwnerKey:        ownerKey,
+		HashAlg:         protocol.Sha256Hash,
+		HTTPClient:      ts.Client(),
+		BaseURL:         ts.URL,
+		HolderPublicKey: holderKey.Public(),
+	}
+
+	result, err := client.Authenticate()
+	if err != nil {
+		t.Fatalf("PullAuth with correct HolderPublicKey failed: %v", err)
+	}
+	if result.SessionToken == "" {
+		t.Error("expected non-empty session token")
+	}
+	t.Logf("HolderSignature verified successfully, token=%s", result.SessionToken)
+}
+
+func TestPullAuth_HolderSignatureVerification_WrongKey(t *testing.T) {
+	holderKey := newTestECKey(t)
+	ownerKey := newTestECKey(t)
+	wrongKey := newTestECKey(t) // different from holderKey
+
+	ts, _ := setupTestServer(t, holderKey)
+
+	// Case 2: Wrong HolderPublicKey — should fail
+	client := &transfer.PullAuthClient{
+		OwnerKey:        ownerKey,
+		HashAlg:         protocol.Sha256Hash,
+		HTTPClient:      ts.Client(),
+		BaseURL:         ts.URL,
+		HolderPublicKey: wrongKey.Public(),
+	}
+
+	_, err := client.Authenticate()
+	if err == nil {
+		t.Fatal("PullAuth with wrong HolderPublicKey should have failed")
+	}
+	t.Logf("Got expected error: %v", err)
+}
+
+func TestPullAuth_HolderSignatureVerification_P384(t *testing.T) {
+	holderKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerKey := newTestECKey(t)
+
+	ts, _ := setupTestServer(t, holderKey)
+
+	client := &transfer.PullAuthClient{
+		OwnerKey:        ownerKey,
+		HashAlg:         protocol.Sha256Hash,
+		HTTPClient:      ts.Client(),
+		BaseURL:         ts.URL,
+		HolderPublicKey: holderKey.Public(),
+	}
+
+	result, authErr := client.Authenticate()
+	if authErr != nil {
+		t.Fatalf("PullAuth with P-384 HolderKey failed: %v", authErr)
+	}
+	if result.SessionToken == "" {
+		t.Error("expected non-empty session token")
+	}
+	t.Logf("P-384 HolderSignature verified successfully")
 }
 
 func TestSessionStore_Capacity(t *testing.T) {

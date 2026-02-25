@@ -62,17 +62,66 @@ type PullAuthHello struct {
 	ProtocolVersion uint
 }
 
-// HolderInfo contains optional metadata about the Holder, encoded as a CBOR array.
+// HolderInfo contains optional metadata about the Holder, encoded as a CBOR map
+// with text string keys per the spec:
 //
-//	HolderInfo = [
-//	    holder_id:     tstr,
-//	    voucher_count: uint,
-//	    algorithms:    [ * int ]
-//	]
+//	HolderInfo = {
+//	    ? "holder_id":     tstr,
+//	    ? "voucher_count": uint,
+//	    ? "algorithms":    [ + int ]
+//	}
 type HolderInfo struct {
 	HolderID     string
 	VoucherCount uint
 	Algorithms   []int
+}
+
+// MarshalCBOR encodes HolderInfo as a CBOR map with text string keys.
+// Only non-zero fields are included (all fields are optional per spec).
+func (h HolderInfo) MarshalCBOR() ([]byte, error) {
+	m := make(map[string]any)
+	if h.HolderID != "" {
+		m["holder_id"] = h.HolderID
+	}
+	if h.VoucherCount > 0 {
+		m["voucher_count"] = h.VoucherCount
+	}
+	if len(h.Algorithms) > 0 {
+		m["algorithms"] = h.Algorithms
+	}
+	return cbor.Marshal(m)
+}
+
+// UnmarshalCBOR decodes HolderInfo from a CBOR map with text string keys.
+func (h *HolderInfo) UnmarshalCBOR(data []byte) error {
+	var m map[string]any
+	if err := cbor.Unmarshal(data, &m); err != nil {
+		return err
+	}
+	if v, ok := m["holder_id"]; ok {
+		if s, ok := v.(string); ok {
+			h.HolderID = s
+		}
+	}
+	if v, ok := m["voucher_count"]; ok {
+		if n, ok := v.(int64); ok {
+			if n < 0 {
+				return fmt.Errorf("voucher_count cannot be negative: %d", n)
+			}
+			h.VoucherCount = uint(n)
+		}
+	}
+	if v, ok := m["algorithms"]; ok {
+		if arr, ok := v.([]any); ok {
+			h.Algorithms = make([]int, 0, len(arr))
+			for _, elem := range arr {
+				if n, ok := elem.(int64); ok {
+					h.Algorithms = append(h.Algorithms, int(n))
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // PullAuthChallenge is the response to PullAuth.Hello, sent from Holder to Recipient.

@@ -83,12 +83,22 @@ server.RegisterHandlers(mux)
 
 ```go
 client := &transfer.PullAuthClient{
-    OwnerKey: ownerPrivateKey,
-    BaseURL:  "https://holder.example.com",
+    OwnerKey:        ownerPrivateKey,
+    BaseURL:         "https://holder.example.com",
+    HolderPublicKey: holderPublicKey, // optional: verify Holder's signature
 }
 result, err := client.Authenticate()
 // result.SessionToken can be used for Pull API requests
 ```
+
+#### HolderSignature Verification
+
+If `HolderPublicKey` is set, the client cryptographically verifies the Holder's COSE_Sign1 signature in `PullAuth.Challenge` (§9.8.3). This proves the Holder possesses the private key corresponding to its DID-published public key, preventing MITM attacks. The verification checks:
+
+1. **Signature**: COSE_Sign1 over the challenge payload
+2. **Payload contents**: type tag, both nonces, hash of Hello, and the Owner Key all match expected values
+
+If `HolderPublicKey` is nil, verification is skipped with a warning logged. The Holder's public key is typically obtained from the `FDOVoucherHolder` service entry in the Holder's DID document.
 
 ## Testing
 

@@ -10,8 +10,10 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -110,6 +112,9 @@ func (s *MemoryVoucherStore) List(_ context.Context, ownerKeyFingerprint []byte,
 	if filter.Since != nil || filter.Until != nil {
 		var filtered []transfer.VoucherInfo
 		for _, v := range vouchers {
+			if v.CreatedAt == nil {
+				continue
+			}
 			if filter.Since != nil && v.CreatedAt.Before(*filter.Since) {
 				continue
 			}
@@ -430,6 +435,99 @@ func TestPullHolderWithInvalidToken(t *testing.T) {
 	}
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("expected 200, got %d", resp.StatusCode)
+	}
+}
+
+// TestPullHolderFieldSelection tests the ?fields= query parameter.
+func TestPullHolderFieldSelection(t *testing.T) {
+	store := NewMemoryVoucherStore()
+	fingerprint := []byte{1, 2, 3, 4}
+
+	// Add a voucher with all fields populated
+	store.AddForOwner(fingerprint, "test-guid-1")
+	store.mu.Lock()
+	store.vouchers["test-guid-1"] = &transfer.VoucherData{
+		VoucherInfo: transfer.VoucherInfo{
+			GUID:         "test-guid-1",
+			SerialNumber: "SN-12345",
+			ModelNumber:  "Model-X",
+			DeviceInfo:   "Test Device",
+			CreatedAt:    func() *time.Time { t := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC); return &t }(),
+		},
+	}
+	store.mu.Unlock()
+
+	holder := &transfer.HTTPPullHolder{
+		Store: store,
+		ValidateToken: func(token string) ([]byte, error) {
+			return fingerprint, nil
+		},
+	}
+
+	mux := http.NewServeMux()
+	holder.RegisterHandlers(mux)
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	// Test with fields=voucher_id,serial_number
+	req, _ := http.NewRequest("GET", ts.URL+"/api/v1/pull/vouchers?fields=voucher_id,serial_number", nil)
+	req.Header.Set("Authorization", "Bearer token")
+	resp, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Logf("Error closing response body: %v", err)
+		}
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// voucher_id and serial_number should be present
+	if !strings.Contains(bodyStr, `"voucher_id"`) {
+		t.Error("expected voucher_id in response")
+	}
+	if !strings.Contains(bodyStr, `"serial_number"`) {
+		t.Error("expected serial_number in response")
+	}
+	// model_number, device_info, created_at should be absent (omitempty)
+	if strings.Contains(bodyStr, `"model_number"`) {
+		t.Error("model_number should be omitted when not in fields")
+	}
+	if strings.Contains(bodyStr, `"device_info"`) {
+		t.Error("device_info should be omitted when not in fields")
+	}
+	if strings.Contains(bodyStr, `"created_at"`) {
+		t.Error("created_at should be omitted when not in fields")
+	}
+
+	// Test without fields param — all fields should be present
+	req2, _ := http.NewRequest("GET", ts.URL+"/api/v1/pull/vouchers", nil)
+	req2.Header.Set("Authorization", "Bearer token")
+	resp2, err := ts.Client().Do(req2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := resp2.Body.Close(); err != nil {
+			t.Logf("Error closing response body: %v", err)
+		}
+	}()
+
+	body2, _ := io.ReadAll(resp2.Body)
+	bodyStr2 := string(body2)
+
+	if !strings.Contains(bodyStr2, `"serial_number"`) {
+		t.Error("expected serial_number in unfiltered response")
+	}
+	if !strings.Contains(bodyStr2, `"model_number"`) {
+		t.Error("expected model_number in unfiltered response")
 	}
 }
 

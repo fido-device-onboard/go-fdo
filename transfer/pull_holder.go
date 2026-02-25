@@ -4,6 +4,8 @@
 package transfer
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -32,16 +34,22 @@ type HTTPPullHolder struct {
 
 // RegisterHandlers registers the Pull API HTTP handlers on the given mux.
 // These handlers expect a valid Bearer token from a completed PullAuth handshake.
-func (h *HTTPPullHolder) RegisterHandlers(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/v1/pull/vouchers", h.HandleListVouchers)
-	mux.HandleFunc("GET /api/v1/pull/vouchers/{guid}", h.HandleDownloadVoucher)
+// The root parameter is the Pull Service Root path (e.g., "/api/v1/pull/vouchers").
+// List is at GET {root} and download is at GET {root}/{guid}/download.
+func (h *HTTPPullHolder) RegisterHandlers(mux *http.ServeMux, root ...string) {
+	prefix := "/api/v1/pull/vouchers"
+	if len(root) > 0 && root[0] != "" {
+		prefix = strings.TrimRight(root[0], "/")
+	}
+	mux.HandleFunc("GET "+prefix, h.HandleListVouchers)
+	mux.HandleFunc("GET "+prefix+"/{guid}/download", h.HandleDownloadVoucher)
 }
 
 // HandleListVouchers handles GET /api/v1/pull/vouchers.
 func (h *HTTPPullHolder) HandleListVouchers(w http.ResponseWriter, r *http.Request) {
 	fingerprint, err := h.authenticate(r)
 	if err != nil {
-		h.writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		h.writeErrorJSON(w, r, http.StatusUnauthorized, err.Error())
 		return
 	}
 
@@ -50,8 +58,31 @@ func (h *HTTPPullHolder) HandleListVouchers(w http.ResponseWriter, r *http.Reque
 	listResp, err := h.Store.List(r.Context(), fingerprint, filter)
 	if err != nil {
 		slog.Error("pull holder: list vouchers failed", "error", err)
-		h.writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		h.writeErrorJSON(w, r, http.StatusInternalServerError, "internal error")
 		return
+	}
+
+	// Apply field selection: if fields param was specified, zero out
+	// unrequested optional fields so omitempty drops them from JSON.
+	if len(filter.Fields) > 0 {
+		allowed := make(map[string]bool, len(filter.Fields))
+		for _, f := range filter.Fields {
+			allowed[f] = true
+		}
+		for i := range listResp.Vouchers {
+			if !allowed["serial_number"] {
+				listResp.Vouchers[i].SerialNumber = ""
+			}
+			if !allowed["model_number"] {
+				listResp.Vouchers[i].ModelNumber = ""
+			}
+			if !allowed["device_info"] {
+				listResp.Vouchers[i].DeviceInfo = ""
+			}
+			if !allowed["created_at"] {
+				listResp.Vouchers[i].CreatedAt = nil
+			}
+		}
 	}
 
 	h.writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -93,6 +124,15 @@ func (h *HTTPPullHolder) parseListFilter(r *http.Request) ListFilter {
 		}
 	}
 
+	if fieldsStr := q.Get("fields"); fieldsStr != "" {
+		for _, f := range strings.Split(fieldsStr, ",") {
+			f = strings.TrimSpace(f)
+			if f != "" {
+				filter.Fields = append(filter.Fields, f)
+			}
+		}
+	}
+
 	return filter
 }
 
@@ -100,25 +140,29 @@ func (h *HTTPPullHolder) parseListFilter(r *http.Request) ListFilter {
 func (h *HTTPPullHolder) HandleDownloadVoucher(w http.ResponseWriter, r *http.Request) {
 	fingerprint, err := h.authenticate(r)
 	if err != nil {
-		h.writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		h.writeErrorJSON(w, r, http.StatusUnauthorized, err.Error())
 		return
 	}
 
 	guid := r.PathValue("guid")
 	if guid == "" {
-		h.writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing guid"})
+		h.writeErrorJSON(w, r, http.StatusBadRequest, "missing guid")
 		return
 	}
 
 	data, err := h.Store.GetVoucher(r.Context(), fingerprint, guid)
 	if err != nil {
 		slog.Error("pull holder: get voucher failed", "guid", guid, "error", err)
-		h.writeJSON(w, http.StatusNotFound, map[string]string{"error": "voucher not found"})
+		h.writeErrorJSON(w, r, http.StatusNotFound, "voucher not found")
 		return
 	}
 
 	if data.Raw != nil {
-		w.Header().Set("Content-Type", ContentTypeCBOR)
+		hash := sha256.Sum256(data.Raw)
+		w.Header().Set("Content-Type", "application/x-fdo-voucher")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", guid+".fdoov"))
+		w.Header().Set("Content-Length", strconv.Itoa(len(data.Raw)))
+		w.Header().Set("X-FDO-Checksum", "sha256:"+hex.EncodeToString(hash[:]))
 		w.WriteHeader(http.StatusOK)
 		if _, err := w.Write(data.Raw); err != nil {
 			http.Error(w, fmt.Sprintf("failed to write response: %v", err), http.StatusInternalServerError)
@@ -128,7 +172,7 @@ func (h *HTTPPullHolder) HandleDownloadVoucher(w http.ResponseWriter, r *http.Re
 	}
 
 	// Fallback: encode from Voucher struct
-	h.writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "voucher raw data not available"})
+	h.writeErrorJSON(w, r, http.StatusInternalServerError, "voucher raw data not available")
 }
 
 // GetVoucher is a convenience method wrapping Store.GetVoucher for the PullHolder interface.
@@ -162,4 +206,12 @@ func (h *HTTPPullHolder) writeJSON(w http.ResponseWriter, status int, v interfac
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		http.Error(w, fmt.Sprintf("failed to encode response: %v", err), http.StatusInternalServerError)
 	}
+}
+
+// writeErrorJSON writes a JSON error response with a request_id field.
+func (h *HTTPPullHolder) writeErrorJSON(w http.ResponseWriter, r *http.Request, status int, msg string) {
+	h.writeJSON(w, status, map[string]string{
+		"error":      msg,
+		"request_id": requestID(r),
+	})
 }

@@ -47,17 +47,27 @@ type JWK struct {
 
 // Service is a service endpoint entry in a DID Document.
 type Service struct {
-	ID              string `json:"id"`
-	Type            string `json:"type"`
-	ServiceEndpoint string `json:"serviceEndpoint"`
+	ID                      string `json:"id"`
+	Type                    string `json:"type"`
+	ServiceEndpoint         string `json:"serviceEndpoint"`
+	TLSCertificateAuthority string `json:"tlsCertificateAuthority,omitempty"`
 }
 
-// FDOVoucherRecipientServiceType is the service type for FDO voucher recipient endpoints.
+// FDOContextURL is the JSON-LD context URL for FDO-specific DID document terms.
+// This context defines FDOVoucherRecipient, FDOVoucherHolder, tlsCertificateAuthority,
+// and fido-device-onboarding. See https://fidoalliance.org/ns/fdo/v1.
+const FDOContextURL = "https://fidoalliance.org/ns/fdo/v1"
+
+// FDOVoucherRecipientServiceType is the service type for FDO voucher recipient endpoints (push).
 const FDOVoucherRecipientServiceType = "FDOVoucherRecipient"
+
+// FDOVoucherHolderServiceType is the service type for FDO voucher holder endpoints (pull).
+const FDOVoucherHolderServiceType = "FDOVoucherHolder"
 
 // NewDocument creates a DID Document for the given public key and DID URI.
 // If voucherRecipientURL is non-empty, an FDOVoucherRecipient service entry is added.
-func NewDocument(didURI string, pub crypto.PublicKey, voucherRecipientURL string) (*Document, error) {
+// If voucherHolderURL is non-empty, an FDOVoucherHolder service entry is added.
+func NewDocument(didURI string, pub crypto.PublicKey, voucherRecipientURL string, voucherHolderURL string) (*Document, error) {
 	jwk, err := PublicKeyToJWK(pub)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert public key to JWK: %w", err)
@@ -70,6 +80,7 @@ func NewDocument(didURI string, pub crypto.PublicKey, voucherRecipientURL string
 		Context: []string{
 			"https://www.w3.org/ns/did/v1",
 			"https://w3id.org/security/suites/jws-2020/v1",
+			FDOContextURL,
 		},
 		ID: didURI,
 		VerificationMethod: []VerificationMethod{
@@ -85,13 +96,19 @@ func NewDocument(didURI string, pub crypto.PublicKey, voucherRecipientURL string
 	}
 
 	if voucherRecipientURL != "" {
-		doc.Service = []Service{
-			{
-				ID:              didURI + "#voucher-recipient",
-				Type:            FDOVoucherRecipientServiceType,
-				ServiceEndpoint: voucherRecipientURL,
-			},
-		}
+		doc.Service = append(doc.Service, Service{
+			ID:              didURI + "#voucher-recipient",
+			Type:            FDOVoucherRecipientServiceType,
+			ServiceEndpoint: voucherRecipientURL,
+		})
+	}
+
+	if voucherHolderURL != "" {
+		doc.Service = append(doc.Service, Service{
+			ID:              didURI + "#voucher-holder",
+			Type:            FDOVoucherHolderServiceType,
+			ServiceEndpoint: voucherHolderURL,
+		})
 	}
 
 	return doc, nil

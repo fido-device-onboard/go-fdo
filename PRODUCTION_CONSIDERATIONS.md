@@ -112,6 +112,44 @@ SerialNumber: big.NewInt(2), // Parent
 - Consider longer validity periods with proper revocation
 - Ensure proper entropy sources for random number generation
 
+### DID Key Minting — Software vs. Hardware Keys
+
+**⚠️ IMPORTANT**: The `did.Mint()` function in `did/mint.go` generates private keys in software using Go's `crypto/rand` and exports them as plain PEM files. This is provided **for convenience, development, testing, and demonstration purposes**. It is NOT recommended for production deployments where DID-backed identities represent organizational trust anchors.
+
+In production environments, the private keys that back DID identities (owner keys, manufacturer keys) are long-lived, high-value secrets. Compromise of these keys would allow an attacker to impersonate the organization in the FDO voucher supply chain. These keys should be:
+
+- **Generated inside** hardware-backed or managed key stores, never exported
+- **Accessed only via** a `crypto.Signer` interface at signing time — the raw private key material should never be available to application code
+
+**Recommended key storage backends:**
+
+| Backend | Use Case |
+|---------|----------|
+| **Hardware Security Modules (HSMs)** | On-premises, FIPS 140-2/3 certified, highest assurance |
+| **Trusted Platform Modules (TPMs)** | Device-local, tied to specific hardware |
+| **Cloud KMS** (AWS KMS, Azure Key Vault, GCP Cloud KMS) | Cloud-native deployments, managed lifecycle |
+| **PKCS#11 / KMIP key vaults** | Enterprise key management infrastructure |
+| **External key management services** | Third-party or multi-cloud key management |
+
+**How to use hardware-backed keys with this library:**
+
+The library is designed to support this pattern. You do NOT need to use `did.Mint()` to create DID documents. Instead:
+
+1. **Generate the key externally** in your HSM/TPM/KMS
+2. **Export only the public key** from the secure enclave
+3. **Construct the DID Document** directly using `did.NewDocument(didURI, publicKey, ...)`
+4. **Sign vouchers** using a `crypto.Signer` implementation backed by the HSM/TPM — Go's standard `crypto.Signer` interface is specifically designed for this; the private key never leaves the hardware
+
+```go
+// Example: Using an HSM-backed signer with DID document creation
+publicKey := hsmClient.GetPublicKey("my-did-key-id")
+doc, err := did.NewDocument(didURI, publicKey, pushURL, pullURL)
+
+// At signing time, use the HSM-backed crypto.Signer
+signer := hsmClient.GetSigner("my-did-key-id") // implements crypto.Signer
+// Pass signer to voucher signing operations — private key never leaves HSM
+```
+
 ### Operational Security
 
 - Enable security-relevant logging and monitoring

@@ -12,13 +12,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/fido-device-onboard/go-fdo/did"
 )
 
 func TestMint_EC_P256(t *testing.T) {
-	result, err := did.Mint("example.com", "", "https://example.com/api/v1/vouchers", did.KeyConfig{Type: "EC", Curve: "P-256"})
+	result, err := did.Mint("example.com", "", "https://example.com/api/v1/vouchers", "", did.KeyConfig{Type: "EC", Curve: "P-256"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +53,7 @@ func TestMint_EC_P256(t *testing.T) {
 }
 
 func TestMint_EC_P384(t *testing.T) {
-	result, err := did.Mint("myservice.local:8080", "", "", did.KeyConfig{Type: "EC", Curve: "P-384"})
+	result, err := did.Mint("myservice.local:8080", "", "", "", did.KeyConfig{Type: "EC", Curve: "P-384"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +70,7 @@ func TestMint_EC_P384(t *testing.T) {
 }
 
 func TestMint_WithPath(t *testing.T) {
-	result, err := did.Mint("example.com", "owner1", "", did.DefaultKeyConfig())
+	result, err := did.Mint("example.com", "owner1", "", "", did.DefaultKeyConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +81,7 @@ func TestMint_WithPath(t *testing.T) {
 }
 
 func TestMint_RSA(t *testing.T) {
-	result, err := did.Mint("example.com", "", "", did.KeyConfig{Type: "RSA", Bits: 2048})
+	result, err := did.Mint("example.com", "", "", "", did.KeyConfig{Type: "RSA", Bits: 2048})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +215,7 @@ func TestPEMRoundTrip(t *testing.T) {
 }
 
 func TestHandler_ServeDIDDocument(t *testing.T) {
-	result, err := did.Mint("example.com", "", "https://example.com/vouchers", did.DefaultKeyConfig())
+	result, err := did.Mint("example.com", "", "https://example.com/vouchers", "", did.DefaultKeyConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +262,7 @@ func TestHandler_ServeDIDDocument(t *testing.T) {
 
 func TestResolver_Web(t *testing.T) {
 	// Mint a DID and serve it
-	result, err := did.Mint("example.com", "", "https://example.com/vouchers", did.DefaultKeyConfig())
+	result, err := did.Mint("example.com", "", "https://example.com/vouchers", "", did.DefaultKeyConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,7 +286,7 @@ func TestResolver_Web(t *testing.T) {
 
 	// Create a DID document with the test server's URL as the ID
 	// (This tests the resolver's ability to parse and extract keys)
-	testDoc, err := did.NewDocument("did:web:localhost", result.PublicKey, "https://localhost/vouchers")
+	testDoc, err := did.NewDocument("did:web:localhost", result.PublicKey, "https://localhost/vouchers", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,7 +369,7 @@ func TestFingerprint(t *testing.T) {
 // Negative tests
 
 func TestMint_InvalidKeyType(t *testing.T) {
-	_, err := did.Mint("example.com", "", "", did.KeyConfig{Type: "INVALID"})
+	_, err := did.Mint("example.com", "", "", "", did.KeyConfig{Type: "INVALID"})
 	if err == nil {
 		t.Fatal("expected error for invalid key type")
 	}
@@ -376,7 +377,7 @@ func TestMint_InvalidKeyType(t *testing.T) {
 }
 
 func TestMint_InvalidCurve(t *testing.T) {
-	_, err := did.Mint("example.com", "", "", did.KeyConfig{Type: "EC", Curve: "P-999"})
+	_, err := did.Mint("example.com", "", "", "", did.KeyConfig{Type: "EC", Curve: "P-999"})
 	if err == nil {
 		t.Fatal("expected error for invalid curve")
 	}
@@ -384,7 +385,7 @@ func TestMint_InvalidCurve(t *testing.T) {
 }
 
 func TestMint_InvalidRSABits(t *testing.T) {
-	_, err := did.Mint("example.com", "", "", did.KeyConfig{Type: "RSA", Bits: 512})
+	_, err := did.Mint("example.com", "", "", "", did.KeyConfig{Type: "RSA", Bits: 512})
 	if err == nil {
 		t.Fatal("expected error for invalid RSA bits (too small)")
 	}
@@ -437,7 +438,7 @@ func TestLoadPrivateKeyPEM_InvalidPEM(t *testing.T) {
 
 func TestHandler_ServesDIDDocument(t *testing.T) {
 	// Test that handler serves valid document
-	result, err := did.Mint("test.example.com", "", "", did.DefaultKeyConfig())
+	result, err := did.Mint("test.example.com", "", "", "", did.DefaultKeyConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -481,7 +482,7 @@ func TestResolver_InvalidDIDMethod(t *testing.T) {
 
 func TestNewDocument_ValidDocument(t *testing.T) {
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	doc, err := did.NewDocument("did:web:example.com", key.Public(), "https://example.com/vouchers")
+	doc, err := did.NewDocument("did:web:example.com", key.Public(), "https://example.com/vouchers", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -497,8 +498,55 @@ func TestNewDocument_ValidDocument(t *testing.T) {
 	}
 }
 
+func TestNewDocument_BothServices(t *testing.T) {
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	doc, err := did.NewDocument("did:web:example.com", key.Public(), "https://example.com/push/vouchers", "https://example.com/pull/vouchers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Service) != 2 {
+		t.Fatalf("expected 2 services, got %d", len(doc.Service))
+	}
+	if doc.Service[0].Type != did.FDOVoucherRecipientServiceType {
+		t.Errorf("service[0] type = %s, want %s", doc.Service[0].Type, did.FDOVoucherRecipientServiceType)
+	}
+	if doc.Service[1].Type != did.FDOVoucherHolderServiceType {
+		t.Errorf("service[1] type = %s, want %s", doc.Service[1].Type, did.FDOVoucherHolderServiceType)
+	}
+	if doc.Service[1].ServiceEndpoint != "https://example.com/pull/vouchers" {
+		t.Errorf("service[1] endpoint = %s", doc.Service[1].ServiceEndpoint)
+	}
+}
+
+func TestService_TLSCertificateAuthority(t *testing.T) {
+	svc := did.Service{
+		ID:                      "did:web:example.com#voucher-recipient",
+		Type:                    did.FDOVoucherRecipientServiceType,
+		ServiceEndpoint:         "https://example.com/vouchers",
+		TLSCertificateAuthority: "-----BEGIN CERTIFICATE-----\nMIIB...\n-----END CERTIFICATE-----",
+	}
+	data, err := json.Marshal(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"tlsCertificateAuthority"`) {
+		t.Error("expected tlsCertificateAuthority in JSON output")
+	}
+
+	// Omitted when empty
+	svc2 := did.Service{
+		ID:              "did:web:example.com#voucher-holder",
+		Type:            did.FDOVoucherHolderServiceType,
+		ServiceEndpoint: "https://example.com/pull/vouchers",
+	}
+	data2, _ := json.Marshal(svc2)
+	if strings.Contains(string(data2), `"tlsCertificateAuthority"`) {
+		t.Error("tlsCertificateAuthority should be omitted when empty")
+	}
+}
+
 func TestNewDocument_NilKey(t *testing.T) {
-	_, err := did.NewDocument("did:web:example.com", nil, "")
+	_, err := did.NewDocument("did:web:example.com", nil, "", "")
 	if err == nil {
 		t.Fatal("expected error for nil public key")
 	}

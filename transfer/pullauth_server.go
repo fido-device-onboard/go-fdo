@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	fdo "github.com/fido-device-onboard/go-fdo"
@@ -61,6 +62,11 @@ type PullAuthServer struct {
 func (s *PullAuthServer) HandleHello(w http.ResponseWriter, r *http.Request) {
 	if s.HashAlg == 0 {
 		s.HashAlg = protocol.Sha256Hash
+	}
+
+	if ct := r.Header.Get("Content-Type"); ct != "" && ct != ContentTypeCBOR {
+		s.writeErrorR(w, r, http.StatusUnsupportedMediaType, "expected Content-Type: "+ContentTypeCBOR)
+		return
 	}
 
 	// Read and decode PullAuth.Hello
@@ -190,6 +196,11 @@ func (s *PullAuthServer) HandleHello(w http.ResponseWriter, r *http.Request) {
 func (s *PullAuthServer) HandleProve(w http.ResponseWriter, r *http.Request) {
 	if s.HashAlg == 0 {
 		s.HashAlg = protocol.Sha256Hash
+	}
+
+	if ct := r.Header.Get("Content-Type"); ct != "" && ct != ContentTypeCBOR {
+		s.writeErrorR(w, r, http.StatusUnsupportedMediaType, "expected Content-Type: "+ContentTypeCBOR)
+		return
 	}
 
 	// Read and decode PullAuth.Prove
@@ -365,17 +376,36 @@ func (s *PullAuthServer) writeCBOR(w http.ResponseWriter, status int, data []byt
 }
 
 // writeError writes an error response. Uses JSON for error bodies for simplicity.
+// Includes a request_id echoed from X-Request-ID or auto-generated.
 func (s *PullAuthServer) writeError(w http.ResponseWriter, status int, msg string) {
-	slog.Debug("PullAuth error", "status", status, "message", msg)
+	reqID := requestID(nil)
+	slog.Debug("PullAuth error", "status", status, "message", msg, "request_id", reqID)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if _, err := fmt.Fprintf(w, `{"error":%q}`, msg); err != nil {
+	if _, err := fmt.Fprintf(w, `{"error":%q,"request_id":%q}`, msg, reqID); err != nil {
+		slog.Error("failed to write error response", "error", err)
+	}
+}
+
+// writeErrorR writes an error response with request_id derived from the HTTP request.
+func (s *PullAuthServer) writeErrorR(w http.ResponseWriter, r *http.Request, status int, msg string) {
+	reqID := requestID(r)
+	slog.Debug("PullAuth error", "status", status, "message", msg, "request_id", reqID)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if _, err := fmt.Fprintf(w, `{"error":%q,"request_id":%q}`, msg, reqID); err != nil {
 		slog.Error("failed to write error response", "error", err)
 	}
 }
 
 // RegisterHandlers registers the PullAuth HTTP handlers on the given mux.
-func (s *PullAuthServer) RegisterHandlers(mux *http.ServeMux) {
-	mux.HandleFunc("POST /api/v1/pull/auth/hello", s.HandleHello)
-	mux.HandleFunc("POST /api/v1/pull/auth/prove", s.HandleProve)
+// The root parameter is the Pull Service Root path (e.g., "/api/v1/pull/vouchers").
+// PullAuth endpoints are registered at {root}/auth/hello and {root}/auth/prove.
+func (s *PullAuthServer) RegisterHandlers(mux *http.ServeMux, root ...string) {
+	prefix := "/api/v1/pull/vouchers"
+	if len(root) > 0 && root[0] != "" {
+		prefix = strings.TrimRight(root[0], "/")
+	}
+	mux.HandleFunc("POST "+prefix+"/auth/hello", s.HandleHello)
+	mux.HandleFunc("POST "+prefix+"/auth/prove", s.HandleProve)
 }

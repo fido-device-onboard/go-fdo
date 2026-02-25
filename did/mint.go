@@ -46,12 +46,33 @@ type MintResult struct {
 // Mint generates a new owner key pair, creates a DID Document, and returns
 // everything needed to serve and share the DID.
 //
+// PRODUCTION NOTE: This function generates private keys in software using
+// Go's crypto/rand and stores them as plain PEM on disk. This is convenient
+// for development, testing, and demonstration but is NOT recommended for
+// production deployments. In real-world environments, private keys that
+// back DID identities should be generated and stored in hardware-backed or
+// managed key stores such as:
+//
+//   - Hardware Security Modules (HSMs)
+//   - Trusted Platform Modules (TPMs)
+//   - Cloud key management services (AWS KMS, Azure Key Vault, GCP Cloud KMS)
+//   - PKCS#11 / KMIP-compatible key vaults
+//
+// Callers requiring production-grade key management should generate keys
+// externally, then construct a [Document] directly via [NewDocument] using
+// only the public key. The private key never needs to leave the secure
+// enclave—only a crypto.Signer interface backed by the HSM/TPM is needed
+// at signing time.
+//
+// See PRODUCTION_CONSIDERATIONS.md for additional guidance.
+//
 // Parameters:
 //   - host: the hostname (and optional port) for the did:web URI (e.g., "example.com:8080")
 //   - path: optional path segments for the did:web URI (e.g., "" for root, "owner1" for sub-path)
 //   - voucherRecipientURL: optional URL where vouchers can be pushed to this owner
+//   - voucherHolderURL: optional URL where vouchers can be pulled from this holder
 //   - keyCfg: key generation configuration
-func Mint(host string, path string, voucherRecipientURL string, keyCfg KeyConfig) (*MintResult, error) {
+func Mint(host string, path string, voucherRecipientURL string, voucherHolderURL string, keyCfg KeyConfig) (*MintResult, error) {
 	// Generate key pair
 	privKey, err := generateKey(keyCfg)
 	if err != nil {
@@ -62,7 +83,7 @@ func Mint(host string, path string, voucherRecipientURL string, keyCfg KeyConfig
 	didURI := WebDID(host, path)
 
 	// Create DID Document
-	doc, err := NewDocument(didURI, privKey.Public(), voucherRecipientURL)
+	doc, err := NewDocument(didURI, privKey.Public(), voucherRecipientURL, voucherHolderURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create DID document: %w", err)
 	}

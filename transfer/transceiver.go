@@ -12,11 +12,11 @@ import (
 
 // VoucherInfo contains metadata about a voucher available for transfer.
 type VoucherInfo struct {
-	GUID         string
-	SerialNumber string
-	ModelNumber  string
-	DeviceInfo   string
-	CreatedAt    time.Time
+	GUID         string     `json:"voucher_id"`
+	SerialNumber string     `json:"serial_number,omitempty"`
+	ModelNumber  string     `json:"model_number,omitempty"`
+	DeviceInfo   string     `json:"device_info,omitempty"`
+	CreatedAt    *time.Time `json:"created_at,omitempty"`
 }
 
 // VoucherData contains a voucher and its metadata for transfer.
@@ -68,6 +68,7 @@ type ListFilter struct {
 	Status       string     // filter by status: "pending", "downloaded", "all" (default: "pending")
 	Limit        int        // max vouchers to return; 0 means use server default
 	Continuation string     // opaque continuation token from a previous response
+	Fields       []string   // if non-empty, only include these fields (voucher_id is always included)
 }
 
 // VoucherListResponse is the response from a voucher list endpoint.

@@ -35,7 +35,7 @@ func (p *HTTPPullInitiator) Authenticate(ctx context.Context) (*PullAuthClientRe
 
 // ListVouchers retrieves the list of available vouchers using the session token.
 func (p *HTTPPullInitiator) ListVouchers(ctx context.Context, token string, filter ListFilter) (*VoucherListResponse, error) {
-	baseURL := p.Auth.BaseURL + "/api/v1/pull/vouchers"
+	baseURL := p.Auth.BaseURL + p.Auth.pathPrefix()
 	params := url.Values{}
 	if filter.Continuation != "" {
 		params.Set("continuation", filter.Continuation)
@@ -107,14 +107,14 @@ func (p *HTTPPullInitiator) ListVouchers(ctx context.Context, token string, filt
 
 // DownloadVoucher downloads a single voucher by GUID.
 func (p *HTTPPullInitiator) DownloadVoucher(ctx context.Context, token string, guid string) (*VoucherData, error) {
-	url := p.Auth.BaseURL + "/api/v1/pull/vouchers/" + guid
+	url := p.Auth.BaseURL + p.Auth.pathPrefix() + "/" + guid + "/download"
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create download request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", ContentTypeCBOR)
+	req.Header.Set("Accept", "application/x-fdo-voucher")
 
 	client := p.Auth.HTTPClient
 	if client == nil {

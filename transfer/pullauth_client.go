@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/protocol"
@@ -58,6 +59,18 @@ type PullAuthClient struct {
 
 	// BaseURL is the Holder's base URL (e.g., "https://holder.example.com").
 	BaseURL string
+
+	// PathPrefix is the Pull Service Root path on the Holder.
+	// All PullAuth and Pull API endpoints are relative to this prefix.
+	// Defaults to "/api/v1/pull/vouchers" if empty.
+	PathPrefix string
+
+	// HolderPublicKey is the Holder's public key, used to verify the
+	// HolderSignature in PullAuth.Challenge. This is typically obtained
+	// from the Holder's DID document (the key in the FDOVoucherHolder
+	// service entry). If nil, HolderSignature verification is skipped
+	// with a warning logged.
+	HolderPublicKey crypto.PublicKey
 }
 
 // PullAuthClientResult contains the result of a successful PullAuth handshake.
@@ -119,7 +132,7 @@ func (c *PullAuthClient) Authenticate() (*PullAuthClientResult, error) {
 		return nil, fmt.Errorf("PullAuth.Hello: failed to CBOR-encode: %w", err)
 	}
 
-	challengeBytes, err := c.postCBOR(client, "/api/v1/pull/auth/hello", helloBytes)
+	challengeBytes, err := c.postCBOR(client, c.pathPrefix()+"/auth/hello", helloBytes)
 	if err != nil {
 		return nil, fmt.Errorf("PullAuth.Hello: %w", err)
 	}
@@ -141,16 +154,9 @@ func (c *PullAuthClient) Authenticate() (*PullAuthClientResult, error) {
 		return nil, fmt.Errorf("PullAuth.Challenge: hash_hello mismatch")
 	}
 
-	// Verify Holder's signature (if Holder has a signing key — optional for now)
-	// In a full implementation, the Recipient would verify the Holder's signature
-	// using a known Holder key. For now, we verify the structure is well-formed.
-	if len(challenge.HolderSignature) > 0 {
-		payloadBytes, err := VerifyPayload(nil, challenge.HolderSignature)
-		if err != nil {
-			// If we don't have the Holder's key, we can still decode the payload
-			// to verify its structure. A production implementation SHOULD verify.
-			_ = payloadBytes
-		}
+	// Verify Holder's signature (§9.8.3)
+	if err := c.verifyHolderSignature(challenge, nonceRecipient, expectedHashHello, ownerPubKey); err != nil {
+		return nil, fmt.Errorf("PullAuth.Challenge: %w", err)
 	}
 
 	// --- Step 3: Build and send PullAuth.Prove ---
@@ -177,7 +183,7 @@ func (c *PullAuthClient) Authenticate() (*PullAuthClientResult, error) {
 		RecipientSignature: sigBytes,
 	}
 
-	resultBytes, err := c.postCBOR(client, "/api/v1/pull/auth/prove", mustMarshal(prove))
+	resultBytes, err := c.postCBOR(client, c.pathPrefix()+"/auth/prove", mustMarshal(prove))
 	if err != nil {
 		return nil, fmt.Errorf("PullAuth.Prove: %w", err)
 	}
@@ -198,6 +204,14 @@ func (c *PullAuthClient) Authenticate() (*PullAuthClientResult, error) {
 		OwnerKeyFingerprint: result.OwnerKeyFingerprint,
 		VoucherCount:        result.VoucherCount,
 	}, nil
+}
+
+// pathPrefix returns the Pull Service Root path, defaulting to "/api/v1/pull/vouchers".
+func (c *PullAuthClient) pathPrefix() string {
+	if c.PathPrefix != "" {
+		return strings.TrimRight(c.PathPrefix, "/")
+	}
+	return "/api/v1/pull/vouchers"
 }
 
 // ownerPublicKey builds the protocol.PublicKey for the Owner's public key.
@@ -233,6 +247,66 @@ func (c *PullAuthClient) signingKey() crypto.Signer {
 		return c.DelegateKey
 	}
 	return c.OwnerKey
+}
+
+// verifyHolderSignature verifies the HolderSignature in a PullAuth.Challenge
+// message per §9.8.3. The signature is a COSE_Sign1 over a
+// PullAuthChallengeSignedPayload containing the nonces, hash of Hello, and
+// the Owner Key. This proves the Holder possesses the private key
+// corresponding to its DID-published public key.
+//
+// If HolderPublicKey is nil, verification is skipped with a warning.
+func (c *PullAuthClient) verifyHolderSignature(challenge PullAuthChallenge, nonceRecipient Nonce, hashHello protocol.Hash, ownerKey *protocol.PublicKey) error {
+	if len(challenge.HolderSignature) == 0 {
+		slog.Warn("PullAuth: HolderSignature is empty — Holder did not sign the challenge")
+		return nil
+	}
+
+	if c.HolderPublicKey == nil {
+		slog.Warn("PullAuth: HolderPublicKey not set — skipping HolderSignature verification")
+		return nil
+	}
+
+	// Step 1: Verify the COSE_Sign1 signature
+	payloadBytes, err := VerifyPayload(c.HolderPublicKey, challenge.HolderSignature)
+	if err != nil {
+		return fmt.Errorf("HolderSignature verification failed: %w", err)
+	}
+
+	// Step 2: Decode and validate the signed payload contents
+	var signed PullAuthChallengeSignedPayload
+	if err := cbor.Unmarshal(payloadBytes, &signed); err != nil {
+		return fmt.Errorf("HolderSignature: failed to decode signed payload: %w", err)
+	}
+
+	if signed.TypeTag != "PullAuth.Challenge" {
+		return fmt.Errorf("HolderSignature: unexpected type tag %q", signed.TypeTag)
+	}
+	if signed.NonceRecipient != nonceRecipient {
+		return fmt.Errorf("HolderSignature: nonce_recipient mismatch in signed payload")
+	}
+	if signed.NonceHolder != challenge.NonceHolder {
+		return fmt.Errorf("HolderSignature: nonce_holder mismatch in signed payload")
+	}
+	if !bytes.Equal(signed.HashHello.Value, hashHello.Value) {
+		return fmt.Errorf("HolderSignature: hash_hello mismatch in signed payload")
+	}
+
+	// Verify the OwnerKey in the signed payload matches what we sent
+	sentKeyBytes, err := cbor.Marshal(ownerKey)
+	if err != nil {
+		return fmt.Errorf("HolderSignature: failed to encode owner key for comparison: %w", err)
+	}
+	signedKeyBytes, err := cbor.Marshal(&signed.OwnerKey)
+	if err != nil {
+		return fmt.Errorf("HolderSignature: failed to encode signed owner key for comparison: %w", err)
+	}
+	if !bytes.Equal(sentKeyBytes, signedKeyBytes) {
+		return fmt.Errorf("HolderSignature: owner key mismatch in signed payload")
+	}
+
+	slog.Debug("PullAuth: HolderSignature verified successfully")
+	return nil
 }
 
 // postCBOR sends a CBOR-encoded body to the given path and returns the response body.

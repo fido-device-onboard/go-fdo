@@ -60,3 +60,26 @@ func ParseVoucherCBOR(data []byte) (*Voucher, error) {
 	}
 	return &voucher, nil
 }
+
+// FormatVoucherPEM encodes a Voucher as a PEM-wrapped OWNERSHIP VOUCHER block.
+// The CBOR-encoded voucher bytes are base64-encoded with proper line wrapping
+// per RFC 7468.
+func FormatVoucherPEM(v *Voucher) ([]byte, error) {
+	if v == nil {
+		return nil, fmt.Errorf("voucher is nil")
+	}
+	data, err := cbor.Marshal(v)
+	if err != nil {
+		return nil, fmt.Errorf("cbor marshal voucher: %w", err)
+	}
+	return FormatVoucherCBORToPEM(data), nil
+}
+
+// FormatVoucherCBORToPEM wraps raw CBOR voucher bytes in a PEM OWNERSHIP
+// VOUCHER block with proper line wrapping per RFC 7468.
+func FormatVoucherCBORToPEM(data []byte) []byte {
+	return pem.EncodeToMemory(&pem.Block{
+		Type:  "OWNERSHIP VOUCHER",
+		Bytes: data,
+	})
+}
