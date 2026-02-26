@@ -28,6 +28,15 @@ It implements [FIDO Device Onboard Specification 1.1][fdo11] and [FIDO Device On
 - Transport security requirements
 - Operational security guidelines
 
+## Documentation
+
+| Document | Description |
+| -------- | ----------- |
+| [VOUCHER_TRANSFER.md](VOUCHER_TRANSFER.md) | **Voucher Transfer Protocol** — How to use the `transfer` and `did` packages for push/pull voucher management in manufacturing systems, voucher management systems, and onboarding services |
+| [delegate.md](delegate.md) | Delegate certificate support and permissions |
+| [PRODUCTION_CONSIDERATIONS.md](PRODUCTION_CONSIDERATIONS.md) | Production deployment security guidelines |
+| [CLI_COMMANDS.md](CLI_COMMANDS.md) | CLI command reference |
+
 ## Quick Start
 
 A comprehensive test script is provided that demonstrates all major features of the FDO implementation. It serves as both a test suite and a self-documenting guide.

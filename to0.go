@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -314,10 +315,33 @@ func (s *TO0Server) acceptOwner(ctx context.Context, msg io.Reader) (*to0AcceptO
 		return nil, fmt.Errorf("TO0 owner sign nonces not match")
 	}
 
+	// Extract delegate chain from ownerSign message (if present)
+	var delegateChain []*x509.Certificate
+	if sig.DelegateChain != nil {
+		for _, cborCert := range *sig.DelegateChain {
+			delegateChain = append(delegateChain, (*x509.Certificate)(cborCert))
+		}
+	}
+
 	// Use optional callback to decide whether to accept voucher and how long
-	// the rendezvous blob should be valid
+	// the rendezvous blob should be valid.
+	// AcceptVoucherWithInfo takes precedence over AcceptVoucher.
 	ttl := sig.To0d.Val.WaitSeconds
-	if s.AcceptVoucher != nil {
+	if s.AcceptVoucherWithInfo != nil {
+		info := TO0OwnerSignInfo{
+			Voucher:       ov,
+			To1d:          *sig.To1d.Untag(),
+			DelegateChain: delegateChain,
+			RequestedTTL:  ttl,
+		}
+		if ttl, err = s.AcceptVoucherWithInfo(ctx, info); err != nil {
+			return nil, err
+		}
+		if ttl == 0 {
+			captureErr(ctx, protocol.InvalidMessageErrCode, "")
+			return nil, fmt.Errorf("voucher has been rejected")
+		}
+	} else if s.AcceptVoucher != nil {
 		if ttl, err = s.AcceptVoucher(ctx, ov, ttl); err != nil {
 			return nil, err
 		}

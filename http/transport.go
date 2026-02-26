@@ -112,6 +112,7 @@ func (t *Transport) Send(ctx context.Context, msgType uint8, msg any, sess kex.S
 
 	// Perform HTTP request
 	debugRequestOut(req, body)
+	// #nosec G704 -- requests only target rendezvous/owner endpoints derived from voucher or configuration
 	resp, err := t.Client.Do(req)
 	if err != nil {
 		return 0, nil, fmt.Errorf("error making HTTP request for message %d: %w", msgType, err)

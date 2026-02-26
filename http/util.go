@@ -26,15 +26,17 @@ func debugRequest(w http.ResponseWriter, r *http.Request, handler http.HandlerFu
 	if _, err := saveBody.ReadFrom(r.Body); err == nil {
 		r.Body = io.NopCloser(&saveBody)
 	}
-	slog.Debug("request", "dump", string(bytes.TrimSpace(debugReq)),
-		"body", tryDebugNotation(saveBody.Bytes()))
+	// #nosec G706 -- sanitizeLogValue removes newline/control characters
+	slog.Debug("request", "dump", sanitizeLogValue(string(bytes.TrimSpace(debugReq))),
+		"body", sanitizeLogValue(tryDebugNotation(saveBody.Bytes())))
 
 	// Dump response
 	rr := httptest.NewRecorder()
 	handler(rr, r)
 	debugResp, _ := httputil.DumpResponse(rr.Result(), false)
-	slog.Debug("response", "dump", string(bytes.TrimSpace(debugResp)),
-		"body", tryDebugNotation(rr.Body.Bytes()))
+	// #nosec G706 -- sanitizeLogValue removes newline/control characters
+	slog.Debug("response", "dump", sanitizeLogValue(string(bytes.TrimSpace(debugResp))),
+		"body", sanitizeLogValue(tryDebugNotation(rr.Body.Bytes())))
 
 	// Copy recorded response into response writer
 	for key, values := range rr.Header() {
@@ -51,8 +53,9 @@ func debugRequestOut(req *http.Request, body *bytes.Buffer) {
 		return
 	}
 	debugReq, _ := httputil.DumpRequestOut(req, false)
-	slog.Debug("request", "dump", string(bytes.TrimSpace(debugReq)),
-		"body", tryDebugNotation(body.Bytes()))
+	// #nosec G706 -- sanitizeLogValue removes newline/control characters
+	slog.Debug("request", "dump", sanitizeLogValue(string(bytes.TrimSpace(debugReq))),
+		"body", sanitizeLogValue(tryDebugNotation(body.Bytes())))
 }
 
 func debugResponse(resp *http.Response) {
@@ -64,6 +67,7 @@ func debugResponse(resp *http.Response) {
 	if _, err := saveBody.ReadFrom(resp.Body); err == nil {
 		resp.Body = io.NopCloser(&saveBody)
 	}
-	slog.Debug("response", "dump", string(bytes.TrimSpace(debugResp)),
-		"body", tryDebugNotation(saveBody.Bytes()))
+	// #nosec G706 -- sanitizeLogValue removes newline/control characters
+	slog.Debug("response", "dump", sanitizeLogValue(string(bytes.TrimSpace(debugResp))),
+		"body", sanitizeLogValue(tryDebugNotation(saveBody.Bytes())))
 }

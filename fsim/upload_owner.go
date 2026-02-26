@@ -162,6 +162,7 @@ func (u *UploadRequest) finalize() (blockPeer, moduleDone bool, _ error) {
 		u.Rename = filepath.Base(u.Name)
 	}
 	oldpath, newpath := u.temp.Name(), filepath.Join(u.Dir, u.Rename)
+	// #nosec G703 -- rename limited to temp files created by module into configured directory
 	if err := os.Rename(oldpath, newpath); err != nil {
 		return false, false, fmt.Errorf("error renaming temp file %q to %q: %w", oldpath, newpath, err)
 	}

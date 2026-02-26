@@ -112,6 +112,44 @@ SerialNumber: big.NewInt(2), // Parent
 - Consider longer validity periods with proper revocation
 - Ensure proper entropy sources for random number generation
 
+### DID Key Minting — Software vs. Hardware Keys
+
+**⚠️ IMPORTANT**: The `did.Mint()` function in `did/mint.go` generates private keys in software using Go's `crypto/rand` and exports them as plain PEM files. This is provided **for convenience, development, testing, and demonstration purposes**. It is NOT recommended for production deployments where DID-backed identities represent organizational trust anchors.
+
+In production environments, the private keys that back DID identities (owner keys, manufacturer keys) are long-lived, high-value secrets. Compromise of these keys would allow an attacker to impersonate the organization in the FDO voucher supply chain. These keys should be:
+
+- **Generated inside** hardware-backed or managed key stores, never exported
+- **Accessed only via** a `crypto.Signer` interface at signing time — the raw private key material should never be available to application code
+
+**Recommended key storage backends:**
+
+| Backend | Use Case |
+|---------|----------|
+| **Hardware Security Modules (HSMs)** | On-premises, FIPS 140-2/3 certified, highest assurance |
+| **Trusted Platform Modules (TPMs)** | Device-local, tied to specific hardware |
+| **Cloud KMS** (AWS KMS, Azure Key Vault, GCP Cloud KMS) | Cloud-native deployments, managed lifecycle |
+| **PKCS#11 / KMIP key vaults** | Enterprise key management infrastructure |
+| **External key management services** | Third-party or multi-cloud key management |
+
+**How to use hardware-backed keys with this library:**
+
+The library is designed to support this pattern. You do NOT need to use `did.Mint()` to create DID documents. Instead:
+
+1. **Generate the key externally** in your HSM/TPM/KMS
+2. **Export only the public key** from the secure enclave
+3. **Construct the DID Document** directly using `did.NewDocument(didURI, publicKey, ...)`
+4. **Sign vouchers** using a `crypto.Signer` implementation backed by the HSM/TPM — Go's standard `crypto.Signer` interface is specifically designed for this; the private key never leaves the hardware
+
+```go
+// Example: Using an HSM-backed signer with DID document creation
+publicKey := hsmClient.GetPublicKey("my-did-key-id")
+doc, err := did.NewDocument(didURI, publicKey, pushURL, pullURL)
+
+// At signing time, use the HSM-backed crypto.Signer
+signer := hsmClient.GetSigner("my-did-key-id") // implements crypto.Signer
+// Pass signer to voucher signing operations — private key never leaves HSM
+```
+
 ### Operational Security
 
 - Enable security-relevant logging and monitoring
@@ -362,6 +400,31 @@ For environments with complex supply chains:
 - **Audit logging**: Log all voucher registrations with manufacturer/owner key fingerprints, timestamps, and source IPs
 - **Manual override**: Provide administrative interface for legitimate GUID recovery scenarios
 - **TTL management**: Balance security (short TTLs limit attack window) vs. operations (long shelf life)
+
+## Transport Layering and Alternative Deployments
+
+The library uses HTTP as its transport protocol for both the core FDO protocol (DI/TO1/TO2) and the voucher transfer protocol (push/pull/PullAuth). However, the HTTP usage is layered in ways that support alternative deployment models.
+
+### Inbound (Server-Side)
+
+All server-side components implement Go's `http.Handler` interface. This means they work behind **any HTTP-compatible gateway** — not just `http.ListenAndServe`. Deployments behind API Gateway + Lambda, Cloud Run, Knative, or any framework that delivers requests as `(http.ResponseWriter, *http.Request)` pairs will work without modification.
+
+Additionally, the core FDO protocol is layered below HTTP via the `protocol.Responder` interface, which operates purely on CBOR message types and `io.Reader`/`io.Writer` — no HTTP dependency at all. The `fdotest.Transport` demonstrates this by running the full DI/TO1/TO2 protocol suite without any HTTP involvement.
+
+### Outbound (Client-Side)
+
+Outbound components (`transfer.HTTPPushSender`, `transfer.PullAuthClient`, `transfer.HTTPPullInitiator`, `http.Transport`) use Go's `*http.Client` for making requests. The `*http.Client` accepts a custom `http.RoundTripper` via its `Transport` field, which provides a pluggable seam for:
+
+- **Testing**: In-process round-trippers that call `ServeHTTP` directly (used in library tests)
+- **Custom TLS**: Corporate proxies, mTLS, custom certificate pools
+- **Observability**: Request/response logging, metrics, tracing
+- **Alternative transports**: Any backend that can fulfill HTTP request/response semantics
+
+For deployments where outbound HTTP is not desirable (e.g., voucher transfer via message queues), the `transfer.PushSender` and `transfer.PullInitiator` interfaces are transport-agnostic — implement them with SQS, Kafka, gRPC, or any other mechanism. The `HTTP*` prefixed structs are just the default HTTP implementations.
+
+### What Is NOT Pluggable
+
+The PullAuth cryptographic handshake logic (CBOR/COSE challenge-response) is currently implemented directly inside HTTP handler methods rather than as a separate protocol-layer API. If a non-HTTP PullAuth transport is ever needed, this would require a modest refactor to split protocol logic from HTTP read/write (~100 lines). For all current deployment scenarios (including serverless behind API Gateway), this is not a limitation.
 
 ## Protocol Security Features
 

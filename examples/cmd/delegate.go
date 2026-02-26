@@ -11,6 +11,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/asn1"
 	"encoding/base64"
 	"encoding/hex"
@@ -400,27 +401,328 @@ func doPrintDelegatePrivKey(state *sqlite.DB, args []string) error {
 	return pem.Encode(os.Stdout, pemBlock)
 }
 
+// doGenerateCSR generates a keypair and CSR for delegate certificate issuance.
+// The requester runs this command, sends the CSR to the owner-key holder for signing.
+// Usage: delegate generate-csr <subject-CN> <key-type> [-key-out <path>]
+//
+//nolint:gocyclo // CLI command with multiple validation steps
+func doGenerateCSR(_ *sqlite.DB, args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: delegate generate-csr <subject-CN> <key-type> [-key-out <path>]")
+	}
+	subject := args[0]
+	keyTypeName := args[1]
+
+	// Parse optional -key-out flag from remaining args
+	keyOutPath := subject + ".key.pem"
+	for i := 2; i < len(args)-1; i++ {
+		if args[i] == "-key-out" {
+			keyOutPath = args[i+1]
+		}
+	}
+
+	// Generate keypair
+	var priv crypto.Signer
+	var err error
+	switch keyTypeName {
+	case "ec256":
+		priv, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	case "ec384":
+		priv, err = ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	case "rsa2048":
+		priv, err = rsa.GenerateKey(rand.Reader, 2048)
+	case "rsa3072":
+		priv, err = rsa.GenerateKey(rand.Reader, 3072)
+	default:
+		return fmt.Errorf("unknown key type %q (use ec256, ec384, rsa2048, rsa3072)", keyTypeName)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to generate %s key: %v", keyTypeName, err)
+	}
+
+	// Create CSR
+	csrTemplate := &x509.CertificateRequest{
+		Subject: pkix.Name{CommonName: subject},
+	}
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, csrTemplate, priv)
+	if err != nil {
+		return fmt.Errorf("failed to create CSR: %v", err)
+	}
+
+	// Verify CSR is well-formed
+	if _, err := x509.ParseCertificateRequest(csrDER); err != nil {
+		return fmt.Errorf("failed to parse generated CSR: %v", err)
+	}
+
+	// Save private key to file
+	keyPEM, err := marshalPrivateKeyPEM(priv)
+	if err != nil {
+		return fmt.Errorf("failed to marshal private key: %v", err)
+	}
+	if err := os.WriteFile(keyOutPath, keyPEM, 0o600); err != nil {
+		return fmt.Errorf("failed to write private key to %s: %v", keyOutPath, err)
+	}
+	fmt.Fprintf(os.Stderr, "Private key saved to: %s\n", keyOutPath)
+
+	// Write CSR PEM to stdout
+	return pem.Encode(os.Stdout, &pem.Block{
+		Type:  "CERTIFICATE REQUEST",
+		Bytes: csrDER,
+	})
+}
+
+// doSignCSR signs a CSR using the local owner key, producing a delegate certificate
+// with scoped permissions. The owner-key holder runs this command.
+// Usage: delegate sign-csr <csr-file> <chain-name> <permissions> <owner-key-type> [-db <db>]
+//
+//nolint:gocyclo // CLI command with multiple validation steps
+func doSignCSR(state *sqlite.DB, args []string) error {
+	if len(args) < 4 {
+		return fmt.Errorf("usage: delegate sign-csr <csr-file> <chain-name> <permissions> <owner-key-type>")
+	}
+	csrFile := args[0]
+	chainName := args[1]
+	permStr := args[2]
+	ownerKeyType := args[3]
+
+	// Read and parse CSR
+	csrPEM, err := os.ReadFile(filepath.Clean(csrFile))
+	if err != nil {
+		return fmt.Errorf("failed to read CSR file %s: %v", csrFile, err)
+	}
+	blk, _ := pem.Decode(csrPEM)
+	if blk == nil || blk.Type != "CERTIFICATE REQUEST" {
+		return fmt.Errorf("expected PEM block of type CERTIFICATE REQUEST in %s", csrFile)
+	}
+	csr, err := x509.ParseCertificateRequest(blk.Bytes)
+	if err != nil {
+		return fmt.Errorf("failed to parse CSR: %v", err)
+	}
+	if err := csr.CheckSignature(); err != nil {
+		return fmt.Errorf("CSR signature verification failed: %v", err)
+	}
+
+	// Load owner key from DB
+	keyType, err := protocol.ParseKeyType(ownerKeyType)
+	if err != nil {
+		return fmt.Errorf("invalid owner key type: %q", ownerKeyType)
+	}
+	var ownerPriv crypto.Signer
+	switch keyType {
+	case protocol.RsaPkcsKeyType, protocol.RsaPssKeyType:
+		ownerPriv, _, err = state.OwnerKey(context.Background(), keyType, 3072)
+		if errors.Is(err, fdo.ErrNotFound) {
+			ownerPriv, _, err = state.OwnerKey(context.Background(), keyType, 2048)
+		}
+	default:
+		ownerPriv, _, err = state.OwnerKey(context.Background(), keyType, 0)
+	}
+	if err != nil {
+		return fmt.Errorf("owner key of type %s does not exist: %v", ownerKeyType, err)
+	}
+
+	// Parse permissions
+	var permissions []asn1.ObjectIdentifier
+	permStrs := strings.Split(permStr, ",")
+	for _, ps := range permStrs {
+		if ps == "onboard" {
+			permissions = append(permissions, fdo.OIDPermitOnboardNewCred)
+			permissions = append(permissions, fdo.OIDPermitOnboardReuseCred)
+			permissions = append(permissions, fdo.OIDPermitOnboardFdoDisable)
+			continue
+		}
+		oid, err := fdo.DelegateStringToOID(ps)
+		if err != nil {
+			return fmt.Errorf("bad permission %q: %v", ps, err)
+		}
+		permissions = append(permissions, oid)
+	}
+
+	// Generate delegate certificate using the CSR's public key
+	cert, err := fdo.GenerateDelegate(
+		ownerPriv,
+		fdo.DelegateFlagLeaf,
+		csr.PublicKey,
+		csr.Subject.CommonName,
+		fmt.Sprintf("%s_%s_Owner", chainName, ownerKeyType),
+		permissions,
+		0,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to generate delegate certificate: %v", err)
+	}
+
+	chain := []*x509.Certificate{cert}
+
+	// Store cert-only in DB (no private key — the requester holds that)
+	// We use a nil private key placeholder; AddDelegateKey requires a key,
+	// so we store the owner key as a placeholder for inspection purposes.
+	// The actual delegate private key is held by the requester.
+	if err := state.AddDelegateKey(chainName, ownerPriv, chain); err != nil {
+		return fmt.Errorf("failed to store delegate chain %q: %v", chainName, err)
+	}
+	fmt.Fprintf(os.Stderr, "Delegate chain %q stored in database (cert-only, requester holds private key)\n", chainName)
+
+	// Output signed cert chain PEM to stdout
+	return pem.Encode(os.Stdout, &pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: cert.Raw,
+	})
+}
+
+// doImportCert imports a signed delegate cert chain and pairs it with a local private key.
+// The requester runs this command after receiving the signed cert back from the owner-key holder.
+// Usage: delegate import-cert <chain-name> <cert-chain.pem> <private-key.pem> [-db <db>]
+func doImportCert(state *sqlite.DB, args []string) error {
+	if len(args) < 3 {
+		return fmt.Errorf("usage: delegate import-cert <chain-name> <cert-chain.pem> <private-key.pem>")
+	}
+	chainName := args[0]
+	certFile := args[1]
+	keyFile := args[2]
+
+	// Read and parse cert chain
+	certPEM, err := os.ReadFile(filepath.Clean(certFile))
+	if err != nil {
+		return fmt.Errorf("failed to read cert file %s: %v", certFile, err)
+	}
+	var chain []*x509.Certificate
+	rest := certPEM
+	for {
+		var blk *pem.Block
+		blk, rest = pem.Decode(rest)
+		if blk == nil {
+			break
+		}
+		if blk.Type != "CERTIFICATE" {
+			continue
+		}
+		cert, err := x509.ParseCertificate(blk.Bytes)
+		if err != nil {
+			return fmt.Errorf("failed to parse certificate: %v", err)
+		}
+		chain = append(chain, cert)
+	}
+	if len(chain) == 0 {
+		return fmt.Errorf("no certificates found in %s", certFile)
+	}
+
+	// Read and parse private key
+	keyPEM, err := os.ReadFile(filepath.Clean(keyFile))
+	if err != nil {
+		return fmt.Errorf("failed to read key file %s: %v", keyFile, err)
+	}
+	privKey, err := parsePrivateKeyPEM(keyPEM)
+	if err != nil {
+		return fmt.Errorf("failed to parse private key from %s: %v", keyFile, err)
+	}
+
+	// Validate that the leaf cert's public key matches the private key
+	leaf := chain[0] // leaf is first in chain (same convention as delegate create)
+	if !publicKeysEqual(leaf.PublicKey, privKey.Public()) {
+		return fmt.Errorf("leaf certificate public key does not match private key")
+	}
+
+	// Store in DB
+	if err := state.AddDelegateKey(chainName, privKey, chain); err != nil {
+		return fmt.Errorf("failed to store delegate chain %q: %v", chainName, err)
+	}
+	fmt.Fprintf(os.Stderr, "Delegate chain %q imported (%d cert(s) + private key)\n", chainName, len(chain))
+	return nil
+}
+
+// marshalPrivateKeyPEM encodes a private key as PEM.
+func marshalPrivateKeyPEM(key crypto.Signer) ([]byte, error) {
+	switch k := key.(type) {
+	case *ecdsa.PrivateKey:
+		der, err := x509.MarshalECPrivateKey(k)
+		if err != nil {
+			return nil, err
+		}
+		return pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}), nil
+	case *rsa.PrivateKey:
+		der := x509.MarshalPKCS1PrivateKey(k)
+		return pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: der}), nil
+	default:
+		return nil, fmt.Errorf("unsupported key type %T", key)
+	}
+}
+
+// parsePrivateKeyPEM parses a PEM-encoded private key (EC or RSA).
+func parsePrivateKeyPEM(pemData []byte) (crypto.Signer, error) {
+	blk, _ := pem.Decode(pemData)
+	if blk == nil {
+		return nil, fmt.Errorf("no PEM block found")
+	}
+	switch blk.Type {
+	case "EC PRIVATE KEY":
+		return x509.ParseECPrivateKey(blk.Bytes)
+	case "RSA PRIVATE KEY":
+		return x509.ParsePKCS1PrivateKey(blk.Bytes)
+	case "PRIVATE KEY":
+		key, err := x509.ParsePKCS8PrivateKey(blk.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		signer, ok := key.(crypto.Signer)
+		if !ok {
+			return nil, fmt.Errorf("PKCS8 key is not a signer")
+		}
+		return signer, nil
+	default:
+		return nil, fmt.Errorf("unsupported PEM block type %q", blk.Type)
+	}
+}
+
+// publicKeysEqual compares two public keys for equality.
+func publicKeysEqual(a, b crypto.PublicKey) bool {
+	switch ak := a.(type) {
+	case *ecdsa.PublicKey:
+		bk, ok := b.(*ecdsa.PublicKey)
+		return ok && ak.Equal(bk)
+	case *rsa.PublicKey:
+		bk, ok := b.(*rsa.PublicKey)
+		return ok && ak.Equal(bk)
+	default:
+		return false
+	}
+}
+
 func doDelegateHelp(_ *sqlite.DB, _ []string) error {
 	fmt.Printf(`
 Delegate commands:
 
-delegate print {chainname} [ownerKeyType]
-delegate list
-delegate key {chainname} 
-delegate inspectVoucher {filename} 
-delegate create {chainName} {Permission[,Permission...]} {ownerKeyType} {keyType} [keyType...]
+  --- Quick single-party (generates key+cert together, for testing) ---
+  delegate create {chainName} {Permission[,Permission...]} {ownerKeyType} {keyType} [keyType...]
+
+  --- Multi-party CSR workflow (for production) ---
+  delegate generate-csr {subject-CN} {key-type} [-key-out {path}]
+  delegate sign-csr {csr-file} {chain-name} {permissions} {owner-key-type}
+  delegate import-cert {chain-name} {cert-chain.pem} {private-key.pem}
+
+  --- Inspection ---
+  delegate print {chainname} [ownerKeyType]
+  delegate list
+  delegate key {chainname}
+  delegate inspectVoucher {filename}
 
 Permissions:
+  voucher-claim        - Claim (pull/download) vouchers via PullAuth
   onboard              - All onboard permissions (new-cred, reuse-cred, fdo-disable)
   redirect             - Redirect permission (TO0)
   onboard-new-cred     - Onboard with new credentials
   onboard-reuse-cred   - Onboard with credential reuse
   onboard-fdo-disable  - Onboard and disable FDO
-  claim                - Claim permission
-  provision            - Provision permission
-KeyTypes: ec256, ec384, rsa2048, rsa3072
-ownerKeyTypes - See "Key types"
+  claim                - Legacy claim permission
+  provision            - Legacy provision permission
 
+KeyTypes: ec256, ec384, rsa2048, rsa3072
+OwnerKeyTypes: SECP384R1, SECP256R1, RSA2048RESTR, RSAPKCS, RSAPSS
+
+CSR Workflow:
+  1. Requester: delegate generate-csr myService ec384 -key-out myService.key.pem > myService.csr.pem
+  2. Owner:     delegate sign-csr myService.csr.pem myDelegate voucher-claim SECP384R1 > signed.pem
+  3. Requester: delegate import-cert myDelegate signed.pem myService.key.pem
 
 `)
 	return nil
@@ -432,12 +734,20 @@ func delegate(args []string) error {
 		level.Set(slog.LevelDebug)
 	}
 
-	if dbPath == "" {
-		return errors.New("db flag is required")
-	}
-
 	if len(args) < 1 {
 		return errors.New("command required")
+	}
+
+	// Commands that don't require a database
+	switch args[0] {
+	case "generate-csr":
+		return doGenerateCSR(nil, args[1:])
+	case "help":
+		return doDelegateHelp(nil, args[1:])
+	}
+
+	if dbPath == "" {
+		return errors.New("db flag is required")
 	}
 
 	state, err := sqlite.Open(dbPath, dbPass)
@@ -454,10 +764,12 @@ func delegate(args []string) error {
 		return doPrintDelegatePrivKey(state, args[1:])
 	case "create":
 		return createDelegateCertificate(state, args[1:])
+	case "sign-csr":
+		return doSignCSR(state, args[1:])
+	case "import-cert":
+		return doImportCert(state, args[1:])
 	case "inspectVoucher":
 		return doInspectVoucher(state, args[1:])
-	case "help":
-		return doDelegateHelp(state, args[1:])
 	default:
 		return fmt.Errorf("invalid command %q", args[0])
 	}

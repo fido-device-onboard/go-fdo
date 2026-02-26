@@ -129,12 +129,22 @@ start_server() {
 	(cd examples && go run ./cmd server -http "$SERVER_ADDR" -db "../$DB_FILE" $flags >/tmp/fdo_server.log 2>&1) &
 	SERVER_PID=$!
 
-	# Wait for server to start listening
+	# Wait for server to start listening AND verify it's actually accepting connections
 	local retries=15
 	while [ $retries -gt 0 ]; do
 		if grep -q "Listening" /tmp/fdo_server.log 2>/dev/null; then
-			log_success "Server started (PID: $SERVER_PID)"
-			return 0
+			# Log says listening - now verify the port is actually open
+			sleep 0.5
+			if nc -z 127.0.0.1 9999 2>/dev/null || (echo >/dev/tcp/127.0.0.1/9999) 2>/dev/null; then
+				log_success "Server started (PID: $SERVER_PID)"
+				return 0
+			fi
+			# Port not open yet, check if process died
+			if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+				log_error "Server process died after logging Listening"
+				cat /tmp/fdo_server.log 2>/dev/null || true
+				return 1
+			fi
 		fi
 		if ! kill -0 "$SERVER_PID" 2>/dev/null; then
 			log_error "Server process died"
@@ -336,6 +346,63 @@ test_delegate_fdo200() {
 
 	stop_server
 	log_success "Delegate Support (FDO 2.0) test PASSED"
+}
+
+# Test: Delegate CSR Workflow (generate-csr, sign-csr, import-cert)
+test_delegate_csr() {
+	log_section "TEST: Delegate CSR Workflow"
+
+	rm -f "$DB_FILE" "$CRED_FILE"
+	rm -f $EPHEMERAL_DIR/delegate-csr.*
+
+	log_step "Creating database with owner certs"
+	start_server "-owner-certs"
+	stop_server
+
+	# Note: run_cmd does "cd examples" so file paths need "../" prefix for EPHEMERAL_DIR
+	log_step "Generating CSR (requester side, no DB needed)"
+	run_cmd go run ./cmd delegate generate-csr testService ec384 -key-out "../$EPHEMERAL_DIR/delegate-csr.key.pem" >"$EPHEMERAL_DIR/delegate-csr.csr.pem"
+	log_success "CSR generated"
+
+	# Verify CSR file exists and is non-empty
+	if [ ! -s "$EPHEMERAL_DIR/delegate-csr.csr.pem" ]; then
+		log_error "CSR file is empty or missing"
+		exit 1
+	fi
+	if [ ! -s "$EPHEMERAL_DIR/delegate-csr.key.pem" ]; then
+		log_error "Private key file is empty or missing"
+		exit 1
+	fi
+	log_success "CSR and key files verified"
+
+	log_step "Signing CSR with voucher-claim permission (owner side)"
+	run_cmd go run ./cmd delegate -db "../$DB_FILE" sign-csr "../$EPHEMERAL_DIR/delegate-csr.csr.pem" csrDelegate voucher-claim SECP384R1 >"$EPHEMERAL_DIR/delegate-csr.cert.pem"
+	log_success "CSR signed"
+
+	# Verify signed cert file exists and is non-empty
+	if [ ! -s "$EPHEMERAL_DIR/delegate-csr.cert.pem" ]; then
+		log_error "Signed cert file is empty or missing"
+		exit 1
+	fi
+	log_success "Signed cert file verified"
+
+	log_step "Importing signed cert + private key (requester side)"
+	run_cmd go run ./cmd delegate -db "../$DB_FILE" import-cert importedDelegate "../$EPHEMERAL_DIR/delegate-csr.cert.pem" "../$EPHEMERAL_DIR/delegate-csr.key.pem"
+	log_success "Cert imported"
+
+	log_step "Listing delegate chains (should show both csrDelegate and importedDelegate)"
+	run_cmd go run ./cmd delegate -db "../$DB_FILE" list
+	log_success "Delegate chains listed"
+
+	log_step "Printing imported delegate chain"
+	run_cmd go run ./cmd delegate -db "../$DB_FILE" print importedDelegate
+	log_success "Delegate chain printed"
+
+	log_step "Signing CSR with onboard permission (no voucher-claim)"
+	run_cmd go run ./cmd delegate -db "../$DB_FILE" sign-csr "../$EPHEMERAL_DIR/delegate-csr.csr.pem" onboardOnly onboard SECP384R1 >"$EPHEMERAL_DIR/delegate-csr.onboard.pem"
+	log_success "CSR signed with onboard-only permission"
+
+	log_success "Delegate CSR Workflow test PASSED"
 }
 
 # Test: Attested Payload (plaintext)
@@ -1431,15 +1498,22 @@ test_credentials() {
 
 	rm -f "$DB_FILE" "$CRED_FILE"
 
+	log_step "Creating database with owner certs"
+	run_cmd go run ./cmd server -initOnly -http "$SERVER_ADDR" -db "$DB_FILE" -owner-certs
+
 	log_step "Starting server with credential provisioning"
 	start_server "-credential password:admin-creds:admin:SecurePass123:https://mgmt.example.com/api -credential api_key:prod-api:sk_live_abc123xyz:https://api.example.com/v1 -credential oauth2_client_secret:oauth-app:client_secret_xyz789:https://oauth.example.com/token"
 
 	log_step "Running DI"
-	run_cmd go run ./cmd client -di "$SERVER_URL"
+	if ! run_cmd go run ./cmd client -di "$SERVER_URL"; then
+		return 1
+	fi
 	log_success "DI completed"
 
 	log_step "Running TO1/TO2 with credential provisioning"
-	run_cmd go run ./cmd client
+	if ! run_cmd go run ./cmd client; then
+		return 1
+	fi
 	log_success "TO1/TO2 completed with credentials provisioned"
 
 	stop_server
@@ -1454,11 +1528,15 @@ test_credentials() {
 	start_server "-request-pubkey ssh_public_key:device-ssh-key:ssh://admin.example.com:22"
 
 	log_step "Running DI"
-	run_cmd go run ./cmd client -di "$SERVER_URL"
+	if ! run_cmd go run ./cmd client -di "$SERVER_URL"; then
+		return 1
+	fi
 	log_success "DI completed"
 
 	log_step "Running TO1/TO2 with SSH public key registration"
-	run_cmd go run ./cmd client -register-ssh-key "device-ssh-key:ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDevicePublicKeyExample"
+	if ! run_cmd go run ./cmd client -register-ssh-key "device-ssh-key:ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDevicePublicKeyExample"; then
+		return 1
+	fi
 	log_success "TO1/TO2 completed with public key registered"
 
 	# Show server log to verify public key was received
@@ -1477,11 +1555,17 @@ test_credentials() {
 	start_server ""
 
 	log_step "Running DI"
-	run_cmd go run ./cmd client -di "$SERVER_URL"
+	if ! run_cmd go run ./cmd client -di "$SERVER_URL"; then
+		log_error "DI failed"
+		return 1
+	fi
 	log_success "DI completed"
 
 	log_step "Running TO1/TO2 with CSR enrollment"
-	run_cmd go run ./cmd client -enroll-csr "device-mtls-cert:-----BEGIN CERTIFICATE REQUEST-----FAKECSR-----END CERTIFICATE REQUEST-----"
+	if ! run_cmd go run ./cmd client -enroll-csr "device-mtls-cert:-----BEGIN CERTIFICATE REQUEST-----FAKECSR-----END CERTIFICATE REQUEST-----"; then
+		log_error "TO1/TO2 failed with CSR enrollment"
+		return 1
+	fi
 	log_success "TO1/TO2 completed with CSR enrollment"
 
 	# Show server received CSR
@@ -1554,6 +1638,7 @@ test_all() {
 	test_fdo200 || failed=1
 	test_delegate || failed=1
 	test_delegate_fdo200 || failed=1
+	test_delegate_csr || failed=1
 	test_attested_payload || failed=1
 	test_attested_payload_encrypted || failed=1
 	test_attested_payload_delegate || failed=1
@@ -1629,6 +1714,9 @@ main() {
 	delegate-fdo200)
 		test_delegate_fdo200
 		;;
+	delegate-csr)
+		test_delegate_csr
+		;;
 	bad-delegate)
 		test_bad_delegate
 		;;
@@ -1694,7 +1782,7 @@ main() {
 		;;
 	*)
 		echo "Unknown test: $test_name"
-		echo "Available tests: basic, basic-reuse, rv-blob, kex, fdo200, delegate, delegate-fdo200, bad-delegate, attested-payload, attested-payload-encrypted, attested-payload-delegate, attested-payload-shell, sysconfig, sysconfig-fdo200, payload, payload-fdo200, payload-multiple-types, payload-selective-rejection, payload-nak, wifi, wifi-fdo200, wifi-single-sided, bmo, bmo-efi, bmo-nak, bmo-multi-asset, credentials, all"
+		echo "Available tests: basic, basic-reuse, rv-blob, kex, fdo200, delegate, delegate-fdo200, delegate-csr, bad-delegate, attested-payload, attested-payload-encrypted, attested-payload-delegate, attested-payload-shell, sysconfig, sysconfig-fdo200, payload, payload-fdo200, payload-multiple-types, payload-selective-rejection, payload-nak, wifi, wifi-fdo200, wifi-single-sided, bmo, bmo-efi, bmo-nak, bmo-multi-asset, credentials, all"
 		exit 1
 		;;
 	esac

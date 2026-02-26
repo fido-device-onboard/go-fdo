@@ -496,7 +496,8 @@ func (l *LinuxSysConfig) mapLanguageToLocale(language string) string {
 
 // WiFiConfig represents WiFi network credentials.
 type WiFiConfig struct {
-	SSID     string `json:"ssid"`
+	SSID string `json:"ssid"`
+	// #nosec G117 -- field mirrors WiFi configuration schema used in JSON
 	Password string `json:"password,omitempty"`
 	Security string `json:"security,omitempty"`
 	Hidden   bool   `json:"hidden,omitempty"`
@@ -596,7 +597,7 @@ func (l *LinuxSysConfig) generateWpaNetworkBlock(config WiFiConfig) string {
 	var block strings.Builder
 
 	block.WriteString("network={\n")
-	block.WriteString(fmt.Sprintf("\tssid=\"%s\"\n", config.SSID))
+	fmt.Fprintf(&block, "\tssid=\"%s\"\n", config.SSID)
 
 	// Handle security type
 	switch config.Security {
@@ -606,21 +607,21 @@ func (l *LinuxSysConfig) generateWpaNetworkBlock(config WiFiConfig) string {
 	case "wpa2":
 		if config.Password != "" {
 			psk := l.generateWpaPSK(config.SSID, config.Password)
-			block.WriteString(fmt.Sprintf("\tpsk=%s\n", psk))
+			fmt.Fprintf(&block, "\tpsk=%s\n", psk)
 		}
 		block.WriteString("\tproto=RSN\n")
 		block.WriteString("\tkey_mgmt=WPA-PSK\n")
 
 	case "wpa3":
 		if config.Password != "" {
-			block.WriteString(fmt.Sprintf("\tpsk=\"%s\"\n", config.Password))
+			fmt.Fprintf(&block, "\tpsk=\"%s\"\n", config.Password)
 		}
 		block.WriteString("\tproto=RSN\n")
 		block.WriteString("\tkey_mgmt=SAE\n")
 
 	case "wpa2-wpa3":
 		if config.Password != "" {
-			block.WriteString(fmt.Sprintf("\tpsk=\"%s\"\n", config.Password))
+			fmt.Fprintf(&block, "\tpsk=\"%s\"\n", config.Password)
 		}
 		block.WriteString("\tproto=RSN\n")
 		block.WriteString("\tkey_mgmt=WPA-PSK SAE\n")
@@ -630,7 +631,7 @@ func (l *LinuxSysConfig) generateWpaNetworkBlock(config WiFiConfig) string {
 	default:
 		// Auto-detect or default: use password and let wpa_supplicant figure it out
 		if config.Password != "" {
-			block.WriteString(fmt.Sprintf("\tpsk=\"%s\"\n", config.Password))
+			fmt.Fprintf(&block, "\tpsk=\"%s\"\n", config.Password)
 		} else {
 			block.WriteString("\tkey_mgmt=NONE\n")
 		}
@@ -643,7 +644,7 @@ func (l *LinuxSysConfig) generateWpaNetworkBlock(config WiFiConfig) string {
 
 	// Priority
 	if config.Priority > 0 {
-		block.WriteString(fmt.Sprintf("\tpriority=%d\n", config.Priority))
+		fmt.Fprintf(&block, "\tpriority=%d\n", config.Priority)
 	}
 
 	block.WriteString("}")

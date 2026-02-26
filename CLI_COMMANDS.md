@@ -451,11 +451,32 @@ go run ./cmd delegate -db fdo.db -print-delegate-private ec384
 - Delegated credential provisioning
 - Complex supply chain operations with multiple stakeholders
 
+### CSR Workflow (Multi-Party Delegate Issuance)
+
+For production multi-party scenarios where one entity holds the owner key and another needs a delegate certificate. See [delegate.md](delegate.md#csr-workflow-multi-party-delegate-issuance) for detailed scenarios.
+
+```bash
+# Step 1: Requester generates keypair + CSR (no database needed)
+go run ./cmd delegate generate-csr myService ec384 -key-out myService.key.pem > myService.csr.pem
+
+# Step 2: Owner-key holder signs the CSR with scoped permissions
+go run ./cmd delegate -db owner.db sign-csr myService.csr.pem myDelegate voucher-claim SECP384R1 > signed.pem
+
+# Step 3: Requester imports signed cert + their private key
+go run ./cmd delegate -db requester.db import-cert myDelegate signed.pem myService.key.pem
+```
+
+**Who runs which command:**
+
+- **`generate-csr`** — The entity requesting delegation (no DB needed)
+- **`sign-csr`** — The owner-key holder (needs DB with owner keys)
+- **`import-cert`** — The requester again (needs DB to store the chain)
+
 ### Delegate Types
 
 - `onboard,redirect` - For TO2 operations (device to first owner)
+- `voucher-claim` - For Pull API voucher retrieval via delegate authentication
 - `provision` - For credential provisioning services
-- `resale` - For device resale scenarios
 
 ### Key Types
 

@@ -16,7 +16,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"database/sql"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -76,6 +75,10 @@ var (
 	voucherExport string // Export voucher to file
 	voucherFormat string // Export format (pem, json, cbor)
 )
+
+func sanitizeLogValue(s string) string {
+	return strings.NewReplacer("\n", "\\n", "\r", "\\r").Replace(s)
+}
 
 type fsVar map[string]string
 
@@ -374,7 +377,8 @@ TO1:
 			version := protocol.Version(fdoVersion) //#nosec G115 -- fdoVersion is validated in flag parsing
 			to1d, err = fdo.TO1(ctx, tlsTransportWithVersion(url.String(), nil, version), conf.Cred, conf.Key, nil)
 			if err != nil {
-				slog.Error("TO1 failed", "base URL", url.String(), "error", err)
+				// #nosec G706 -- sanitizeLogValue strips control characters from logged URL
+				slog.Error("TO1 failed", "base URL", sanitizeLogValue(url.String()), "error", err)
 				continue
 			}
 			break TO1
@@ -931,48 +935,17 @@ func exportVoucherFromDB(db *sql.DB) error {
 
 // exportVoucherPEM exports voucher in PEM format
 func exportVoucherPEM(cborBytes []byte) error {
-	var outputFile *os.File
-	var err error
+	pemBytes := fdo.FormatVoucherCBORToPEM(cborBytes)
 
 	if voucherExport == "-" {
-		outputFile = os.Stdout
-	} else {
-		outputFile, err = os.Create(voucherExport)
-		if err != nil {
-			return fmt.Errorf("failed to create output file: %w", err)
-		}
-		defer func() {
-			if closeErr := outputFile.Close(); closeErr != nil {
-				slog.Error("failed to close output file", "error", closeErr)
-			}
-		}()
+		_, err := os.Stdout.Write(pemBytes)
+		return err
 	}
 
-	if _, err := fmt.Fprintf(outputFile, "-----BEGIN OWNERSHIP VOUCHER-----\n"); err != nil {
-		return fmt.Errorf("failed to write PEM header: %w", err)
+	if err := os.WriteFile(voucherExport, pemBytes, 0o644); err != nil {
+		return fmt.Errorf("failed to write PEM file: %w", err)
 	}
-
-	encoded := base64.StdEncoding.EncodeToString(cborBytes)
-
-	// Wrap base64 output at 76 characters per line
-	for i := 0; i < len(encoded); i += 76 {
-		end := i + 76
-		if end > len(encoded) {
-			end = len(encoded)
-		}
-		if _, err := fmt.Fprintf(outputFile, "%s\n", encoded[i:end]); err != nil {
-			return fmt.Errorf("failed to write PEM data: %w", err)
-		}
-	}
-
-	if _, err := fmt.Fprintf(outputFile, "-----END OWNERSHIP VOUCHER-----\n"); err != nil {
-		return fmt.Errorf("failed to write PEM footer: %w", err)
-	}
-
-	if voucherExport != "-" {
-		fmt.Printf("Voucher exported to: %s\n", voucherExport)
-	}
-
+	fmt.Printf("Voucher exported to: %s\n", voucherExport)
 	return nil
 }
 
