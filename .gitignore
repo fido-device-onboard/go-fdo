@@ -53,3 +53,4 @@ ephemeral-test-files/
 test.db
 fdo-cmd
 to2_client_v200.go.backup
+examples/cmd/client

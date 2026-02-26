@@ -423,7 +423,7 @@ test_attested_payload() {
 	log_step "Exporting voucher to PEM"
 	(
 		echo '-----BEGIN OWNERSHIP VOUCHER-----'
-		sqlite3 "$DB_FILE" 'select hex(cbor) from vouchers;' | xxd -r -p | base64
+		sqlite3 "$DB_FILE" 'select hex(cbor) from vouchers;' | xxd -r -p | base64 -w 64
 		echo '-----END OWNERSHIP VOUCHER-----'
 	) >$EPHEMERAL_DIR/voucher.pem
 	log_success "Voucher exported"
@@ -482,7 +482,7 @@ test_attested_payload_encrypted() {
 	log_step "Exporting voucher to PEM"
 	(
 		echo '-----BEGIN OWNERSHIP VOUCHER-----'
-		sqlite3 "$DB_FILE" 'select hex(cbor) from vouchers;' | xxd -r -p | base64
+		sqlite3 "$DB_FILE" 'select hex(cbor) from vouchers;' | xxd -r -p | base64 -w 64
 		echo '-----END OWNERSHIP VOUCHER-----'
 	) >$EPHEMERAL_DIR/voucher.pem
 	log_success "Voucher exported"
@@ -529,7 +529,7 @@ test_attested_payload_delegate() {
 	log_step "Exporting voucher to PEM"
 	(
 		echo '-----BEGIN OWNERSHIP VOUCHER-----'
-		sqlite3 "$DB_FILE" 'select hex(cbor) from vouchers;' | xxd -r -p | base64
+		sqlite3 "$DB_FILE" 'select hex(cbor) from vouchers;' | xxd -r -p | base64 -w 64
 		echo '-----END OWNERSHIP VOUCHER-----'
 	) >$EPHEMERAL_DIR/voucher.pem
 	log_success "Voucher exported"
@@ -568,7 +568,7 @@ test_attested_payload_shell() {
 	log_step "Exporting voucher to PEM"
 	(
 		echo '-----BEGIN OWNERSHIP VOUCHER-----'
-		sqlite3 "$DB_FILE" 'select hex(cbor) from vouchers;' | xxd -r -p | base64
+		sqlite3 "$DB_FILE" 'select hex(cbor) from vouchers;' | xxd -r -p | base64 -w 64
 		echo '-----END OWNERSHIP VOUCHER-----'
 	) >$EPHEMERAL_DIR/voucher.pem
 	log_success "Voucher exported"
