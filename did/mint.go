@@ -204,6 +204,31 @@ func LoadPrivateKeyPEM(data []byte) (crypto.Signer, error) {
 	}
 }
 
+// LoadPublicKeyPEM loads a public key from PEM-encoded bytes.
+// Supported PEM block types: PUBLIC KEY (PKIX), CERTIFICATE (extracts subject
+// public key), and RSA PUBLIC KEY (PKCS#1).
+func LoadPublicKeyPEM(data []byte) (crypto.PublicKey, error) {
+	block, _ := pem.Decode(data)
+	if block == nil {
+		return nil, fmt.Errorf("no PEM block found")
+	}
+
+	switch block.Type {
+	case "PUBLIC KEY":
+		return x509.ParsePKIXPublicKey(block.Bytes)
+	case "RSA PUBLIC KEY":
+		return x509.ParsePKCS1PublicKey(block.Bytes)
+	case "CERTIFICATE":
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse certificate: %w", err)
+		}
+		return cert.PublicKey, nil
+	default:
+		return nil, fmt.Errorf("unsupported PEM block type: %s", block.Type)
+	}
+}
+
 func generateKey(cfg KeyConfig) (crypto.Signer, error) {
 	switch strings.ToUpper(cfg.Type) {
 	case "EC", "ECDSA", "":
