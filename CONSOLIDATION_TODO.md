@@ -52,9 +52,20 @@ Instructions for AI agents working on **go-fdo-di** and **go-fdo-onboarding-serv
 
 DI is the **worst offender** with ~1,400 lines of duplicate code and a 635-line DID resolver that should be ~50 lines.
 
-#### Step 1: Replace DID Resolver (CRITICAL)
+#### Step 1: Replace DID Resolver (CRITICAL — SECURITY BUG)
 
 DI's `did_resolver.go` is **635 lines** with its own caching, `go-did` dependency, key generation, etc.
+
+> **⚠️ CRITICAL BUG**: The `parseECJWK()` and `parseRSAJWK()` functions in the app-level
+> DID resolver **do not actually parse JWK coordinates from the DID document**. Instead,
+> they **generate brand-new random keys** and return those. This means any `did:web:`
+> resolution returns a random public key that has **nothing to do with the actual DID owner**.
+> Any cached "resolved" keys are garbage. The caching logic itself (store on success, keep
+> on failure) is sound — the underlying JWK parse was just silently wrong.
+>
+> The library's `did.Resolver` performs correct JWK parsing (`did.JWKToPublicKey`), so
+> switching to it fixes this bug. **Do not attempt to fix the app-level parseECJWK/parseRSAJWK
+> — just delete them and use the library.**
 
 **Replace with:**
 
@@ -163,7 +174,9 @@ Onboarding's `voucher_receiver_tokens.go` (~188 lines) is near-identical to VM's
 
 #### Step 3: Replace Any DID Resolution
 
-If Onboarding resolves DIDs anywhere, use:
+If Onboarding has a `did_resolver.go` or any JWK parsing functions (`parseECJWK`, `parseRSAJWK`), check for the same **random-key-generation bug** described in the DI section above. These functions may generate new random keys instead of parsing the actual JWK coordinates from the DID document.
+
+Replace with:
 
 ```go
 resolver := did.NewResolver()
@@ -275,10 +288,10 @@ After consolidation, each app should pass these checks:
 
 The go-fdo-voucher-management project has completed its consolidation. Key changes:
 
-1. **`did_resolver.go`**: 271 lines → 79 lines (thin wrapper around `did.Resolver`)
+1. **`did_resolver.go`**: 271 lines → 79 lines (thin wrapper around `did.Resolver`). **Fixed critical JWK parsing bug**: the old `parseECJWK()`/`parseRSAJWK()` functions generated random keys instead of parsing JWK coordinates from the DID document, meaning all `did:web:` resolutions returned garbage keys. The library's `did.Resolver` does correct JWK parsing.
 2. **`key_utils.go`**: 236 lines → 148 lines (fingerprint functions delegate to library)
 3. **`did_resolver_test.go`**: Updated to use `did.ParseDIDKey` from library
-4. **`owner_key_service.go`**: Fixed bug where resolver was created with `enabled=false`
+4. **`owner_key_service.go`**: Fixed bug where resolver was created with `enabled=false` (always failed)
 5. **Dependencies removed**: `github.com/mr-tron/base58` and 9 transitive deps
 6. **Fingerprint unified**: All code paths now use CBOR-based `did.FingerprintFDO()`
 
