@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -324,17 +325,17 @@ func TestResolver_Web(t *testing.T) {
 	}
 }
 
-func TestFingerprint(t *testing.T) {
+func TestFingerprintJWK(t *testing.T) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	fp1, err := did.Fingerprint(key.Public())
+	fp1, err := did.FingerprintJWK(key.Public())
 	if err != nil {
 		t.Fatal(err)
 	}
-	fp2, err := did.Fingerprint(key.Public())
+	fp2, err := did.FingerprintJWK(key.Public())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -346,14 +347,14 @@ func TestFingerprint(t *testing.T) {
 	// Same key should produce same fingerprint
 	for i := range fp1 {
 		if fp1[i] != fp2[i] {
-			t.Error("fingerprints should be deterministic")
+			t.Error("JWK fingerprints should be deterministic")
 			break
 		}
 	}
 
 	// Different key should produce different fingerprint
 	key2, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	fp3, _ := did.Fingerprint(key2.Public())
+	fp3, _ := did.FingerprintJWK(key2.Public())
 	same := true
 	for i := range fp1 {
 		if fp1[i] != fp3[i] {
@@ -362,7 +363,83 @@ func TestFingerprint(t *testing.T) {
 		}
 	}
 	if same {
-		t.Error("different keys should produce different fingerprints")
+		t.Error("different keys should produce different JWK fingerprints")
+	}
+}
+
+func TestFingerprintFDO(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fp1, err := did.FingerprintFDO(key.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp2, err := did.FingerprintFDO(key.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(fp1) != 32 {
+		t.Errorf("expected 32-byte FDO fingerprint, got %d", len(fp1))
+	}
+
+	// Deterministic
+	for i := range fp1 {
+		if fp1[i] != fp2[i] {
+			t.Error("FDO fingerprints should be deterministic")
+			break
+		}
+	}
+
+	// Different key should produce different fingerprint
+	key2, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	fp3, _ := did.FingerprintFDO(key2.Public())
+	same := true
+	for i := range fp1 {
+		if fp1[i] != fp3[i] {
+			same = false
+			break
+		}
+	}
+	if same {
+		t.Error("different keys should produce different FDO fingerprints")
+	}
+
+	// FDO and JWK fingerprints should differ (they use different algorithms)
+	fpJWK, _ := did.FingerprintJWK(key.Public())
+	sameAlg := true
+	for i := range fp1 {
+		if fp1[i] != fpJWK[i] {
+			sameAlg = false
+			break
+		}
+	}
+	if sameAlg {
+		t.Error("FDO and JWK fingerprints should differ (different algorithms)")
+	}
+
+	// Hex convenience
+	hexFP := did.FingerprintFDOHex(key.Public())
+	if len(hexFP) != 64 {
+		t.Errorf("expected 64-char hex fingerprint, got %d", len(hexFP))
+	}
+}
+
+func TestFingerprintFDO_P384(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fp, err := did.FingerprintFDO(key.Public())
+	if err != nil {
+		t.Fatalf("FingerprintFDO P-384 failed: %v", err)
+	}
+	if len(fp) != 32 {
+		t.Errorf("expected 32-byte fingerprint, got %d", len(fp))
 	}
 }
 
@@ -472,12 +549,168 @@ func TestHandler_ServesDIDDocument(t *testing.T) {
 func TestResolver_InvalidDIDMethod(t *testing.T) {
 	resolver := &did.Resolver{}
 
-	// did:key is not supported (only did:web)
-	_, err := resolver.Resolve(context.Background(), "did:key:z6Mkf5rGMoatrSj1f4CyvuHBeXJELe9RPdzo2PKGNCKVtZxP")
+	_, err := resolver.Resolve(context.Background(), "did:example:abc123")
 	if err == nil {
 		t.Fatal("expected error for unsupported DID method")
 	}
 	t.Logf("Expected error: %v", err)
+}
+
+func TestParseDIDKey_P256(t *testing.T) {
+	// Generate a P-256 key, compress it, encode as did:key, and round-trip
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	didURI := ecPublicKeyToDIDKey(t, &key.PublicKey)
+	t.Logf("did:key URI: %s", didURI)
+
+	pub, err := did.ParseDIDKey(didURI)
+	if err != nil {
+		t.Fatalf("ParseDIDKey failed: %v", err)
+	}
+
+	ecPub, ok := pub.(*ecdsa.PublicKey)
+	if !ok {
+		t.Fatalf("expected *ecdsa.PublicKey, got %T", pub)
+	}
+	if !key.PublicKey.Equal(ecPub) {
+		t.Error("round-tripped P-256 key does not match original")
+	}
+}
+
+func TestParseDIDKey_P384(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	didURI := ecPublicKeyToDIDKey(t, &key.PublicKey)
+	t.Logf("did:key URI: %s", didURI)
+
+	pub, err := did.ParseDIDKey(didURI)
+	if err != nil {
+		t.Fatalf("ParseDIDKey failed: %v", err)
+	}
+
+	ecPub, ok := pub.(*ecdsa.PublicKey)
+	if !ok {
+		t.Fatalf("expected *ecdsa.PublicKey, got %T", pub)
+	}
+	if !key.PublicKey.Equal(ecPub) {
+		t.Error("round-tripped P-384 key does not match original")
+	}
+}
+
+func TestResolver_DIDKey(t *testing.T) {
+	// Test that Resolver.Resolve handles did:key properly
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	didURI := ecPublicKeyToDIDKey(t, &key.PublicKey)
+	resolver := &did.Resolver{}
+
+	result, err := resolver.Resolve(context.Background(), didURI)
+	if err != nil {
+		t.Fatalf("Resolve(did:key) failed: %v", err)
+	}
+	if result.PublicKey == nil {
+		t.Fatal("expected non-nil public key")
+	}
+	if result.VoucherRecipientURL != "" {
+		t.Errorf("did:key should have no voucher recipient URL, got %q", result.VoucherRecipientURL)
+	}
+}
+
+func TestParseDIDKey_Negative(t *testing.T) {
+	tests := []struct {
+		name string
+		uri  string
+	}{
+		{"missing z prefix", "did:key:abc123"},
+		{"empty after z", "did:key:z"},
+		{"invalid base58 chars", "did:key:z0OIl"},
+		{"too short after decode", "did:key:z1"},
+		{"unsupported multicodec", "did:key:z6Mkf5rGMoatrSj1f4CyvuHBeXJELe9RPdzo2PKGNCKVtZxP"},
+		{"not a did:key", "did:web:example.com"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := did.ParseDIDKey(tt.uri)
+			if err == nil {
+				t.Errorf("expected error for %q", tt.uri)
+			}
+			t.Logf("Expected error for %q: %v", tt.uri, err)
+		})
+	}
+}
+
+// ecPublicKeyToDIDKey encodes an ECDSA public key as a did:key URI for testing.
+func ecPublicKeyToDIDKey(t *testing.T, pub *ecdsa.PublicKey) string {
+	t.Helper()
+
+	var prefix []byte
+	switch pub.Curve {
+	case elliptic.P256():
+		prefix = []byte{0x80, 0x24}
+	case elliptic.P384():
+		prefix = []byte{0x81, 0x24}
+	default:
+		t.Fatalf("unsupported curve: %v", pub.Curve.Params().Name)
+	}
+
+	// Compress the point (SEC1 format)
+	byteLen := (pub.Curve.Params().BitSize + 7) / 8
+	xBytes := pub.X.Bytes()
+	compressed := make([]byte, 1+byteLen)
+	if pub.Y.Bit(0) == 0 {
+		compressed[0] = 0x02
+	} else {
+		compressed[0] = 0x03
+	}
+	copy(compressed[1+byteLen-len(xBytes):], xBytes)
+
+	// Prepend multicodec prefix
+	data := append(prefix, compressed...)
+
+	// Encode as base58-btc
+	encoded := encodeBase58BTC(data)
+	return "did:key:z" + encoded
+}
+
+// encodeBase58BTC encodes bytes as base58-btc (Bitcoin alphabet) for testing.
+func encodeBase58BTC(data []byte) string {
+	const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+	x := new(big.Int).SetBytes(data)
+	base := big.NewInt(58)
+	zero := big.NewInt(0)
+	mod := new(big.Int)
+
+	var result []byte
+	for x.Cmp(zero) > 0 {
+		x.DivMod(x, base, mod)
+		result = append(result, alphabet[mod.Int64()])
+	}
+
+	// Leading zero bytes → leading '1' characters
+	for _, b := range data {
+		if b != 0 {
+			break
+		}
+		result = append(result, '1')
+	}
+
+	// Reverse
+	for i, j := 0, len(result)-1; i < j; i, j = i+1, j-1 {
+		result[i], result[j] = result[j], result[i]
+	}
+
+	return string(result)
 }
 
 func TestNewDocument_ValidDocument(t *testing.T) {

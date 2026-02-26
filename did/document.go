@@ -10,9 +10,13 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math/big"
+
+	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/protocol"
 )
 
 // Document is a W3C DID Document (https://www.w3.org/TR/did-core/).
@@ -172,8 +176,60 @@ func rsaPublicKeyToJWK(key *rsa.PublicKey) (*JWK, error) {
 	}, nil
 }
 
-// Fingerprint computes a SHA-256 fingerprint of the public key's JWK thumbprint (RFC 7638).
-func Fingerprint(pub crypto.PublicKey) ([]byte, error) {
+// FingerprintFDO computes the spec-correct FDO OwnerKeyFingerprint: SHA-256 of the
+// CBOR-encoded protocol.PublicKey (spec §9.8). This is used for PullAuth token
+// scoping, partner trust store lookups, and voucher pipeline routing.
+func FingerprintFDO(pub crypto.PublicKey) ([]byte, error) {
+	keyType, err := protocol.KeyTypeFromPublicKey(pub)
+	if err != nil {
+		return nil, err
+	}
+
+	var protoKey *protocol.PublicKey
+	switch key := pub.(type) {
+	case *ecdsa.PublicKey:
+		protoKey, err = protocol.NewPublicKey(keyType, key, false)
+	case *rsa.PublicKey:
+		protoKey, err = protocol.NewPublicKey(keyType, key, false)
+	default:
+		return nil, fmt.Errorf("unsupported key type for FDO fingerprint: %T", pub)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to create protocol key: %w", err)
+	}
+
+	data, err := cbor.Marshal(protoKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to CBOR-encode protocol key: %w", err)
+	}
+	h := sha256.Sum256(data)
+	return h[:], nil
+}
+
+// FingerprintProtocolKey computes the FDO OwnerKeyFingerprint directly from a
+// protocol.PublicKey. Use this when you already have a protocol key (e.g., from
+// PullAuth). For crypto.PublicKey, use FingerprintFDO instead.
+func FingerprintProtocolKey(pub protocol.PublicKey) ([]byte, error) {
+	data, err := cbor.Marshal(pub)
+	if err != nil {
+		return nil, fmt.Errorf("failed to CBOR-encode protocol key: %w", err)
+	}
+	h := sha256.Sum256(data)
+	return h[:], nil
+}
+
+// FingerprintFDOHex returns the hex-encoded FDO OwnerKeyFingerprint.
+func FingerprintFDOHex(pub crypto.PublicKey) string {
+	fp, err := FingerprintFDO(pub)
+	if err != nil {
+		return ""
+	}
+	return hex.EncodeToString(fp)
+}
+
+// FingerprintJWK computes a SHA-256 fingerprint of the public key's JWK thumbprint (RFC 7638).
+// Note: For FDO spec-correct fingerprinting, use FingerprintFDO instead.
+func FingerprintJWK(pub crypto.PublicKey) ([]byte, error) {
 	jwk, err := PublicKeyToJWK(pub)
 	if err != nil {
 		return nil, err

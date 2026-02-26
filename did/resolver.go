@@ -33,6 +33,9 @@ type ResolveResult struct {
 // Resolver resolves DID URIs to public keys and service endpoints.
 type Resolver struct {
 	HTTPClient *http.Client
+	// InsecureHTTP allows resolving did:web over HTTP instead of HTTPS.
+	// This is for local development/testing only.
+	InsecureHTTP bool
 }
 
 // NewResolver creates a DID resolver with sensible defaults.
@@ -53,11 +56,15 @@ func (r *Resolver) Resolve(ctx context.Context, didURI string) (*ResolveResult, 
 	return nil, fmt.Errorf("unsupported DID method in %q", didURI)
 }
 
-// resolveWeb resolves a did:web URI by fetching the DID Document over HTTPS.
+// resolveWeb resolves a did:web URI by fetching the DID Document over HTTPS
+// (or HTTP if InsecureHTTP is set).
 func (r *Resolver) resolveWeb(ctx context.Context, didURI string) (*ResolveResult, error) {
 	docURL, err := WebDIDToURL(didURI)
 	if err != nil {
 		return nil, err
+	}
+	if r.InsecureHTTP {
+		docURL = strings.Replace(docURL, "https://", "http://", 1)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, docURL, nil)
@@ -104,11 +111,14 @@ func (r *Resolver) resolveWeb(ctx context.Context, didURI string) (*ResolveResul
 }
 
 // resolveKey resolves a did:key URI (multicodec-encoded public key).
-// Currently supports P-256 and P-384 keys.
+// Supports P-256 and P-384 keys. did:key URIs have no service endpoints,
+// so VoucherRecipientURL is always empty.
 func (r *Resolver) resolveKey(_ context.Context, didURI string) (*ResolveResult, error) {
-	// did:key format: did:key:<multibase-encoded-multicodec-key>
-	// For now, return an error with guidance
-	return nil, fmt.Errorf("did:key resolution not yet implemented for %q; use did:web instead", didURI)
+	pub, err := ParseDIDKey(didURI)
+	if err != nil {
+		return nil, err
+	}
+	return &ResolveResult{PublicKey: pub}, nil
 }
 
 // extractFromDocument extracts the public key and service endpoints from a DID Document.

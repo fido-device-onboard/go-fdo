@@ -401,6 +401,31 @@ For environments with complex supply chains:
 - **Manual override**: Provide administrative interface for legitimate GUID recovery scenarios
 - **TTL management**: Balance security (short TTLs limit attack window) vs. operations (long shelf life)
 
+## Transport Layering and Alternative Deployments
+
+The library uses HTTP as its transport protocol for both the core FDO protocol (DI/TO1/TO2) and the voucher transfer protocol (push/pull/PullAuth). However, the HTTP usage is layered in ways that support alternative deployment models.
+
+### Inbound (Server-Side)
+
+All server-side components implement Go's `http.Handler` interface. This means they work behind **any HTTP-compatible gateway** — not just `http.ListenAndServe`. Deployments behind API Gateway + Lambda, Cloud Run, Knative, or any framework that delivers requests as `(http.ResponseWriter, *http.Request)` pairs will work without modification.
+
+Additionally, the core FDO protocol is layered below HTTP via the `protocol.Responder` interface, which operates purely on CBOR message types and `io.Reader`/`io.Writer` — no HTTP dependency at all. The `fdotest.Transport` demonstrates this by running the full DI/TO1/TO2 protocol suite without any HTTP involvement.
+
+### Outbound (Client-Side)
+
+Outbound components (`transfer.HTTPPushSender`, `transfer.PullAuthClient`, `transfer.HTTPPullInitiator`, `http.Transport`) use Go's `*http.Client` for making requests. The `*http.Client` accepts a custom `http.RoundTripper` via its `Transport` field, which provides a pluggable seam for:
+
+- **Testing**: In-process round-trippers that call `ServeHTTP` directly (used in library tests)
+- **Custom TLS**: Corporate proxies, mTLS, custom certificate pools
+- **Observability**: Request/response logging, metrics, tracing
+- **Alternative transports**: Any backend that can fulfill HTTP request/response semantics
+
+For deployments where outbound HTTP is not desirable (e.g., voucher transfer via message queues), the `transfer.PushSender` and `transfer.PullInitiator` interfaces are transport-agnostic — implement them with SQS, Kafka, gRPC, or any other mechanism. The `HTTP*` prefixed structs are just the default HTTP implementations.
+
+### What Is NOT Pluggable
+
+The PullAuth cryptographic handshake logic (CBOR/COSE challenge-response) is currently implemented directly inside HTTP handler methods rather than as a separate protocol-layer API. If a non-HTTP PullAuth transport is ever needed, this would require a modest refactor to split protocol logic from HTTP read/write (~100 lines). For all current deployment scenarios (including serverless behind API Gateway), this is not a limitation.
+
 ## Protocol Security Features
 
 ### Attested Payload ("Offline FDO")
