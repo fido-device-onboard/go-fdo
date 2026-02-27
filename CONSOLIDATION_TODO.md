@@ -1,48 +1,186 @@
 # Library Consolidation TODO
 
-Instructions for AI agents working on **go-fdo-di** and **go-fdo-onboarding-service** to eliminate duplicate code by adopting the go-fdo library's `did/` and `transfer/` packages.
+## The Problem: Massive Code Duplication
 
-**Context**: Three applications (go-fdo-voucher-management "VM", go-fdo-di "DI", go-fdo-onboarding-service "Onboarding") all re-implement functionality that either already exists in this library or should be added here. The VM project has already completed its consolidation as a reference implementation. This document tells you exactly what to do in the other projects.
+Three applications — **go-fdo-voucher-management** (VM), **go-fdo-di** (DI), and
+**go-fdo-onboarding-service** (Onboarding) — each independently re-implemented
+functionality that **already exists in this library**. The library's `did/`, `transfer/`,
+and `http/` packages collectively provide ~3,500 lines of tested, production-quality code
+for DID operations, voucher transfer, and FDO protocol transport. The apps duplicated
+large portions of this — often poorly.
+
+**Your primary directive is: audit your app for code that duplicates library functionality,
+and replace it with calls to the library.** Do not fix app-level code that the library
+already does correctly. Delete it and use the library.
 
 ---
 
-## What the Library Already Provides
+## How to Approach This
 
-### `did/` package
+### Step 1: Understand What the Library Provides
 
-| Function | What It Does | Replaces |
-|----------|-------------|----------|
-| `did.Resolver` | Resolves `did:web` and `did:key` URIs to public keys + service endpoints | App-level `DIDResolver` / `parseDIDKey()` |
-| `did.Resolver.InsecureHTTP` | Allows HTTP (not HTTPS) for `did:web` in dev/testing | App-level `InsecureHTTP` field |
-| `did.ParseDIDKey(uri)` | Decodes `did:key:z...` → `crypto.PublicKey` (P-256, P-384). Zero external deps (inline base58-btc). | App-level `parseDIDKey()` + `base58` dependency |
-| `did.FingerprintFDO(pub)` | SHA-256 of CBOR-encoded `protocol.PublicKey` — **spec §9.8 correct** | App-level `FingerprintPublicKey()` / `publicKeyToProtocol()` |
-| `did.FingerprintFDOHex(pub)` | Hex-encoded version of above | App-level `FingerprintPublicKeyHex()` |
-| `did.FingerprintProtocolKey(pub)` | Same fingerprint from a `protocol.PublicKey` directly (no round-trip) | App-level `FingerprintProtocolKey()` |
-| `did.FingerprintJWK(pub)` | JWK Thumbprint (RFC 7638) — NOT FDO-spec, but useful for non-FDO contexts | — |
-| `did.WebDIDToURL(uri)` | Converts `did:web:...` to `https://.../.well-known/did.json` URL | App-level `webDIDToURL()` |
-| `did.NewDocument(...)` | Creates a DID Document with verification methods + service entries | App-level DID doc construction |
-| `did.NewHandler(doc)` | HTTP handler serving `.well-known/did.json` | App-level DID serving code |
-| `did.Mint(...)` | Generate key + DID document in one call | App-level key gen + doc construction |
-| `did.LoadPrivateKeyPEM(pem)` | Load private key from PEM bytes (PKCS8, PKCS1, EC) | App-level `LoadPrivateKeyFromPEM()` |
-| `did.ExportPrivateKeyPEM(key)` | Export private key as PEM | App-level PEM export |
-| `did.ExportPublicKeyPEM(key)` | Export public key as PEM | App-level PEM export |
-| `did.PublicKeyToJWK(pub)` | Convert crypto.PublicKey to JWK struct | App-level JWK conversion |
-| `did.JWKToPublicKey(jwk)` | Convert JWK struct to crypto.PublicKey | App-level JWK parsing |
+Before changing anything, read the library packages your app depends on. The key packages
+are summarized below, but you should **read the actual source** to understand the full API:
 
-### `transfer/` package
+- **`did/`** (~960 lines) — DID minting, resolution, document construction, serving,
+  JWK conversion, PEM utilities, fingerprinting
+- **`transfer/`** (~1,750 lines) — Push sender/receiver, Pull holder/initiator, PullAuth
+  client/server, voucher store interface, session management, COSE signing/verification
+- **`http/`** (~680 lines) — FDO protocol HTTP transport (client `Transport` and server
+  `Handler`), token management, request/response debug logging, encryption/decryption
 
-| Type | What It Does | Replaces |
-|------|-------------|----------|
-| `transfer.PushSender` interface | Send vouchers to remote receiver | — |
-| `transfer.PushReceiver` interface | Accept pushed vouchers | — |
-| `transfer.HTTPPushSender` | HTTP multipart push client | App-level `VoucherPushClient` |
-| `transfer.HTTPPushReceiver` | HTTP push receiver with validation | App-level `VoucherReceiverHandler` |
-| `transfer.VoucherStore` interface | Storage abstraction for vouchers | App-level `VoucherFileStore` |
-| `transfer.VoucherData` | Unified voucher metadata struct | App-level passing raw paths + `fdo.Voucher` separately |
-| `transfer.PullHolder` interface | Serve vouchers to authenticated recipients | — |
-| `transfer.PullInitiator` interface | Authenticate + download vouchers | — |
-| `transfer.PullAuthServer` | Full PullAuth protocol server | App-level pullauth server code |
-| `transfer.PullAuthClient` | Full PullAuth protocol client | App-level pullauth client code |
+### Step 2: Audit Your App for Duplicates
+
+Go file-by-file through your app and ask: **"Does the library already do this?"**
+
+Common duplications found in the apps include:
+
+| App-level code | Library equivalent | Package |
+|---|---|---|
+| `did_resolver.go` (DID resolution, JWK parsing, caching) | `did.Resolver`, `did.JWKToPublicKey`, `did.ParseDIDKey` | `did/` |
+| `parseDIDKey()` / base58 decoding | `did.ParseDIDKey()` (zero external deps) | `did/` |
+| `parseECJWK()` / `parseRSAJWK()` | `did.JWKToPublicKey()` | `did/` |
+| `webDIDToURL()` | `did.WebDIDToURL()` | `did/` |
+| `FingerprintPublicKey()` / `publicKeyToProtocol()` | `did.FingerprintFDO()` / `did.FingerprintFDOHex()` | `did/` |
+| `FingerprintProtocolKey()` | `did.FingerprintProtocolKey()` | `did/` |
+| DID document construction | `did.NewDocument()` | `did/` |
+| DID document HTTP serving | `did.NewHandler()` / `did.Handler.RegisterHandlers()` | `did/` |
+| Key generation + DID creation | `did.Mint()` | `did/` |
+| `LoadPrivateKeyFromPEM()` / PEM export | `did.LoadPrivateKeyPEM()` / `did.ExportPrivateKeyPEM()` / `did.ExportPublicKeyPEM()` | `did/` |
+| `VoucherPushClient` (HTTP multipart push) | `transfer.HTTPPushSender` / `transfer.NewHTTPPushSender()` | `transfer/` |
+| `VoucherReceiverHandler` (push receiver) | `transfer.HTTPPushReceiver` | `transfer/` |
+| `VoucherFileStore` / voucher storage | `transfer.VoucherStore` interface | `transfer/` |
+| Passing raw bytes + `fdo.Voucher` separately | `transfer.VoucherData` (unified struct) | `transfer/` |
+| PullAuth server implementation | `transfer.PullAuthServer` (412 lines, complete) | `transfer/` |
+| PullAuth client implementation | `transfer.PullAuthClient` (353 lines, complete) | `transfer/` |
+| Pull list/download handler | `transfer.HTTPPullHolder` (218 lines, complete) | `transfer/` |
+| Pull authenticate + download all | `transfer.HTTPPullInitiator` (215 lines, complete) | `transfer/` |
+| FDO protocol HTTP handler (DI/TO1/TO2) | `http.Handler` (369 lines, handles all message types) | `http/` |
+| FDO protocol HTTP client transport | `http.Transport` (198 lines, with encryption) | `http/` |
+| Authorization token jar | `http.AuthorizationJar` interface + default impl | `http/` |
+
+### Step 3: Replace, Don't Fix
+
+For each duplicate you find:
+
+1. **Delete the app-level implementation**
+2. **Import and call the library version**
+3. **Keep only thin wrappers** if your app needs app-specific behavior (e.g., caching
+   around `did.Resolver`, or additional auth checks around `transfer.HTTPPushReceiver`)
+
+### Step 4: Clean Up Dependencies
+
+After replacing duplicates, run `go mod tidy`. You should see external dependencies
+disappear (e.g., `go-did`, `base58`, `multibase`) because the library has zero external
+dependencies for the same functionality.
+
+---
+
+## ⚠️ CRITICAL SECURITY BUG: App-Level JWK Parsing
+
+> **The `parseECJWK()` and `parseRSAJWK()` functions in the app-level DID resolvers
+> are BROKEN.** They **generate brand-new random keys** instead of parsing the JWK
+> coordinates from the DID document. This means any `did:web:` resolution silently
+> returns a random public key that has **nothing to do with the actual DID owner**.
+> Any cached "resolved" keys are garbage.
+>
+> The caching logic itself (store on success, keep on failure) is sound — the
+> underlying JWK parse was just silently wrong.
+>
+> **The fix is simple: delete `parseECJWK`/`parseRSAJWK` and use `did.Resolver`
+> from the library, which calls `did.JWKToPublicKey()` with correct base64url
+> decoding, coordinate validation, and curve-on-point checks.**
+>
+> Do NOT attempt to fix the app-level parsing functions. Just delete them.
+
+---
+
+## Library API Reference
+
+### `did/` package — DID Operations
+
+**Resolution** (replaces app-level `did_resolver.go`):
+
+- `did.NewResolver() *Resolver` — Create resolver with 30s HTTP timeout
+- `did.Resolver.Resolve(ctx, didURI) (*ResolveResult, error)` — Resolve `did:web:` or `did:key:` to public key + service endpoints
+- `did.Resolver.InsecureHTTP bool` — Allow HTTP for `did:web` in dev/testing
+- `did.ParseDIDKey(uri) (crypto.PublicKey, error)` — Decode `did:key:z...` → P-256/P-384 public key (inline base58-btc, zero deps)
+- `did.ResolveResult` — Contains `.PublicKey`, `.VoucherRecipientURL`, `.Document`
+
+**JWK conversion** (replaces app-level `parseECJWK`/`parseRSAJWK`):
+
+- `did.PublicKeyToJWK(pub) (*JWK, error)` — crypto.PublicKey → JWK
+- `did.JWKToPublicKey(jwk) (crypto.PublicKey, error)` — JWK → crypto.PublicKey (correct parsing!)
+
+**DID document construction** (replaces app-level document building):
+
+- `did.NewDocument(didURI, pub, recipientURL, holderURL) (*Document, error)` — Build complete DID Document
+- `did.Document.JSON() ([]byte, error)` — Pretty-print as JSON
+- `did.NewHandler(doc) (*Handler, error)` — HTTP handler for `/.well-known/did.json`
+- `did.Handler.RegisterHandlers(mux, subPath)` — Register on mux
+
+**Key minting** (replaces app-level key gen + doc creation):
+
+- `did.Mint(host, path, recipientURL, holderURL, keyCfg) (*MintResult, error)`
+- `did.MintResult` — Contains `.PrivateKey`, `.PublicKey`, `.DIDDocument`, `.DIDURI`
+- `did.WebDID(host, path) string` — Construct `did:web:` URI
+- `did.WebDIDToURL(didURI) (string, error)` — `did:web:` → `https://.../.well-known/did.json`
+
+**PEM utilities** (replaces app-level PEM load/save):
+
+- `did.LoadPrivateKeyPEM(data) (crypto.Signer, error)` — Handles PKCS8, PKCS1, EC
+- `did.ExportPrivateKeyPEM(key) ([]byte, error)`
+- `did.ExportPublicKeyPEM(pub) ([]byte, error)`
+
+**Fingerprinting** (replaces app-level `FingerprintPublicKey` etc.):
+
+- `did.FingerprintFDO(pub) ([]byte, error)` — SHA-256 of CBOR-encoded `protocol.PublicKey` (**spec §9.8 correct**)
+- `did.FingerprintFDOHex(pub) string` — Hex-encoded version
+- `did.FingerprintProtocolKey(pub protocol.PublicKey) ([]byte, error)` — From protocol key directly
+- `did.FingerprintJWK(pub) ([]byte, error)` — JWK Thumbprint (RFC 7638, NOT for FDO protocol use)
+
+### `transfer/` package — Voucher Transfer
+
+**Push model** (replaces app-level `VoucherPushClient`, `VoucherReceiverHandler`):
+
+- `transfer.NewHTTPPushSender() *HTTPPushSender`
+- `transfer.HTTPPushSender.Push(ctx, dest, data) error`
+- `transfer.HTTPPushReceiver` — HTTP handler with `.Store`, `.Authenticate`, `.OnReceive`
+- `transfer.PushDestination` — `.URL` + `.Token`
+- `transfer.VoucherData` — Unified struct: `.GUID`, `.SerialNumber`, `.Voucher`, `.Raw`
+- `transfer.VoucherStore` interface — `.Save()`, `.Load()`, `.GetVoucher()`, `.List()`, `.Delete()`
+
+**Pull model** (replaces app-level PullAuth and pull handlers):
+
+- `transfer.PullAuthServer` — Complete Holder-side PullAuth (`.HandleHello`, `.HandleProve`, `.RegisterHandlers`)
+- `transfer.PullAuthClient` — Complete Recipient-side PullAuth (`.Authenticate()`)
+- `transfer.HTTPPullHolder` — Serves voucher list + download (`.HandleListVouchers`, `.HandleDownloadVoucher`, `.RegisterHandlers`)
+- `transfer.HTTPPullInitiator` — Authenticate + list + download (`.PullAll()`)
+- `transfer.PullAuthClient.PathPrefix` — Configurable Pull Service Root (defaults to `/api/v1/pull/vouchers`)
+- `transfer.PullAuthServer.RegisterHandlers(mux, root...)` — Variadic root path
+
+**Session management**:
+
+- `transfer.SessionStore` — In-memory PullAuth session store with TTL and max-sessions
+- `transfer.TokenIssuer` / `transfer.TokenValidator` — Callbacks for token lifecycle
+- `transfer.VoucherLookup` — Callback for voucher existence checks
+
+### `http/` package — FDO Protocol Transport
+
+**Server-side** (replaces app-level FDO protocol HTTP handlers):
+
+- `http.Handler` — Handles all DI, TO0, TO1, TO2 messages via `POST /fdo/{ver}/msg/{type}`
+- Automatic encryption/decryption for TO2 messages after key exchange
+- Token management via `http.AuthorizationJar`
+- Content length validation
+- Debug request/response logging
+
+**Client-side** (replaces app-level FDO protocol HTTP clients):
+
+- `http.Transport` — Sends FDO messages, handles response parsing, encryption/decryption
+- `http.Transport.FdoVersion` — Supports 1.01 and 2.0
+- `http.Transport.Auth` — `AuthorizationJar` for token management
+- `http.Transport.BaseURL` — Target server URL
 
 ---
 
@@ -50,249 +188,103 @@ Instructions for AI agents working on **go-fdo-di** and **go-fdo-onboarding-serv
 
 ### go-fdo-di (DI / Manufacturer)
 
-DI is the **worst offender** with ~1,400 lines of duplicate code and a 635-line DID resolver that should be ~50 lines.
+DI is the **worst offender** with ~1,400 lines of duplicate code.
 
-#### Step 1: Replace DID Resolver (CRITICAL — SECURITY BUG)
+**Audit these files** — each likely has a library replacement:
 
-DI's `did_resolver.go` is **635 lines** with its own caching, `go-did` dependency, key generation, etc.
+| App file | Likely library replacement | Action |
+|---|---|---|
+| `did_resolver.go` (~635 lines) | `did.Resolver` (~50 lines wrapper) | **Delete + replace (SECURITY BUG — see above)** |
+| `voucher_push_client.go` (~132 lines) | `transfer.HTTPPushSender` | Delete + replace |
+| `key_utils.go` (fingerprint functions) | `did.FingerprintFDO*()` | Delete fingerprint funcs, call library |
+| PEM load/save functions | `did.LoadPrivateKeyPEM()` / `did.ExportPrivateKeyPEM()` | Delete + replace |
+| DID document construction | `did.NewDocument()` / `did.NewHandler()` | Delete + replace |
+| JWK conversion | `did.PublicKeyToJWK()` / `did.JWKToPublicKey()` | Delete + replace |
+| `voucher_transmission_store.go` (~454 lines) | Not yet in library | Keep for now |
+| `voucher_retry_worker.go` (~119 lines) | Not yet in library | Keep for now |
 
-> **⚠️ CRITICAL BUG**: The `parseECJWK()` and `parseRSAJWK()` functions in the app-level
-> DID resolver **do not actually parse JWK coordinates from the DID document**. Instead,
-> they **generate brand-new random keys** and return those. This means any `did:web:`
-> resolution returns a random public key that has **nothing to do with the actual DID owner**.
-> Any cached "resolved" keys are garbage. The caching logic itself (store on success, keep
-> on failure) is sound — the underlying JWK parse was just silently wrong.
->
-> The library's `did.Resolver` performs correct JWK parsing (`did.JWKToPublicKey`), so
-> switching to it fixes this bug. **Do not attempt to fix the app-level parseECJWK/parseRSAJWK
-> — just delete them and use the library.**
+**After cleanup**: Run `go mod tidy`. Expected removals: `go-did`, `base58`, `multibase`, and their transitive deps.
 
-**Replace with:**
-
-```go
-import "github.com/fido-device-onboard/go-fdo/did"
-
-type DIDResolver struct {
-    resolver *did.Resolver
-    enabled  bool
-}
-
-func NewDIDResolver(enabled bool) *DIDResolver {
-    return &DIDResolver{
-        resolver: did.NewResolver(),
-        enabled:  enabled,
-    }
-}
-
-func (r *DIDResolver) ResolveDIDKey(ctx context.Context, didURI string) (crypto.PublicKey, string, error) {
-    if !r.enabled {
-        return nil, "", fmt.Errorf("DID resolution disabled")
-    }
-    result, err := r.resolver.Resolve(ctx, didURI)
-    if err != nil {
-        return nil, "", err
-    }
-    return result.PublicKey, result.VoucherRecipientURL, nil
-}
-```
-
-**After**: Remove `github.com/nuts-foundation/go-did` dependency entirely. Run `go mod tidy`.
-
-**Reference**: See `go-fdo-voucher-management/did_resolver.go` (79 lines, thin wrapper).
-
-#### Step 2: Replace Fingerprinting
-
-DI likely has its own `FingerprintPublicKey` / `publicKeyToProtocol`. Replace with:
-
-```go
-import "github.com/fido-device-onboard/go-fdo/did"
-
-// Replace FingerprintPublicKeyHex(pub) with:
-did.FingerprintFDOHex(pub)
-
-// Replace FingerprintProtocolKey(pub) with:
-fp, err := did.FingerprintProtocolKey(pub)
-```
-
-**IMPORTANT**: The library's `did.FingerprintFDO()` uses `protocol.NewPublicKey` + `cbor.Marshal` + SHA-256. This is the **spec-correct** algorithm (§9.8). If DI was using JWK thumbprints or PKIX-hash fingerprints, existing fingerprints stored in databases will NOT match. You may need a one-time migration or to support both during transition.
-
-#### Step 3: Replace Push Client
-
-DI's `voucher_push_client.go` (~132 lines) duplicates `transfer.HTTPPushSender`. Switch to:
-
-```go
-import "github.com/fido-device-onboard/go-fdo/transfer"
-
-sender := transfer.NewHTTPPushSender(httpClient)
-err := sender.Push(ctx, dest, voucherData)
-```
-
-#### Step 4: Replace Transmission Store + Retry Worker
-
-DI's `voucher_transmission_store.go` (~454 lines) and `voucher_retry_worker.go` (~119 lines) are near-identical to VM's. These are **not yet in the library** — see "What's Missing" below. For now, keep them in-app but plan to switch when the library adds `transfer.TransmissionStore` and `transfer.RetryWorker`.
-
-#### Step 5: Remove PEM Utility Duplicates
-
-Replace any local `LoadPrivateKeyFromPEM`, `ExportPrivateKeyPEM`, `LoadPublicKeyFromPEM` with:
-
-- `did.LoadPrivateKeyPEM()`
-- `did.ExportPrivateKeyPEM()`
-- `did.ExportPublicKeyPEM()`
-
-Note: The library versions handle PKCS8, PKCS1, and EC PEM blocks. If DI has additional block types (e.g., `RSA PUBLIC KEY`), keep those as local extensions.
-
-#### Step 6: Clean Up Dependencies
-
-After all replacements, run:
-
-```bash
-go mod tidy
-```
-
-Expected removals: `github.com/nuts-foundation/go-did`, `github.com/mr-tron/base58`, `github.com/multiformats/go-multibase`, and their transitive deps.
-
----
+**Reference**: See `go-fdo-voucher-management/did_resolver.go` (79 lines total — that's the
+entire DID resolver after consolidation, down from 635).
 
 ### go-fdo-onboarding-service (Onboarding / Owner)
 
-Onboarding has ~730 lines of duplicates, primarily in voucher receiving.
+Onboarding has ~730 lines of duplicates.
 
-#### Step 1: Replace Voucher Receiver Handler
+**Audit these files**:
 
-Onboarding's `voucher_receiver_handler.go` (~360 lines) duplicates the push receiver. Switch to `transfer.HTTPPushReceiver` or at minimum use `did.Resolver` for any DID resolution within the handler.
+| App file | Likely library replacement | Action |
+|---|---|---|
+| `voucher_receiver_handler.go` (~360 lines) | `transfer.HTTPPushReceiver` | Delete + replace |
+| `voucher_receiver_tokens.go` (~188 lines) | Not yet in library | Keep for now |
+| Any `did_resolver.go` or JWK parsing | `did.Resolver` | **Delete + replace (check for SECURITY BUG)** |
+| Fingerprint functions | `did.FingerprintFDO*()` | Delete + replace |
+| PEM encoding (manual base64 line-wrapping) | `fdo.FormatVoucherCBORToPEM()` | Delete + replace |
 
-**Special concern**: Onboarding's handler has its own PEM encoding (manual base64 line-wrapping) instead of using `fdo.FormatVoucherCBORToPEM()`. Fix this:
-
-```go
-import "github.com/fido-device-onboard/go-fdo"
-pemBytes := fdo.FormatVoucherCBORToPEM(cborBytes)
-```
-
-#### Step 2: Replace Token Store
-
-Onboarding's `voucher_receiver_tokens.go` (~188 lines) is near-identical to VM's. This is **not yet in the library** — see "What's Missing" below. Keep in-app for now.
-
-#### Step 3: Replace Any DID Resolution
-
-If Onboarding has a `did_resolver.go` or any JWK parsing functions (`parseECJWK`, `parseRSAJWK`), check for the same **random-key-generation bug** described in the DI section above. These functions may generate new random keys instead of parsing the actual JWK coordinates from the DID document.
-
-Replace with:
-
-```go
-resolver := did.NewResolver()
-result, err := resolver.Resolve(ctx, didURI)
-```
-
-#### Step 4: Replace Fingerprinting
-
-Same as DI Step 2 — use `did.FingerprintFDO()` / `did.FingerprintFDOHex()`.
+**Special concern**: Onboarding's voucher receiver may have its own PEM encoding that
+does manual base64 line-wrapping instead of using `fdo.FormatVoucherCBORToPEM()`. Fix this.
 
 ---
 
-## What's Missing from the Library (Future Work)
+## What's NOT Yet in the Library (Keep in App)
 
-These components are duplicated across apps but **not yet in the library**. They should be added to `transfer/` before apps can fully consolidate.
+These components are duplicated across apps but are not yet in the library. Keep them
+in-app for now, but be aware they are candidates for future library consolidation:
 
-### 1. TransmissionStore (~450 lines, duplicated in VM + DI)
-
-SQLite-backed queue tracking push attempts with states (`pending`, `in_progress`, `succeeded`, `failed`), retry scheduling, owner-key fingerprint scoping.
-
-**Interface to add to `transfer/`:**
-
-```go
-type TransmissionStore interface {
-    Create(ctx context.Context, record *TransmissionRecord) error
-    GetPending(ctx context.Context, limit int) ([]*TransmissionRecord, error)
-    UpdateStatus(ctx context.Context, id string, status string, err error) error
-    GetByVoucherID(ctx context.Context, voucherID string) (*TransmissionRecord, error)
-}
-```
-
-**Reference implementation**: `go-fdo-voucher-management/voucher_transmission_store.go`
-
-### 2. RetryWorker (~120 lines, duplicated in VM + DI)
-
-Background goroutine that polls TransmissionStore for failed pushes and retries with exponential backoff + jitter. Honors `Retry-After` headers.
-
-**Reference**: `go-fdo-voucher-management/voucher_retry_worker.go`
-
-### 3. PushOrchestrator (~220 lines, duplicated in VM + DI)
-
-Ties together: destination resolution → transmission record creation → initial push attempt → retry scheduling.
-
-**Reference**: `go-fdo-voucher-management/voucher_push_service.go`
-
-### 4. DestinationResolver (~120 lines, duplicated in VM + DI)
-
-Cascade of resolution strategies: external callback → partner store lookup → DID resolution → static URL fallback.
-
-**Reference**: `go-fdo-voucher-management/voucher_destination.go`
-
-### 5. TokenStore / Auth Middleware (~180 lines, duplicated in VM + Onboarding)
-
-Bearer token management (create/validate/list/revoke/audit) for push receiver authentication.
-
-**Reference**: `go-fdo-voucher-management/voucher_receiver_tokens.go`
-
-### 6. LoadOrGenerateKey (~80 lines, in VM only but needed by all)
-
-3-mode key management pattern:
-
-1. **Import**: Load existing key from PEM file
-2. **First-time init**: Generate key, persist to file, reload on restart
-3. **Ephemeral**: Generate key in memory (dev/testing, with warning)
-
-**Reference**: `go-fdo-voucher-management/did_minting_setup.go:loadOrGenerateOwnerKey()`
-
-### 7. ExternalCommandExecutor (~46 lines, duplicated in VM + DI)
-
-Shell-out helper for external callbacks with timeout, JSON stdin/stdout.
-
-**Reference**: `go-fdo-voucher-management/external_executor.go`
+| Component | ~Lines | Duplicated in | Future library location |
+|---|---|---|---|
+| TransmissionStore (SQLite push queue) | ~450 | VM + DI | `transfer.TransmissionStore` |
+| RetryWorker (exponential backoff) | ~120 | VM + DI | `transfer.RetryWorker` |
+| PushOrchestrator (destination → push → retry) | ~220 | VM + DI | `transfer.PushOrchestrator` |
+| DestinationResolver (callback → partner → DID → static) | ~120 | VM + DI | `transfer.DestinationResolver` |
+| TokenStore / Auth Middleware (bearer tokens) | ~180 | VM + Onboarding | `transfer.TokenStore` |
+| LoadOrGenerateKey (3-mode key management) | ~80 | VM only | `did.LoadOrGenerateKey` |
+| ExternalCommandExecutor (shell-out helper) | ~46 | VM + DI | TBD |
 
 ---
 
-## Fingerprint Algorithm — CRITICAL COMPATIBILITY NOTE
+## Fingerprint Algorithm — Compatibility Note
 
-The library now provides **two** fingerprint algorithms:
+The library provides **two** fingerprint algorithms:
 
 | Function | Algorithm | Use Case |
-|----------|-----------|----------|
-| `did.FingerprintFDO()` | `SHA-256(CBOR(protocol.PublicKey))` | **FDO spec §9.8** — PullAuth tokens, partner trust store, voucher routing. Use this for all FDO operations. |
-| `did.FingerprintJWK()` | `SHA-256(canonical_JWK_JSON)` per RFC 7638 | General-purpose key identification. NOT for FDO protocol operations. |
+|---|---|---|
+| `did.FingerprintFDO()` | `SHA-256(CBOR(protocol.PublicKey))` | **FDO spec §9.8** — use for all FDO operations |
+| `did.FingerprintJWK()` | `SHA-256(canonical_JWK_JSON)` per RFC 7638 | General-purpose, NOT for FDO protocol |
 
-**If your app was previously using a different algorithm** (e.g., `SHA-256(PKIX_DER_bytes)` or JWK thumbprint), existing fingerprints stored in databases **will not match** `FingerprintFDO()` output. Plan a migration:
-
-1. Add a DB migration that recomputes fingerprints using `did.FingerprintFDOHex()`
-2. Or support both old and new fingerprints during a transition period
+**If your app used a different algorithm** (e.g., `SHA-256(PKIX_DER)` or JWK thumbprint),
+existing fingerprints in databases **will not match**. Plan a migration or support both
+during transition.
 
 ---
 
 ## Verification Checklist
 
-After consolidation, each app should pass these checks:
+After consolidation, each app should pass:
 
 - [ ] `go build ./...` succeeds
-- [ ] `go test ./...` passes (no regressions)
-- [ ] `gofmt -l .` shows no formatting issues
+- [ ] `go test ./...` passes
+- [ ] `gofmt -l .` clean
 - [ ] `golangci-lint run` passes
-- [ ] `go mod tidy` removes old dependencies (`go-did`, `base58`, `multibase`, etc.)
-- [ ] Integration tests still pass (push, pull, PullAuth workflows)
-- [ ] Fingerprints in the database match `did.FingerprintFDOHex()` output
+- [ ] `go mod tidy` removes old deps (`go-did`, `base58`, `multibase`, etc.)
+- [ ] Integration tests pass (push, pull, PullAuth workflows)
+- [ ] Fingerprints match `did.FingerprintFDOHex()` output
 - [ ] `did:key` and `did:web` resolution works via `did.Resolver`
-- [ ] PEM encoding uses `fdo.FormatVoucherPEM()` / `fdo.FormatVoucherCBORToPEM()`
 
 ---
 
 ## Reference: VM Project Consolidation (Completed)
 
-The go-fdo-voucher-management project has completed its consolidation. Key changes:
+The go-fdo-voucher-management project has completed its consolidation and serves as the
+reference for how to do this. Key outcomes:
 
-1. **`did_resolver.go`**: 271 lines → 79 lines (thin wrapper around `did.Resolver`). **Fixed critical JWK parsing bug**: the old `parseECJWK()`/`parseRSAJWK()` functions generated random keys instead of parsing JWK coordinates from the DID document, meaning all `did:web:` resolutions returned garbage keys. The library's `did.Resolver` does correct JWK parsing.
-2. **`key_utils.go`**: 236 lines → 148 lines (fingerprint functions delegate to library)
-3. **`did_resolver_test.go`**: Updated to use `did.ParseDIDKey` from library
-4. **`owner_key_service.go`**: Fixed bug where resolver was created with `enabled=false` (always failed)
-5. **Dependencies removed**: `github.com/mr-tron/base58` and 9 transitive deps
-6. **Fingerprint unified**: All code paths now use CBOR-based `did.FingerprintFDO()`
+1. **`did_resolver.go`**: 635 → 79 lines (thin wrapper around `did.Resolver`). Fixed the critical JWK parsing bug.
+2. **`key_utils.go`**: 236 → 148 lines (fingerprint functions delegate to library).
+3. **`did_resolver_test.go`**: Updated to use `did.ParseDIDKey` from library.
+4. **Dependencies removed**: `github.com/mr-tron/base58` and 9 transitive deps.
+5. **Fingerprint unified**: All code paths use CBOR-based `did.FingerprintFDO()`.
 
-Use the VM project as a reference for how to structure the thin wrappers.
+The pattern in every case was the same: find app code that duplicates library code,
+delete it, import and call the library instead. The app retains only thin wrappers
+for app-specific concerns (caching, config integration, etc.).

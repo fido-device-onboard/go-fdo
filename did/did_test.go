@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/fido-device-onboard/go-fdo/did"
+	"github.com/fido-device-onboard/go-fdo/protocol"
 )
 
 func TestMint_EC_P256(t *testing.T) {
@@ -440,6 +441,70 @@ func TestFingerprintFDO_P384(t *testing.T) {
 	}
 	if len(fp) != 32 {
 		t.Errorf("expected 32-byte fingerprint, got %d", len(fp))
+	}
+}
+
+// TestFingerprintProtocolKey_ConsistentAcrossEncodings verifies that
+// FingerprintProtocolKey produces the same fingerprint as FingerprintFDO
+// for the same underlying key, regardless of the protocol.PublicKey encoding
+// (X509 vs X5Chain). This is critical for PullAuth token scoping: the
+// pipeline stores fingerprints via FingerprintFDO(crypto.PublicKey) and
+// PullAuth verifies via FingerprintProtocolKey(protocol.PublicKey).
+func TestFingerprintProtocolKey_ConsistentAcrossEncodings(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		curve elliptic.Curve
+	}{
+		{"P-256", elliptic.P256()},
+		{"P-384", elliptic.P384()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			key, err := ecdsa.GenerateKey(tc.curve, rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pub := key.Public()
+
+			// Path 1: FingerprintFDO from crypto.PublicKey (used by pipeline)
+			fpCrypto, err := did.FingerprintFDO(pub)
+			if err != nil {
+				t.Fatalf("FingerprintFDO failed: %v", err)
+			}
+
+			// Path 2: FingerprintProtocolKey from protocol.PublicKey (X509 encoding)
+			keyType, err := protocol.KeyTypeFromPublicKey(pub)
+			if err != nil {
+				t.Fatalf("KeyTypeFromPublicKey failed: %v", err)
+			}
+			protoKey, err := protocol.NewPublicKey(keyType, pub.(*ecdsa.PublicKey), false)
+			if err != nil {
+				t.Fatalf("NewPublicKey (X509) failed: %v", err)
+			}
+			fpProtoX509, err := did.FingerprintProtocolKey(*protoKey)
+			if err != nil {
+				t.Fatalf("FingerprintProtocolKey (X509) failed: %v", err)
+			}
+
+			if string(fpCrypto) != string(fpProtoX509) {
+				t.Errorf("X509 mismatch: FingerprintFDO=%x FingerprintProtocolKey=%x",
+					fpCrypto, fpProtoX509)
+			}
+
+			// Path 3: FingerprintProtocolKey from protocol.PublicKey (COSE encoding)
+			protoKeyCOSE, err := protocol.NewPublicKey(keyType, pub.(*ecdsa.PublicKey), true)
+			if err != nil {
+				t.Fatalf("NewPublicKey (COSE) failed: %v", err)
+			}
+			fpProtoCOSE, err := did.FingerprintProtocolKey(*protoKeyCOSE)
+			if err != nil {
+				t.Fatalf("FingerprintProtocolKey (COSE) failed: %v", err)
+			}
+
+			if string(fpCrypto) != string(fpProtoCOSE) {
+				t.Errorf("COSE mismatch: FingerprintFDO=%x FingerprintProtocolKey=%x",
+					fpCrypto, fpProtoCOSE)
+			}
+		})
 	}
 }
 

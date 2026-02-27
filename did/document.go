@@ -206,16 +206,18 @@ func FingerprintFDO(pub crypto.PublicKey) ([]byte, error) {
 	return h[:], nil
 }
 
-// FingerprintProtocolKey computes the FDO OwnerKeyFingerprint directly from a
-// protocol.PublicKey. Use this when you already have a protocol key (e.g., from
-// PullAuth). For crypto.PublicKey, use FingerprintFDO instead.
+// FingerprintProtocolKey computes the FDO OwnerKeyFingerprint from a
+// protocol.PublicKey by normalizing to the canonical form: it extracts the
+// underlying crypto.PublicKey and delegates to FingerprintFDO. This ensures
+// the fingerprint depends only on the key material, not on the wire encoding
+// (X509 vs X5Chain vs COSE), so the same key always produces the same
+// fingerprint regardless of how it was transmitted.
 func FingerprintProtocolKey(pub protocol.PublicKey) ([]byte, error) {
-	data, err := cbor.Marshal(pub)
+	cryptoPub, err := pub.Public()
 	if err != nil {
-		return nil, fmt.Errorf("failed to CBOR-encode protocol key: %w", err)
+		return nil, fmt.Errorf("failed to extract crypto public key: %w", err)
 	}
-	h := sha256.Sum256(data)
-	return h[:], nil
+	return FingerprintFDO(cryptoPub)
 }
 
 // FingerprintFDOHex returns the hex-encoded FDO OwnerKeyFingerprint.
