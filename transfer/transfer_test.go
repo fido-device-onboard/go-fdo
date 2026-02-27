@@ -9,6 +9,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -706,6 +707,72 @@ func TestPullAuthHashAlgorithms(t *testing.T) {
 				t.Errorf("unexpected token: %s", result.SessionToken)
 			}
 		})
+	}
+}
+
+// TestPushErrorIsTransient verifies PushError classifies HTTP status codes correctly.
+func TestPushErrorIsTransient(t *testing.T) {
+	tests := []struct {
+		status    int
+		transient bool
+	}{
+		{400, false},
+		{401, false},
+		{403, false},
+		{404, false},
+		{409, false},
+		{429, true}, // Too Many Requests
+		{500, true}, // Internal Server Error
+		{502, true}, // Bad Gateway
+		{503, true}, // Service Unavailable
+	}
+	for _, tc := range tests {
+		e := &transfer.PushError{StatusCode: tc.status, Body: "test"}
+		if e.IsTransient() != tc.transient {
+			t.Errorf("status %d: IsTransient()=%v, want %v", tc.status, e.IsTransient(), tc.transient)
+		}
+	}
+}
+
+// TestPushSenderReturnsPushError verifies HTTPPushSender returns *PushError on HTTP failures.
+func TestPushSenderReturnsPushError(t *testing.T) {
+	store := NewMemoryVoucherStore()
+
+	receiver := &transfer.HTTPPushReceiver{
+		Store: store,
+		Authenticate: func(r *http.Request) bool {
+			return false // always reject
+		},
+	}
+
+	ts := httptest.NewServer(receiver)
+	defer ts.Close()
+
+	sender := &transfer.HTTPPushSender{HTTPClient: ts.Client()}
+
+	ov, raw := createTestVoucher(t)
+	guid := fmt.Sprintf("%x", ov.Header.Val.GUID[:])
+
+	data := &transfer.VoucherData{
+		VoucherInfo: transfer.VoucherInfo{GUID: guid},
+		Voucher:     ov,
+		Raw:         raw,
+	}
+
+	err := sender.Push(context.Background(), transfer.PushDestination{URL: ts.URL}, data)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	var pushErr *transfer.PushError
+	if !errors.As(err, &pushErr) {
+		t.Fatalf("expected *transfer.PushError, got %T: %v", err, err)
+	}
+	if pushErr.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected status 401, got %d", pushErr.StatusCode)
+	}
+	if pushErr.IsTransient() {
+		t.Error("401 should not be transient")
 	}
 }
 

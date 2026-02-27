@@ -11,10 +11,52 @@ import (
 	"log/slog"
 	"mime/multipart"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 )
+
+// PushError represents an HTTP error from a voucher push attempt.
+// It carries the status code and optional Retry-After duration so
+// callers can classify transient vs permanent failures.
+type PushError struct {
+	StatusCode int
+	Body       string
+	RetryAfter time.Duration // parsed from Retry-After header; zero if absent
+}
+
+func (e *PushError) Error() string {
+	return fmt.Sprintf("push returned HTTP %d: %s", e.StatusCode, e.Body)
+}
+
+// IsTransient returns true for errors that are worth retrying:
+// 429 Too Many Requests, 5xx server errors, and network errors.
+// 4xx (except 429) are permanent — the request itself is wrong.
+func (e *PushError) IsTransient() bool {
+	if e.StatusCode == http.StatusTooManyRequests {
+		return true
+	}
+	return e.StatusCode >= 500
+}
+
+// parseRetryAfter parses the Retry-After header value.
+// Supports both seconds (integer) and HTTP-date formats.
+func parseRetryAfter(val string) time.Duration {
+	if val == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(val); err == nil && secs > 0 {
+		return time.Duration(secs) * time.Second
+	}
+	if t, err := http.ParseTime(val); err == nil {
+		d := time.Until(t)
+		if d > 0 {
+			return d
+		}
+	}
+	return 0
+}
 
 // HTTPPushSender implements PushSender using HTTP multipart upload.
 type HTTPPushSender struct {
@@ -99,7 +141,11 @@ func (s *HTTPPushSender) Push(ctx context.Context, dest PushDestination, data *V
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return fmt.Errorf("push returned HTTP %d: %s", resp.StatusCode, string(respBody))
+		return &PushError{
+			StatusCode: resp.StatusCode,
+			Body:       string(respBody),
+			RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After")),
+		}
 	}
 
 	return nil
