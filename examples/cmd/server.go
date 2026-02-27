@@ -80,6 +80,8 @@ var (
 	bmoFile              string
 	bmoImageType         string
 	bmoFiles             stringList // Multiple BMO files with types (format: type:file)
+	bmoURLs              stringList // BMO URL delivery (format: type:url[:hash_hex][:ca_file])
+	bmoMetaURLs          stringList // BMO meta-URL delivery (format: meta_url[:signer_key_file][:ca_file])
 	bmoSetParams         stringList // BIOS parameters to set (format: key=value)
 	bmoSetFile           string     // BIOS parameters from file
 	payloadFiles         stringList // Multiple payload files with types (format: type:file)
@@ -134,6 +136,8 @@ func init() {
 	serverFlags.StringVar(&bmoFile, "bmo-file", "", "Use fdo.bmo FSIM to send boot image `file` to device")
 	serverFlags.StringVar(&bmoImageType, "bmo-type", "application/x-iso9660-image", "Image type for BMO file")
 	serverFlags.Var(&bmoFiles, "bmo", "Use fdo.bmo FSIM with `type:file` format with RequireAck (flag may be used multiple times for NAK testing)")
+	serverFlags.Var(&bmoURLs, "bmo-url", "Use fdo.bmo FSIM URL mode with `type:url[:hash_hex][:ca_file]` format (flag may be used multiple times)")
+	serverFlags.Var(&bmoMetaURLs, "bmo-meta-url", "Use fdo.bmo FSIM meta-URL mode with `meta_url[:signer_key_file][:ca_file]` format (flag may be used multiple times)")
 	serverFlags.Var(&bmoSetParams, "bmo-set", "Use fdo.bmo FSIM to set BIOS parameters with `key=value` pairs (flag may be used multiple times)")
 	serverFlags.StringVar(&bmoSetFile, "bmo-set-file", "", "Use fdo.bmo FSIM to set BIOS parameters from `file` (one key=value per line)")
 	serverFlags.Var(&payloadFiles, "payload", "Use fdo.payload FSIM with `type:file` format with RequireAck (flag may be used multiple times for NAK testing)")
@@ -1025,7 +1029,7 @@ func ownerModules(modules []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 			}
 		}
 
-		if slices.Contains(modules, "fdo.bmo") && (bmoFile != "" || len(bmoFiles) > 0) {
+		if slices.Contains(modules, "fdo.bmo") && (bmoFile != "" || len(bmoFiles) > 0 || len(bmoURLs) > 0 || len(bmoMetaURLs) > 0) {
 			bmoOwner := &fsim.BMOOwner{}
 
 			// Handle multi-file NAK testing mode (with RequireAck)
@@ -1043,13 +1047,143 @@ func ownerModules(modules []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 					bmoOwner.AddImageWithAck(imageType, filepath.Base(filePath), data, nil)
 					log.Printf("BMO: Added image with RequireAck: type=%s, file=%s", imageType, filePath)
 				}
-			} else {
+			} else if bmoFile != "" {
 				// Single file mode (no RequireAck)
 				data, err := os.ReadFile(bmoFile)
 				if err != nil {
 					log.Fatalf("error reading BMO file %q: %v", bmoFile, err)
 				}
 				bmoOwner.AddImage(bmoImageType, filepath.Base(bmoFile), data, nil)
+			}
+
+			// Handle URL delivery mode (Mode 1)
+			for _, urlSpec := range bmoURLs {
+				parts := strings.Split(urlSpec, ":")
+				if len(parts) < 2 {
+					log.Fatalf("invalid BMO URL specification %q: expected type:url[:hash_hex][:ca_file] format", urlSpec)
+				}
+				// Reconstruct URL (may contain colons for port)
+				imageType := parts[0]
+				// Find where URL ends - look for hash (64 hex chars) or ca_file
+				var url string
+				var hashHex string
+				var caFile string
+
+				// Simple parsing: type:url or type:url:hash or type:url:hash:ca_file
+				// URL may contain : so we need to be careful
+				remaining := strings.TrimPrefix(urlSpec, imageType+":")
+				colonParts := strings.Split(remaining, ":")
+
+				// Try to identify hash (64 hex chars for sha256) and ca_file
+				if len(colonParts) >= 3 {
+					// Check if last part looks like a file path
+					lastPart := colonParts[len(colonParts)-1]
+					secondLast := colonParts[len(colonParts)-2]
+					if len(secondLast) == 64 && isHexString(secondLast) {
+						// type:url:hash:ca_file
+						hashHex = secondLast
+						caFile = lastPart
+						url = strings.Join(colonParts[:len(colonParts)-2], ":")
+					} else if len(lastPart) == 64 && isHexString(lastPart) {
+						// type:url:hash
+						hashHex = lastPart
+						url = strings.Join(colonParts[:len(colonParts)-1], ":")
+					} else {
+						// Assume it's all URL
+						url = remaining
+					}
+				} else if len(colonParts) == 2 {
+					lastPart := colonParts[1]
+					if len(lastPart) == 64 && isHexString(lastPart) {
+						hashHex = lastPart
+						url = colonParts[0]
+					} else {
+						url = remaining
+					}
+				} else {
+					url = remaining
+				}
+
+				var expectedHash []byte
+				if hashHex != "" {
+					var err error
+					expectedHash, err = hex.DecodeString(hashHex)
+					if err != nil {
+						log.Fatalf("invalid hash hex in BMO URL specification %q: %v", urlSpec, err)
+					}
+				}
+
+				var tlsCA []byte
+				if caFile != "" {
+					var err error
+					tlsCA, err = loadCACert(caFile)
+					if err != nil {
+						log.Fatalf("error loading CA cert for BMO URL %q: %v", caFile, err)
+					}
+				}
+
+				bmoOwner.AddImageURL(imageType, url, expectedHash, tlsCA)
+				log.Printf("BMO: Added URL image: type=%s, url=%s, has_hash=%v, has_ca=%v", imageType, url, len(expectedHash) > 0, len(tlsCA) > 0)
+			}
+
+			// Handle meta-URL delivery mode (Mode 2)
+			for _, metaSpec := range bmoMetaURLs {
+				parts := strings.Split(metaSpec, ":")
+				if len(parts) < 1 {
+					log.Fatalf("invalid BMO meta-URL specification %q: expected meta_url[:signer_key_file][:ca_file] format", metaSpec)
+				}
+
+				// Simple parsing: meta_url or meta_url:signer_key or meta_url:signer_key:ca_file
+				var metaURL string
+				var signerKeyFile string
+				var caFile string
+
+				// URL may contain : so we parse from the end
+				// Check if last parts are files
+				if len(parts) >= 3 {
+					lastPart := parts[len(parts)-1]
+					secondLast := parts[len(parts)-2]
+					if fileExists(lastPart) && fileExists(secondLast) {
+						caFile = lastPart
+						signerKeyFile = secondLast
+						metaURL = strings.Join(parts[:len(parts)-2], ":")
+					} else if fileExists(lastPart) {
+						signerKeyFile = lastPart
+						metaURL = strings.Join(parts[:len(parts)-1], ":")
+					} else {
+						metaURL = metaSpec
+					}
+				} else if len(parts) == 2 {
+					if fileExists(parts[1]) {
+						signerKeyFile = parts[1]
+						metaURL = parts[0]
+					} else {
+						metaURL = metaSpec
+					}
+				} else {
+					metaURL = metaSpec
+				}
+
+				var metaSigner []byte
+				if signerKeyFile != "" {
+					var err error
+					metaSigner, err = os.ReadFile(signerKeyFile)
+					if err != nil {
+						log.Fatalf("error loading signer key for BMO meta-URL %q: %v", signerKeyFile, err)
+					}
+				}
+
+				var tlsCA []byte
+				if caFile != "" {
+					var err error
+					tlsCA, err = loadCACert(caFile)
+					if err != nil {
+						log.Fatalf("error loading CA cert for BMO meta-URL %q: %v", caFile, err)
+					}
+				}
+
+				bmoOwner.AddImageMetaURL(metaURL, metaSigner, tlsCA)
+				log.Printf("BMO: Added meta-URL: url=%s, has_signer=%v, has_ca=%v", metaURL, len(metaSigner) > 0, len(tlsCA) > 0)
 			}
 
 			// Add BIOS parameters if specified
@@ -1308,4 +1442,41 @@ func loadWiFiConfig(filePath string) (*fsim.WiFiOwner, error) {
 	}
 
 	return wifiOwner, nil
+}
+
+// isHexString checks if a string contains only hexadecimal characters.
+func isHexString(s string) bool {
+	for _, c := range s {
+		isDigit := c >= '0' && c <= '9'
+		isLowerHex := c >= 'a' && c <= 'f'
+		isUpperHex := c >= 'A' && c <= 'F'
+		if !isDigit && !isLowerHex && !isUpperHex {
+			return false
+		}
+	}
+	return len(s) > 0
+}
+
+// fileExists checks if a file exists.
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// loadCACert loads a CA certificate from a file (PEM or DER format).
+// Returns DER-encoded certificate bytes.
+func loadCACert(path string) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	// Try to decode as PEM first
+	block, _ := pem.Decode(data)
+	if block != nil && block.Type == "CERTIFICATE" {
+		return block.Bytes, nil
+	}
+
+	// Assume it's DER-encoded
+	return data, nil
 }

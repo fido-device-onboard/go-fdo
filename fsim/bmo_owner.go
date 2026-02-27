@@ -66,11 +66,23 @@ type pendingBiosResponse struct {
 // ImageToSend represents a boot image to be sent to the device per fdo.bmo.md.
 type ImageToSend struct {
 	ImageType  string         // Required: Image type/MIME type (field -1)
-	Name       string         // Optional: Image name (field -2)
-	Data       []byte         // Image data
-	Metadata   map[string]any // Optional: Metadata map (field -3)
+	Name       string         // Optional: Image name (field -3)
+	Data       []byte         // Image data (for inline mode)
+	Metadata   map[string]any // Optional: Metadata map
 	HashAlg    string         // Optional: Hash algorithm (e.g., "sha256")
 	RequireAck bool           // Optional: Request ack before sending data (default: false)
+
+	// URL delivery mode fields (fdo.bmo.md extension)
+	DeliveryMode uint   // 0=inline (default), 1=url, 2=meta-url (field -6)
+	URL          string // URL to fetch image/meta (field -7)
+	TLSCA        []byte // Optional: Single DER-encoded CA cert (field -8)
+	ExpectedHash []byte // Optional: Expected hash of final image (field -9)
+	MetaSigner   []byte // Optional: COSE_Key for meta-payload signature (field -10)
+
+	// Optional additional metadata fields
+	Version     string // Optional: Version string (field -4)
+	Description string // Optional: Description (field -5)
+	BootArgs    string // Optional: Boot arguments (field -2)
 }
 
 // ImageResult represents the result received from the device.
@@ -119,6 +131,34 @@ func (b *BMOOwner) AddImageWithAck(imageType, name string, data []byte, metadata
 		Metadata:   metadata,
 		HashAlg:    "sha256",
 		RequireAck: true,
+	})
+}
+
+// AddImageURL adds a boot image to be fetched from a URL (Mode 1: Direct URL).
+// The device will download the image from the specified URL.
+func (b *BMOOwner) AddImageURL(imageType, url string, expectedHash []byte, tlsCA []byte) {
+	b.images = append(b.images, ImageToSend{
+		ImageType:    imageType,
+		DeliveryMode: DeliveryModeURL,
+		URL:          url,
+		ExpectedHash: expectedHash,
+		TLSCA:        tlsCA,
+		HashAlg:      "sha256",
+		RequireAck:   true, // URL mode should always use RequireAck
+	})
+}
+
+// AddImageMetaURL adds a meta-payload URL (Mode 2: Meta-URL).
+// The device will download a CBOR meta-payload from the URL, which defines the actual image.
+// If metaSigner is provided, the meta-payload must be COSE Sign1 signed.
+func (b *BMOOwner) AddImageMetaURL(metaURL string, metaSigner []byte, tlsCA []byte) {
+	b.images = append(b.images, ImageToSend{
+		ImageType:    "application/x-bmo-meta",
+		DeliveryMode: DeliveryModeMetaURL,
+		URL:          metaURL,
+		MetaSigner:   metaSigner,
+		TLSCA:        tlsCA,
+		RequireAck:   true, // Meta-URL mode should always use RequireAck
 	})
 }
 
@@ -178,11 +218,39 @@ func (b *BMOOwner) produceInfo(ctx context.Context, producer *serviceinfo.Produc
 
 		// Set FSIM-specific fields per fdo.bmo.md
 		b.currentSender.BeginFields.FSIMFields[-1] = image.ImageType // Required
-		if image.Name != "" {
-			b.currentSender.BeginFields.FSIMFields[-2] = image.Name
+		if image.BootArgs != "" {
+			b.currentSender.BeginFields.FSIMFields[-2] = image.BootArgs
 		}
+		if image.Name != "" {
+			b.currentSender.BeginFields.FSIMFields[-3] = image.Name
+		}
+		if image.Version != "" {
+			b.currentSender.BeginFields.FSIMFields[-4] = image.Version
+		}
+		if image.Description != "" {
+			b.currentSender.BeginFields.FSIMFields[-5] = image.Description
+		}
+
+		// URL delivery mode fields (fdo.bmo.md extension)
+		if image.DeliveryMode != DeliveryModeInline {
+			b.currentSender.BeginFields.FSIMFields[-6] = image.DeliveryMode
+		}
+		if image.URL != "" {
+			b.currentSender.BeginFields.FSIMFields[-7] = image.URL
+		}
+		if len(image.TLSCA) > 0 {
+			b.currentSender.BeginFields.FSIMFields[-8] = image.TLSCA
+		}
+		if len(image.ExpectedHash) > 0 {
+			b.currentSender.BeginFields.FSIMFields[-9] = image.ExpectedHash
+		}
+		if len(image.MetaSigner) > 0 {
+			b.currentSender.BeginFields.FSIMFields[-10] = image.MetaSigner
+		}
+
+		// Legacy metadata support
 		if image.Metadata != nil {
-			b.currentSender.BeginFields.FSIMFields[-3] = image.Metadata
+			b.currentSender.BeginFields.Metadata = image.Metadata
 		}
 
 		// Set RequireAck if requested
@@ -231,6 +299,15 @@ func (b *BMOOwner) produceInfo(ctx context.Context, producer *serviceinfo.Produc
 			b.sendState = bmoStateIdle
 			return false, false, nil
 		}
+
+		// For URL modes, skip data chunks and go directly to image-end
+		image := &b.images[b.currentIndex]
+		if image.DeliveryMode == DeliveryModeURL || image.DeliveryMode == DeliveryModeMetaURL {
+			fmt.Printf("[BMOOwner] image-ack received for URL mode, skipping chunks, sending end\n")
+			b.sendState = bmoStateSendingEnd
+			return false, false, nil
+		}
+
 		fmt.Printf("[BMOOwner] image-ack received, proceeding to send chunks\n")
 		b.sendState = bmoStateSendingChunks
 		fallthrough

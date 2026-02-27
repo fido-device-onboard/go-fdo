@@ -108,6 +108,181 @@ Device → Owner: image-result [0, "Booting EFI app..."]
 [Firmware chainloads EFI app, FDO session ends]
 ```
 
+### Delivery Mode Fallback
+
+The NAK fallback mechanism applies to **delivery modes** just as it does to MIME types. Owners MAY offer the **same image** via different delivery modes, and devices accept the first supported option.
+
+#### Same Image, Multiple Delivery Methods
+
+- Devices **SHOULD support all delivery modes** (inline, url, meta-url)
+- Devices **MAY support only a subset** of delivery modes
+- Owners present options in **preference order**; device accepts first supported option
+
+#### Example: Owner Prefers Inline (Cached Image)
+
+If an Onboarding Service has an image cached locally, it may prefer inline delivery (faster, no external dependency). If the device doesn't support inline for large images, the owner falls back to URL:
+
+```text
+1. Owner → Device: image-begin {
+     -1: "application/x-raw-disk-image",
+     -6: 0,                              // inline
+     0: 524288000,                       // 500MB
+     3: true
+   }
+   Device → Owner: image-ack [false, 3, "Image too large for inline transfer"]
+
+2. Owner → Device: image-begin {
+     -1: "application/x-raw-disk-image",
+     -6: 1,                              // url (same image!)
+     -7: "https://images.example.com/rhel9.dd",
+     3: true
+   }
+   Device → Owner: image-ack [true]
+   ; Device downloads from URL
+```
+
+#### Example: Owner Prefers URL (Bandwidth Savings)
+
+Conversely, if the owner prefers URL delivery but the device (e.g., firmware without network stack) doesn't support it:
+
+```text
+1. Owner → Device: image-begin {
+     -1: "application/efi",
+     -6: 1,                              // url preferred
+     -7: "https://images.example.com/boot.efi",
+     3: true
+   }
+   Device → Owner: image-ack [false, 14, "URL delivery not supported"]
+
+2. Owner → Device: image-begin {
+     -1: "application/efi",
+     -6: 0,                              // inline fallback
+     3: true
+   }
+   Device → Owner: image-ack [true]
+   ; Owner sends image-data-* chunks
+```
+
+#### Combined MIME Type and Delivery Mode Fallback
+
+The full preference hierarchy can combine both MIME types and delivery modes:
+
+```text
+1. Try inline EFI (fastest, most compatible)
+   → NAK "EFI not supported"
+
+2. Try URL-referenced ISO (avoids large inline transfer)
+   → NAK "URL delivery not supported"
+
+3. Try inline ISO (fallback)
+   → ACK, transfer begins
+```
+
+### CDN and Cloud Scaling Use Cases
+
+#### Why URL Delivery for Scale-Out
+
+While inline delivery is optimal for local installations (avoiding over-the-top network traffic), URL-based delivery enables **cloud and CDN scale-out**:
+
+- **CDN Distribution**: Large images hosted on CDNs (Akamai, CloudFront, Azure CDN) can serve thousands of devices simultaneously without overloading the Onboarding Service
+- **Geographic Optimization**: CDNs route devices to nearest edge nodes, reducing latency
+- **Bandwidth Offload**: Onboarding Service only sends small `image-begin` messages; heavy lifting is done by CDN infrastructure
+- **Cost Efficiency**: CDN bandwidth is often cheaper than direct server egress at scale
+
+**Typical deployment pattern:**
+
+```text
+Owner (Onboarding Service)          CDN / Cloud Storage
+         |                                   |
+         | image-begin { url: CDN }          |
+         |---------------------------------->| Device
+         |                                   |
+         |                                   |<-- Device fetches from CDN
+         |                                   |
+         | image-result [0, "success"]       |
+         |<----------------------------------|
+```
+
+#### Runtime Network Accessibility Fallback
+
+**Critical concept**: Devices may **accept** a URL-based delivery mode but **fail at runtime** when attempting to fetch. This is a normal error case, not a protocol violation.
+
+**Common scenarios:**
+
+- Device is on an isolated network without public internet access
+- Firewall blocks outbound HTTPS to CDN domains
+- DNS resolution fails for external URLs
+- Network timeout due to congestion or routing issues
+
+**Protocol behavior:**
+
+When a device accepts URL delivery (`image-ack [true]`) but subsequently fails to fetch:
+
+1. Device attempts to download from URL after receiving `image-end`
+2. Download fails (timeout, DNS failure, connection refused, etc.)
+3. Device sends `image-result` with error code 9 (URL Fetch Failed)
+4. Owner MAY present an alternative delivery method (e.g., inline fallback)
+5. Process continues until device successfully receives image or all options exhausted
+
+**Example: CDN Preferred, Inline Fallback**
+
+```text
+; Owner prefers CDN for bandwidth efficiency
+Owner → Device: image-begin {
+  -1: "application/x-iso9660-image",
+  -6: 1,                              // url
+  -7: "https://cdn.example.com/rhel9.iso",
+  -9: h'abc123...',
+  3: true
+}
+Device → Owner: image-ack [true]      // Device accepts URL mode
+
+Owner → Device: image-end {}          // Signal to fetch
+
+; Device attempts download but fails (no internet access)
+Device → Owner: image-result [9, "URL fetch failed: connection timeout"]
+
+; Owner falls back to inline delivery (same image)
+Owner → Device: image-begin {
+  -1: "application/x-iso9660-image",
+  -6: 0,                              // inline fallback
+  3: true
+}
+Device → Owner: image-ack [true]
+
+; Owner sends image-data-* chunks directly
+Owner → Device: image-data-0..N
+Owner → Device: image-end { 2: h'abc123...' }
+
+Device → Owner: image-result [0, "Image received, booting"]
+```
+
+**Key points:**
+
+- **Error code 9** (URL Fetch Failed) after `image-ack [true]` indicates runtime failure, not capability rejection
+- **Owner SHOULD be prepared** to fall back to inline when URL fails
+- **Device MAY retry** URL fetch before reporting failure (implementation-defined)
+- **This is expected behavior** in mixed-network environments where some devices have internet access and others don't
+
+#### Deployment Recommendations
+
+**For large-scale deployments:**
+
+1. **Primary**: URL delivery via CDN (scales to thousands of devices)
+2. **Fallback**: Inline delivery for devices without internet access
+
+**For isolated/air-gapped networks:**
+
+1. **Primary**: Inline delivery (no external dependencies)
+2. **Alternative**: URL to internal image server (if available)
+
+**For mixed environments:**
+
+1. **Primary**: URL to CDN (optimistic - most devices have internet)
+2. **Fallback**: Inline (handles devices without internet access)
+
+This approach maximizes efficiency for the common case while gracefully handling edge cases.
+
 ## Key-Value Pairs
 
 ### Module Activation
@@ -166,12 +341,20 @@ Boot image transfers use the generic chunking strategy. `fdo.bmo` reserves the f
 | `-3` | name | tstr | Optional | Descriptive name for the image (informational) |
 | `-4` | version | tstr | Optional | Version string (informational) |
 | `-5` | description | tstr | Optional | Human-readable description (informational) |
+| `-6` | delivery_mode | uint | Optional | 0=inline (default), 1=url, 2=meta-url. See [Delivery Modes](#delivery-modes). |
+| `-7` | url | tstr | Conditional | URL to fetch image or meta-payload. Required when `delivery_mode` ≠ 0. |
+| `-8` | tls_ca | bstr | Optional | Single DER-encoded CA certificate for TLS validation of URL. |
+| `-9` | expected_hash | bstr | Optional | Expected hash of final image (algorithm specified in key `1`). |
+| `-10` | meta_signer | bstr | Optional | COSE_Key for meta-payload signature verification. If present, meta-payload MUST be COSE Sign1. |
 
 **Notes:**
 
 - Only `image_type` is required; all other fields are optional
 - `boot_args` is the most commonly used optional field - it passes kernel command line arguments (e.g., kickstart URLs, installer options)
 - `name`, `version`, and `description` are informational only - implementations may log them but are not required to act on them
+- `tls_ca` is a **single certificate** (root or intermediate CA), not a chain. This mirrors UEFI Secure Boot DB behavior where individual certificates are enrolled. Chain validation occurs at TLS handshake time using the provided CA as trust anchor.
+- When `delivery_mode` is 0 (inline) or omitted, the existing chunked transfer behavior applies
+- When `delivery_mode` is 1 or 2, no `image-data-*` chunks are sent; the device fetches from the URL after `image-end`
 
 ### ImageAck
 
@@ -325,6 +508,160 @@ Vendor-specific BIOS parameters use reverse-DNS notation:
 
 Unknown parameters MUST be rejected with an error response.
 
+## Delivery Modes
+
+The `delivery_mode` field (`-6`) controls how the boot image is delivered to the device. This enables flexible deployment strategies where owners can choose between inline transfer, direct URL download, or meta-payload indirection.
+
+### Mode 0: Inline (Default)
+
+When `delivery_mode` is 0 or omitted, the existing chunked transfer behavior applies:
+
+- Owner sends `image-begin` with metadata
+- Owner sends `image-data-0` through `image-data-N` chunks
+- Owner sends `image-end` with optional hash
+- Device verifies and boots the image
+
+This is the traditional BMO flow and remains the default for backward compatibility.
+
+### Mode 1: Direct URL Reference
+
+When `delivery_mode` is 1, the device fetches the image from a URL instead of receiving inline chunks:
+
+```text
+Owner → Device: image-begin {
+  -1: "application/x-raw-disk-image",  // MIME type of FINAL image
+  -6: 1,                                // delivery_mode = url
+  -7: "https://images.example.com/rhel9.dd",
+  -8: h'3082...',                       // optional: custom CA cert (DER)
+  -9: h'a1b2c3...',                     // optional: expected SHA-256 hash
+  1: "sha256",                          // hash algorithm (if -9 provided)
+  3: true                               // require_ack
+}
+Device → Owner: image-ack [true]
+
+; No image-data-* chunks sent!
+
+Owner → Device: image-end {}            // signals "go fetch it"
+Device → Owner: image-result [0, "Downloaded and verified"]
+```
+
+**Key Points:**
+
+- **MIME type (`-1`)** describes the **final image**, not the URL
+- **No new MIME types needed** - same types work for inline or URL delivery
+- **TLS CA (`-8`)** is optional - if omitted, device uses system trust store
+- **Hash (`-9`)** is optional - if provided, device MUST verify after download
+- **Device can still NAK** based on MIME type, size concerns, or policy
+
+### Mode 2: Meta-Payload Indirection
+
+When `delivery_mode` is 2, the device fetches a CBOR meta-payload from the URL, which then defines the actual image location. This enables **third-party delegation** of image selection.
+
+#### Design Rationale: Why Meta-Payloads?
+
+The purpose of meta-payload indirection is to **delegate image selection to a third party** (e.g., OS vendor, image repository). The owner specifies:
+
+- The vendor's signing key (optional)
+- The meta-payload URL
+
+The **vendor controls** which image version is current. This decouples fleet management from image versioning:
+
+- Owner doesn't need to update every device's configuration when a new OS version is released
+- Vendor can update the meta-payload to point to newer images
+- Devices always get the "current" image as determined by the vendor
+
+**Example**: Owner configures 10,000 devices with Red Hat's meta-URL and signing key. Red Hat updates the meta-payload when RHEL 9.4 releases. All devices automatically get the new version without owner intervention.
+
+#### Meta-Payload Structure (CBOR)
+
+```cddl
+MetaPayload = {
+  0: tstr,           ; mime_type - MIME type of actual image
+  1: tstr,           ; url - URL to fetch actual image
+  ? 2: bstr,         ; tls_ca - CA cert for image URL (DER)
+  ? 3: tstr,         ; hash_alg - hash algorithm
+  ? 4: bstr,         ; expected_hash - hash of actual image
+  ? 5: tstr,         ; boot_args - kernel arguments
+  ? 6: tstr,         ; name
+  ? 7: tstr,         ; version
+  ? 8: tstr          ; description
+}
+```
+
+#### Meta-Payload Signing (Optional COSE Sign1)
+
+Signing is **controlled by the presence of `-10` (meta_signer)** in `image-begin`:
+
+| `-10` Present? | Meta-Payload Format | Device Behavior |
+|----------------|---------------------|-----------------|
+| No | Raw CBOR `MetaPayload` | Parse directly, no signature check |
+| Yes | COSE Sign1 wrapping `MetaPayload` | Verify signature, then parse payload |
+
+**COSE Sign1 Structure** (when `-10` is present):
+
+```cddl
+COSE_Sign1 = [
+  protected: bstr,    ; { 1: -7 } = ES256 (or other alg)
+  unprotected: {},
+  payload: bstr,      ; CBOR-encoded MetaPayload
+  signature: bstr
+]
+```
+
+**Device behavior when `-10` is present:**
+
+1. Fetch meta-payload from URL
+2. Parse as COSE Sign1
+3. Verify signature using public key from `-10`
+4. Reject if signature invalid (error code 12)
+5. Extract and parse inner payload as `MetaPayload`
+6. Proceed to fetch actual image
+
+#### Protocol Flow (Meta-URL, Signed)
+
+```text
+Owner → Device: image-begin {
+  -1: "application/x-bmo-meta",         // indicates meta-payload
+  -6: 2,                                // delivery_mode = meta-url
+  -7: "https://vendor.example.com/fleet-image.cbor",
+  -10: h'a401...',                      // COSE_Key - signature required
+  3: true
+}
+Device → Owner: image-ack [true]
+
+Owner → Device: image-end {}
+
+; Device fetches COSE Sign1 meta-payload, verifies signature, extracts:
+; {
+;   0: "application/x-raw-disk-image",
+;   1: "https://images.vendor.com/rhel9-v2.dd.gz",
+;   4: h'deadbeef...'
+; }
+; Device then fetches actual image, verifies hash, boots
+
+Device → Owner: image-result [0, "Meta resolved, image downloaded, booting"]
+```
+
+#### Protocol Flow (Meta-URL, Unsigned)
+
+```text
+Owner → Device: image-begin {
+  -1: "application/x-bmo-meta",
+  -6: 2,
+  -7: "https://internal.example.com/image-config.cbor",
+  // No -10 = no signature verification
+  3: true
+}
+Device → Owner: image-ack [true]
+
+Owner → Device: image-end {}
+
+; Device fetches raw CBOR MetaPayload (no signature wrapper)
+; Parses and proceeds to fetch actual image
+
+Device → Owner: image-result [0, "Meta resolved, image downloaded, booting"]
+```
+
 ## Supported Image Types
 
 ### Boot Images
@@ -414,6 +751,12 @@ Device → Owner: fdo.bmo:image-ack [false, 7, "DB modification not supported"]
 | 6 | Secure Boot Violation | Image fails Secure Boot verification |
 | 7 | DB Modification Not Supported | Firmware cannot modify Secure Boot DB/DBX |
 | 8 | DB Modification Failed | DB/DBX enrollment failed (e.g., invalid cert, policy violation) |
+| 9 | URL Fetch Failed | Could not download from URL (network error, timeout, 404, etc.) |
+| 10 | TLS Validation Failed | TLS certificate validation failed for URL |
+| 11 | Hash Mismatch | Downloaded image hash doesn't match expected hash |
+| 12 | Meta Signature Invalid | COSE Sign1 signature verification failed for meta-payload |
+| 13 | Meta Parse Error | Meta-payload CBOR is malformed or missing required fields |
+| 14 | Delivery Mode Not Supported | Firmware does not support the requested delivery mode (url or meta-url) |
 
 ### BIOS Parameter Error Codes
 
@@ -578,24 +921,29 @@ Owner                           Device (Firmware)
 
 - Advertise `fdo.bmo:active = true` only if capable of booting received images
 - Validate image type before accepting data
-- Verify hash when provided in `image-end`
+- Verify hash when provided in `image-end` or `expected_hash` (`-9`)
 - Report errors with appropriate codes
 - Validate BIOS parameter names and values before applying
 - Return appropriate response codes for each BIOS parameter
+- NAK with error code 14 if `delivery_mode` is not supported
 
 **SHOULD**:
 
 - Support at least `application/efi` and `application/x-iso9660-image`
 - Support at least `secure-boot` and `bios-password` BIOS parameters
+- Support all delivery modes (inline, url, meta-url) when network stack is available
 - Validate Secure Boot signatures when Secure Boot is enabled
 - Verify Secure Boot enablement won't brick the device
 - Provide meaningful error messages
+- Verify COSE Sign1 signatures when `meta_signer` (`-10`) is provided
+- Use provided `tls_ca` (`-8`) for TLS validation when fetching from URLs
 
 **MAY**:
 
 - Support additional image types
 - Support additional BIOS parameters (boot-order, vendor-specific)
 - Provide boot progress indication
+- Support URL and meta-url delivery modes (firmware without network stack may only support inline)
 
 ### Owner (Server) Requirements
 
@@ -603,30 +951,35 @@ Owner                           Device (Firmware)
 
 - Only send boot images to clients advertising `fdo.bmo`
 - Specify valid image type in `image-begin`
-- Send data in appropriate chunk sizes for firmware memory constraints
+- Send data in appropriate chunk sizes for firmware memory constraints (inline mode)
 - Set `require_ack: true` for all image-begin messages to enable NAK fallback
 - Handle BIOS response codes appropriately (especially errors)
 - Enroll required certificates before enabling Secure Boot
+- Provide `url` (`-7`) when `delivery_mode` is 1 or 2
+- Send `image-end` (with no data chunks) to signal "go fetch" for URL modes
 
 **SHOULD**:
 
-- Provide hash for integrity verification
+- Provide hash for integrity verification (`expected_hash` for URL modes, `image-end` hash for inline)
 - Include descriptive metadata (name, version)
 - **Present multiple boot assets in preference order** (EFI → ISO → Raw disk)
 - **Implement NAK fallback** - if firmware rejects first asset, try next preferred option
+- **Implement delivery mode fallback** - if firmware rejects URL mode, fall back to inline
 - Set BIOS password as final configuration step
 - Log all BIOS configuration changes for audit
+- Present preferred delivery mode first (based on caching, bandwidth, latency considerations)
+- Be prepared to fall back to alternative delivery modes for the same image
 
-**Multi-Asset Strategy**:
+**Multi-Asset and Delivery Mode Strategy**:
 
 When offering multiple boot assets, servers SHOULD:
 
-1. **Start with most preferred format** (typically `application/efi`)
-2. **Use NAK feedback** to determine firmware capabilities
+1. **Start with most preferred format and delivery mode** (e.g., inline EFI if cached locally)
+2. **Use NAK feedback** to determine firmware capabilities (both MIME type and delivery mode)
 3. **Progress through preference hierarchy** until firmware accepts
 4. **Terminate after first successful transfer** (BMO phase ends)
 
-This ensures firmware receives the **best boot method it supports** while maintaining broad compatibility across diverse firmware implementations.
+This ensures firmware receives the **best boot method it supports** while maintaining broad compatibility across diverse firmware implementations. The same image MAY be offered via different delivery modes (e.g., inline first, then URL fallback) to accommodate varying device capabilities.
 
 ## Security Considerations
 
@@ -641,3 +994,45 @@ The image is delivered over the FDO TO2 encrypted channel from an authenticated 
 - Log image metadata for audit purposes
 - Verify image signatures when applicable
 - Reject images that fail integrity checks
+
+### URL Delivery Security
+
+When using URL-based delivery modes (1 or 2), additional security considerations apply:
+
+**TLS Validation:**
+
+- Devices MUST validate TLS certificates when fetching from HTTPS URLs
+- If `tls_ca` (`-8`) is provided, device SHOULD use it as the trust anchor
+- If `tls_ca` is not provided, device SHOULD use system trust store
+- Devices MUST reject connections with invalid or expired certificates (error code 10)
+
+**Hash Verification:**
+
+- When `expected_hash` (`-9`) is provided, device MUST verify the downloaded image matches
+- Hash verification provides end-to-end integrity even if TLS is compromised
+- Devices MUST reject images with hash mismatch (error code 11)
+
+**Meta-Payload Signing:**
+
+- When `meta_signer` (`-10`) is provided, device MUST verify the COSE Sign1 signature
+- This protects against compromised meta-payload URLs or man-in-the-middle attacks
+- The signing key is delivered over the authenticated FDO channel, establishing trust
+- Devices MUST reject meta-payloads with invalid signatures (error code 12)
+
+**Network Exposure:**
+
+- URL delivery exposes the device to external network traffic outside the FDO channel
+- Firmware SHOULD minimize attack surface by:
+  - Using HTTPS only (reject HTTP URLs)
+  - Validating URL format before fetching
+  - Implementing timeouts to prevent resource exhaustion
+  - Limiting redirect following
+
+**Third-Party Delegation Trust Model:**
+
+When using meta-url mode with third-party vendors:
+
+- The owner trusts the vendor by including their signing key (`-10`)
+- The vendor controls image selection but cannot modify the trust relationship
+- Devices verify the vendor's signature, ensuring image authenticity
+- This model enables fleet-wide updates without owner intervention while maintaining security

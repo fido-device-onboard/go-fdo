@@ -13,6 +13,7 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/sha512"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"database/sql"
@@ -20,11 +21,13 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"math"
 	"math/big"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -516,6 +519,62 @@ func (h *bmoAckHandler) AcceptImage(imageType, name string, size uint64, metadat
 	return false, 1, fmt.Sprintf("unsupported image type: %s", imageType)
 }
 
+// defaultURLFetcher implements fsim.URLFetcher for HTTP/HTTPS URL fetching.
+type defaultURLFetcher struct {
+	timeout time.Duration
+}
+
+func (f *defaultURLFetcher) Fetch(url string, tlsCA []byte) ([]byte, error) {
+	fmt.Printf("[fdo.bmo] Fetching URL: %s\n", url)
+
+	// Create HTTP client with optional custom CA
+	client := &http.Client{
+		Timeout: f.timeout,
+	}
+
+	if len(tlsCA) > 0 {
+		// Parse the CA certificate
+		cert, err := x509.ParseCertificate(tlsCA)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse CA certificate: %w", err)
+		}
+
+		// Create a certificate pool with the custom CA
+		pool := x509.NewCertPool()
+		pool.AddCert(cert)
+
+		// Create TLS config with custom CA
+		tlsConfig := &tls.Config{
+			RootCAs:    pool,
+			MinVersion: tls.VersionTLS12,
+		}
+
+		client.Transport = &http.Transport{
+			TLSClientConfig: tlsConfig,
+		}
+	}
+
+	// Make the request
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP request returned status %d", resp.StatusCode)
+	}
+
+	// Read the response body
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	fmt.Printf("[fdo.bmo] Downloaded %d bytes from URL\n", len(data))
+	return data, nil
+}
+
 // payloadAckHandler implements fsim.PayloadAckHandler to accept/reject payloads based on MIME type.
 type payloadAckHandler struct {
 	supportedTypes []string
@@ -692,6 +751,8 @@ func transferOwnership2(ctx context.Context, transport fdo.Transport, to1d *cose
 	// Using UnifiedHandler - the framework handles chunking transparently
 	bmoFSIM := &fsim.BMO{
 		UnifiedHandler: &bmoHandler{},
+		URLFetcher:     &defaultURLFetcher{timeout: 30 * time.Second},
+		URLTimeout:     30,
 	}
 	// Add AckHandler if supported types are specified (for NAK testing)
 	if bmoSupportedTypes != "" {

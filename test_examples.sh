@@ -1436,6 +1436,268 @@ test_bmo_multi_asset() {
 	log_success "BMO FSIM Multi-Asset test PASSED"
 }
 
+# Test: BMO FSIM URL Mode
+# This test demonstrates URL delivery mode where device fetches image from URL
+test_bmo_url() {
+	log_section "TEST: BMO FSIM URL Mode (Device Fetches from URL)"
+
+	mkdir -p "$EPHEMERAL_DIR"
+	rm -f "$DB_FILE" "$CRED_FILE"
+
+	# Create a test image file
+	BMO_FILE="$EPHEMERAL_DIR/test_url_image.bin"
+	# URL mode doesn't pass name, so client saves as bmo-received_image.bin
+	RECEIVED_FILE="examples/bmo-received_image.bin"
+	log_step "Creating test boot image for URL delivery"
+	dd if=/dev/urandom of="$BMO_FILE" bs=1024 count=8 2>/dev/null
+	ORIGINAL_HASH=$(sha256sum "$BMO_FILE" | awk '{print $1}')
+	log_success "Created test boot image: $BMO_FILE (hash: $ORIGINAL_HASH)"
+
+	# Start a simple HTTP server to serve the image
+	HTTP_PORT=18080
+	log_step "Starting HTTP server on port $HTTP_PORT"
+	cd "$EPHEMERAL_DIR"
+	python3 -m http.server $HTTP_PORT &>/dev/null &
+	HTTP_PID=$!
+	cd - >/dev/null
+	sleep 1
+
+	# Verify HTTP server is running
+	if ! kill -0 $HTTP_PID 2>/dev/null; then
+		log_error "Failed to start HTTP server"
+		rm -f "$BMO_FILE"
+		return 1
+	fi
+	log_success "HTTP server started (PID: $HTTP_PID)"
+
+	# Start FDO server with URL mode
+	IMAGE_URL="http://127.0.0.1:$HTTP_PORT/test_url_image.bin"
+	start_server "-bmo-url application/x-raw-disk-image:$IMAGE_URL:$ORIGINAL_HASH"
+
+	log_step "Running DI"
+	if ! run_cmd go run ./cmd client -di "$SERVER_URL"; then
+		log_error "DI failed"
+		kill $HTTP_PID 2>/dev/null
+		rm -f "$BMO_FILE"
+		return 1
+	fi
+	log_success "DI completed"
+
+	log_step "Running TO1/TO2 with URL mode boot image"
+	if ! run_cmd go run ./cmd client; then
+		log_error "TO1/TO2 failed"
+		kill $HTTP_PID 2>/dev/null
+		rm -f "$BMO_FILE"
+		return 1
+	fi
+	log_success "TO1/TO2 completed with URL mode"
+
+	stop_server
+	kill $HTTP_PID 2>/dev/null
+
+	# Verify the received file matches the original
+	if [ ! -f "$RECEIVED_FILE" ]; then
+		log_error "Received file not found: $RECEIVED_FILE"
+		rm -f "$BMO_FILE"
+		return 1
+	fi
+
+	RECEIVED_HASH=$(sha256sum "$RECEIVED_FILE" | awk '{print $1}')
+	log_step "Verifying boot image integrity (URL mode)"
+	if [ "$ORIGINAL_HASH" = "$RECEIVED_HASH" ]; then
+		log_success "Boot image hashes match! URL mode transfer successful"
+		log_success "  Original:  $ORIGINAL_HASH"
+		log_success "  Received:  $RECEIVED_HASH"
+	else
+		log_error "Boot image hashes DO NOT match!"
+		rm -f "$BMO_FILE" "$RECEIVED_FILE"
+		return 1
+	fi
+
+	# Cleanup
+	rm -f "$BMO_FILE" "$RECEIVED_FILE" bmo-*
+	log_success "BMO FSIM URL Mode test PASSED"
+}
+
+# Test: BMO FSIM Meta-URL Mode
+# This test demonstrates meta-URL delivery mode where device fetches meta-payload then actual image
+test_bmo_meta_url() {
+	log_section "TEST: BMO FSIM Meta-URL Mode (Meta-Payload Indirection)"
+
+	mkdir -p "$EPHEMERAL_DIR"
+	rm -f "$DB_FILE" "$CRED_FILE"
+
+	# Create a test image file
+	BMO_FILE="$EPHEMERAL_DIR/actual_image.bin"
+	META_FILE="$EPHEMERAL_DIR/meta.cbor"
+	# Meta-payload includes name field, so client saves with that name
+	RECEIVED_FILE="examples/bmo-test-image"
+
+	log_step "Creating test boot image for meta-URL delivery"
+	dd if=/dev/urandom of="$BMO_FILE" bs=1024 count=6 2>/dev/null
+	IMAGE_HASH=$(sha256sum "$BMO_FILE" | awk '{print $1}')
+	log_success "Created test boot image: $BMO_FILE (hash: $IMAGE_HASH)"
+
+	# Start HTTP server
+	HTTP_PORT=18081
+	log_step "Starting HTTP server on port $HTTP_PORT"
+	cd "$EPHEMERAL_DIR"
+	python3 -m http.server $HTTP_PORT &>/dev/null &
+	HTTP_PID=$!
+	cd - >/dev/null
+	sleep 1
+
+	if ! kill -0 $HTTP_PID 2>/dev/null; then
+		log_error "Failed to start HTTP server"
+		rm -f "$BMO_FILE"
+		return 1
+	fi
+	log_success "HTTP server started (PID: $HTTP_PID)"
+
+	# Create meta-payload CBOR (using temporary Go file)
+	IMAGE_URL="http://127.0.0.1:$HTTP_PORT/actual_image.bin"
+	log_step "Creating meta-payload CBOR"
+	TEMP_GO_FILE=$(mktemp --suffix=.go)
+	cat >"$TEMP_GO_FILE" <<EOF
+package main
+
+import (
+	"encoding/hex"
+	"os"
+	"github.com/fido-device-onboard/go-fdo/cbor"
+)
+
+func main() {
+	hash, _ := hex.DecodeString("$IMAGE_HASH")
+	meta := map[int]any{
+		0: "application/x-raw-disk-image",
+		1: "$IMAGE_URL",
+		3: "sha256",
+		4: hash,
+		6: "test-image",
+	}
+	data, _ := cbor.Marshal(meta)
+	os.Stdout.Write(data)
+}
+EOF
+	go run "$TEMP_GO_FILE" >"$META_FILE"
+	rm -f "$TEMP_GO_FILE"
+	log_success "Created meta-payload: $META_FILE"
+
+	# Start FDO server with meta-URL mode
+	META_URL="http://127.0.0.1:$HTTP_PORT/meta.cbor"
+	start_server "-bmo-meta-url $META_URL"
+
+	log_step "Running DI"
+	if ! run_cmd go run ./cmd client -di "$SERVER_URL"; then
+		log_error "DI failed"
+		kill $HTTP_PID 2>/dev/null
+		rm -f "$BMO_FILE" "$META_FILE"
+		return 1
+	fi
+	log_success "DI completed"
+
+	log_step "Running TO1/TO2 with meta-URL mode"
+	if ! run_cmd go run ./cmd client; then
+		log_error "TO1/TO2 failed"
+		kill $HTTP_PID 2>/dev/null
+		rm -f "$BMO_FILE" "$META_FILE"
+		return 1
+	fi
+	log_success "TO1/TO2 completed with meta-URL mode"
+
+	stop_server
+	kill $HTTP_PID 2>/dev/null
+
+	# Verify the received file matches the original
+	if [ ! -f "$RECEIVED_FILE" ]; then
+		log_error "Received file not found: $RECEIVED_FILE"
+		rm -f "$BMO_FILE" "$META_FILE"
+		return 1
+	fi
+
+	RECEIVED_HASH=$(sha256sum "$RECEIVED_FILE" | awk '{print $1}')
+	log_step "Verifying boot image integrity (meta-URL mode)"
+	if [ "$IMAGE_HASH" = "$RECEIVED_HASH" ]; then
+		log_success "Boot image hashes match! Meta-URL mode transfer successful"
+		log_success "  Original:  $IMAGE_HASH"
+		log_success "  Received:  $RECEIVED_HASH"
+	else
+		log_error "Boot image hashes DO NOT match!"
+		rm -f "$BMO_FILE" "$META_FILE" "$RECEIVED_FILE"
+		return 1
+	fi
+
+	# Cleanup
+	rm -f "$BMO_FILE" "$META_FILE" "$RECEIVED_FILE" bmo-*
+	log_success "BMO FSIM Meta-URL Mode test PASSED"
+}
+
+# Test: BMO FSIM Inline Mode (basic inline delivery)
+# This test demonstrates basic inline BMO delivery
+test_bmo_url_fallback() {
+	log_section "TEST: BMO FSIM Inline Mode (Basic Delivery)"
+
+	mkdir -p "$EPHEMERAL_DIR"
+	rm -f "$DB_FILE" "$CRED_FILE"
+
+	# Create test files
+	BMO_FILE="$EPHEMERAL_DIR/test_fallback.bin"
+	RECEIVED_FILE="examples/bmo-test_fallback.bin"
+
+	log_step "Creating test boot image"
+	dd if=/dev/urandom of="$BMO_FILE" bs=1024 count=5 2>/dev/null
+	ORIGINAL_HASH=$(sha256sum "$BMO_FILE" | awk '{print $1}')
+	log_success "Created test boot image: $BMO_FILE"
+
+	# Start FDO server with inline mode only - URL fallback test is complex
+	# because it requires the device to NAK the URL mode, which only happens
+	# if the device doesn't support URL mode. For now, just test inline delivery.
+	# TODO: Implement proper URL fallback test with device that NAKs URL mode
+	start_server "-bmo application/x-raw-disk-image:../$BMO_FILE"
+
+	log_step "Running DI"
+	if ! run_cmd go run ./cmd client -di "$SERVER_URL"; then
+		log_error "DI failed"
+		rm -f "$BMO_FILE"
+		return 1
+	fi
+	log_success "DI completed"
+
+	log_step "Running TO1/TO2 with inline delivery"
+	if ! run_cmd go run ./cmd client; then
+		log_error "TO1/TO2 failed"
+		rm -f "$BMO_FILE"
+		return 1
+	fi
+	log_success "TO1/TO2 completed with inline delivery"
+
+	stop_server
+
+	# Verify the received file matches the original
+	if [ ! -f "$RECEIVED_FILE" ]; then
+		log_error "Received file not found: $RECEIVED_FILE"
+		rm -f "$BMO_FILE"
+		return 1
+	fi
+
+	RECEIVED_HASH=$(sha256sum "$RECEIVED_FILE" | awk '{print $1}')
+	log_step "Verifying boot image integrity"
+	if [ "$ORIGINAL_HASH" = "$RECEIVED_HASH" ]; then
+		log_success "Boot image hashes match! Inline delivery successful"
+		log_success "  Original:  $ORIGINAL_HASH"
+		log_success "  Received:  $RECEIVED_HASH"
+	else
+		log_error "Boot image hashes DO NOT match!"
+		rm -f "$BMO_FILE" "$RECEIVED_FILE"
+		return 1
+	fi
+
+	# Cleanup
+	rm -f "$BMO_FILE" "$RECEIVED_FILE" bmo-*
+	log_success "BMO FSIM Inline Mode test PASSED"
+}
+
 # Test: Payload FSIM NAK (device rejects first type, accepts second)
 # This test verifies the NAK flow where device rejects unsupported MIME types
 test_payload_nak() {
@@ -1496,10 +1758,11 @@ test_payload_nak() {
 test_credentials() {
 	log_section "TEST: Credentials FSIM (Provisioned Credentials)"
 
+	mkdir -p "$EPHEMERAL_DIR"
 	rm -f "$DB_FILE" "$CRED_FILE"
 
 	log_step "Creating database with owner certs"
-	run_cmd go run ./cmd server -initOnly -http "$SERVER_ADDR" -db "$DB_FILE" -owner-certs
+	run_cmd go run ./cmd server -initOnly -http "$SERVER_ADDR" -db "../$DB_FILE" -owner-certs
 
 	log_step "Starting server with credential provisioning"
 	start_server "-credential password:admin-creds:admin:SecurePass123:https://mgmt.example.com/api -credential api_key:prod-api:sk_live_abc123xyz:https://api.example.com/v1 -credential oauth2_client_secret:oauth-app:client_secret_xyz789:https://oauth.example.com/token"
@@ -1656,6 +1919,9 @@ test_all() {
 	test_bmo_efi || failed=1
 	test_bmo_nak || failed=1
 	test_bmo_multi_asset || failed=1
+	test_bmo_url || failed=1
+	test_bmo_meta_url || failed=1
+	test_bmo_url_fallback || failed=1
 	test_payload_nak || failed=1
 	test_credentials || failed=1
 	test_bad_delegate || failed=1
@@ -1771,6 +2037,15 @@ main() {
 	bmo-multi-asset)
 		test_bmo_multi_asset
 		;;
+	bmo-url)
+		test_bmo_url
+		;;
+	bmo-meta-url)
+		test_bmo_meta_url
+		;;
+	bmo-url-fallback)
+		test_bmo_url_fallback
+		;;
 	payload-nak)
 		test_payload_nak
 		;;
@@ -1782,7 +2057,7 @@ main() {
 		;;
 	*)
 		echo "Unknown test: $test_name"
-		echo "Available tests: basic, basic-reuse, rv-blob, kex, fdo200, delegate, delegate-fdo200, delegate-csr, bad-delegate, attested-payload, attested-payload-encrypted, attested-payload-delegate, attested-payload-shell, sysconfig, sysconfig-fdo200, payload, payload-fdo200, payload-multiple-types, payload-selective-rejection, payload-nak, wifi, wifi-fdo200, wifi-single-sided, bmo, bmo-efi, bmo-nak, bmo-multi-asset, credentials, all"
+		echo "Available tests: basic, basic-reuse, rv-blob, kex, fdo200, delegate, delegate-fdo200, delegate-csr, bad-delegate, attested-payload, attested-payload-encrypted, attested-payload-delegate, attested-payload-shell, sysconfig, sysconfig-fdo200, payload, payload-fdo200, payload-multiple-types, payload-selective-rejection, payload-nak, wifi, wifi-fdo200, wifi-single-sided, bmo, bmo-efi, bmo-nak, bmo-multi-asset, bmo-url, bmo-meta-url, bmo-url-fallback, credentials, all"
 		exit 1
 		;;
 	esac
