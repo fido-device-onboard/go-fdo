@@ -134,11 +134,15 @@ func decodeBase58BTC(s string) ([]byte, error) {
 	result := new(big.Int)
 	base := big.NewInt(58)
 	for _, c := range s {
-		if c > 255 || alphabet[c] == -1 {
+		if c > 255 {
+			return nil, fmt.Errorf("invalid base58 character: %c", c)
+		}
+		idx := alphabet[c]
+		if idx == -1 {
 			return nil, fmt.Errorf("invalid base58 character: %c", c)
 		}
 		result.Mul(result, base)
-		result.Add(result, big.NewInt(int64(alphabet[c])))
+		result.Add(result, big.NewInt(int64(idx)))
 	}
 
 	// Convert to bytes
