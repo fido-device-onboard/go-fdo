@@ -48,7 +48,7 @@ func (v *CoseSign1Verifier) Verify(signedPayload []byte, signerKey []byte) ([]by
 	}
 
 	// Verify the signature (no external AAD for meta-payloads)
-	valid, err := sign1Tag.Sign1.Verify(pubKey, nil, nil)
+	valid, err := sign1Tag.Verify(pubKey, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("signature verification error: %w", err)
 	}
@@ -57,11 +57,11 @@ func (v *CoseSign1Verifier) Verify(signedPayload []byte, signerKey []byte) ([]by
 	}
 
 	// Extract and return the inner payload
-	if sign1Tag.Sign1.Payload == nil {
+	if sign1Tag.Payload == nil {
 		return nil, fmt.Errorf("COSE_Sign1 has no payload")
 	}
 
-	return sign1Tag.Sign1.Payload.Val, nil
+	return sign1Tag.Payload.Val, nil
 }
 
 // NewCoseSign1Verifier creates a new CoseSign1Verifier instance.
