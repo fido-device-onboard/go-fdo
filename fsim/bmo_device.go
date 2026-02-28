@@ -124,7 +124,8 @@ type BMO struct {
 	URLFetcher URLFetcher
 
 	// MetaPayloadVerifier is used to verify COSE Sign1 signatures on meta-payloads (Mode 2).
-	// If nil and meta_signer is present, meta-payload verification will fail with error code 12.
+	// If nil, the default CoseSign1Verifier is used automatically.
+	// Set explicitly only if you need custom verification logic.
 	MetaPayloadVerifier MetaPayloadVerifier
 
 	// SupportedDeliveryModes specifies which delivery modes the device supports.
@@ -159,7 +160,14 @@ var _ serviceinfo.DeviceModule = (*BMO)(nil)
 
 // Transition implements serviceinfo.DeviceModule.
 func (b *BMO) Transition(active bool) error {
-	if !active {
+	if active {
+		// Auto-initialize MetaPayloadVerifier with the default COSE Sign1
+		// verifier if none was explicitly provided. This makes signed
+		// meta-payload verification transparent to the application.
+		if b.MetaPayloadVerifier == nil {
+			b.MetaPayloadVerifier = NewCoseSign1Verifier()
+		}
+	} else {
 		b.reset()
 	}
 	return nil
