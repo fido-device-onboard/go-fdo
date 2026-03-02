@@ -559,18 +559,72 @@ When `delivery_mode` is 2, the device fetches a CBOR meta-payload from the URL, 
 
 #### Design Rationale: Why Meta-Payloads?
 
-The purpose of meta-payload indirection is to **delegate image selection to a third party** (e.g., OS vendor, image repository). The owner specifies:
+Meta-payload indirection serves two key purposes:
 
-- The vendor's signing key (optional)
+1. **Delegate image selection to a third party** (e.g., OS vendor, image repository)
+2. **Provide cryptographic integrity for unsigned image formats** (e.g., raw disk images, ISOs)
+
+The owner specifies:
+
 - The meta-payload URL
+- The signing key for verification (optional but recommended)
 
-The **vendor controls** which image version is current. This decouples fleet management from image versioning:
+The **entity controlling the meta-payload** determines which image version devices receive. This decouples fleet management from image versioning and provides a single point of control for updates.
+
+#### Use Case 1: Vendor-Managed Images
+
+An OS vendor (e.g., Red Hat, Canonical, Microsoft) hosts the meta-payload and controls image selection:
 
 - Owner doesn't need to update every device's configuration when a new OS version is released
 - Vendor can update the meta-payload to point to newer images
 - Devices always get the "current" image as determined by the vendor
 
 **Example**: Owner configures 10,000 devices with Red Hat's meta-URL and signing key. Red Hat updates the meta-payload when RHEL 9.4 releases. All devices automatically get the new version without owner intervention.
+
+#### Use Case 2: Fleet Operator-Managed Images
+
+An individual end-user or fleet operator hosts their own meta-payload to control image versions across their fleet:
+
+**Example**: A data center operator manages 500 servers running a custom Linux image:
+
+1. **Initial deployment**: Operator creates a meta-payload pointing to `image-v1.dd` with its SHA-256 hash, signs it with their private key, and hosts it at `https://images.mycompany.com/datacenter/meta.cbor`
+2. **Fleet configuration**: All devices are configured with the meta-URL and the operator's public signing key
+3. **Upgrade to v2**: When ready to upgrade, the operator:
+   - Uploads `image-v2.dd` to their image server
+   - Generates a new meta-payload with the v2 URL and hash
+   - Signs and replaces the meta-payload at the same URL
+4. **Automatic rollout**: All devices onboarding after the update automatically receive v2
+
+This provides a **single point of control** for fleet-wide image updates without modifying device configurations or Onboarding Service settings.
+
+#### Use Case 3: Signing Unsigned Image Formats
+
+Many boot image formats—such as raw disk images (`dd`), ISO images, and legacy BIOS images—have **no well-defined mechanism for cryptographic signing**. The meta-payload solves this problem by providing an **external signature envelope**:
+
+1. **Hash as signature proxy**: The meta-payload includes the expected hash of the image. Since the meta-payload itself is signed (COSE Sign1), the hash is cryptographically bound to the signer's key.
+2. **Verification chain**: Device verifies meta-payload signature → extracts trusted hash → downloads image → verifies image hash matches. This effectively "signs" an image that cannot be signed internally.
+3. **Easy updates**: When the image is updated (breaking the old hash), the operator simply generates a new signed meta-payload with the new hash. No changes to the image format or device configuration required.
+
+**Example**: A raw disk image (`rhel9.dd`) cannot be signed directly. The operator:
+
+1. Computes `sha256sum rhel9.dd` → `a1b2c3...`
+2. Creates a meta-payload with `url: https://images.example.com/rhel9.dd` and `expected_hash: a1b2c3...`
+3. Signs the meta-payload with their private key
+4. Devices verify the signature, then verify the downloaded image matches the trusted hash
+
+This provides **end-to-end integrity** for image formats that lack native signing support.
+
+#### Meta-Payload Construction
+
+Meta-payloads are constructed using a tool (TBD) that:
+
+1. Takes the image URL, MIME type, and optional metadata as input
+2. Computes the image hash (if integrity verification is desired)
+3. Encodes the meta-payload as CBOR
+4. Optionally wraps the payload in a COSE Sign1 structure using the operator's signing key
+5. Outputs the final meta-payload for hosting at the configured URL
+
+The meta-payload URL configured in devices may also reference the expected signing key, ensuring devices only accept meta-payloads signed by the authorized party.
 
 #### Meta-Payload Structure (CBOR)
 
