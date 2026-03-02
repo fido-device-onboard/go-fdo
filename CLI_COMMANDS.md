@@ -4,12 +4,13 @@ This document provides comprehensive documentation for all FDO (FIDO Device Onbo
 
 ## Overview
 
-The FDO CLI provides four main commands:
+The FDO CLI provides five main commands:
 
 - `client` - Device-side operations (DI, TO1, TO2, voucher management)
 - `server` - Owner-side operations (DI server, TO2 server, rendezvous)
 - `delegate` - Delegate certificate management
 - `attestpayload` - Attested payload creation and verification
+- `meta` - BMO meta-payload creation, signing, and verification
 
 ## Client Commands
 
@@ -292,6 +293,15 @@ go run ./cmd server -payload application/json:config.json -payload application/o
 # BMO FSIM - Boot image management for device updates
 go run ./cmd server -bmo application/x-iso9660-image:boot.iso
 
+# BMO FSIM with Meta-URL delivery (unsigned meta-payload served via HTTP)
+go run ./cmd server -bmo-meta-url http://cdn.example.com/meta.cbor
+
+# BMO FSIM with Meta-URL delivery (signed meta-payload, PEM signer key)
+go run ./cmd server -bmo-meta-url "http://cdn.example.com/meta-signed.cbor:signer-key.pem"
+
+# BMO FSIM with Meta-URL delivery (signed meta-payload, raw COSE_Key file)
+go run ./cmd server -bmo-meta-url "http://cdn.example.com/meta-signed.cbor:signer.cbor"
+
 # WiFi Configuration FSIM - Configure wireless network settings
 go run ./cmd server -wifi-config wifi-config.json
 
@@ -535,6 +545,235 @@ go run ./cmd attestpayload -db fdo.db -voucher voucher.pem -payload "Config v2" 
 go run ./cmd attestpayload -db fdo.db -db-pass "password" -voucher voucher.pem -payload "Data"
 ```
 
+## Meta Commands (BMO Meta-Payload Tooling)
+
+### Overview
+
+The `meta` command provides tools for creating, signing, and verifying BMO (Bare Metal Onboarding) meta-payloads. Meta-payloads enable **meta-URL delivery mode** (mode 2) where the device fetches a CBOR descriptor from a URL, which then points to the actual boot image. This decouples image versioning from fleet management — an OS vendor can update the meta-payload to point to a new image version without requiring owner reconfiguration.
+
+See [fdo.bmo.md](fdo.bmo.md#mode-2-meta-payload-indirection) for the full specification of meta-URL delivery.
+
+### Basic Usage
+
+```bash
+go run ./cmd meta <subcommand> [flags]
+go run ./cmd meta help
+```
+
+### Subcommands
+
+| Subcommand | Purpose |
+|------------|---------|
+| `create` | Create an unsigned meta-payload CBOR file |
+| `sign` | Sign an existing meta-payload with a private key |
+| `verify` | Verify a signed meta-payload and optionally print contents |
+| `create-signed` | Create and sign a meta-payload in one step |
+| `export-pubkey` | Export a private key's public key as COSE_Key CBOR |
+
+### Create Unsigned Meta-Payload
+
+**Purpose:** Build a CBOR meta-payload file that describes where to fetch a boot image, its MIME type, hash, and optional metadata. The resulting file can be served over HTTP for devices using meta-URL delivery mode.
+
+```bash
+# Minimal: MIME type + URL + output
+go run ./cmd meta create \
+  -mime "application/x-raw-disk-image" \
+  -url "http://cdn.example.com/rhel9.dd" \
+  -out meta.cbor
+
+# With hash verification (recommended for production)
+go run ./cmd meta create \
+  -mime "application/x-raw-disk-image" \
+  -url "http://cdn.example.com/rhel9.dd" \
+  -hash-file /path/to/rhel9.dd \
+  -name "rhel9-boot" \
+  -version "9.3" \
+  -description "RHEL 9.3 bare-metal installer" \
+  -boot-args "inst.ks=http://ks.example.com/ks.cfg quiet" \
+  -out meta.cbor
+```
+
+**Flags:**
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `-mime` | Yes | MIME type of the actual boot image |
+| `-url` | Yes | URL where the actual image can be fetched |
+| `-out` | Yes | Output file path for the CBOR meta-payload |
+| `-hash-file` | No | Path to the actual image file (computes SHA-256 hash automatically) |
+| `-name` | No | Descriptive name for the image |
+| `-version` | No | Version string |
+| `-description` | No | Human-readable description |
+| `-boot-args` | No | Kernel/boot arguments to pass when booting |
+
+**Output:** Writes a CBOR-encoded `MetaPayload` struct to the output file. Prints the computed SHA-256 hash to stderr if `-hash-file` is provided.
+
+### Sign Meta-Payload
+
+**Purpose:** Wrap an existing meta-payload CBOR file in a COSE Sign1 envelope using an ECDSA private key. The signed meta-payload can be verified by devices that have the corresponding public key.
+
+```bash
+go run ./cmd meta sign \
+  -in meta.cbor \
+  -key signer-key.pem \
+  -out meta-signed.cbor
+```
+
+**Flags:**
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `-in` | Yes | Input meta-payload CBOR file (unsigned) |
+| `-key` | Yes | PEM private key file for signing (ECDSA P-256 or P-384) |
+| `-out` | Yes | Output file path for the signed meta-payload |
+
+**Key format:** The private key must be PEM-encoded ECDSA. Supported PEM block types:
+
+- `EC PRIVATE KEY` (SEC 1 / OpenSSL format)
+- `PRIVATE KEY` (PKCS#8 format)
+
+### Verify Signed Meta-Payload
+
+**Purpose:** Verify the COSE Sign1 signature on a signed meta-payload using a public key. Optionally print the inner meta-payload contents.
+
+```bash
+# Verify only
+go run ./cmd meta verify \
+  -in meta-signed.cbor \
+  -key signer-pub.pem
+
+# Verify and print contents
+go run ./cmd meta verify \
+  -in meta-signed.cbor \
+  -key signer-pub.pem \
+  -print
+```
+
+**Flags:**
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `-in` | Yes | Signed meta-payload file to verify |
+| `-key` | Yes | PEM public key file for verification |
+| `-print` | No | Print meta-payload contents after successful verification |
+
+**Key format:** The public key can be provided as:
+
+- `PUBLIC KEY` PEM (PKIX format)
+- `EC PRIVATE KEY` or `PRIVATE KEY` PEM (public key is extracted automatically)
+
+**Output with `-print`:**
+
+```text
+Signature verified OK
+  MIME Type:  application/x-raw-disk-image
+  URL:        http://cdn.example.com/rhel9.dd
+  Name:       rhel9-boot
+  Hash Alg:   sha256
+  Hash:       a1b2c3d4e5f6...
+  Boot Args:  inst.ks=http://ks.example.com/ks.cfg quiet
+  Version:    9.3
+  Desc:       RHEL 9.3 bare-metal installer
+```
+
+### Create and Sign in One Step
+
+**Purpose:** Convenience command that creates a meta-payload and signs it in a single operation. Equivalent to running `create` followed by `sign`.
+
+```bash
+go run ./cmd meta create-signed \
+  -mime "application/x-raw-disk-image" \
+  -url "http://cdn.example.com/rhel9.dd" \
+  -hash-file /path/to/rhel9.dd \
+  -name "rhel9-boot" \
+  -key signer-key.pem \
+  -out meta-signed.cbor
+```
+
+**Flags:** Combines all flags from `create` plus `-key` from `sign`.
+
+### Export Public Key as COSE_Key
+
+**Purpose:** Extract the public key from a PEM private key file and export it as a COSE_Key CBOR file. This file is used by the server's `-bmo-meta-url` flag to tell devices which key to use for signature verification.
+
+```bash
+go run ./cmd meta export-pubkey \
+  -key signer-key.pem \
+  -out signer-pubkey.cbor
+```
+
+**Flags:**
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `-key` | Yes | PEM private key file |
+| `-out` | Yes | Output COSE_Key CBOR file |
+
+**Output:** Prints the COSE_Key file path, size, and first 8 bytes of its SHA-256 fingerprint to stderr.
+
+### End-to-End Example: Signed Meta-URL Workflow
+
+This example shows the complete workflow for setting up signed meta-URL delivery:
+
+```bash
+# 1. Generate an ECDSA signing key
+openssl ecparam -name prime256v1 -genkey -noout -out signer-key.pem
+
+# 2. Create and sign the meta-payload
+go run ./cmd meta create-signed \
+  -mime "application/x-raw-disk-image" \
+  -url "http://images.example.com/rhel9.dd" \
+  -hash-file ./rhel9.dd \
+  -name "rhel9-boot" \
+  -key signer-key.pem \
+  -out meta-signed.cbor
+
+# 3. Export public key for the server
+go run ./cmd meta export-pubkey \
+  -key signer-key.pem \
+  -out signer-pubkey.cbor
+
+# 4. Host the signed meta-payload on a web server
+cp meta-signed.cbor /var/www/html/
+
+# 5. Start the FDO server with signed meta-URL
+go run ./cmd server \
+  -http "127.0.0.1:9999" \
+  -db fdo.db \
+  -bmo-meta-url "http://images.example.com/meta-signed.cbor:signer-pubkey.cbor"
+
+# 6. Alternatively, use the PEM key directly (auto-converts to COSE_Key)
+go run ./cmd server \
+  -http "127.0.0.1:9999" \
+  -db fdo.db \
+  -bmo-meta-url "http://images.example.com/meta-signed.cbor:signer-key.pem"
+```
+
+**What happens at onboarding:**
+
+1. Server sends `image-begin` with `delivery_mode=2` (meta-url), the meta-payload URL, and the signer's COSE_Key
+2. Device fetches the meta-payload from the URL
+3. Device verifies the COSE Sign1 signature using the provided public key
+4. Device extracts the inner `MetaPayload` (image URL, MIME type, hash, etc.)
+5. Device fetches the actual boot image from the URL in the meta-payload
+6. Device verifies the image hash and boots
+
+### Server Flag: `-bmo-meta-url`
+
+The `-bmo-meta-url` flag configures the server to use meta-URL delivery mode (mode 2) for BMO. It accepts two formats:
+
+| Format | Description |
+|--------|-------------|
+| `URL` | Unsigned meta-payload. Device fetches and parses raw CBOR. |
+| `URL:KEY_FILE` | Signed meta-payload. Device verifies COSE Sign1 signature using the key. |
+
+**Key file formats for signed mode:**
+
+- **PEM file** (`.pem` extension): Automatically parsed and converted to COSE_Key CBOR at server startup. Supports `PUBLIC KEY`, `EC PRIVATE KEY`, or `PRIVATE KEY` PEM blocks.
+- **COSE_Key CBOR file** (any other extension): Used directly as the raw COSE_Key bytes sent to the device.
+
+**Real-world context:** The `-bmo-meta-url` flag enables delegation of image management to a third party (e.g., OS vendor). The vendor publishes a signed meta-payload at a stable URL, and the owner configures devices to fetch from it. When the vendor releases a new image, they update the meta-payload — all devices automatically get the new version without owner intervention.
+
 ## Global Options
 
 ### Debug Mode
@@ -560,6 +799,7 @@ go run ./cmd client --help
 go run ./cmd server --help
 go run ./cmd delegate --help
 go run ./cmd attestpayload --help
+go run ./cmd meta help
 ```
 
 ## Troubleshooting

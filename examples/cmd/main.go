@@ -29,7 +29,7 @@ func init() {
 func usage() {
 	_, _ = fmt.Fprintf(os.Stderr, `
 Usage:
-  fdo [global_options] [client|server|delegate|attestpayload] [--] [options]
+  fdo [global_options] [client|server|delegate|attestpayload|meta] [--] [options]
 
 Global options:
 %s
@@ -44,6 +44,7 @@ Attested Payload options:
 
 "delegate help" for more delegate commands
 "attestpayload help" for attested payload commands
+"meta help" for meta-payload commands
 
 Key types:
   - RSA2048RESTR
@@ -135,6 +136,11 @@ func main() {
 	case "attestpayload", "ap":
 		if err := attestPayload(args); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "attestpayload error: %v\n", err)
+			os.Exit(2)
+		}
+	case "meta", "m":
+		if err := metaPayload(args); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "meta error: %v\n", err)
 			os.Exit(2)
 		}
 	default:

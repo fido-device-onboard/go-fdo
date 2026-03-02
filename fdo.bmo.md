@@ -1036,3 +1036,51 @@ When using meta-url mode with third-party vendors:
 - The vendor controls image selection but cannot modify the trust relationship
 - Devices verify the vendor's signature, ensuring image authenticity
 - This model enables fleet-wide updates without owner intervention while maintaining security
+
+## Tooling
+
+### CLI: `fdo meta`
+
+The `fdo meta` CLI subcommand provides tools for creating, signing, and verifying meta-payloads. See [CLI_COMMANDS.md](CLI_COMMANDS.md#meta-commands-bmo-meta-payload-tooling) for full documentation.
+
+```bash
+fdo meta create         # Create unsigned meta-payload CBOR
+fdo meta sign           # Sign with ECDSA private key (COSE Sign1)
+fdo meta verify         # Verify signature + optionally print contents
+fdo meta create-signed  # Create + sign in one step
+fdo meta export-pubkey  # Export public key as COSE_Key CBOR
+```
+
+### Server Flag: `-bmo-meta-url`
+
+Configures the example server to use meta-URL delivery mode:
+
+```bash
+# Unsigned
+fdo server -bmo-meta-url http://cdn.example.com/meta.cbor
+
+# Signed (PEM key auto-converted to COSE_Key)
+fdo server -bmo-meta-url "http://cdn.example.com/meta-signed.cbor:signer-key.pem"
+```
+
+### Library API: `fsim` Package
+
+The `fsim` package provides the building blocks used by the CLI:
+
+| Function | Description |
+|----------|-------------|
+| `CreateMetaPayload()` | Build CBOR `MetaPayload` with functional options |
+| `SignMetaPayload()` | Wrap CBOR in COSE Sign1 envelope |
+| `MarshalSignerPublicKey()` | Convert `crypto.PublicKey` → COSE_Key CBOR |
+| `ComputeSHA256()` | Compute SHA-256 hash of data |
+| `CoseSign1Verifier.Verify()` | Verify COSE Sign1 signature, return inner payload |
+
+**Functional options for `CreateMetaPayload()`:** `WithBootArgs()`, `WithVersion()`, `WithDescription()`, `WithTLSCA()`.
+
+### Integration Tests
+
+| Test | Command | Description |
+|------|---------|-------------|
+| `bmo-meta-url` | `./test_examples.sh bmo-meta-url` | Unsigned meta-payload via CLI + HTTP server |
+| `bmo-meta-signed` | `./test_examples.sh bmo-meta-signed` | Signed meta-payload + tampered-signature negative test |
+| Scenario 8 | `bash tests/supertest/scenario-8-bmo-meta-url.sh` | Full supertest: inline + unsigned + signed + negative |
