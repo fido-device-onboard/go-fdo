@@ -497,9 +497,7 @@ func (b *BMO) onEndUnified(ctx context.Context) func(chunking.EndMessage) error 
 			var metaPayloadData []byte
 			if len(metaSignerKey) > 0 {
 				if b.MetaPayloadVerifier == nil {
-					b.resultStatus = 2
-					b.resultMsg = "Meta-payload signature verification not supported"
-					return &bmoURLError{code: BMOErrorMetaSignatureInvalid, message: b.resultMsg}
+					b.MetaPayloadVerifier = &CoseSign1Verifier{}
 				}
 				metaPayloadData, err = b.MetaPayloadVerifier.Verify(metaData, metaSignerKey)
 				if err != nil {

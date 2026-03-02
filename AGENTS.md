@@ -91,6 +91,8 @@ Run via `./test_examples.sh` with specific test scenarios:
 | `payload` | File payload transfer FSIM |
 | `wifi` | WiFi configuration FSIM |
 | `bmo` | Bare Metal Onboarding FSIM |
+| `bmo-meta-url` | BMO meta-URL delivery (unsigned meta-payload via CLI) |
+| `bmo-meta-signed` | BMO signed meta-payload + tampered-signature negative test |
 | `all` | Run all tests (default) |
 
 ### Running Tests

@@ -1554,34 +1554,20 @@ test_bmo_meta_url() {
 	fi
 	log_success "HTTP server started (PID: $HTTP_PID)"
 
-	# Create meta-payload CBOR (using temporary Go file)
+	# Create meta-payload CBOR using fdo meta CLI
 	IMAGE_URL="http://127.0.0.1:$HTTP_PORT/actual_image.bin"
-	log_step "Creating meta-payload CBOR"
-	TEMP_GO_FILE=$(mktemp --suffix=.go)
-	cat >"$TEMP_GO_FILE" <<EOF
-package main
-
-import (
-	"encoding/hex"
-	"os"
-	"github.com/fido-device-onboard/go-fdo/cbor"
-)
-
-func main() {
-	hash, _ := hex.DecodeString("$IMAGE_HASH")
-	meta := map[int]any{
-		0: "application/x-raw-disk-image",
-		1: "$IMAGE_URL",
-		3: "sha256",
-		4: hash,
-		6: "test-image",
-	}
-	data, _ := cbor.Marshal(meta)
-	os.Stdout.Write(data)
-}
-EOF
-	go run "$TEMP_GO_FILE" >"$META_FILE"
-	rm -f "$TEMP_GO_FILE"
+	log_step "Creating meta-payload CBOR using 'fdo meta create'"
+	if ! (cd examples && go run ./cmd meta create \
+		-mime "application/x-raw-disk-image" \
+		-url "$IMAGE_URL" \
+		-hash-file "../$BMO_FILE" \
+		-name "test-image" \
+		-out "../$META_FILE"); then
+		log_error "Failed to create meta-payload"
+		kill $HTTP_PID 2>/dev/null
+		rm -f "$BMO_FILE"
+		return 1
+	fi
 	log_success "Created meta-payload: $META_FILE"
 
 	# Start FDO server with meta-URL mode
@@ -1631,6 +1617,185 @@ EOF
 	# Cleanup
 	rm -f "$BMO_FILE" "$META_FILE" "$RECEIVED_FILE" bmo-*
 	log_success "BMO FSIM Meta-URL Mode test PASSED"
+}
+
+# Test: BMO FSIM Meta-URL Signed Mode
+# This test demonstrates signed meta-URL delivery with COSE Sign1 signatures
+# and includes a negative test for tampered signatures.
+test_bmo_meta_signed() {
+	log_section "TEST: BMO FSIM Meta-URL Signed Mode (COSE Sign1)"
+
+	mkdir -p "$EPHEMERAL_DIR"
+	rm -f "$DB_FILE" "$CRED_FILE"
+
+	BMO_FILE="$EPHEMERAL_DIR/actual_image_signed.bin"
+	META_SIGNED_FILE="$EPHEMERAL_DIR/meta-signed.cbor"
+	SIGNER_KEY_FILE="$EPHEMERAL_DIR/meta-signer.pem"
+	COSE_KEY_FILE="$EPHEMERAL_DIR/signer.cbor"
+	RECEIVED_FILE="examples/bmo-signed-image"
+
+	# Generate an ECDSA P-256 signing key
+	log_step "Generating ECDSA P-256 signing key"
+	openssl ecparam -name prime256v1 -genkey -noout -out "$SIGNER_KEY_FILE" 2>/dev/null
+	log_success "Generated signing key: $SIGNER_KEY_FILE"
+
+	# Create a test image
+	log_step "Creating test boot image for signed meta-URL delivery"
+	dd if=/dev/urandom of="$BMO_FILE" bs=1024 count=8 2>/dev/null
+	IMAGE_HASH=$(sha256sum "$BMO_FILE" | awk '{print $1}')
+	log_success "Created test boot image: $BMO_FILE (hash: $IMAGE_HASH)"
+
+	# Start HTTP server
+	HTTP_PORT=18081
+	log_step "Starting HTTP server on port $HTTP_PORT"
+	cd "$EPHEMERAL_DIR"
+	python3 -m http.server $HTTP_PORT &>/dev/null &
+	HTTP_PID=$!
+	cd - >/dev/null
+	sleep 1
+
+	if ! kill -0 $HTTP_PID 2>/dev/null; then
+		log_error "Failed to start HTTP server"
+		return 1
+	fi
+	log_success "HTTP server started (PID: $HTTP_PID)"
+
+	# Create signed meta-payload using fdo meta CLI
+	IMAGE_URL="http://127.0.0.1:$HTTP_PORT/actual_image_signed.bin"
+	log_step "Creating signed meta-payload using 'fdo meta create-signed'"
+	if ! (cd examples && go run ./cmd meta create-signed \
+		-mime "application/x-raw-disk-image" \
+		-url "$IMAGE_URL" \
+		-hash-file "../$BMO_FILE" \
+		-name "signed-image" \
+		-key "../$SIGNER_KEY_FILE" \
+		-out "../$META_SIGNED_FILE"); then
+		log_error "Failed to create signed meta-payload"
+		kill $HTTP_PID 2>/dev/null
+		return 1
+	fi
+	log_success "Created signed meta-payload: $META_SIGNED_FILE"
+
+	# Export public key as COSE_Key CBOR
+	log_step "Exporting signer public key as COSE_Key"
+	if ! (cd examples && go run ./cmd meta export-pubkey \
+		-key "../$SIGNER_KEY_FILE" \
+		-out "../$COSE_KEY_FILE"); then
+		log_error "Failed to export public key"
+		kill $HTTP_PID 2>/dev/null
+		return 1
+	fi
+	log_success "Exported COSE_Key: $COSE_KEY_FILE"
+
+	# Verify the signed meta-payload (self-check)
+	log_step "Verifying signed meta-payload (self-check)"
+	if ! (cd examples && go run ./cmd meta verify \
+		-in "../$META_SIGNED_FILE" \
+		-key "../$SIGNER_KEY_FILE" \
+		-print); then
+		log_error "Signed meta-payload verification failed"
+		kill $HTTP_PID 2>/dev/null
+		return 1
+	fi
+	log_success "Signed meta-payload verification passed"
+
+	# Start FDO server with signed meta-URL mode
+	META_URL="http://127.0.0.1:$HTTP_PORT/meta-signed.cbor"
+	start_server "-bmo-meta-url $META_URL:../$COSE_KEY_FILE"
+
+	log_step "Running DI"
+	if ! run_cmd go run ./cmd client -di "$SERVER_URL"; then
+		log_error "DI failed"
+		kill $HTTP_PID 2>/dev/null
+		return 1
+	fi
+	log_success "DI completed"
+
+	log_step "Running TO1/TO2 with signed meta-URL mode"
+	if ! run_cmd go run ./cmd client; then
+		log_error "TO1/TO2 failed"
+		kill $HTTP_PID 2>/dev/null
+		return 1
+	fi
+	log_success "TO1/TO2 completed with signed meta-URL mode"
+
+	stop_server
+
+	# Verify the received file matches the original
+	if [ ! -f "$RECEIVED_FILE" ]; then
+		log_error "Received file not found: $RECEIVED_FILE"
+		kill $HTTP_PID 2>/dev/null
+		return 1
+	fi
+
+	RECEIVED_HASH=$(sha256sum "$RECEIVED_FILE" | awk '{print $1}')
+	log_step "Verifying boot image integrity (signed meta-URL mode)"
+	if [ "$IMAGE_HASH" = "$RECEIVED_HASH" ]; then
+		log_success "Boot image hashes match! Signed meta-URL transfer successful"
+		log_success "  Original:  $IMAGE_HASH"
+		log_success "  Received:  $RECEIVED_HASH"
+	else
+		log_error "Boot image hashes DO NOT match!"
+		kill $HTTP_PID 2>/dev/null
+		return 1
+	fi
+	rm -f "$RECEIVED_FILE"
+
+	# NEGATIVE TEST: Tamper with signed meta-payload and verify TO2 fails
+	log_step "NEGATIVE TEST: Tampering with signed meta-payload"
+	TAMPERED_FILE="$EPHEMERAL_DIR/meta-signed-tampered.cbor"
+	cp "$META_SIGNED_FILE" "$TAMPERED_FILE"
+	# Flip the last byte in the file (corrupts the signature)
+	python3 -c "
+import sys
+data = bytearray(open('$TAMPERED_FILE', 'rb').read())
+data[-2] ^= 0xFF
+open('$TAMPERED_FILE', 'wb').write(data)
+"
+	log_success "Tampered with signed meta-payload"
+
+	# Restart with tampered file
+	rm -f "$DB_FILE" "$CRED_FILE"
+	# Rename tampered file to the same name so HTTP server serves it
+	cp "$TAMPERED_FILE" "$META_SIGNED_FILE"
+
+	start_server "-bmo-meta-url $META_URL:../$COSE_KEY_FILE"
+
+	log_step "Running DI (for tampered test)"
+	if ! run_cmd go run ./cmd client -di "$SERVER_URL"; then
+		log_error "DI failed (tampered test)"
+		kill $HTTP_PID 2>/dev/null
+		return 1
+	fi
+	log_success "DI completed (tampered test)"
+
+	log_step "Running TO1/TO2 with tampered meta-payload (expecting failure)"
+	if run_cmd go run ./cmd client 2>/dev/null; then
+		# Check if the received file doesn't match (signature failed but maybe partial?)
+		if [ -f "$RECEIVED_FILE" ]; then
+			log_error "TO2 should have failed with tampered signature but file was received"
+			kill $HTTP_PID 2>/dev/null
+			return 1
+		fi
+		# TO2 might succeed at protocol level but BMO should fail — check logs
+		if grep -q "signature.*invalid\|signature.*failed\|BMOError" /tmp/fdo_server.log 2>/dev/null; then
+			log_success "TO2 completed but BMO correctly rejected tampered signature"
+		else
+			log_error "TO2 succeeded unexpectedly with tampered signature"
+			kill $HTTP_PID 2>/dev/null
+			return 1
+		fi
+	else
+		log_success "TO2 correctly failed with tampered signature"
+	fi
+
+	stop_server
+	kill $HTTP_PID 2>/dev/null
+
+	# Cleanup
+	rm -f "$BMO_FILE" "$META_SIGNED_FILE" "$SIGNER_KEY_FILE" "$COSE_KEY_FILE" \
+		"$TAMPERED_FILE" "$RECEIVED_FILE" bmo-*
+	log_success "BMO FSIM Meta-URL Signed Mode test PASSED"
 }
 
 # Test: BMO FSIM Inline Mode (basic inline delivery)
@@ -1921,6 +2086,7 @@ test_all() {
 	test_bmo_multi_asset || failed=1
 	test_bmo_url || failed=1
 	test_bmo_meta_url || failed=1
+	test_bmo_meta_signed || failed=1
 	test_bmo_url_fallback || failed=1
 	test_payload_nak || failed=1
 	test_credentials || failed=1
@@ -2043,6 +2209,9 @@ main() {
 	bmo-meta-url)
 		test_bmo_meta_url
 		;;
+	bmo-meta-signed)
+		test_bmo_meta_signed
+		;;
 	bmo-url-fallback)
 		test_bmo_url_fallback
 		;;
@@ -2057,7 +2226,7 @@ main() {
 		;;
 	*)
 		echo "Unknown test: $test_name"
-		echo "Available tests: basic, basic-reuse, rv-blob, kex, fdo200, delegate, delegate-fdo200, delegate-csr, bad-delegate, attested-payload, attested-payload-encrypted, attested-payload-delegate, attested-payload-shell, sysconfig, sysconfig-fdo200, payload, payload-fdo200, payload-multiple-types, payload-selective-rejection, payload-nak, wifi, wifi-fdo200, wifi-single-sided, bmo, bmo-efi, bmo-nak, bmo-multi-asset, bmo-url, bmo-meta-url, bmo-url-fallback, credentials, all"
+		echo "Available tests: basic, basic-reuse, rv-blob, kex, fdo200, delegate, delegate-fdo200, delegate-csr, bad-delegate, attested-payload, attested-payload-encrypted, attested-payload-delegate, attested-payload-shell, sysconfig, sysconfig-fdo200, payload, payload-fdo200, payload-multiple-types, payload-selective-rejection, payload-nak, wifi, wifi-fdo200, wifi-single-sided, bmo, bmo-efi, bmo-nak, bmo-multi-asset, bmo-url, bmo-meta-url, bmo-meta-signed, bmo-url-fallback, credentials, all"
 		exit 1
 		;;
 	esac

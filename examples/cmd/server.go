@@ -1166,10 +1166,23 @@ func ownerModules(modules []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 
 				var metaSigner []byte
 				if signerKeyFile != "" {
-					var err error
-					metaSigner, err = os.ReadFile(signerKeyFile)
-					if err != nil {
-						log.Fatalf("error loading signer key for BMO meta-URL %q: %v", signerKeyFile, err)
+					if strings.HasSuffix(signerKeyFile, ".pem") {
+						// PEM file: parse key and marshal as COSE_Key
+						pubKey, err := loadPublicKeyPEM(signerKeyFile)
+						if err != nil {
+							log.Fatalf("error loading PEM signer key for BMO meta-URL %q: %v", signerKeyFile, err)
+						}
+						metaSigner, err = fsim.MarshalSignerPublicKey(pubKey)
+						if err != nil {
+							log.Fatalf("error marshaling signer key for BMO meta-URL %q: %v", signerKeyFile, err)
+						}
+					} else {
+						// Raw file: assume COSE_Key CBOR (backward compat)
+						var err error
+						metaSigner, err = os.ReadFile(signerKeyFile)
+						if err != nil {
+							log.Fatalf("error loading signer key for BMO meta-URL %q: %v", signerKeyFile, err)
+						}
 					}
 				}
 
