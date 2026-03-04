@@ -447,9 +447,9 @@ func TestFingerprintFDO_P384(t *testing.T) {
 // TestFingerprintProtocolKey_ConsistentAcrossEncodings verifies that
 // FingerprintProtocolKey produces the same fingerprint as FingerprintFDO
 // for the same underlying key, regardless of the protocol.PublicKey encoding
-// (X509 vs X5Chain). This is critical for PullAuth token scoping: the
+// (X509 vs X5Chain). This is critical for FDOKeyAuth token scoping: the
 // pipeline stores fingerprints via FingerprintFDO(crypto.PublicKey) and
-// PullAuth verifies via FingerprintProtocolKey(protocol.PublicKey).
+// FDOKeyAuth verifies via FingerprintProtocolKey(protocol.PublicKey).
 func TestFingerprintProtocolKey_ConsistentAcrossEncodings(t *testing.T) {
 	for _, tc := range []struct {
 		name  string

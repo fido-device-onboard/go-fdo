@@ -85,8 +85,8 @@ Your organization holds the owner key. Internal teams need to pull vouchers that
 │              │ ◀───────────────── │              │
 │              │                    └──────────────┘
 │              │
-│              │  3. PullAuth (delegate)
-│              │ ─────────────────▶  Voucher Holder Service
+│              │  3. FDOKeyAuth (delegate)
+│              │ ─────────────────▶  Server Service
 │              │  4. Vouchers
 │              │ ◀─────────────────
 └──────────────┘
@@ -210,7 +210,7 @@ All permission OIDs are under the base `1.3.6.1.4.1.45724.3.1` (PERM):
 | `PERM.2` | `permit-onboard-new-cred` | Onboard with new credentials | TO2 |
 | `PERM.3` | `permit-onboard-reuse-cred` | Onboard with credential reuse | TO2 |
 | `PERM.4` | `permit-onboard-fdo-disable` | Onboard and disable FDO | TO2 |
-| `PERM.5` | `permit-voucher-claim` | Claim (pull/download) vouchers via PullAuth | Pull API |
+| `PERM.5` | `permit-voucher-claim` | Claim (pull/download) vouchers via FDOKeyAuth | Pull API |
 
 Full OIDs:
 
@@ -231,7 +231,7 @@ When creating delegate chains via CLI, you can use these permission strings:
 | `onboard-new-cred` | PERM.2 | Onboard with new credentials only |
 | `onboard-reuse-cred` | PERM.3 | Onboard with credential reuse only |
 | `onboard-fdo-disable` | PERM.4 | Onboard and disable FDO only |
-| `voucher-claim` | PERM.5 | Claim (pull/download) vouchers via PullAuth |
+| `voucher-claim` | PERM.5 | Claim (pull/download) vouchers via FDOKeyAuth |
 | `claim` | Legacy | Legacy claim permission |
 | `provision` | Legacy | Legacy provision permission |
 

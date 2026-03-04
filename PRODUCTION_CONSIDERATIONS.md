@@ -403,7 +403,7 @@ For environments with complex supply chains:
 
 ## Transport Layering and Alternative Deployments
 
-The library uses HTTP as its transport protocol for both the core FDO protocol (DI/TO1/TO2) and the voucher transfer protocol (push/pull/PullAuth). However, the HTTP usage is layered in ways that support alternative deployment models.
+The library uses HTTP as its transport protocol for both the core FDO protocol (DI/TO1/TO2) and the voucher transfer protocol (push/pull/FDOKeyAuth). However, the HTTP usage is layered in ways that support alternative deployment models.
 
 ### Inbound (Server-Side)
 
@@ -413,7 +413,7 @@ Additionally, the core FDO protocol is layered below HTTP via the `protocol.Resp
 
 ### Outbound (Client-Side)
 
-Outbound components (`transfer.HTTPPushSender`, `transfer.PullAuthClient`, `transfer.HTTPPullInitiator`, `http.Transport`) use Go's `*http.Client` for making requests. The `*http.Client` accepts a custom `http.RoundTripper` via its `Transport` field, which provides a pluggable seam for:
+Outbound components (`transfer.HTTPPushSender`, `transfer.FDOKeyAuthClient`, `transfer.HTTPPullInitiator`, `http.Transport`) use Go's `*http.Client` for making requests. The `*http.Client` accepts a custom `http.RoundTripper` via its `Transport` field, which provides a pluggable seam for:
 
 - **Testing**: In-process round-trippers that call `ServeHTTP` directly (used in library tests)
 - **Custom TLS**: Corporate proxies, mTLS, custom certificate pools
@@ -424,7 +424,7 @@ For deployments where outbound HTTP is not desirable (e.g., voucher transfer via
 
 ### What Is NOT Pluggable
 
-The PullAuth cryptographic handshake logic (CBOR/COSE challenge-response) is currently implemented directly inside HTTP handler methods rather than as a separate protocol-layer API. If a non-HTTP PullAuth transport is ever needed, this would require a modest refactor to split protocol logic from HTTP read/write (~100 lines). For all current deployment scenarios (including serverless behind API Gateway), this is not a limitation.
+The FDOKeyAuth cryptographic handshake logic (CBOR/COSE challenge-response) is currently implemented directly inside HTTP handler methods rather than as a separate protocol-layer API. If a non-HTTP FDOKeyAuth transport is ever needed, this would require a modest refactor to split protocol logic from HTTP read/write (~100 lines). For all current deployment scenarios (including serverless behind API Gateway), this is not a limitation.
 
 ## Protocol Security Features
 

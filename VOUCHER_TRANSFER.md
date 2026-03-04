@@ -17,7 +17,7 @@ The voucher transfer system supports two models:
 | **Push** | Sender → Receiver | Manufacturing pushes vouchers to owner service |
 | **Pull** | Initiator ← Holder | Owner service pulls vouchers from manufacturing |
 
-Both models use HTTP and support authentication via Bearer tokens or cryptographic proof (PullAuth).
+Both models use HTTP and support authentication via Bearer tokens or cryptographic proof (FDOKeyAuth).
 
 ## Quick Start
 
@@ -88,7 +88,7 @@ func main() {
 }
 ```
 
-### Pull Model with PullAuth (Cryptographic Authentication)
+### Pull Model with FDOKeyAuth (Cryptographic Authentication)
 
 The pull model uses a 3-message cryptographic handshake where the recipient proves possession of an Owner Key (or Delegate Key) to authenticate.
 
@@ -109,9 +109,9 @@ import (
 func main() {
     holderKey := loadHolderPrivateKey() // Your holder's signing key
 
-    // PullAuth server handles the cryptographic handshake
-    authServer := &transfer.PullAuthServer{
-        HolderKey: holderKey,
+    // FDOKeyAuth server handles the cryptographic handshake
+    authServer := &transfer.FDOKeyAuthServer{
+        ServerKey: holderKey,
         HashAlg:   protocol.Sha256Hash,
         Sessions:  transfer.NewSessionStore(5*time.Minute, 1000),
         IssueToken: func(ownerKey protocol.PublicKey) (string, time.Time, error) {
@@ -161,7 +161,7 @@ func main() {
     ownerKey := loadOwnerPrivateKey() // Your owner's private key
 
     initiator := &transfer.HTTPPullInitiator{
-        Auth: &transfer.PullAuthClient{
+        Auth: &transfer.FDOKeyAuthClient{
             OwnerKey: ownerKey,
             HashAlg:  protocol.Sha256Hash,
             BaseURL:  "https://manufacturing.example.com",
@@ -247,7 +247,7 @@ func main() {
     }
 
     log.Printf("Public Key: %T", result.PublicKey)
-    log.Printf("Voucher Recipient URL: %s", result.VoucherRecipientURL)
+    log.Printf("Caller URL: %s", result.VoucherRecipientURL)
     // Use VoucherRecipientURL to push vouchers to this partner
 }
 ```
@@ -274,15 +274,15 @@ receiver := &transfer.HTTPPushReceiver{
 
 ### Owner Key Authentication (Pull)
 
-Cryptographic proof of Owner Key possession via PullAuth:
+Cryptographic proof of Owner Key possession via FDOKeyAuth:
 
 ```go
-// The PullAuth protocol proves the initiator possesses the Owner Key
+// The FDOKeyAuth protocol proves the initiator possesses the Owner Key
 // without revealing the private key. This is the recommended method
 // for pull operations as it provides strong authentication tied to
 // the FDO ownership chain.
 
-client := &transfer.PullAuthClient{
+client := &transfer.FDOKeyAuthClient{
     OwnerKey:      ownerPrivateKey,     // ECDSA or RSA private key
     DelegateChain: delegateCerts,       // Optional: X.509 delegate chain
     HashAlg:       protocol.Sha384Hash, // SHA-256 or SHA-384
@@ -298,7 +298,7 @@ result, err := client.Authenticate()
 For delegated operations, include the delegate certificate chain:
 
 ```go
-client := &transfer.PullAuthClient{
+client := &transfer.FDOKeyAuthClient{
     OwnerKey:      delegatePrivateKey,
     DelegateChain: []*x509.Certificate{delegateCert, intermediateCert},
     HashAlg:       protocol.Sha256Hash,
@@ -367,7 +367,7 @@ if err != nil {
 ```go
 result, err := client.Authenticate()
 if err != nil {
-    // PullAuth errors include:
+    // FDOKeyAuth errors include:
     // - "HTTP 401" - Invalid signature or expired session
     // - "HTTP 404" - No vouchers for this owner key
     // - "session not found or expired" - Session timeout

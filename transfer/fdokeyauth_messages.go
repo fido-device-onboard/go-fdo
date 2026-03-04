@@ -16,17 +16,17 @@ import (
 	"github.com/fido-device-onboard/go-fdo/protocol"
 )
 
-// NonceSize is the size of nonces used in the PullAuth protocol (16 bytes / 128 bits),
+// NonceSize is the size of nonces used in the FDOKeyAuth protocol (16 bytes / 128 bits),
 // matching the FDO specification nonce size.
 const NonceSize = 16
 
-// ProtocolVersion is the current PullAuth protocol version.
+// ProtocolVersion is the current FDOKeyAuth protocol version.
 const ProtocolVersion uint = 1
 
-// ContentTypeCBOR is the HTTP Content-Type for PullAuth messages.
+// ContentTypeCBOR is the HTTP Content-Type for FDOKeyAuth messages.
 const ContentTypeCBOR = "application/cbor"
 
-// Nonce is a 16-byte random value used for freshness in the PullAuth protocol.
+// Nonce is a 16-byte random value used for freshness in the FDOKeyAuth protocol.
 //
 //	Nonce = bstr .size 16
 type Nonce [NonceSize]byte
@@ -46,42 +46,42 @@ func GenerateNonce() (Nonce, error) {
 //	X5CHAIN = [ + bstr ]
 type CertChain []*cbor.X509Certificate
 
-// PullAuthHello is the first message in the PullAuth protocol, sent from
-// Recipient to Holder.
+// FDOKeyAuthHello is the first message in the FDOKeyAuth protocol, sent from
+// Caller to Server.
 //
-//	PullAuth.Hello = [
-//	    OwnerKey:              PublicKey,
+//	FDOKeyAuth.Hello = [
+//	    CallerKey:             PublicKey,
 //	    DelegateChain:         CertChainOrNull,
-//	    NoncePullRecipient_Prep,
+//	    NonceAuthCaller_Prep,
 //	    ProtocolVersion:       uint
 //	]
-type PullAuthHello struct {
-	OwnerKey        protocol.PublicKey
+type FDOKeyAuthHello struct {
+	CallerKey       protocol.PublicKey
 	DelegateChain   *CertChain // nil encodes as CBOR null
-	NonceRecipient  Nonce
+	NonceCaller     Nonce
 	ProtocolVersion uint
 }
 
-// HolderInfo contains optional metadata about the Holder, encoded as a CBOR map
+// ServerInfo contains optional metadata about the Server, encoded as a CBOR map
 // with text string keys per the spec:
 //
-//	HolderInfo = {
-//	    ? "holder_id":     tstr,
+//	ServerInfo = {
+//	    ? "server_id":     tstr,
 //	    ? "voucher_count": uint,
 //	    ? "algorithms":    [ + int ]
 //	}
-type HolderInfo struct {
-	HolderID     string
+type ServerInfo struct {
+	ServerID     string
 	VoucherCount uint
 	Algorithms   []int
 }
 
-// MarshalCBOR encodes HolderInfo as a CBOR map with text string keys.
+// MarshalCBOR encodes ServerInfo as a CBOR map with text string keys.
 // Only non-zero fields are included (all fields are optional per spec).
-func (h HolderInfo) MarshalCBOR() ([]byte, error) {
+func (h ServerInfo) MarshalCBOR() ([]byte, error) {
 	m := make(map[string]any)
-	if h.HolderID != "" {
-		m["holder_id"] = h.HolderID
+	if h.ServerID != "" {
+		m["server_id"] = h.ServerID
 	}
 	if h.VoucherCount > 0 {
 		m["voucher_count"] = h.VoucherCount
@@ -92,15 +92,15 @@ func (h HolderInfo) MarshalCBOR() ([]byte, error) {
 	return cbor.Marshal(m)
 }
 
-// UnmarshalCBOR decodes HolderInfo from a CBOR map with text string keys.
-func (h *HolderInfo) UnmarshalCBOR(data []byte) error {
+// UnmarshalCBOR decodes ServerInfo from a CBOR map with text string keys.
+func (h *ServerInfo) UnmarshalCBOR(data []byte) error {
 	var m map[string]any
 	if err := cbor.Unmarshal(data, &m); err != nil {
 		return err
 	}
-	if v, ok := m["holder_id"]; ok {
+	if v, ok := m["server_id"]; ok {
 		if s, ok := v.(string); ok {
-			h.HolderID = s
+			h.ServerID = s
 		}
 	}
 	if v, ok := m["voucher_count"]; ok {
@@ -124,95 +124,95 @@ func (h *HolderInfo) UnmarshalCBOR(data []byte) error {
 	return nil
 }
 
-// PullAuthChallenge is the response to PullAuth.Hello, sent from Holder to Recipient.
+// FDOKeyAuthChallenge is the response to FDOKeyAuth.Hello, sent from Server to Caller.
 //
-//	PullAuth.Challenge = [
+//	FDOKeyAuth.Challenge = [
 //	    SessionId:             bstr,
-//	    NoncePullHolder_Prep,
-//	    NoncePullRecipient,
-//	    HashPullHello:         Hash,
-//	    HolderSignature:       bstr,     ;; COSE_Sign1 bytes
-//	    HolderInfo:            HolderInfoOrNull
+//	    NonceAuthServer_Prep,
+//	    NonceAuthCaller,
+//	    HashAuthHello:         Hash,
+//	    ServerSignature:       bstr,     ;; COSE_Sign1 bytes
+//	    ServerInfo:            ServerInfoOrNull
 //	]
-type PullAuthChallenge struct {
+type FDOKeyAuthChallenge struct {
 	SessionID       []byte
-	NonceHolder     Nonce
-	NonceRecipient  Nonce         // echo of Recipient's nonce from Hello
-	HashHello       protocol.Hash // hash of CBOR-encoded PullAuth.Hello body
-	HolderSignature []byte        // COSE_Sign1 encoded bytes
-	HolderInfo      *HolderInfo   // nil encodes as CBOR null
+	NonceServer     Nonce
+	NonceCaller     Nonce         // echo of Caller's nonce from Hello
+	HashHello       protocol.Hash // hash of CBOR-encoded FDOKeyAuth.Hello body
+	ServerSignature []byte        // COSE_Sign1 encoded bytes
+	ServerInfo      *ServerInfo   // nil encodes as CBOR null
 }
 
-// PullAuthChallengeSignedPayload is the CBOR structure signed by the Holder
-// inside the HolderSignature COSE_Sign1.
+// FDOKeyAuthChallengeSignedPayload is the CBOR structure signed by the Server
+// inside the ServerSignature COSE_Sign1.
 //
-//	PullAuthChallengeSignedPayload = [
-//	    "PullAuth.Challenge",
-//	    NoncePullRecipient,
-//	    NoncePullHolder_Prep,
-//	    HashPullHello: Hash,
-//	    OwnerKey: PublicKey
+//	FDOKeyAuthChallengeSignedPayload = [
+//	    "FDOKeyAuth.Challenge",
+//	    NonceAuthCaller,
+//	    NonceAuthServer_Prep,
+//	    HashAuthHello: Hash,
+//	    CallerKey: PublicKey
 //	]
-type PullAuthChallengeSignedPayload struct {
-	TypeTag        string // always "PullAuth.Challenge"
-	NonceRecipient Nonce
-	NonceHolder    Nonce
-	HashHello      protocol.Hash
-	OwnerKey       protocol.PublicKey
+type FDOKeyAuthChallengeSignedPayload struct {
+	TypeTag     string // always "FDOKeyAuth.Challenge"
+	NonceCaller Nonce
+	NonceServer Nonce
+	HashHello   protocol.Hash
+	CallerKey   protocol.PublicKey
 }
 
-// PullAuthProve is the second request message, sent from Recipient to Holder.
+// FDOKeyAuthProve is the second request message, sent from Caller to Server.
 //
-//	PullAuth.Prove = [
+//	FDOKeyAuth.Prove = [
 //	    SessionId:             bstr,
-//	    NoncePullHolder,
-//	    HashPullChallenge:     Hash,
-//	    RecipientSignature:    bstr      ;; COSE_Sign1 encoded bytes
+//	    NonceAuthServer,
+//	    HashAuthChallenge:     Hash,
+//	    CallerSignature:       bstr      ;; COSE_Sign1 encoded bytes
 //	]
-type PullAuthProve struct {
-	SessionID          []byte
-	NonceHolder        Nonce         // echo of Holder's nonce from Challenge
-	HashChallenge      protocol.Hash // hash of CBOR-encoded PullAuth.Challenge body
-	RecipientSignature []byte        // COSE_Sign1 encoded bytes
+type FDOKeyAuthProve struct {
+	SessionID       []byte
+	NonceServer     Nonce         // echo of Server's nonce from Challenge
+	HashChallenge   protocol.Hash // hash of CBOR-encoded FDOKeyAuth.Challenge body
+	CallerSignature []byte        // COSE_Sign1 encoded bytes
 }
 
-// PullAuthProveSignedPayload is the CBOR structure signed by the Recipient
-// inside the RecipientSignature COSE_Sign1.
+// FDOKeyAuthProveSignedPayload is the CBOR structure signed by the Caller
+// inside the CallerSignature COSE_Sign1.
 //
-//	PullAuthProveSignedPayload = [
-//	    "PullAuth.Prove",
-//	    NoncePullHolder,
-//	    NoncePullRecipient,
-//	    HashPullChallenge: Hash,
-//	    OwnerKey: PublicKey
+//	FDOKeyAuthProveSignedPayload = [
+//	    "FDOKeyAuth.Prove",
+//	    NonceAuthServer,
+//	    NonceAuthCaller,
+//	    HashAuthChallenge: Hash,
+//	    CallerKey: PublicKey
 //	]
-type PullAuthProveSignedPayload struct {
-	TypeTag        string // always "PullAuth.Prove"
-	NonceHolder    Nonce
-	NonceRecipient Nonce
-	HashChallenge  protocol.Hash
-	OwnerKey       protocol.PublicKey
+type FDOKeyAuthProveSignedPayload struct {
+	TypeTag       string // always "FDOKeyAuth.Prove"
+	NonceServer   Nonce
+	NonceCaller   Nonce
+	HashChallenge protocol.Hash
+	CallerKey     protocol.PublicKey
 }
 
-// PullAuthResult is the final response from Holder to Recipient after
+// FDOKeyAuthResult is the final response from Server to Caller after
 // successful authentication.
 //
-//	PullAuth.Result = [
+//	FDOKeyAuth.Result = [
 //	    Status:                tstr,
 //	    SessionToken:          tstr,
 //	    TokenExpiresAt:        uint,
-//	    OwnerKeyFingerprint:   bstr,
+//	    KeyFingerprint:        bstr,
 //	    VoucherCount:          uint    ;; 0 if unknown
 //	]
-type PullAuthResult struct {
-	Status              string
-	SessionToken        string
-	TokenExpiresAt      uint64
-	OwnerKeyFingerprint []byte
-	VoucherCount        uint
+type FDOKeyAuthResult struct {
+	Status         string
+	SessionToken   string
+	TokenExpiresAt uint64
+	KeyFingerprint []byte
+	VoucherCount   uint
 }
 
-// StatusAuthenticated is the success status value in PullAuth.Result.
+// StatusAuthenticated is the success status value in FDOKeyAuth.Result.
 const StatusAuthenticated = "authenticated"
 
 // HashCBOR computes a hash of the CBOR-encoded value using the specified algorithm.

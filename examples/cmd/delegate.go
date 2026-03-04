@@ -707,7 +707,7 @@ Delegate commands:
   delegate inspectVoucher {filename}
 
 Permissions:
-  voucher-claim        - Claim (pull/download) vouchers via PullAuth
+  voucher-claim        - Claim (pull/download) vouchers via FDOKeyAuth
   onboard              - All onboard permissions (new-cred, reuse-cred, fdo-disable)
   redirect             - Redirect permission (TO0)
   onboard-new-cred     - Onboard with new credentials

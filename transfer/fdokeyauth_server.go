@@ -21,19 +21,21 @@ import (
 	"github.com/fido-device-onboard/go-fdo/protocol"
 )
 
-// VoucherLookup is called by the Holder to check whether vouchers exist
-// for a given Owner Key. Implementations may return the count or 0 if unknown.
-// Return -1 to indicate no vouchers exist (allows early 404).
-type VoucherLookup func(ownerKey protocol.PublicKey) (count int, err error)
+// KeyLookup is called by the Server to check whether the presented key is
+// recognized. For pull endpoints, this checks whether vouchers exist for the
+// given Owner Key. For push endpoints, this checks whether the key belongs
+// to a trusted Supplier. Return -1 to indicate the key is not recognized
+// (allows early 404). Return 0 or positive to indicate the key is known.
+type KeyLookup func(callerKey protocol.PublicKey) (count int, err error)
 
 // TokenIssuer is called after successful authentication to generate a
-// session token scoped to the authenticated Owner Key.
-type TokenIssuer func(ownerKey protocol.PublicKey) (token string, expiresAt time.Time, err error)
+// session token scoped to the authenticated key.
+type TokenIssuer func(callerKey protocol.PublicKey) (token string, expiresAt time.Time, err error)
 
-// PullAuthServer implements the Holder side of the PullAuth protocol.
-type PullAuthServer struct {
-	// HolderKey is the Holder's signing key, used to sign PullAuth.Challenge.
-	HolderKey crypto.Signer
+// FDOKeyAuthServer implements the Server side of the FDOKeyAuth protocol.
+type FDOKeyAuthServer struct {
+	// ServerKey is the Server's signing key, used to sign FDOKeyAuth.Challenge.
+	ServerKey crypto.Signer
 
 	// UsePSS controls whether RSA-PSS is used for RSA keys.
 	UsePSS bool
@@ -41,25 +43,27 @@ type PullAuthServer struct {
 	// HashAlg is the hash algorithm for hash continuity. Defaults to SHA-256.
 	HashAlg protocol.HashAlg
 
-	// Sessions manages PullAuth session state.
+	// Sessions manages FDOKeyAuth session state.
 	Sessions *SessionStore
 
-	// LookupVouchers checks if vouchers exist for a given Owner Key.
-	// If nil, the Holder always proceeds with the challenge (no early 404).
-	LookupVouchers VoucherLookup
+	// LookupKey checks if the presented key is recognized by the Server.
+	// For pull: checks if vouchers exist for the given Owner Key.
+	// For push: checks if the key belongs to a trusted Supplier.
+	// If nil, the Server always proceeds with the challenge (no early 404).
+	LookupKey KeyLookup
 
 	// IssueToken generates a session token after successful authentication.
 	IssueToken TokenIssuer
 
-	// RevealVoucherExistence controls whether the Holder returns 404 when no
-	// vouchers exist for a key, or always proceeds to avoid information disclosure.
+	// RevealVoucherExistence controls whether the Server returns 404 when the
+	// key is not recognized, or always proceeds to avoid information disclosure.
 	// Default false (always proceed).
 	RevealVoucherExistence bool
 }
 
-// HandleHello handles POST /api/v1/pull/auth/hello.
+// HandleHello handles POST {root}/auth/hello.
 // It validates the Hello message, creates a session, and returns a signed Challenge.
-func (s *PullAuthServer) HandleHello(w http.ResponseWriter, r *http.Request) {
+func (s *FDOKeyAuthServer) HandleHello(w http.ResponseWriter, r *http.Request) {
 	if s.HashAlg == 0 {
 		s.HashAlg = protocol.Sha256Hash
 	}
@@ -69,14 +73,14 @@ func (s *PullAuthServer) HandleHello(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Read and decode PullAuth.Hello
+	// Read and decode FDOKeyAuth.Hello
 	helloBytes, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "failed to read request body")
 		return
 	}
 
-	var hello PullAuthHello
+	var hello FDOKeyAuthHello
 	if err := cbor.Unmarshal(helloBytes, &hello); err != nil {
 		s.writeError(w, http.StatusBadRequest, "malformed CBOR: "+err.Error())
 		return
@@ -88,22 +92,22 @@ func (s *PullAuthServer) HandleHello(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate OwnerKey is well-formed
-	if _, err := hello.OwnerKey.Public(); err != nil {
-		s.writeError(w, http.StatusBadRequest, "invalid owner key: "+err.Error())
+	// Validate CallerKey is well-formed
+	if _, err := hello.CallerKey.Public(); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid caller key: "+err.Error())
 		return
 	}
 
-	// Optionally check if vouchers exist
-	if s.LookupVouchers != nil && s.RevealVoucherExistence {
-		count, err := s.LookupVouchers(hello.OwnerKey)
+	// Optionally check if the key is recognized
+	if s.LookupKey != nil && s.RevealVoucherExistence {
+		count, err := s.LookupKey(hello.CallerKey)
 		if err != nil {
-			slog.Error("PullAuth.Hello: voucher lookup failed", "error", err)
+			slog.Error("FDOKeyAuth.Hello: key lookup failed", "error", err)
 			s.writeError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
 		if count < 0 {
-			s.writeError(w, http.StatusNotFound, "no vouchers for this owner key")
+			s.writeError(w, http.StatusNotFound, "key not recognized")
 			return
 		}
 	}
@@ -116,10 +120,10 @@ func (s *PullAuthServer) HandleHello(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Generate Holder nonce
-	nonceHolder, err := GenerateNonce()
+	// Generate Server nonce
+	nonceServer, err := GenerateNonce()
 	if err != nil {
-		slog.Error("PullAuth.Hello: failed to generate nonce", "error", err)
+		slog.Error("FDOKeyAuth.Hello: failed to generate nonce", "error", err)
 		s.writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
@@ -128,49 +132,49 @@ func (s *PullAuthServer) HandleHello(w http.ResponseWriter, r *http.Request) {
 	hashHello := HashBytes(s.HashAlg, helloBytes)
 
 	// Build the signed challenge payload
-	challengePayload := PullAuthChallengeSignedPayload{
-		TypeTag:        "PullAuth.Challenge",
-		NonceRecipient: hello.NonceRecipient,
-		NonceHolder:    nonceHolder,
-		HashHello:      hashHello,
-		OwnerKey:       hello.OwnerKey,
+	challengePayload := FDOKeyAuthChallengeSignedPayload{
+		TypeTag:     "FDOKeyAuth.Challenge",
+		NonceCaller: hello.NonceCaller,
+		NonceServer: nonceServer,
+		HashHello:   hashHello,
+		CallerKey:   hello.CallerKey,
 	}
 
-	holderSig, err := SignPayload(s.HolderKey, s.UsePSS, challengePayload)
+	serverSig, err := SignPayload(s.ServerKey, s.UsePSS, challengePayload)
 	if err != nil {
-		slog.Error("PullAuth.Hello: failed to sign challenge", "error", err)
+		slog.Error("FDOKeyAuth.Hello: failed to sign challenge", "error", err)
 		s.writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 
-	// Build holder info
-	var holderInfo *HolderInfo
-	if s.LookupVouchers != nil {
-		count, _ := s.LookupVouchers(hello.OwnerKey)
+	// Build server info
+	var serverInfo *ServerInfo
+	if s.LookupKey != nil {
+		count, _ := s.LookupKey(hello.CallerKey)
 		if count >= 0 {
-			holderInfo = &HolderInfo{VoucherCount: uint(count)}
+			serverInfo = &ServerInfo{VoucherCount: uint(count)}
 		}
 	}
 
 	// Build the Challenge response
-	challenge := PullAuthChallenge{
-		NonceHolder:     nonceHolder,
-		NonceRecipient:  hello.NonceRecipient,
+	challenge := FDOKeyAuthChallenge{
+		NonceServer:     nonceServer,
+		NonceCaller:     hello.NonceCaller,
 		HashHello:       hashHello,
-		HolderSignature: holderSig,
-		HolderInfo:      holderInfo,
+		ServerSignature: serverSig,
+		ServerInfo:      serverInfo,
 	}
 
 	// Create session (sets challenge.SessionID)
 	session := &Session{
-		OwnerKey:       hello.OwnerKey,
-		DelegateChain:  hello.DelegateChain,
-		NonceRecipient: hello.NonceRecipient,
-		NonceHolder:    nonceHolder,
-		HashHello:      hashHello,
+		CallerKey:     hello.CallerKey,
+		DelegateChain: hello.DelegateChain,
+		NonceCaller:   hello.NonceCaller,
+		NonceServer:   nonceServer,
+		HashHello:     hashHello,
 	}
 	if err := s.Sessions.Create(session); err != nil {
-		slog.Error("PullAuth.Hello: failed to create session", "error", err)
+		slog.Error("FDOKeyAuth.Hello: failed to create session", "error", err)
 		s.writeError(w, http.StatusTooManyRequests, "too many pending sessions")
 		return
 	}
@@ -179,7 +183,7 @@ func (s *PullAuthServer) HandleHello(w http.ResponseWriter, r *http.Request) {
 	// Encode and store the challenge bytes for hash continuity verification
 	challengeBytes, err := cbor.Marshal(challenge)
 	if err != nil {
-		slog.Error("PullAuth.Hello: failed to encode challenge", "error", err)
+		slog.Error("FDOKeyAuth.Hello: failed to encode challenge", "error", err)
 		s.writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
@@ -191,9 +195,9 @@ func (s *PullAuthServer) HandleHello(w http.ResponseWriter, r *http.Request) {
 	s.writeCBOR(w, http.StatusOK, challengeBytes)
 }
 
-// HandleProve handles POST /api/v1/pull/auth/prove.
-// It verifies the Recipient's signature and issues a session token.
-func (s *PullAuthServer) HandleProve(w http.ResponseWriter, r *http.Request) {
+// HandleProve handles POST {root}/auth/prove.
+// It verifies the Caller's signature and issues a session token.
+func (s *FDOKeyAuthServer) HandleProve(w http.ResponseWriter, r *http.Request) {
 	if s.HashAlg == 0 {
 		s.HashAlg = protocol.Sha256Hash
 	}
@@ -203,14 +207,14 @@ func (s *PullAuthServer) HandleProve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Read and decode PullAuth.Prove
+	// Read and decode FDOKeyAuth.Prove
 	proveBytes, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, "failed to read request body")
 		return
 	}
 
-	var prove PullAuthProve
+	var prove FDOKeyAuthProve
 	if err := cbor.Unmarshal(proveBytes, &prove); err != nil {
 		s.writeError(w, http.StatusBadRequest, "malformed CBOR: "+err.Error())
 		return
@@ -231,8 +235,8 @@ func (s *PullAuthServer) HandleProve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Nonce verification
-	if prove.NonceHolder != session.NonceHolder {
-		s.writeError(w, http.StatusUnauthorized, "nonce_holder mismatch")
+	if prove.NonceServer != session.NonceServer {
+		s.writeError(w, http.StatusUnauthorized, "nonce_server mismatch")
 		return
 	}
 
@@ -244,30 +248,30 @@ func (s *PullAuthServer) HandleProve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Verify COSE_Sign1 signature
-	payloadBytes, err := VerifyPayload(verifyKey, prove.RecipientSignature)
+	payloadBytes, err := VerifyPayload(verifyKey, prove.CallerSignature)
 	if err != nil {
 		s.writeError(w, http.StatusUnauthorized, "signature verification failed: "+err.Error())
 		return
 	}
 
 	// Decode and verify the signed payload structure
-	var provePayload PullAuthProveSignedPayload
+	var provePayload FDOKeyAuthProveSignedPayload
 	if err := cbor.Unmarshal(payloadBytes, &provePayload); err != nil {
 		s.writeError(w, http.StatusBadRequest, "malformed prove payload: "+err.Error())
 		return
 	}
 
 	// Verify payload fields
-	if provePayload.TypeTag != "PullAuth.Prove" {
+	if provePayload.TypeTag != "FDOKeyAuth.Prove" {
 		s.writeError(w, http.StatusUnauthorized, "invalid message type tag")
 		return
 	}
-	if provePayload.NonceHolder != session.NonceHolder {
-		s.writeError(w, http.StatusUnauthorized, "nonce_holder in payload mismatch")
+	if provePayload.NonceServer != session.NonceServer {
+		s.writeError(w, http.StatusUnauthorized, "nonce_server in payload mismatch")
 		return
 	}
-	if provePayload.NonceRecipient != session.NonceRecipient {
-		s.writeError(w, http.StatusUnauthorized, "nonce_recipient in payload mismatch")
+	if provePayload.NonceCaller != session.NonceCaller {
+		s.writeError(w, http.StatusUnauthorized, "nonce_caller in payload mismatch")
 		return
 	}
 
@@ -276,32 +280,32 @@ func (s *PullAuthServer) HandleProve(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, "token issuer not configured")
 		return
 	}
-	token, expiresAt, err := s.IssueToken(session.OwnerKey)
+	token, expiresAt, err := s.IssueToken(session.CallerKey)
 	if err != nil {
-		slog.Error("PullAuth.Prove: failed to issue token", "error", err)
+		slog.Error("FDOKeyAuth.Prove: failed to issue token", "error", err)
 		s.writeError(w, http.StatusInternalServerError, "failed to issue token")
 		return
 	}
 
-	// Compute owner key fingerprint
-	ownerKeyBytes, err := cbor.Marshal(session.OwnerKey)
+	// Compute key fingerprint
+	callerKeyBytes, err := cbor.Marshal(session.CallerKey)
 	if err != nil {
-		slog.Error("PullAuth.Prove: failed to encode owner key for fingerprint", "error", err)
+		slog.Error("FDOKeyAuth.Prove: failed to encode caller key for fingerprint", "error", err)
 		s.writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	fingerprint := sha256.Sum256(ownerKeyBytes)
+	fingerprint := sha256.Sum256(callerKeyBytes)
 
 	// Optionally get voucher count
 	var voucherCount uint
-	if s.LookupVouchers != nil {
-		count, _ := s.LookupVouchers(session.OwnerKey)
+	if s.LookupKey != nil {
+		count, _ := s.LookupKey(session.CallerKey)
 		if count > 0 {
 			voucherCount = uint(count)
 		}
 	}
 
-	result := PullAuthResult{
+	result := FDOKeyAuthResult{
 		Status:       StatusAuthenticated,
 		SessionToken: token,
 		TokenExpiresAt: func() uint64 {
@@ -310,39 +314,39 @@ func (s *PullAuthServer) HandleProve(w http.ResponseWriter, r *http.Request) {
 			}
 			return 0
 		}(),
-		OwnerKeyFingerprint: fingerprint[:],
-		VoucherCount:        voucherCount,
+		KeyFingerprint: fingerprint[:],
+		VoucherCount:   voucherCount,
 	}
 
 	resultBytes, err := cbor.Marshal(result)
 	if err != nil {
-		slog.Error("PullAuth.Prove: failed to encode result", "error", err)
+		slog.Error("FDOKeyAuth.Prove: failed to encode result", "error", err)
 		s.writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 
-	slog.Info("PullAuth: authentication successful",
-		"owner_key_fingerprint", fmt.Sprintf("%x", fingerprint[:8]),
+	slog.Info("FDOKeyAuth: authentication successful",
+		"key_fingerprint", fmt.Sprintf("%x", fingerprint[:8]),
 		"has_delegate", session.DelegateChain != nil,
 	)
 
 	s.writeCBOR(w, http.StatusOK, resultBytes)
 }
 
-// verificationKey returns the public key to verify the Recipient's signature.
-func (s *PullAuthServer) verificationKey(session *Session) (crypto.PublicKey, error) {
+// verificationKey returns the public key to verify the Caller's signature.
+func (s *FDOKeyAuthServer) verificationKey(session *Session) (crypto.PublicKey, error) {
 	if session.DelegateChain != nil && len(*session.DelegateChain) > 0 {
 		// Use the leaf certificate's public key
 		chain := *session.DelegateChain
 		leaf := (*x509.Certificate)(chain[len(chain)-1])
 		return leaf.PublicKey, nil
 	}
-	return session.OwnerKey.Public()
+	return session.CallerKey.Public()
 }
 
-// validateDelegateChain validates the delegate chain against the owner key
+// validateDelegateChain validates the delegate chain against the caller key
 // and checks for the required voucher-claim permission.
-func (s *PullAuthServer) validateDelegateChain(hello PullAuthHello) error {
+func (s *FDOKeyAuthServer) validateDelegateChain(hello FDOKeyAuthHello) error {
 	if hello.DelegateChain == nil || len(*hello.DelegateChain) == 0 {
 		return fmt.Errorf("empty delegate chain")
 	}
@@ -352,14 +356,14 @@ func (s *PullAuthServer) validateDelegateChain(hello PullAuthHello) error {
 		chain[i] = (*x509.Certificate)(cert)
 	}
 
-	ownerPub, err := hello.OwnerKey.Public()
+	callerPub, err := hello.CallerKey.Public()
 	if err != nil {
-		return fmt.Errorf("failed to parse owner key: %w", err)
+		return fmt.Errorf("failed to parse caller key: %w", err)
 	}
 
 	// Use go-fdo's delegate chain verification with the voucher-claim OID
 	oid := asn1.ObjectIdentifier(fdo.OIDPermitVoucherClaim)
-	if err := fdo.VerifyDelegateChain(chain, &ownerPub, &oid); err != nil {
+	if err := fdo.VerifyDelegateChain(chain, &callerPub, &oid); err != nil {
 		return err
 	}
 
@@ -367,7 +371,7 @@ func (s *PullAuthServer) validateDelegateChain(hello PullAuthHello) error {
 }
 
 // writeCBOR writes a CBOR response.
-func (s *PullAuthServer) writeCBOR(w http.ResponseWriter, status int, data []byte) {
+func (s *FDOKeyAuthServer) writeCBOR(w http.ResponseWriter, status int, data []byte) {
 	w.Header().Set("Content-Type", ContentTypeCBOR)
 	w.WriteHeader(status)
 	if _, err := w.Write(data); err != nil {
@@ -377,9 +381,9 @@ func (s *PullAuthServer) writeCBOR(w http.ResponseWriter, status int, data []byt
 
 // writeError writes an error response. Uses JSON for error bodies for simplicity.
 // Includes a request_id echoed from X-Request-ID or auto-generated.
-func (s *PullAuthServer) writeError(w http.ResponseWriter, status int, msg string) {
+func (s *FDOKeyAuthServer) writeError(w http.ResponseWriter, status int, msg string) {
 	reqID := requestID(nil)
-	slog.Debug("PullAuth error", "status", status, "message", msg, "request_id", reqID)
+	slog.Debug("FDOKeyAuth error", "status", status, "message", msg, "request_id", reqID)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if _, err := fmt.Fprintf(w, `{"error":%q,"request_id":%q}`, msg, reqID); err != nil {
@@ -388,9 +392,9 @@ func (s *PullAuthServer) writeError(w http.ResponseWriter, status int, msg strin
 }
 
 // writeErrorR writes an error response with request_id derived from the HTTP request.
-func (s *PullAuthServer) writeErrorR(w http.ResponseWriter, r *http.Request, status int, msg string) {
+func (s *FDOKeyAuthServer) writeErrorR(w http.ResponseWriter, r *http.Request, status int, msg string) {
 	reqID := requestID(r)
-	slog.Debug("PullAuth error", "status", status, "message", msg, "request_id", reqID)
+	slog.Debug("FDOKeyAuth error", "status", status, "message", msg, "request_id", reqID)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if _, err := fmt.Fprintf(w, `{"error":%q,"request_id":%q}`, msg, reqID); err != nil {
@@ -398,10 +402,11 @@ func (s *PullAuthServer) writeErrorR(w http.ResponseWriter, r *http.Request, sta
 	}
 }
 
-// RegisterHandlers registers the PullAuth HTTP handlers on the given mux.
-// The root parameter is the Pull Service Root path (e.g., "/api/v1/pull/vouchers").
-// PullAuth endpoints are registered at {root}/auth/hello and {root}/auth/prove.
-func (s *PullAuthServer) RegisterHandlers(mux *http.ServeMux, root ...string) {
+// RegisterHandlers registers the FDOKeyAuth HTTP handlers on the given mux.
+// The root parameter is the Service Root path (e.g., "/api/v1/pull/vouchers"
+// for pull, or "/api/v1/vouchers" for push).
+// Auth endpoints are registered at {root}/auth/hello and {root}/auth/prove.
+func (s *FDOKeyAuthServer) RegisterHandlers(mux *http.ServeMux, root ...string) {
 	prefix := "/api/v1/pull/vouchers"
 	if len(root) > 0 && root[0] != "" {
 		prefix = strings.TrimRight(root[0], "/")

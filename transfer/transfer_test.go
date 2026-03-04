@@ -322,15 +322,15 @@ func TestPushInvalidVoucher(t *testing.T) {
 	}
 }
 
-// TestPullAuthWithWrongKey tests that authentication fails with wrong key.
-func TestPullAuthWithWrongKey(t *testing.T) {
-	holderKey := newTestECKey(t)
-	ownerKey := newTestECKey(t)
+// TestFDOKeyAuthWithWrongKey tests that authentication fails with wrong key.
+func TestFDOKeyAuthWithWrongKey(t *testing.T) {
+	serverKey := newTestECKey(t)
+	callerKey := newTestECKey(t)
 	wrongKey := newTestECKey(t)
 
-	// Server expects ownerKey but client uses wrongKey
-	server := &transfer.PullAuthServer{
-		HolderKey: holderKey,
+	// Server expects callerKey but client uses wrongKey
+	server := &transfer.FDOKeyAuthServer{
+		ServerKey: serverKey,
 		HashAlg:   protocol.Sha256Hash,
 		Sessions:  transfer.NewSessionStore(60*time.Second, 100),
 		IssueToken: func(key protocol.PublicKey) (string, time.Time, error) {
@@ -343,9 +343,9 @@ func TestPullAuthWithWrongKey(t *testing.T) {
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
 
-	// Client authenticates with ownerKey - should succeed
-	client := &transfer.PullAuthClient{
-		OwnerKey:   ownerKey,
+	// Client authenticates with callerKey - should succeed
+	client := &transfer.FDOKeyAuthClient{
+		CallerKey:  callerKey,
 		HashAlg:    protocol.Sha256Hash,
 		HTTPClient: ts.Client(),
 		BaseURL:    ts.URL,
@@ -360,8 +360,8 @@ func TestPullAuthWithWrongKey(t *testing.T) {
 	}
 
 	// Now test that a different key gets a different fingerprint
-	client2 := &transfer.PullAuthClient{
-		OwnerKey:   wrongKey,
+	client2 := &transfer.FDOKeyAuthClient{
+		CallerKey:  wrongKey,
 		HashAlg:    protocol.Sha256Hash,
 		HTTPClient: ts.Client(),
 		BaseURL:    ts.URL,
@@ -373,7 +373,7 @@ func TestPullAuthWithWrongKey(t *testing.T) {
 	}
 
 	// Fingerprints should be different
-	if fmt.Sprintf("%x", result.OwnerKeyFingerprint) == fmt.Sprintf("%x", result2.OwnerKeyFingerprint) {
+	if fmt.Sprintf("%x", result.KeyFingerprint) == fmt.Sprintf("%x", result2.KeyFingerprint) {
 		t.Error("different keys should produce different fingerprints")
 	}
 }
@@ -564,13 +564,13 @@ func TestPullHolderVoucherNotFound(t *testing.T) {
 	}
 }
 
-// TestPullAuthDelegateChain tests authentication with delegate certificates.
-func TestPullAuthDelegateChain(t *testing.T) {
-	holderKey := newTestECKey(t)
-	ownerKey := newTestECKey(t)
+// TestFDOKeyAuthDelegateChain tests authentication with delegate certificates.
+func TestFDOKeyAuthDelegateChain(t *testing.T) {
+	serverKey := newTestECKey(t)
+	callerKey := newTestECKey(t)
 
-	server := &transfer.PullAuthServer{
-		HolderKey: holderKey,
+	server := &transfer.FDOKeyAuthServer{
+		ServerKey: serverKey,
 		HashAlg:   protocol.Sha256Hash,
 		Sessions:  transfer.NewSessionStore(60*time.Second, 100),
 		IssueToken: func(key protocol.PublicKey) (string, time.Time, error) {
@@ -584,8 +584,8 @@ func TestPullAuthDelegateChain(t *testing.T) {
 	defer ts.Close()
 
 	// For now, test without delegate (delegate chain support requires X.509 setup)
-	client := &transfer.PullAuthClient{
-		OwnerKey:   ownerKey,
+	client := &transfer.FDOKeyAuthClient{
+		CallerKey:  callerKey,
 		HashAlg:    protocol.Sha256Hash,
 		HTTPClient: ts.Client(),
 		BaseURL:    ts.URL,
@@ -601,8 +601,8 @@ func TestPullAuthDelegateChain(t *testing.T) {
 	}
 }
 
-// TestPullAuthReplayProtection tests that nonces prevent replay attacks.
-func TestPullAuthReplayProtection(t *testing.T) {
+// TestFDOKeyAuthReplayProtection tests that nonces prevent replay attacks.
+func TestFDOKeyAuthReplayProtection(t *testing.T) {
 	// Generate two nonces and verify they're different
 	n1, err := transfer.GenerateNonce()
 	if err != nil {
@@ -623,17 +623,17 @@ func TestPullAuthReplayProtection(t *testing.T) {
 	}
 }
 
-// TestPullAuthSignatureVerification tests that invalid signatures are rejected.
-func TestPullAuthSignatureVerification(t *testing.T) {
+// TestFDOKeyAuthSignatureVerification tests that invalid signatures are rejected.
+func TestFDOKeyAuthSignatureVerification(t *testing.T) {
 	key := newTestECKey(t)
 	wrongKey := newTestECKey(t)
 
-	payload := transfer.PullAuthProveSignedPayload{
-		TypeTag:        "PullAuth.Prove",
-		NonceHolder:    transfer.Nonce{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
-		NonceRecipient: transfer.Nonce{16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1},
-		HashChallenge:  protocol.Hash{Algorithm: protocol.Sha256Hash, Value: make([]byte, 32)},
-		OwnerKey:       protocol.PublicKey{},
+	payload := transfer.FDOKeyAuthProveSignedPayload{
+		TypeTag:       "FDOKeyAuth.Prove",
+		NonceServer:   transfer.Nonce{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
+		NonceCaller:   transfer.Nonce{16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1},
+		HashChallenge: protocol.Hash{Algorithm: protocol.Sha256Hash, Value: make([]byte, 32)},
+		CallerKey:     protocol.PublicKey{},
 	}
 
 	// Sign with key
@@ -655,8 +655,8 @@ func TestPullAuthSignatureVerification(t *testing.T) {
 	}
 }
 
-// TestPullAuthHashAlgorithms tests different hash algorithms.
-func TestPullAuthHashAlgorithms(t *testing.T) {
+// TestFDOKeyAuthHashAlgorithms tests different hash algorithms.
+func TestFDOKeyAuthHashAlgorithms(t *testing.T) {
 	testCases := []struct {
 		name    string
 		hashAlg protocol.HashAlg
@@ -668,17 +668,17 @@ func TestPullAuthHashAlgorithms(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			holderKey, err := ecdsa.GenerateKey(tc.curve, rand.Reader)
+			serverKey, err := ecdsa.GenerateKey(tc.curve, rand.Reader)
 			if err != nil {
 				t.Fatal(err)
 			}
-			ownerKey, err := ecdsa.GenerateKey(tc.curve, rand.Reader)
+			callerKey, err := ecdsa.GenerateKey(tc.curve, rand.Reader)
 			if err != nil {
 				t.Fatal(err)
 			}
 
-			server := &transfer.PullAuthServer{
-				HolderKey: holderKey,
+			server := &transfer.FDOKeyAuthServer{
+				ServerKey: serverKey,
 				HashAlg:   tc.hashAlg,
 				Sessions:  transfer.NewSessionStore(60*time.Second, 100),
 				IssueToken: func(key protocol.PublicKey) (string, time.Time, error) {
@@ -691,8 +691,8 @@ func TestPullAuthHashAlgorithms(t *testing.T) {
 			ts := httptest.NewServer(mux)
 			defer ts.Close()
 
-			client := &transfer.PullAuthClient{
-				OwnerKey:   ownerKey,
+			client := &transfer.FDOKeyAuthClient{
+				CallerKey:  callerKey,
 				HashAlg:    tc.hashAlg,
 				HTTPClient: ts.Client(),
 				BaseURL:    ts.URL,

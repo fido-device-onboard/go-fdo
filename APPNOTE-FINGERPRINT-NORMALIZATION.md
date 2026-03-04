@@ -36,8 +36,8 @@ func FingerprintFDOHex(pub crypto.PublicKey) string
 ## Why This Matters
 
 The FDO voucher pipeline stores fingerprints using `FingerprintFDO(crypto.PublicKey)`.
-PullAuth token scoping computes fingerprints using `FingerprintProtocolKey(protocol.PublicKey)`.
-If these two paths produce different hashes for the same key, PullAuth token scoping
+FDOKeyAuth token scoping computes fingerprints using `FingerprintProtocolKey(protocol.PublicKey)`.
+If these two paths produce different hashes for the same key, FDOKeyAuth token scoping
 fails silently — the puller authenticates successfully but sees zero vouchers because
 the token's fingerprint doesn't match any stored transmission records.
 
@@ -81,7 +81,7 @@ You should re-compute and update them using the normalized function.
 
 ## Spec Reference
 
-The voucher transfer spec (§9.8 PullAuth.Result) now includes:
+The voucher transfer spec (§9.8 FDOKeyAuth.Result) now includes:
 
 > Implementations MUST normalize the Owner Key to its canonical form before
 > computing the fingerprint: extract the raw public key material, re-encode it

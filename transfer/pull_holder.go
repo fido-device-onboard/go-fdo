@@ -19,8 +19,8 @@ import (
 // it is scoped to. Returns an error if the token is invalid or expired.
 type TokenValidator func(token string) (ownerKeyFingerprint []byte, err error)
 
-// HTTPPullHolder serves vouchers to authenticated Recipients via the Pull API.
-// It handles the JSON-based list/download endpoints that follow PullAuth.
+// HTTPPullHolder serves vouchers to authenticated Callers via the Pull API.
+// It handles the JSON-based list/download endpoints that follow FDOKeyAuth.
 type HTTPPullHolder struct {
 	// Store provides access to vouchers.
 	Store VoucherStore
@@ -33,7 +33,7 @@ type HTTPPullHolder struct {
 }
 
 // RegisterHandlers registers the Pull API HTTP handlers on the given mux.
-// These handlers expect a valid Bearer token from a completed PullAuth handshake.
+// These handlers expect a valid Bearer token from a completed FDOKeyAuth handshake.
 // The root parameter is the Pull Service Root path (e.g., "/api/v1/pull/vouchers").
 // List is at GET {root} and download is at GET {root}/{guid}/download.
 func (h *HTTPPullHolder) RegisterHandlers(mux *http.ServeMux, root ...string) {

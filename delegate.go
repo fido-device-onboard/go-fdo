@@ -49,8 +49,13 @@ var OIDPermitOnboardFdoDisable = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 45724, 
 
 // OIDPermitVoucherClaim is the fdo-ekt-permit-voucher-claim permission OID (PERM.5).
 // This permission authorizes a Delegate to claim (pull/download) vouchers signed over
-// to the Owner Key from a Holder service via the Pull Authentication protocol.
+// to the Owner Key from a Server via the FDOKeyAuth protocol.
 var OIDPermitVoucherClaim = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 45724, 3, 1, 5}
+
+// OIDPermitVoucherUpload is the fdo-ekt-permit-voucher-upload permission OID (PERM.6).
+// This permission authorizes a Delegate to upload (push) vouchers to a Recipient
+// service via the FDOKeyAuth protocol.
+var OIDPermitVoucherUpload = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 45724, 3, 1, 6}
 
 // OIDDelegateClaim is a legacy delegate OID (kept for backwards compatibility).
 var OIDDelegateClaim = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 45724, 3, 4}
@@ -114,6 +119,9 @@ func DelegateOIDtoString(oid asn1.ObjectIdentifier) string {
 	if oid.Equal(OIDPermitVoucherClaim) {
 		return "permit-voucher-claim"
 	}
+	if oid.Equal(OIDPermitVoucherUpload) {
+		return "permit-voucher-upload"
+	}
 	// Legacy OIDs
 	if oid.Equal(OIDDelegateClaim) {
 		return "claim"
@@ -141,6 +149,8 @@ func DelegateStringToOID(str string) (asn1.ObjectIdentifier, error) {
 		return OIDPermitOnboardFdoDisable, nil
 	case "voucher-claim", "permit-voucher-claim":
 		return OIDPermitVoucherClaim, nil
+	case "voucher-upload", "permit-voucher-upload":
+		return OIDPermitVoucherUpload, nil
 	// Legacy OIDs
 	case "claim":
 		return OIDDelegateClaim, nil

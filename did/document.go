@@ -177,7 +177,7 @@ func rsaPublicKeyToJWK(key *rsa.PublicKey) (*JWK, error) {
 }
 
 // FingerprintFDO computes the spec-correct FDO OwnerKeyFingerprint: SHA-256 of the
-// CBOR-encoded protocol.PublicKey (spec §9.8). This is used for PullAuth token
+// CBOR-encoded protocol.PublicKey (spec §10). This is used for FDOKeyAuth token
 // scoping, partner trust store lookups, and voucher pipeline routing.
 func FingerprintFDO(pub crypto.PublicKey) ([]byte, error) {
 	keyType, err := protocol.KeyTypeFromPublicKey(pub)

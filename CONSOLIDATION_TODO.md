@@ -24,7 +24,7 @@ are summarized below, but you should **read the actual source** to understand th
 
 - **`did/`** (~960 lines) — DID minting, resolution, document construction, serving,
   JWK conversion, PEM utilities, fingerprinting
-- **`transfer/`** (~1,750 lines) — Push sender/receiver, Pull holder/initiator, PullAuth
+- **`transfer/`** (~1,750 lines) — Push sender/receiver, Pull holder/initiator, FDOKeyAuth
   client/server, voucher store interface, session management, COSE signing/verification
 - **`http/`** (~680 lines) — FDO protocol HTTP transport (client `Transport` and server
   `Handler`), token management, request/response debug logging, encryption/decryption
@@ -51,8 +51,8 @@ Common duplications found in the apps include:
 | `VoucherReceiverHandler` (push receiver) | `transfer.HTTPPushReceiver` | `transfer/` |
 | `VoucherFileStore` / voucher storage | `transfer.VoucherStore` interface | `transfer/` |
 | Passing raw bytes + `fdo.Voucher` separately | `transfer.VoucherData` (unified struct) | `transfer/` |
-| PullAuth server implementation | `transfer.PullAuthServer` (412 lines, complete) | `transfer/` |
-| PullAuth client implementation | `transfer.PullAuthClient` (353 lines, complete) | `transfer/` |
+| FDOKeyAuth server implementation | `transfer.FDOKeyAuthServer` (412 lines, complete) | `transfer/` |
+| FDOKeyAuth client implementation | `transfer.FDOKeyAuthClient` (353 lines, complete) | `transfer/` |
 | Pull list/download handler | `transfer.HTTPPullHolder` (218 lines, complete) | `transfer/` |
 | Pull authenticate + download all | `transfer.HTTPPullInitiator` (215 lines, complete) | `transfer/` |
 | FDO protocol HTTP handler (DI/TO1/TO2) | `http.Handler` (369 lines, handles all message types) | `http/` |
@@ -150,18 +150,18 @@ dependencies for the same functionality.
 - `transfer.VoucherData` — Unified struct: `.GUID`, `.SerialNumber`, `.Voucher`, `.Raw`
 - `transfer.VoucherStore` interface — `.Save()`, `.Load()`, `.GetVoucher()`, `.List()`, `.Delete()`
 
-**Pull model** (replaces app-level PullAuth and pull handlers):
+**Pull model** (replaces app-level FDOKeyAuth and pull handlers):
 
-- `transfer.PullAuthServer` — Complete Holder-side PullAuth (`.HandleHello`, `.HandleProve`, `.RegisterHandlers`)
-- `transfer.PullAuthClient` — Complete Recipient-side PullAuth (`.Authenticate()`)
+- `transfer.FDOKeyAuthServer` — Complete Holder-side FDOKeyAuth (`.HandleHello`, `.HandleProve`, `.RegisterHandlers`)
+- `transfer.FDOKeyAuthClient` — Complete Recipient-side FDOKeyAuth (`.Authenticate()`)
 - `transfer.HTTPPullHolder` — Serves voucher list + download (`.HandleListVouchers`, `.HandleDownloadVoucher`, `.RegisterHandlers`)
 - `transfer.HTTPPullInitiator` — Authenticate + list + download (`.PullAll()`)
-- `transfer.PullAuthClient.PathPrefix` — Configurable Pull Service Root (defaults to `/api/v1/pull/vouchers`)
-- `transfer.PullAuthServer.RegisterHandlers(mux, root...)` — Variadic root path
+- `transfer.FDOKeyAuthClient.PathPrefix` — Configurable Pull Service Root (defaults to `/api/v1/pull/vouchers`)
+- `transfer.FDOKeyAuthServer.RegisterHandlers(mux, root...)` — Variadic root path
 
 **Session management**:
 
-- `transfer.SessionStore` — In-memory PullAuth session store with TTL and max-sessions
+- `transfer.SessionStore` — In-memory FDOKeyAuth session store with TTL and max-sessions
 - `transfer.TokenIssuer` / `transfer.TokenValidator` — Callbacks for token lifecycle
 - `transfer.VoucherLookup` — Callback for voucher existence checks
 
@@ -268,7 +268,7 @@ After consolidation, each app should pass:
 - [ ] `gofmt -l .` clean
 - [ ] `golangci-lint run` passes
 - [ ] `go mod tidy` removes old deps (`go-did`, `base58`, `multibase`, etc.)
-- [ ] Integration tests pass (push, pull, PullAuth workflows)
+- [ ] Integration tests pass (push, pull, FDOKeyAuth workflows)
 - [ ] Fingerprints match `did.FingerprintFDOHex()` output
 - [ ] `did:key` and `did:web` resolution works via `did.Resolver`
 

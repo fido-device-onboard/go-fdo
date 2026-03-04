@@ -18,18 +18,18 @@ import (
 	"github.com/fido-device-onboard/go-fdo/cbor"
 )
 
-// HTTPPullInitiator implements PullInitiator using PullAuth + JSON Pull API.
+// HTTPPullInitiator implements PullInitiator using FDOKeyAuth + JSON Pull API.
 type HTTPPullInitiator struct {
-	// Auth is the PullAuth client used for authentication.
-	Auth *PullAuthClient
+	// Auth is the FDOKeyAuth client used for authentication.
+	Auth *FDOKeyAuthClient
 
 	// Store is used to persist downloaded vouchers. If nil, vouchers are
 	// returned but not persisted.
 	Store VoucherStore
 }
 
-// Authenticate performs the PullAuth handshake.
-func (p *HTTPPullInitiator) Authenticate(ctx context.Context) (*PullAuthClientResult, error) {
+// Authenticate performs the FDOKeyAuth handshake.
+func (p *HTTPPullInitiator) Authenticate(ctx context.Context) (*FDOKeyAuthClientResult, error) {
 	return p.Auth.Authenticate()
 }
 

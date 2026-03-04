@@ -16,19 +16,19 @@ import (
 // SessionIDSize is the size of session identifiers in bytes (128 bits).
 const SessionIDSize = 16
 
-// Session holds the state for an in-progress PullAuth handshake.
+// Session holds the state for an in-progress FDOKeyAuth handshake.
 type Session struct {
 	ID             []byte
-	OwnerKey       protocol.PublicKey
+	CallerKey      protocol.PublicKey
 	DelegateChain  *CertChain
-	NonceRecipient Nonce
-	NonceHolder    Nonce
+	NonceCaller    Nonce
+	NonceServer    Nonce
 	HashHello      protocol.Hash
-	ChallengeBytes []byte // CBOR-encoded PullAuth.Challenge for hash continuity
+	ChallengeBytes []byte // CBOR-encoded FDOKeyAuth.Challenge for hash continuity
 	CreatedAt      time.Time
 }
 
-// SessionStore manages PullAuth session state. Sessions are short-lived
+// SessionStore manages FDOKeyAuth session state. Sessions are short-lived
 // (typically 60 seconds) and single-use.
 type SessionStore struct {
 	mu       sync.Mutex

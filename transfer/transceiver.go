@@ -45,10 +45,10 @@ type PushReceiver interface {
 	Receive(ctx context.Context, data *VoucherData, sourceIP string) error
 }
 
-// PullInitiator authenticates to a Holder and downloads vouchers.
+// PullInitiator authenticates to a Server and downloads vouchers.
 type PullInitiator interface {
-	// Authenticate performs the PullAuth handshake and returns a session token.
-	Authenticate(ctx context.Context) (*PullAuthClientResult, error)
+	// Authenticate performs the FDOKeyAuth handshake and returns a session token.
+	Authenticate(ctx context.Context) (*FDOKeyAuthClientResult, error)
 
 	// ListVouchers retrieves the list of available vouchers using the session token.
 	ListVouchers(ctx context.Context, token string, filter ListFilter) (*VoucherListResponse, error)
