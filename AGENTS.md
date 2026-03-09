@@ -73,6 +73,17 @@ make          # Default: run lint + test
 - TPM tests: `go test -v ./tpm/...`
 - Examples tests: `go test -v ./examples/...`
 
+#### TPM Spec Compliance Tests
+
+Separate build tag, must run from `tpm/` directory:
+
+```bash
+cd tpm && go test -v -tags=spec_compliance_test -count=1
+```
+
+P-384/SHA-384 tests are skipped (hardware TPM does not support P-384).
+See `tpm/SPEC_COMPLIANCE_TODO.md` for phase tracking and details.
+
 #### Integration Tests
 
 Run via `./test_examples.sh` with specific test scenarios:

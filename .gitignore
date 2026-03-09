@@ -54,3 +54,4 @@ test.db
 fdo-cmd
 to2_client_v200.go.backup
 examples/cmd/client
+securing-fdo-in-tpm-v1.0-rd-20231010.html

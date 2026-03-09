@@ -36,6 +36,7 @@ It implements [FIDO Device Onboard Specification 1.1][fdo11] and [FIDO Device On
 | [delegate.md](delegate.md) | Delegate certificate support and permissions |
 | [PRODUCTION_CONSIDERATIONS.md](PRODUCTION_CONSIDERATIONS.md) | Production deployment security guidelines |
 | [CLI_COMMANDS.md](CLI_COMMANDS.md) | CLI command reference |
+| [TPM Compliance Testing](tpm/TPM_COMPLIANCE_TESTING.md) | TPM spec compliance testing guide (opt-in tests requiring sudo or env config) |
 
 ## Quick Start
 
@@ -45,6 +46,7 @@ A comprehensive test script is provided that demonstrates all major features of 
 go work init
 go work use -r .
 ./test_examples.sh all
+
 ```
 
 Makefile included is for convenience, and to prove some quick ways to build, run test, run examples, and provide more of a "cheat sheet" to illustrate commands for common tasks. Try `make help` for more information.
@@ -67,6 +69,7 @@ Run a specific test:
 ```bash
 ./test_examples.sh basic
 ./test_examples.sh delegate-fdo200
+
 ```
 
 **Requirements:** `sqlite3` must be installed for GUID extraction.
@@ -188,6 +191,7 @@ Key exchange suites:
   - ASYMKEX3072
   - ECDH256
   - ECDH384
+
 ```
 
 ### Testing Device Onboard
@@ -199,6 +203,7 @@ $ go run ./examples/cmd server -http 127.0.0.1:9999 -db ./test.db
 [2024-09-01 00:00:00] INFO: Listening
   local: 127.0.0.1:9999
   external: 127.0.0.1:9999
+
 ```
 
 Then DI, followed by TO1 and TO2 may be run. Passing the `-debug` flag allows message payloads to be viewed.
@@ -208,6 +213,7 @@ $ go run ./examples/cmd client -di http://127.0.0.1:9999
 Success
 $ go run ./examples/cmd client
 Success
+
 ```
 
 Running TO1 and TO2 again will fail, because the new voucher has not been registered for rendezvous.
@@ -219,6 +225,7 @@ $ go run ./examples/cmd client
   error: error received from TO1.HelloRV request: 2024-09-01 00:00:00 UTC [code=6,prevMsgType=30,id=0] not found
 client error: transfer of ownership not successful
 exit status 2
+
 ```
 
 If the server had been started with the `-rv-bypass` flag, then the second onboarding attempt would have failed with not found, because unextended vouchers are not automatically allowed for re-onboarding.
@@ -229,6 +236,7 @@ If the server had been started with the `-rv-bypass` flag, then the second onboa
   error: error received from TO2.HelloDevice request: 2024-09-01 00:00:00 UTC [code=6,prevMsgType=60,id=0] error retrieving voucher for device fa667c70e50b696086bbd8e05ba2773b: not found
 client error: transfer of ownership not successful
 exit status 2
+
 ```
 
 To test repeatedly without the device credential changing, run the server with the `-reuse-cred` flag to enable the [Credential Reuse Protocol][Credential Reuse Protocol].
@@ -244,6 +252,7 @@ $ go run ./examples/cmd server -http 127.0.0.1:9999 -to0 http://127.0.0.1:9999 -
 [2024-09-01 00:00:00] INFO: Listening
   local: 127.0.0.1:9999
   external: 127.0.0.1:9999
+
 ```
 
 Next, initialize the device and check that TO1 fails.
@@ -260,6 +269,7 @@ $ go run ./examples/cmd client -rv-only
 [2024-09-01 00:00:00] ERROR: TO1 failed
   base URL: http://127.0.0.1:9999
   error: error received from TO1.HelloRV request: 2024-09-01 00:00:00 +0000 UTC [code=6,prevMsgType=30,id=0] not found
+
 ```
 
 Then register an RV blob with the server.
@@ -268,6 +278,7 @@ Then register an RV blob with the server.
 $ go run ./examples/cmd server -http 127.0.0.1:9999 -to0 http://127.0.0.1:9999 -to0-guid d21d841a3f54f4e89a60ed9b9779e9e8 -db ./test.db
 [2024-09-01 00:00:00] INFO: RV blob registered
   ttl: 1193046h28m15s
+
 ```
 
 Finally, check that TO1 now succeeds.
@@ -281,6 +292,7 @@ TO1 Blob: to1d[
     Algorithm: Sha256Hash
     Value: 340129067ad5839e2a5424baa3e7aa4bb984f610f29123b47b56353f47d71145
 ]
+
 ```
 
 ### Testing Key Exchanges
@@ -292,6 +304,7 @@ $ go run ./examples/cmd server -http 127.0.0.1:9999 -db ./test.db
 [2024-09-01 00:00:00] INFO: Listening
   local: 127.0.0.1:9999
   external: 127.0.0.1:9999
+
 ```
 
 Then DI, followed by TO1 and TO2 may be run.
@@ -303,6 +316,7 @@ $ go run ./examples/cmd client -di http://127.0.0.1:9999 -di-key rsa2048
 Success
 $ go run ./examples/cmd client -kex ASYMKEX2048
 Success
+
 ```
 
 ### Testing Resale Protocol
@@ -314,6 +328,7 @@ $ go run ./examples/cmd server -http 127.0.0.1:9999 -to0 http://127.0.0.1:9999 -
 [2024-09-01 00:00:00] INFO: Listening
   local: 127.0.0.1:9999
   external: 127.0.0.1:9999
+
 ```
 
 Next, initialize the device and perform transfer of ownership.
@@ -328,6 +343,7 @@ blobcred[
   GUID          d21d841a3f54f4e89a60ed9b9779e9e8
   ...
 ]
+
 ```
 
 Then, using a randomly-generated SHA384 public key, perform resale:
@@ -374,6 +390,7 @@ qq5ZXzCeiCGxbXNPpR/DbbInW3C2Q6mGtbuXDRr/roCViWO83QGrlFf3bgha7y+U
 i2op2Hc819qjlgzt0kCmpOs75TtIIcOr2pSMy6pB+1bCr3QLdKH4bf7y8p9Hh8Tu
 s0hciw==
 -----END OWNERSHIP VOUCHER-----
+
 ```
 
 ### Testing with a TPM
@@ -385,6 +402,7 @@ $ go run ./examples/cmd server -http 127.0.0.1:9999 -db ./test.db
 [2024-09-01 00:00:00] INFO: Listening
   local: 127.0.0.1:9999
   external: 127.0.0.1:9999
+
 ```
 
 Then run DI, with the TPM resource manager path specified. The key type must always be explicit through the `-di-key` flag.
@@ -396,6 +414,8 @@ $ go run ./examples/cmd client -di http://127.0.0.1:9999 -di-key ec384 -tpm /dev
 Success
 ```
 
+> **Note**: The standard test suite (`make test`, `./test_examples.sh`) runs TPM simulator tests only. TPM spec compliance tests require explicit opt-in and hardware access or env config. See [TPM Compliance Testing](tpm/TPM_COMPLIANCE_TESTING.md) for details.
+
 Finally, run TO1/TO2.
 
 ```console
@@ -403,6 +423,7 @@ $ go run ./examples/cmd client -di-key ec384 -tpm /dev/tpmrm0
 [2024-09-01 00:00:00] INFO: tpm: max input buffer size undefined, using default
   size: 1024
 Success
+
 ```
 
 The TPM simulator may be used with 3 caveats:
@@ -421,6 +442,7 @@ $ go run ./examples/cmd client -di-key rsa2048 -tpm simulator
 [2024-09-01 00:00:00] INFO: tpm: max input buffer size undefined, using default
   size: 1024
 Success
+
 ```
 
 ## Delegate Support
