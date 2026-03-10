@@ -36,6 +36,7 @@ It implements [FIDO Device Onboard Specification 1.1][fdo11] and [FIDO Device On
 | [delegate.md](delegate.md) | Delegate certificate support and permissions |
 | [PRODUCTION_CONSIDERATIONS.md](PRODUCTION_CONSIDERATIONS.md) | Production deployment security guidelines |
 | [CLI_COMMANDS.md](CLI_COMMANDS.md) | CLI command reference |
+| [TPM.md](TPM.md) | **TPM Integration** — Build tags, credential provisioning, NV inspection, DAK proof, and library API for downstream apps |
 | [TPM Compliance Testing](tpm/TPM_COMPLIANCE_TESTING.md) | TPM spec compliance testing guide (opt-in tests requiring sudo or env config) |
 
 ## Quick Start
@@ -77,6 +78,22 @@ Run a specific test:
 ## Building the Example Application
 
 The example client and server application can be built with `go build` directly, but requires a Go workspace to build from the root package directory.
+
+### Credential Storage Build Tags
+
+Build tags select the credential storage backend at compile time. Application
+code is identical regardless of backend — only the build command changes.
+
+| Build command | Credential backend | CGO | Use case |
+|---------------|--------------------|-----|----------|
+| `go build ./examples/cmd` | Software blob (file) | No | Default — keys and HMAC in CBOR file |
+| `go build -tags=tpm ./examples/cmd` | Hardware TPM | No | Production hardware on Linux |
+| `CGO_ENABLED=1 go build -tags=tpmsim ./examples/cmd` | TPM simulator | Yes | Development and CI |
+
+The `cred` module (`go-fdo/cred`) provides the `cred.Store` interface that
+abstracts credential storage. Existing apps that import `go-fdo/blob` or
+`go-fdo/tpm` directly continue to work — `cred.Store` is additive, not a
+breaking change. See [TPM.md](TPM.md) for the library API and migration guide.
 
 ```console
 $ go work init
@@ -395,55 +412,24 @@ s0hciw==
 
 ### Testing with a TPM
 
-First, start a server in a separate console.
+When built with `-tags=tpm` or `-tags=tpmsim`, the binary stores credentials
+in the TPM instead of a blob file. DI and TO1/TO2 commands are the same — no
+extra flags needed.
+
+Inspect TPM-stored credentials:
 
 ```console
-$ go run ./examples/cmd server -http 127.0.0.1:9999 -db ./test.db
-[2024-09-01 00:00:00] INFO: Listening
-  local: 127.0.0.1:9999
-  external: 127.0.0.1:9999
+./fdo client -tpm-show
+./fdo client -tpm-export-dak > dak.pem
+./fdo client -tpm-prove
 
 ```
 
-Then run DI, with the TPM resource manager path specified. The key type must always be explicit through the `-di-key` flag.
+The `-tpm <path>` flag overrides the default TPM device for inspection commands
+(e.g., `-tpm /dev/tpm0` or `-tpm simulator`).
 
-```console
-$ go run ./examples/cmd client -di http://127.0.0.1:9999 -di-key ec384 -tpm /dev/tpmrm0
-[2024-09-01 00:00:00] INFO: tpm: max input buffer size undefined, using default
-  size: 1024
-Success
-```
-
-> **Note**: The standard test suite (`make test`, `./test_examples.sh`) runs TPM simulator tests only. TPM spec compliance tests require explicit opt-in and hardware access or env config. See [TPM Compliance Testing](tpm/TPM_COMPLIANCE_TESTING.md) for details.
-
-Finally, run TO1/TO2.
-
-```console
-$ go run ./examples/cmd client -di-key ec384 -tpm /dev/tpmrm0
-[2024-09-01 00:00:00] INFO: tpm: max input buffer size undefined, using default
-  size: 1024
-Success
-
-```
-
-The TPM simulator may be used with 3 caveats:
-
-1. RSA3072 keys are not supported
-2. OpenSSL libraries and headers must be installed
-3. The executable must be built with cgo enabled
-
-```console
-$ go run ./examples/cmd client -di http://127.0.0.1:9999 -di-key rsa2048 -tpm simulator
-[2024-09-01 00:00:00] INFO: tpm: max input buffer size undefined, using default
-  size: 1024
-Success
-
-$ go run ./examples/cmd client -di-key rsa2048 -tpm simulator
-[2024-09-01 00:00:00] INFO: tpm: max input buffer size undefined, using default
-  size: 1024
-Success
-
-```
+See [TPM.md](TPM.md) for NV index details, the `cred.Store` library API for
+downstream applications, and TPM spec compliance testing.
 
 ## Delegate Support
 

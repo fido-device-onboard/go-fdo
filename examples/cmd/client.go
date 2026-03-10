@@ -5,14 +5,7 @@ package main
 
 import (
 	"context"
-	"crypto"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/rsa"
-	"crypto/sha256"
-	"crypto/sha512"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -36,7 +29,6 @@ import (
 	"time"
 
 	"github.com/fido-device-onboard/go-fdo"
-	"github.com/fido-device-onboard/go-fdo/blob"
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
 	"github.com/fido-device-onboard/go-fdo/custom"
@@ -44,7 +36,6 @@ import (
 	"github.com/fido-device-onboard/go-fdo/kex"
 	"github.com/fido-device-onboard/go-fdo/protocol"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
-	"github.com/fido-device-onboard/go-fdo/tpm"
 )
 
 var clientFlags = flag.NewFlagSet("client", flag.ContinueOnError)
@@ -77,6 +68,12 @@ var (
 	voucherSerial string // Serial number for voucher operations
 	voucherExport string // Export voucher to file
 	voucherFormat string // Export format (pem, json, cbor)
+
+	// TPM credential inspection flags
+	tpmShow      bool   // Show all FDO credentials stored in TPM NV indices
+	tpmExportDak bool   // Export DAK public key as PEM
+	tpmProveDak  bool   // Prove DAK possession by signing a challenge
+	tpmChallenge string // Optional challenge for -tpm-prove (hashed with SHA-256)
 )
 
 func sanitizeLogValue(s string) string {
@@ -188,6 +185,12 @@ func init() {
 	clientFlags.StringVar(&voucherSerial, "voucher-serial", "", "Serial number for voucher operations")
 	clientFlags.StringVar(&voucherExport, "voucher-export", "", "Export voucher to file")
 	clientFlags.StringVar(&voucherFormat, "voucher-format", "pem", "Export format (pem, json, cbor)")
+
+	// TPM credential inspection flags
+	clientFlags.BoolVar(&tpmShow, "tpm-show", false, "Show all FDO credentials stored in TPM NV indices")
+	clientFlags.BoolVar(&tpmExportDak, "tpm-export-dak", false, "Export DAK public key as PEM")
+	clientFlags.BoolVar(&tpmProveDak, "tpm-prove", false, "Prove DAK possession by signing a challenge")
+	clientFlags.StringVar(&tpmChallenge, "tpm-challenge", "", "Optional challenge `string` for -tpm-prove (hashed with SHA-256; random if empty)")
 }
 
 func client(ctx context.Context) error {
@@ -195,21 +198,37 @@ func client(ctx context.Context) error {
 		level.Set(slog.LevelDebug)
 	}
 
+	// Handle TPM credential inspection operations (no -tpm flag needed;
+	// tpmOpen falls back to tpm.DefaultOpen which is build-tag-selected).
+	if tpmShow || tpmExportDak || tpmProveDak {
+		switch {
+		case tpmShow:
+			return tpmShowCredentials()
+		case tpmExportDak:
+			return tpmExportDAK()
+		case tpmProveDak:
+			return tpmProveDAK()
+		}
+	}
+
 	// Handle voucher management operations
 	if listVouchers || voucherExport != "" {
 		return handleVoucherOperations()
 	}
+
+	// Open the build-tag-selected credential store (blob, tpm, or tpmsim)
+	if err := openCredStore(); err != nil {
+		return err
+	}
+	defer func() { _ = closeCredStore() }()
 
 	// Perform DI if given a URL
 	if diURL != "" {
 		return di(ctx)
 	}
 
-	// Read device credential blob to configure client for TO1/TO2
-	dc, hmacSha256, hmacSha384, privateKey, cleanup, err := readCred()
-	if err == nil && cleanup != nil {
-		defer func() { _ = cleanup() }()
-	}
+	// Read device credential to configure client for TO1/TO2
+	dc, hmacSha256, hmacSha384, privateKey, err := readCred()
 	if err != nil || printDevice {
 		return err
 	}
@@ -251,49 +270,31 @@ func client(ctx context.Context) error {
 
 	// Store new credential
 	fmt.Println("Success")
-	return updateCred(*newDC)
+	return saveCred(*newDC)
 }
 
-func di(ctx context.Context) (err error) { //nolint:gocyclo
-	// Generate new key and secret
-	secret := make([]byte, 32)
-	if _, err := rand.Read(secret); err != nil {
-		return fmt.Errorf("error generating device secret: %w", err)
-	}
-	hmacSha256, hmacSha384 := hmac.New(sha256.New, secret), hmac.New(sha512.New384, secret)
-
+func di(ctx context.Context) (err error) {
+	// Determine key type and CSR signature algorithm from CLI flag
 	var sigAlg x509.SignatureAlgorithm
 	var keyType protocol.KeyType
-	var key crypto.Signer
 	switch diKey {
 	case "ec256":
 		keyType = protocol.Secp256r1KeyType
-		key, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	case "ec384":
 		keyType = protocol.Secp384r1KeyType
-		key, err = ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	case "rsa2048":
 		keyType = protocol.Rsa2048RestrKeyType
-		key, err = rsa.GenerateKey(rand.Reader, 2048)
 	case "rsa3072":
 		sigAlg = x509.SHA384WithRSA
 		keyType = protocol.RsaPkcsKeyType
-		key, err = rsa.GenerateKey(rand.Reader, 3072)
 	default:
 		return fmt.Errorf("unknown key type: %s", diKey)
 	}
-	if err != nil {
-		return fmt.Errorf("error generating device key: %w", err)
-	}
 
-	// If using a TPM, swap key/hmac for that
-	if tpmPath != "" {
-		var cleanup func() error
-		hmacSha256, hmacSha384, key, cleanup, err = tpmCred()
-		if err != nil {
-			return err
-		}
-		defer func() { _ = cleanup() }()
+	// Generate HMAC + device key via the build-tag-selected credential store
+	hmacSha256, hmacSha384, key, err := newDICred(keyType)
+	if err != nil {
+		return err
 	}
 
 	// Generate Java implementation-compatible mfg string
@@ -326,7 +327,7 @@ func di(ctx context.Context) (err error) { //nolint:gocyclo
 		return fmt.Errorf("unsupported key encoding: %s", diKeyEnc)
 	}
 	version := protocol.Version(fdoVersion) //#nosec G115 -- fdoVersion is validated in flag parsing
-	cred, err := fdo.DI(ctx, tlsTransportWithVersion(diURL, nil, version), custom.DeviceMfgInfo{
+	dc, err := fdo.DI(ctx, tlsTransportWithVersion(diURL, nil, version), custom.DeviceMfgInfo{
 		KeyType:      keyType,
 		KeyEncoding:  keyEncoding,
 		SerialNumber: strconv.FormatInt(sn.Int64(), 10),
@@ -341,18 +342,7 @@ func di(ctx context.Context) (err error) { //nolint:gocyclo
 		return err
 	}
 
-	if tpmPath != "" {
-		return saveCred(tpm.DeviceCredential{
-			DeviceCredential: *cred,
-			DeviceKey:        tpm.FdoDeviceKey,
-		})
-	}
-	return saveCred(blob.DeviceCredential{
-		Active:           true,
-		DeviceCredential: *cred,
-		HmacSecret:       secret,
-		PrivateKey:       blob.Pkcs8Key{Signer: key},
-	})
+	return saveCred(*dc)
 }
 
 func transferOwnership(ctx context.Context, rvInfo [][]protocol.RvInstruction, conf fdo.TO2Config) (*fdo.DeviceCredential, error) { //nolint:gocyclo

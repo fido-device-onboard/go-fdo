@@ -344,9 +344,9 @@ func InspectVoucherFull(state *sqlite.DB, voucherData []byte) (*InspectVoucherRe
 	info := fdo.OvhValidationContext{
 		PublicKeyToValidate: ownerKey.Public(),
 	}
-	dc, hmacSha256, hmacSha384, privateKey, cleanup, err := readCred()
-	if err == nil && cleanup != nil {
-		defer func() { _ = cleanup() }()
+	dc, hmacSha256, hmacSha384, privateKey, err := readCred()
+	if err != nil {
+		return nil, fmt.Errorf("reading credential: %w", err)
 	}
 
 	err = ov.VerifyCrypto(fdo.VerifyOptions{

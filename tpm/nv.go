@@ -1,0 +1,295 @@
+// SPDX-FileCopyrightText: (C) 2026 Dell Technologies
+// SPDX-License-Identifier: Apache 2.0
+
+package tpm
+
+import (
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/asn1"
+	"fmt"
+	"math/big"
+
+	"github.com/google/go-tpm/tpm2"
+)
+
+// NV Index range reserved for FDO per "Securing FDO Credentials in the TPM v1.0".
+const (
+	DCActiveIndex    = 0x01D10000 // OS action flag (1=initialized, 0=not)
+	DCTPMIndex       = 0x01D10001 // GUID + device info (Profile B)
+	DCOVIndex        = 0x01D10002 // Ownership Voucher data (Profile C)
+	HMACUSIndex      = 0x01D10003 // HMAC Unique String (Profile B)
+	DeviceKeyUSIndex = 0x01D10004 // Device Key Unique String (Profile B)
+	FDOCertIndex     = 0x01D10005 // Optional X.509 certificate (Profile C)
+)
+
+// Persistent object handles reserved for FDO.
+const (
+	DAKHandle     = 0x81020002 // ECC signing key (Device Attestation Key)
+	HMACKeyHandle = 0x81020003 // HMAC key
+)
+
+// NVCredentialInfo holds all credential data read from TPM NV indices.
+type NVCredentialInfo struct {
+	Active     bool // DCActive flag (true = device initialized)
+	GUID       [16]byte
+	DeviceInfo string
+	HasDCOV    bool   // true if DCOV NV index exists
+	DCOVData   []byte // raw DCOV content (ownership voucher placeholder)
+	HasCert    bool   // true if FDO_Cert NV index exists
+	CertData   []byte // raw certificate data
+
+	// NV index metadata
+	DCActiveSize    uint16
+	DCTPMSize       uint16
+	DCOVSize        uint16
+	HMACUSSize      uint16
+	DeviceKeyUSSize uint16
+	FDOCertSize     uint16
+
+	// Persistent key presence
+	HasDAK     bool
+	HasHMACKey bool
+}
+
+// ReadNVCredentials reads all FDO credential data from TPM NV indices.
+// It returns information about what is stored without requiring any
+// authorization beyond NV public reads and owner/auth reads.
+func ReadNVCredentials(t TPM) (*NVCredentialInfo, error) {
+	info := &NVCredentialInfo{}
+
+	// DCActive (Profile A: OwnerRead)
+	if nvPub, err := (tpm2.NVReadPublic{NVIndex: tpm2.TPMHandle(DCActiveIndex)}).Execute(t); err == nil {
+		pub, _ := nvPub.NVPublic.Contents()
+		info.DCActiveSize = pub.DataSize
+		data, err := nvReadOwner(t, DCActiveIndex, nvPub.NVName, pub.DataSize)
+		if err != nil {
+			return nil, fmt.Errorf("read DCActive: %w", err)
+		}
+		info.Active = len(data) > 0 && data[0] == 0x01
+	}
+
+	// DCTPM (Profile B: AuthRead — NV index auth)
+	if nvPub, err := (tpm2.NVReadPublic{NVIndex: tpm2.TPMHandle(DCTPMIndex)}).Execute(t); err == nil {
+		pub, _ := nvPub.NVPublic.Contents()
+		info.DCTPMSize = pub.DataSize
+		data, err := nvReadAuth(t, DCTPMIndex, nvPub.NVName, pub.DataSize)
+		if err != nil {
+			return nil, fmt.Errorf("read DCTPM: %w", err)
+		}
+		if len(data) >= 16 {
+			copy(info.GUID[:], data[:16])
+			info.DeviceInfo = string(data[16:])
+		}
+	}
+
+	// DCOV (Profile C: OwnerRead)
+	if nvPub, err := (tpm2.NVReadPublic{NVIndex: tpm2.TPMHandle(DCOVIndex)}).Execute(t); err == nil {
+		pub, _ := nvPub.NVPublic.Contents()
+		info.DCOVSize = pub.DataSize
+		info.HasDCOV = true
+		data, err := nvReadOwner(t, DCOVIndex, nvPub.NVName, pub.DataSize)
+		if err == nil {
+			info.DCOVData = data
+		}
+	}
+
+	// HMAC_US (Profile B: AuthRead)
+	if nvPub, err := (tpm2.NVReadPublic{NVIndex: tpm2.TPMHandle(HMACUSIndex)}).Execute(t); err == nil {
+		pub, _ := nvPub.NVPublic.Contents()
+		info.HMACUSSize = pub.DataSize
+	}
+
+	// DeviceKey_US (Profile B: AuthRead)
+	if nvPub, err := (tpm2.NVReadPublic{NVIndex: tpm2.TPMHandle(DeviceKeyUSIndex)}).Execute(t); err == nil {
+		pub, _ := nvPub.NVPublic.Contents()
+		info.DeviceKeyUSSize = pub.DataSize
+	}
+
+	// FDO_Cert (Profile C: OwnerRead)
+	if nvPub, err := (tpm2.NVReadPublic{NVIndex: tpm2.TPMHandle(FDOCertIndex)}).Execute(t); err == nil {
+		pub, _ := nvPub.NVPublic.Contents()
+		info.FDOCertSize = pub.DataSize
+		info.HasCert = true
+		data, err := nvReadOwner(t, FDOCertIndex, nvPub.NVName, pub.DataSize)
+		if err == nil {
+			info.CertData = data
+		}
+	}
+
+	// Check persistent key handles
+	if _, err := (tpm2.ReadPublic{ObjectHandle: tpm2.TPMHandle(DAKHandle)}).Execute(t); err == nil {
+		info.HasDAK = true
+	}
+	if _, err := (tpm2.ReadPublic{ObjectHandle: tpm2.TPMHandle(HMACKeyHandle)}).Execute(t); err == nil {
+		info.HasHMACKey = true
+	}
+
+	return info, nil
+}
+
+// ReadDAKPublicKey reads the Device Attestation Key's public key from the
+// persistent handle. Returns the public key as a crypto.PublicKey (currently
+// *ecdsa.PublicKey for ECC keys).
+func ReadDAKPublicKey(t TPM) (crypto.PublicKey, error) {
+	resp, err := (tpm2.ReadPublic{ObjectHandle: tpm2.TPMHandle(DAKHandle)}).Execute(t)
+	if err != nil {
+		return nil, fmt.Errorf("ReadPublic DAK (0x%08X): %w", DAKHandle, err)
+	}
+
+	pub, err := resp.OutPublic.Contents()
+	if err != nil {
+		return nil, fmt.Errorf("parse DAK public: %w", err)
+	}
+
+	switch pub.Type {
+	case tpm2.TPMAlgECC:
+		ecc, err := pub.Unique.ECC()
+		if err != nil {
+			return nil, fmt.Errorf("extract ECC point: %w", err)
+		}
+		var curve elliptic.Curve
+		switch len(ecc.X.Buffer) {
+		case 32:
+			curve = elliptic.P256()
+		case 48:
+			curve = elliptic.P384()
+		default:
+			return nil, fmt.Errorf("unsupported ECC key size: %d bytes", len(ecc.X.Buffer))
+		}
+		return &ecdsa.PublicKey{
+			Curve: curve,
+			X:     new(big.Int).SetBytes(ecc.X.Buffer),
+			Y:     new(big.Int).SetBytes(ecc.Y.Buffer),
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported DAK key type: %v", pub.Type)
+	}
+}
+
+// DAKProof contains the result of a DAK possession proof.
+type DAKProof struct {
+	PublicKey crypto.PublicKey // DAK public key
+	Challenge [32]byte         // SHA-256 hash that was signed
+	Signature []byte           // ASN.1-encoded ECDSA signature
+}
+
+// ProveDAKPossession signs a random challenge with the Device Attestation Key
+// using policy session authorization (PolicyNV + PolicySecret on the
+// DeviceKey_US NV index). This proves the TPM holds the private key
+// corresponding to the DAK public key.
+//
+// If challenge is nil, a random 32-byte challenge is generated.
+func ProveDAKPossession(t TPM, challenge []byte) (*DAKProof, error) {
+	// Read DAK public key
+	pubKey, err := ReadDAKPublicKey(t)
+	if err != nil {
+		return nil, err
+	}
+
+	// Generate or hash challenge
+	var digest [32]byte
+	if challenge == nil {
+		if _, err := rand.Read(digest[:]); err != nil {
+			return nil, fmt.Errorf("generate random challenge: %w", err)
+		}
+	} else {
+		digest = sha256.Sum256(challenge)
+	}
+
+	// Discover DAK name
+	dkResp, err := (tpm2.ReadPublic{ObjectHandle: tpm2.TPMHandle(DAKHandle)}).Execute(t)
+	if err != nil {
+		return nil, fmt.Errorf("ReadPublic DAK: %w", err)
+	}
+
+	// Discover DeviceKey_US NV name for policy session
+	nvPub, err := (tpm2.NVReadPublic{NVIndex: tpm2.TPMHandle(DeviceKeyUSIndex)}).Execute(t)
+	if err != nil {
+		return nil, fmt.Errorf("NVReadPublic DeviceKey_US: %w", err)
+	}
+
+	// Sign with policy session auth
+	sigResp, err := (tpm2.Sign{
+		KeyHandle: tpm2.AuthHandle{
+			Handle: tpm2.TPMHandle(DAKHandle),
+			Name:   dkResp.Name,
+			Auth:   fdoKeyPolicy(DeviceKeyUSIndex, nvPub.NVName),
+		},
+		Digest:     tpm2.TPM2BDigest{Buffer: digest[:]},
+		Validation: tpm2.TPMTTKHashCheck{Tag: tpm2.TPMSTHashCheck},
+	}).Execute(t)
+	if err != nil {
+		return nil, fmt.Errorf("DAK Sign (policy auth): %w", err)
+	}
+
+	// Extract signature
+	ecSig, err := sigResp.Signature.Signature.ECDSA()
+	if err != nil {
+		return nil, fmt.Errorf("extract ECDSA signature: %w", err)
+	}
+	r := new(big.Int).SetBytes(ecSig.SignatureR.Buffer)
+	s := new(big.Int).SetBytes(ecSig.SignatureS.Buffer)
+	sigBytes, err := asn1.Marshal(struct {
+		R, S *big.Int
+	}{R: r, S: s})
+	if err != nil {
+		return nil, fmt.Errorf("marshal ECDSA signature: %w", err)
+	}
+
+	return &DAKProof{
+		PublicKey: pubKey,
+		Challenge: digest,
+		Signature: sigBytes,
+	}, nil
+}
+
+// fdoKeyPolicy returns a policy session callback for key authorization.
+// This implements: PolicyNV(US_NV, offset=0, operand=0x00, UnsignedGE) || PolicySecret(US_NV)
+func fdoKeyPolicy(usIndex uint32, usName tpm2.TPM2BName) tpm2.Session {
+	return tpm2.Policy(tpm2.TPMAlgSHA256, 16, func(tpm TPM, handle tpm2.TPMISHPolicy, _ tpm2.TPM2BNonce) error {
+		ah := tpm2.AuthHandle{Handle: tpm2.TPMHandle(usIndex), Name: usName, Auth: tpm2.PasswordAuth(nil)}
+		nh := tpm2.NamedHandle{Handle: tpm2.TPMHandle(usIndex), Name: usName}
+		if _, err := (tpm2.PolicyNV{
+			AuthHandle: ah, NVIndex: nh, PolicySession: handle,
+			OperandB: tpm2.TPM2BOperand{Buffer: []byte{0}}, Operation: tpm2.TPMEOUnsignedGE,
+		}).Execute(tpm); err != nil {
+			return err
+		}
+		if _, err := (tpm2.PolicySecret{
+			AuthHandle: ah, PolicySession: handle,
+		}).Execute(tpm); err != nil {
+			return err
+		}
+		return nil
+	})
+}
+
+// nvReadOwner reads NV data using Owner hierarchy authorization.
+func nvReadOwner(t TPM, index uint32, nvName tpm2.TPM2BName, size uint16) ([]byte, error) {
+	resp, err := (tpm2.NVRead{
+		AuthHandle: tpm2.AuthHandle{Handle: tpm2.TPMRHOwner, Auth: tpm2.PasswordAuth(nil)},
+		NVIndex:    tpm2.NamedHandle{Handle: tpm2.TPMHandle(index), Name: nvName},
+		Size:       size,
+	}).Execute(t)
+	if err != nil {
+		return nil, err
+	}
+	return resp.Data.Buffer, nil
+}
+
+// nvReadAuth reads NV data using NV index authorization.
+func nvReadAuth(t TPM, index uint32, nvName tpm2.TPM2BName, size uint16) ([]byte, error) {
+	resp, err := (tpm2.NVRead{
+		AuthHandle: tpm2.AuthHandle{Handle: tpm2.TPMHandle(index), Name: nvName, Auth: tpm2.PasswordAuth(nil)},
+		NVIndex:    tpm2.NamedHandle{Handle: tpm2.TPMHandle(index), Name: nvName},
+		Size:       size,
+	}).Execute(t)
+	if err != nil {
+		return nil, err
+	}
+	return resp.Data.Buffer, nil
+}

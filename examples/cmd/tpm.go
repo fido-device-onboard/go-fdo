@@ -6,11 +6,12 @@
 package main
 
 import (
-	"crypto"
-	"crypto/elliptic"
-	"flag"
+	"crypto/ecdsa"
+	"crypto/x509"
+	"encoding/hex"
+	"encoding/pem"
 	"fmt"
-	"hash"
+	"os"
 
 	"github.com/google/go-tpm-tools/simulator"
 	"github.com/google/go-tpm/tpm2/transport"
@@ -21,62 +22,11 @@ import (
 
 const tpmSimulatorPath = "simulator"
 
-func tpmCred() (hash.Hash, hash.Hash, crypto.Signer, func() error, error) {
-	var diKeyFlagSet bool
-	clientFlags.Visit(func(flag *flag.Flag) {
-		diKeyFlagSet = diKeyFlagSet || flag.Name == "di-key"
-	})
-	if !diKeyFlagSet {
-		return nil, nil, nil, nil, fmt.Errorf("-di-key must be set explicitly when using a TPM")
-	}
-
-	tpmc, err := tpmOpen(tpmPath)
-	if err != nil {
-		return nil, nil, nil, nil, err
-	}
-
-	// Use TPM keys for HMAC and Device Key
-	h256, err := tpm.NewHmac(tpmc, crypto.SHA256)
-	if err != nil {
-		_ = tpmc.Close()
-		return nil, nil, nil, nil, err
-	}
-	h384, err := tpm.NewHmac(tpmc, crypto.SHA384)
-	if err != nil {
-		_ = tpmc.Close()
-		return nil, nil, nil, nil, err
-	}
-	var key tpm.Key
-	switch diKey {
-	case "ec256":
-		key, err = tpm.GenerateECKey(tpmc, elliptic.P256())
-	case "ec384":
-		key, err = tpm.GenerateECKey(tpmc, elliptic.P384())
-	case "rsa2048":
-		key, err = tpm.GenerateRSAKey(tpmc, 2048)
-	case "rsa3072":
-		if tpmPath == tpmSimulatorPath {
-			err = fmt.Errorf("TPM simulator does not support RSA3072")
-		} else {
-			key, err = tpm.GenerateRSAKey(tpmc, 3072)
-		}
-	default:
-		err = fmt.Errorf("unsupported key type: %s", diKey)
-	}
-	if err != nil {
-		_ = tpmc.Close()
-		return nil, nil, nil, nil, err
-	}
-
-	return h256, h384, key, func() error {
-		_ = h256.Close()
-		_ = h384.Close()
-		_ = key.Close()
-		return tpmc.Close()
-	}, nil
-}
-
 func tpmOpen(tpmPath string) (tpm.Closer, error) {
+	if tpmPath == "" {
+		// No explicit path — use build-tag-selected default
+		return tpm.DefaultOpen()
+	}
 	if tpmPath == tpmSimulatorPath {
 		sim, err := simulator.GetWithFixedSeedInsecure(8086)
 		if err != nil {
@@ -85,4 +35,168 @@ func tpmOpen(tpmPath string) (tpm.Closer, error) {
 		return transport.FromReadWriteCloser(sim), nil
 	}
 	return linuxtpm.Open(tpmPath)
+}
+
+// tpmShowCredentials reads and displays all FDO credentials stored in TPM NV indices.
+func tpmShowCredentials() error {
+	tpmc, err := tpmOpen(tpmPath)
+	if err != nil {
+		return fmt.Errorf("opening TPM: %w", err)
+	}
+	defer func() { _ = tpmc.Close() }()
+
+	info, err := tpm.ReadNVCredentials(tpmc)
+	if err != nil {
+		return fmt.Errorf("reading TPM credentials: %w", err)
+	}
+
+	source := tpmPath
+	if source == "" {
+		source = "default"
+	}
+	fmt.Printf("tpm-credentials[%s]\n", source)
+	fmt.Printf("  DCActive (0x%08X)    %v", tpm.DCActiveIndex, info.Active)
+	if info.DCActiveSize > 0 {
+		fmt.Printf("  [%d bytes]", info.DCActiveSize)
+	} else {
+		fmt.Print("  [not defined]")
+	}
+	fmt.Println()
+
+	if info.DCTPMSize > 0 {
+		fmt.Printf("  DCTPM (0x%08X)      [%d bytes]\n", tpm.DCTPMIndex, info.DCTPMSize)
+		fmt.Printf("    GUID              %x\n", info.GUID)
+		fmt.Printf("    DeviceInfo        %q\n", info.DeviceInfo)
+	} else {
+		fmt.Printf("  DCTPM (0x%08X)      [not defined]\n", tpm.DCTPMIndex)
+	}
+
+	if info.HasDCOV {
+		fmt.Printf("  DCOV (0x%08X)       [%d bytes]\n", tpm.DCOVIndex, info.DCOVSize)
+	} else {
+		fmt.Printf("  DCOV (0x%08X)       [not defined]\n", tpm.DCOVIndex)
+	}
+
+	if info.HMACUSSize > 0 {
+		fmt.Printf("  HMAC_US (0x%08X)    [%d bytes]\n", tpm.HMACUSIndex, info.HMACUSSize)
+	} else {
+		fmt.Printf("  HMAC_US (0x%08X)    [not defined]\n", tpm.HMACUSIndex)
+	}
+
+	if info.DeviceKeyUSSize > 0 {
+		fmt.Printf("  DeviceKey_US (0x%08X) [%d bytes]\n", tpm.DeviceKeyUSIndex, info.DeviceKeyUSSize)
+	} else {
+		fmt.Printf("  DeviceKey_US (0x%08X) [not defined]\n", tpm.DeviceKeyUSIndex)
+	}
+
+	if info.HasCert {
+		fmt.Printf("  FDO_Cert (0x%08X)   [%d bytes]\n", tpm.FDOCertIndex, info.FDOCertSize)
+	} else {
+		fmt.Printf("  FDO_Cert (0x%08X)   [not defined]\n", tpm.FDOCertIndex)
+	}
+
+	fmt.Printf("  DAK (0x%08X)        ", tpm.DAKHandle)
+	if info.HasDAK {
+		pubKey, err := tpm.ReadDAKPublicKey(tpmc)
+		if err != nil {
+			fmt.Printf("present (error reading: %v)\n", err)
+		} else {
+			switch k := pubKey.(type) {
+			case *ecdsa.PublicKey:
+				fmt.Printf("ECC %s\n", k.Curve.Params().Name)
+				fmt.Printf("    X                 %x\n", k.X.Bytes())
+				fmt.Printf("    Y                 %x\n", k.Y.Bytes())
+			default:
+				fmt.Printf("%T\n", pubKey)
+			}
+		}
+	} else {
+		fmt.Println("not present")
+	}
+
+	fmt.Printf("  HMAC Key (0x%08X)    ", tpm.HMACKeyHandle)
+	if info.HasHMACKey {
+		fmt.Println("present")
+	} else {
+		fmt.Println("not present")
+	}
+
+	return nil
+}
+
+// tpmExportDAK exports the DAK public key as PEM to stdout.
+func tpmExportDAK() error {
+	tpmc, err := tpmOpen(tpmPath)
+	if err != nil {
+		return fmt.Errorf("opening TPM: %w", err)
+	}
+	defer func() { _ = tpmc.Close() }()
+
+	pubKey, err := tpm.ReadDAKPublicKey(tpmc)
+	if err != nil {
+		return fmt.Errorf("reading DAK public key: %w", err)
+	}
+
+	der, err := x509.MarshalPKIXPublicKey(pubKey)
+	if err != nil {
+		return fmt.Errorf("marshaling public key: %w", err)
+	}
+
+	return pem.Encode(os.Stdout, &pem.Block{
+		Type:  "PUBLIC KEY",
+		Bytes: der,
+	})
+}
+
+// tpmProveDAK proves possession of the DAK private key by signing a challenge.
+func tpmProveDAK() error {
+	tpmc, err := tpmOpen(tpmPath)
+	if err != nil {
+		return fmt.Errorf("opening TPM: %w", err)
+	}
+	defer func() { _ = tpmc.Close() }()
+
+	var challenge []byte
+	if tpmChallenge != "" {
+		challenge = []byte(tpmChallenge)
+	}
+
+	proof, err := tpm.ProveDAKPossession(tpmc, challenge)
+	if err != nil {
+		return fmt.Errorf("DAK proof: %w", err)
+	}
+
+	switch k := proof.PublicKey.(type) {
+	case *ecdsa.PublicKey:
+		fmt.Printf("DAK Public Key:  ECC %s\n", k.Curve.Params().Name)
+		fmt.Printf("  X:             %x\n", k.X.Bytes())
+		fmt.Printf("  Y:             %x\n", k.Y.Bytes())
+	default:
+		fmt.Printf("DAK Public Key:  %T\n", proof.PublicKey)
+	}
+	fmt.Printf("Challenge:       %x\n", proof.Challenge)
+	fmt.Printf("Signature:       %x\n", proof.Signature)
+
+	// Self-verify
+	ecKey, ok := proof.PublicKey.(*ecdsa.PublicKey)
+	if !ok {
+		fmt.Println("Verified:        (cannot self-verify non-ECC key)")
+		return nil
+	}
+	verified := ecdsa.VerifyASN1(ecKey, proof.Challenge[:], proof.Signature)
+	fmt.Printf("Verified:        %v\n", verified)
+
+	if !verified {
+		return fmt.Errorf("self-verification failed")
+	}
+
+	sigHex := hex.EncodeToString(proof.Signature)
+	chalHex := hex.EncodeToString(proof.Challenge[:])
+	fmt.Println()
+	fmt.Println("To verify externally:")
+	fmt.Printf("  echo -n '%s' | xxd -r -p > /tmp/sig.bin\n", sigHex)
+	fmt.Printf("  echo -n '%s' | xxd -r -p > /tmp/digest.bin\n", chalHex)
+	fmt.Println("  # Verify with: openssl pkeyutl -verify -pubin -inkey dak.pem -in /tmp/digest.bin -sigfile /tmp/sig.bin")
+
+	return nil
 }

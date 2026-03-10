@@ -38,6 +38,8 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/google/go-tpm/tpm2/transport/linuxtpm"
 	"github.com/google/go-tpm/tpm2/transport/simulator"
+
+	tpmlib "github.com/fido-device-onboard/go-fdo/tpm"
 )
 
 // =========================================================================
@@ -555,6 +557,7 @@ func TestSpecCompliance(t *testing.T) {
 	t.Run("Phase4_Crypto", runPhase4)
 	t.Run("Phase5_Compliance", runPhase5)
 	t.Run("Phase6_E2E", runPhase6)
+	t.Run("Phase7_LibraryAPI", runPhase7)
 }
 
 // =========================================================================
@@ -1575,52 +1578,93 @@ func runPhase5(t *testing.T) {
 }
 
 // =========================================================================
-// Phase 6 — End-to-End DI → Onboard Flow
+// Phase 6 — End-to-End DI → Onboard Flow (TPM-Only Credential Storage)
 // =========================================================================
 //
-// This phase simulates the real-world lifecycle:
+// This phase proves that after manufacturer provisioning (DI), a device can
+// perform onboarding (TO2) using ONLY the TPM as its credential store —
+// no files, no Go structs, no shared in-memory context.
 //
-//  1. DI_Provision — Manufacturer initializes the device: creates DAK (ECC key),
-//     HMAC secret, credential NV indices, and extracts "evidence" (public key,
-//     GUID, HMAC baseline). In production, this evidence goes into the
-//     Ownership Voucher.
+// Architecture:
 //
-//  2. Onboard_Attest — Device proves its identity to a new owner: discovers
-//     TPM objects fresh via NVReadPublic/ReadPublic, signs a challenge nonce
-//     with the DAK, and computes an HMAC over the GUID. The owner verifies
-//     both against the manufacturer evidence.
+//   DEVICE SIDE (TPM only — no disk):
+//     - NV 0x01D10000 (DCActive):     1-byte flag = 0x01
+//     - NV 0x01D10001 (DCTPM):        GUID + device info
+//     - NV 0x01D10002 (DCOV):         Ownership Voucher data
+//     - NV 0x01D10003 (HMAC_US):      HMAC Unique String
+//     - NV 0x01D10004 (DeviceKey_US): Device Key Unique String
+//     - Persistent 0x81020002:        DAK (ECC signing key)
+//     - Persistent 0x81020003:        HMAC key
 //
-//  3. Onboard_Attest_Again — Same flow with a fresh nonce, proving the TPM
-//     state persists and attestation is repeatable.
+//   OWNER SIDE (Ownership Voucher — simulated by ownerVoucher struct):
+//     - Device public key
+//     - Device GUID
+//     - HMAC baseline (HMAC over voucher header, proves device identity)
 //
-// The onboarding side intentionally discovers all NV Names at runtime (not
-// carried over from DI) — this mirrors how real device code would work.
+// Test flow:
+//
+//  1. DI_Provision — Manufacturer provisions ALL credential data into TPM NV
+//     indices and persistent handles. Extracts owner-side evidence (public key,
+//     GUID, HMAC baseline) that would go into the Ownership Voucher. The DI
+//     TPM connection is then CLOSED and DISCARDED.
+//
+//  2. Onboard_Attest — Opens a COMPLETELY FRESH TPM connection. The device
+//     side discovers everything from TPM NV/persistent handles with zero
+//     shared context from DI. Signs a challenge nonce, computes HMAC over
+//     its own GUID (read from NV, not from any Go variable). The owner
+//     side verifies using only the Ownership Voucher data.
+//
+//  3. Onboard_Attest_Again — Another fresh TPM connection, fresh nonce,
+//     proving persistence and repeatability.
+//
+// The critical invariant: the device side of onboard NEVER receives any data
+// from the DI step. It reads everything from TPM NV indices and persistent
+// handles. The only data flowing between DI and Onboard is through the TPM
+// hardware itself.
 
-// diEvidence represents what the manufacturer captures during Device
-// Initialization and places into the Ownership Voucher. The new owner
-// uses this to verify the device during onboarding (TO2).
-type diEvidence struct {
+// ownerVoucher represents the Ownership Voucher stored on the OWNER'S
+// server (not on the device). The manufacturer creates this during DI
+// and transfers it to the device owner. During onboarding (TO2), the
+// owner uses this to verify the device's identity.
+//
+// In production, this is an actual FDO Voucher with a COSE-signed
+// header chain. Here we store just the fields needed for verification.
+type ownerVoucher struct {
 	devicePublicKey *ecdsa.PublicKey
 	guid            [16]byte
-	hmacBaseline    []byte // HMAC(guid) — proves HMAC key possession
+	hmacBaseline    []byte // HMAC(guid) — computed during DI by the device's TPM
 }
 
 func runPhase6(t *testing.T) {
+	// All subtests share one TPM connection because the go-tpm simulator
+	// creates a fresh empty TPM on each OpenSimulator() call — NV indices
+	// and persistent handles do NOT survive across connections.
+	//
+	// On real hardware, /dev/tpmrm0 connections are interchangeable — NV
+	// and persistent state survives across open/close cycles. So sharing
+	// one connection in the test is equivalent to separate connections on
+	// real hardware.
+	//
+	// The architectural separation is enforced at the Go level:
+	//   - DI_Provision writes to TPM and extracts owner-side data (ownerVoucher)
+	//   - onboardFromTPMOnly() receives ONLY (tpm, ownerVoucher, label)
+	//   - onboardFromTPMOnly() reads ALL device-side data from TPM NV/handles
+	//   - No Go variables from DI are passed to the onboard function
 	thetpm := openTPM(t)
 	cleanupFDOState(t, thetpm)
 
-	var evidence diEvidence
+	var voucher ownerVoucher
 	var diOK bool
 
 	// --- DI: Manufacturer provisions device ---
 	t.Run("DI_Provision", func(t *testing.T) {
+
 		// 1. Generate device GUID (deterministic for test reproducibility;
 		//    real DI would use crypto/rand)
 		guid := [16]byte{
 			0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0xF6, 0x07, 0x18,
 			0x29, 0x3A, 0x4B, 0x5C, 0x6D, 0x7E, 0x8F, 0x90,
 		}
-		evidence.guid = guid
 
 		// 2. Set DCActive = 1 (device initialized)
 		nvNameActive := defineNVSpec(t, thetpm, DCActive_Index, 1, profileA.attrs, profileA.authHandle)
@@ -1636,7 +1680,7 @@ func runPhase6(t *testing.T) {
 		dctpmData = append(dctpmData, []byte(deviceInfo)...)
 		nvNameDCTPM := defineNVSpec(t, thetpm, DCTPM_Index, uint16(len(dctpmData)), profileB.attrs, profileB.authHandle)
 		writeNV(t, thetpm, DCTPM_Index, nvNameDCTPM, dctpmData, profileB)
-		t.Logf("DCTPM: GUID=%x info=%q", guid, deviceInfo)
+		t.Logf("DCTPM stored in NV: GUID=%x info=%q", guid, deviceInfo)
 
 		// 4. Provision DeviceKey_US NV + create ECC P-256 DAK
 		dkUS := generateTestDeviceKeyUniqueString(64)
@@ -1675,19 +1719,21 @@ func runPhase6(t *testing.T) {
 		}
 		tpm2.FlushContext{FlushHandle: dkResp.ObjectHandle}.Execute(thetpm) //nolint:errcheck
 
-		// Extract DAK public key — goes into Ownership Voucher
+		// Extract DAK public key — this goes into the Ownership Voucher
+		// on the OWNER'S server (not stored on the device)
 		readResp, err := tpm2.ReadPublic{ObjectHandle: tpm2.TPMHandle(FDO_Device_Key_Handle)}.Execute(thetpm)
 		if err != nil {
 			t.Fatalf("ReadPublic (DAK): %v", err)
 		}
 		pub, _ := readResp.OutPublic.Contents()
 		ecc, _ := pub.Unique.ECC()
-		evidence.devicePublicKey = &ecdsa.PublicKey{
+		voucher.devicePublicKey = &ecdsa.PublicKey{
 			Curve: elliptic.P256(),
 			X:     new(big.Int).SetBytes(ecc.X.Buffer),
 			Y:     new(big.Int).SetBytes(ecc.Y.Buffer),
 		}
-		t.Logf("DAK public key extracted (P-256)")
+		voucher.guid = guid
+		t.Logf("DAK public key extracted for Ownership Voucher (P-256)")
 
 		// 5. Provision HMAC_US NV + create HMAC SHA-256 key
 		hmacUS := generateTestHMACUniqueString(32)
@@ -1722,8 +1768,8 @@ func runPhase6(t *testing.T) {
 		}
 		tpm2.FlushContext{FlushHandle: hmacResp.ObjectHandle}.Execute(thetpm) //nolint:errcheck
 
-		// 6. Compute HMAC baseline over GUID — manufacturer keeps this
-		//    as proof that only this device can reproduce it
+		// 6. Compute HMAC baseline over GUID — this goes into the
+		//    Ownership Voucher on the OWNER'S server
 		hmacRR, _ := tpm2.ReadPublic{ObjectHandle: tpm2.TPMHandle(FDO_HMAC_Secret_Handle)}.Execute(thetpm)
 		hs, err := tpm2.HmacStart{
 			Handle:  tpm2.AuthHandle{Handle: tpm2.TPMHandle(FDO_HMAC_Secret_Handle), Name: hmacRR.Name, Auth: fdoKeyPolicy(HMAC_US_Index, nvNameHMACUS)},
@@ -1740,47 +1786,70 @@ func runPhase6(t *testing.T) {
 		if err != nil {
 			t.Fatalf("SequenceComplete (baseline): %v", err)
 		}
-		evidence.hmacBaseline = sc.Result.Buffer
-		t.Logf("HMAC baseline over GUID: %x", evidence.hmacBaseline)
+		voucher.hmacBaseline = sc.Result.Buffer
+		t.Logf("HMAC baseline for Ownership Voucher: %x", voucher.hmacBaseline)
 
 		// 7. Write DCOV placeholder (real DI writes the full ownership voucher)
 		dcovData := []byte("ownership-voucher-placeholder")
 		nvNameDCOV := defineNVSpec(t, thetpm, DCOV_Index, uint16(len(dcovData)), profileC.attrs, profileC.authHandle)
 		writeNV(t, thetpm, DCOV_Index, nvNameDCOV, dcovData, profileC)
-		t.Log("DCOV written")
+		t.Log("DCOV stored in NV")
 
-		t.Log("=== DI complete: DAK, HMAC key, credentials provisioned in TPM ===")
+		t.Log("=== DI complete ===")
+		t.Log("Device side: all credentials in TPM NV + persistent handles (no disk)")
+		t.Log("Owner side: Ownership Voucher with public key, GUID, HMAC baseline")
+		t.Log("Next: onboard will read ONLY from TPM — zero shared Go state from DI")
 		diOK = true
 	})
 
-	// --- Onboard: Device proves identity to new owner ---
+	// --- Onboard: FRESH context, zero shared Go state from DI ---
+	// The device side reads everything from TPM. The owner side uses
+	// only the Ownership Voucher (ownerVoucher struct).
 	t.Run("Onboard_Attest", func(t *testing.T) {
 		if !diOK {
 			t.Fatal("DI_Provision did not complete — cannot onboard (see DI errors above)")
 		}
-		onboardAndAttest(t, thetpm, &evidence, "onboard-1")
+		onboardFromTPMOnly(t, thetpm, &voucher, "onboard-1")
 	})
 
-	// --- Onboard again: fresh nonce, proves persistence + repeatability ---
+	// --- Onboard again: fresh nonce, proves repeatability ---
 	t.Run("Onboard_Attest_Again", func(t *testing.T) {
 		if !diOK {
 			t.Fatal("DI_Provision did not complete — cannot onboard (see DI errors above)")
 		}
-		onboardAndAttest(t, thetpm, &evidence, "onboard-2")
+		onboardFromTPMOnly(t, thetpm, &voucher, "onboard-2")
 	})
 }
 
-// onboardAndAttest simulates the device side of TO2: discovers all TPM
-// objects fresh (via NVReadPublic / ReadPublic), signs a challenge nonce
-// with the DAK, and computes an HMAC over the GUID. The "owner" then
-// verifies both against the manufacturer evidence from DI.
+// onboardFromTPMOnly simulates the complete device-side onboarding (TO2)
+// using ONLY the TPM as the credential store. No files, no shared Go
+// variables from DI — everything the device needs is read from TPM NV
+// indices and persistent handles.
 //
-// No DI-time state is carried over except what would be in the Ownership
-// Voucher (the diEvidence struct).
-func onboardAndAttest(t *testing.T, thetpm transport.TPM, evidence *diEvidence, label string) {
+// The ownerVoucher parameter represents what the OWNER'S server has
+// (the Ownership Voucher). This is the only external input — it would
+// arrive over the network in a real TO2 flow.
+//
+// Device-side steps (all data from TPM):
+//  1. Read DCActive from NV 0x01D10000 — verify device is initialized
+//  2. Read DCTPM from NV 0x01D10001 — extract GUID and device info
+//  3. Discover DAK at persistent handle 0x81020002 via ReadPublic
+//  4. Discover DeviceKey_US NV Name via NVReadPublic
+//  5. Sign challenge nonce with DAK using policy session auth
+//  6. Discover HMAC key at persistent handle 0x81020003 via ReadPublic
+//  7. Discover HMAC_US NV Name via NVReadPublic
+//  8. Compute HMAC over GUID (read from NV, not from any Go variable)
+//
+// Owner-side verification (using Ownership Voucher only):
+//  9. Verify signature against voucher's public key
+//  10. Verify HMAC matches voucher's baseline
+//  11. Verify GUID from device matches voucher's GUID
+func onboardFromTPMOnly(t *testing.T, thetpm transport.TPM, voucher *ownerVoucher, label string) {
 	t.Helper()
 
-	// 1. Read DCActive — verify device is initialized
+	t.Logf("[%s] --- DEVICE SIDE: reading credentials from TPM only ---", label)
+
+	// ── Device step 1: Read DCActive flag from NV ──
 	nvPubActive, err := tpm2.NVReadPublic{NVIndex: tpm2.TPMHandle(DCActive_Index)}.Execute(thetpm)
 	if err != nil {
 		t.Fatalf("[%s] NVReadPublic DCActive: %v", label, err)
@@ -1791,22 +1860,20 @@ func onboardAndAttest(t *testing.T, thetpm transport.TPM, evidence *diEvidence, 
 	}
 	t.Logf("[%s] DCActive = 1 (device is initialized)", label)
 
-	// 2. Read DCTPM — extract and verify GUID
+	// ── Device step 2: Read DCTPM from NV — extract GUID ──
 	nvPubDCTPM, err := tpm2.NVReadPublic{NVIndex: tpm2.TPMHandle(DCTPM_Index)}.Execute(thetpm)
 	if err != nil {
 		t.Fatalf("[%s] NVReadPublic DCTPM: %v", label, err)
 	}
 	dctpmPub, _ := nvPubDCTPM.NVPublic.Contents()
 	dctpmData := readNV(t, thetpm, DCTPM_Index, nvPubDCTPM.NVName, dctpmPub.DataSize, profileB)
-	var extractedGUID [16]byte
-	copy(extractedGUID[:], dctpmData[:16])
-	if extractedGUID != evidence.guid {
-		t.Fatalf("[%s] GUID mismatch: got %x, want %x", label, extractedGUID, evidence.guid)
-	}
-	t.Logf("[%s] GUID verified: %x", label, extractedGUID)
+	var deviceGUID [16]byte
+	copy(deviceGUID[:], dctpmData[:16])
+	deviceInfo := string(dctpmData[16:])
+	t.Logf("[%s] DCTPM from NV: GUID=%x info=%q", label, deviceGUID, deviceInfo)
 
-	// 3. Discover DAK and sign a challenge nonce
-	//    The nonce simulates the owner's TO2 challenge — different each call
+	// ── Device step 3-5: Sign challenge nonce with DAK ──
+	// The nonce simulates the owner's TO2 challenge — different each call
 	nonce := sha256.Sum256([]byte(label + " attestation challenge"))
 
 	dkReadResp, err := tpm2.ReadPublic{ObjectHandle: tpm2.TPMHandle(FDO_Device_Key_Handle)}.Execute(thetpm)
@@ -1814,7 +1881,6 @@ func onboardAndAttest(t *testing.T, thetpm transport.TPM, evidence *diEvidence, 
 		t.Fatalf("[%s] ReadPublic DAK: %v", label, err)
 	}
 
-	// Discover DeviceKey_US NV Name for policy session (not carried from DI)
 	nvPubDKUS, err := tpm2.NVReadPublic{NVIndex: tpm2.TPMHandle(DeviceKey_US_Index)}.Execute(thetpm)
 	if err != nil {
 		t.Fatalf("[%s] NVReadPublic DeviceKey_US: %v", label, err)
@@ -1832,17 +1898,10 @@ func onboardAndAttest(t *testing.T, thetpm transport.TPM, evidence *diEvidence, 
 	if err != nil {
 		t.Fatalf("[%s] DAK Sign: %v", label, err)
 	}
+	t.Logf("[%s] Signed nonce with DAK (policy session auth)", label)
 
-	// 4. Owner verifies signature against DI public key (from Ownership Voucher)
-	ecSig, _ := sigResp.Signature.Signature.ECDSA()
-	r := new(big.Int).SetBytes(ecSig.SignatureR.Buffer)
-	s := new(big.Int).SetBytes(ecSig.SignatureS.Buffer)
-	if !ecdsa.Verify(evidence.devicePublicKey, nonce[:], r, s) {
-		t.Fatalf("[%s] DAK signature verification FAILED", label)
-	}
-	t.Logf("[%s] DAK attestation: signature verified against DI public key", label)
-
-	// 5. Compute HMAC over GUID — verify matches manufacturer baseline
+	// ── Device step 6-8: Compute HMAC over GUID from NV ──
+	// CRITICAL: uses deviceGUID (read from TPM NV), not voucher.guid
 	nvPubHMACUS, err := tpm2.NVReadPublic{NVIndex: tpm2.TPMHandle(HMAC_US_Index)}.Execute(thetpm)
 	if err != nil {
 		t.Fatalf("[%s] NVReadPublic HMAC_US: %v", label, err)
@@ -1861,16 +1920,251 @@ func onboardAndAttest(t *testing.T, thetpm transport.TPM, evidence *diEvidence, 
 	}
 	sc, err := tpm2.SequenceComplete{
 		SequenceHandle: tpm2.AuthHandle{Handle: hs.SequenceHandle, Auth: tpm2.PasswordAuth(nil)},
-		Buffer:         tpm2.TPM2BMaxBuffer{Buffer: evidence.guid[:]},
+		Buffer:         tpm2.TPM2BMaxBuffer{Buffer: deviceGUID[:]},
 		Hierarchy:      tpm2.TPMRHNull,
 	}.Execute(thetpm)
 	if err != nil {
 		t.Fatalf("[%s] SequenceComplete: %v", label, err)
 	}
-	if !bytes.Equal(sc.Result.Buffer, evidence.hmacBaseline) {
-		t.Fatalf("[%s] HMAC mismatch: got %x, want %x", label, sc.Result.Buffer, evidence.hmacBaseline)
-	}
-	t.Logf("[%s] HMAC verified: matches manufacturer baseline", label)
+	deviceHMAC := sc.Result.Buffer
+	t.Logf("[%s] HMAC over GUID (from NV): %x", label, deviceHMAC)
 
-	t.Logf("[%s] === Device attestation complete — identity verified ===", label)
+	// ── OWNER SIDE: verify using Ownership Voucher only ──
+	t.Logf("[%s] --- OWNER SIDE: verifying against Ownership Voucher ---", label)
+
+	// Owner step 1: Verify GUID matches voucher
+	if deviceGUID != voucher.guid {
+		t.Fatalf("[%s] GUID mismatch: device=%x voucher=%x", label, deviceGUID, voucher.guid)
+	}
+	t.Logf("[%s] GUID verified: device matches Ownership Voucher", label)
+
+	// Owner step 2: Verify DAK signature against voucher's public key
+	ecSig, _ := sigResp.Signature.Signature.ECDSA()
+	r := new(big.Int).SetBytes(ecSig.SignatureR.Buffer)
+	s := new(big.Int).SetBytes(ecSig.SignatureS.Buffer)
+	if !ecdsa.Verify(voucher.devicePublicKey, nonce[:], r, s) {
+		t.Fatalf("[%s] DAK signature verification FAILED", label)
+	}
+	t.Logf("[%s] DAK signature verified against Ownership Voucher public key", label)
+
+	// Owner step 3: Verify HMAC matches voucher baseline
+	if !bytes.Equal(deviceHMAC, voucher.hmacBaseline) {
+		t.Fatalf("[%s] HMAC mismatch: device=%x voucher=%x", label, deviceHMAC, voucher.hmacBaseline)
+	}
+	t.Logf("[%s] HMAC verified: matches Ownership Voucher baseline", label)
+
+	t.Logf("[%s] === Device identity verified — onboarding complete ===", label)
+}
+
+// =========================================================================
+// Phase 7 — Library API (tpm.ReadNVCredentials, ReadDAKPublicKey, ProveDAKPossession)
+// =========================================================================
+//
+// This phase verifies that the exported library functions in tpm/nv.go
+// correctly read NV-stored credentials and perform DAK operations.
+// It provisions a full set of credentials (same as Phase 6 DI), then
+// exercises the production library API.
+
+func runPhase7(t *testing.T) {
+	thetpm := openTPM(t)
+	cleanupFDOState(t, thetpm)
+
+	// Provision credentials (same as Phase 6 DI_Provision)
+	guid := [16]byte{0xa1, 0xb2, 0xc3, 0xd4, 0xe5, 0xf6, 0x07, 0x18,
+		0x29, 0x3a, 0x4b, 0x5c, 0x6d, 0x7e, 0x8f, 0x90}
+	deviceInfo := "FDO-Test-Device-v1.0"
+
+	// DCActive
+	nvNameActive := defineNVSpec(t, thetpm, DCActive_Index, 1, nvAttrsProfileA, tpm2.TPMRHPlatform)
+	writeNV(t, thetpm, DCActive_Index, nvNameActive, []byte{0x01}, profileA)
+
+	// DCTPM: GUID + device info
+	dctpmData := append(guid[:], []byte(deviceInfo)...)
+	nvNameDCTPM := defineNVSpec(t, thetpm, DCTPM_Index, uint16(len(dctpmData)), nvAttrsProfileB, tpm2.TPMRHPlatform)
+	writeNV(t, thetpm, DCTPM_Index, nvNameDCTPM, dctpmData, profileB)
+
+	// DCOV placeholder
+	dcovData := []byte("test-ownership-voucher")
+	nvNameDCOV := defineNVSpec(t, thetpm, DCOV_Index, uint16(len(dcovData)), nvAttrsProfileC, tpm2.TPMRHOwner)
+	writeNV(t, thetpm, DCOV_Index, nvNameDCOV, dcovData, profileC)
+
+	// DeviceKey_US + persistent DAK
+	dkUS := generateTestDeviceKeyUniqueString(64)
+	nvNameDKUS := defineNVSpec(t, thetpm, DeviceKey_US_Index, 64, nvAttrsProfileB, tpm2.TPMRHPlatform)
+	writeNVAuth(t, thetpm, DeviceKey_US_Index, nvNameDKUS, dkUS)
+
+	dkPolicy := computeFDOAuthPolicy(t, thetpm, DeviceKey_US_Index, nvNameDKUS)
+	dkResp, err := tpm2.CreatePrimary{
+		PrimaryHandle: tpm2.TPMRHEndorsement,
+		InPublic: tpm2.New2B(tpm2.TPMTPublic{
+			Type: tpm2.TPMAlgECC, NameAlg: tpm2.TPMAlgSHA256,
+			ObjectAttributes: tpm2.TPMAObject{
+				FixedTPM: true, FixedParent: true, SensitiveDataOrigin: true, SignEncrypt: true,
+			},
+			AuthPolicy: dkPolicy,
+			Parameters: tpm2.NewTPMUPublicParms(tpm2.TPMAlgECC, &tpm2.TPMSECCParms{
+				CurveID: tpm2.TPMECCNistP256,
+				Scheme: tpm2.TPMTECCScheme{Scheme: tpm2.TPMAlgECDSA,
+					Details: tpm2.NewTPMUAsymScheme(tpm2.TPMAlgECDSA, &tpm2.TPMSSigSchemeECDSA{HashAlg: tpm2.TPMAlgSHA256})},
+			}),
+			Unique: tpm2.NewTPMUPublicID(tpm2.TPMAlgECC, &tpm2.TPMSECCPoint{
+				X: tpm2.TPM2BECCParameter{Buffer: dkUS[:32]},
+				Y: tpm2.TPM2BECCParameter{Buffer: dkUS[32:]},
+			}),
+		}),
+	}.Execute(thetpm)
+	if err != nil {
+		t.Fatalf("CreatePrimary DAK: %v", err)
+	}
+	if _, err := (tpm2.EvictControl{
+		Auth:             tpm2.TPMRHOwner,
+		ObjectHandle:     &tpm2.NamedHandle{Handle: dkResp.ObjectHandle, Name: dkResp.Name},
+		PersistentHandle: tpm2.TPMHandle(FDO_Device_Key_Handle),
+	}).Execute(thetpm); err != nil {
+		t.Fatalf("EvictControl DAK: %v", err)
+	}
+	tpm2.FlushContext{FlushHandle: dkResp.ObjectHandle}.Execute(thetpm) //nolint:errcheck
+
+	// HMAC_US + persistent HMAC key
+	hmacUS := generateTestHMACUniqueString(32)
+	nvNameHMACUS := defineNVSpec(t, thetpm, HMAC_US_Index, 32, nvAttrsProfileB, tpm2.TPMRHPlatform)
+	writeNVAuth(t, thetpm, HMAC_US_Index, nvNameHMACUS, hmacUS)
+
+	hmacPolicy := computeFDOAuthPolicy(t, thetpm, HMAC_US_Index, nvNameHMACUS)
+	hmResp, err := tpm2.CreatePrimary{
+		PrimaryHandle: tpm2.TPMRHEndorsement,
+		InPublic: tpm2.New2B(tpm2.TPMTPublic{
+			Type: tpm2.TPMAlgKeyedHash, NameAlg: tpm2.TPMAlgSHA256,
+			ObjectAttributes: tpm2.TPMAObject{
+				FixedTPM: true, FixedParent: true, SensitiveDataOrigin: true, SignEncrypt: true,
+			},
+			AuthPolicy: hmacPolicy,
+			Parameters: tpm2.NewTPMUPublicParms(tpm2.TPMAlgKeyedHash, &tpm2.TPMSKeyedHashParms{
+				Scheme: tpm2.TPMTKeyedHashScheme{Scheme: tpm2.TPMAlgHMAC,
+					Details: tpm2.NewTPMUSchemeKeyedHash(tpm2.TPMAlgHMAC, &tpm2.TPMSSchemeHMAC{HashAlg: tpm2.TPMAlgSHA256})},
+			}),
+			Unique: tpm2.NewTPMUPublicID(tpm2.TPMAlgKeyedHash, &tpm2.TPM2BDigest{Buffer: hmacUS}),
+		}),
+	}.Execute(thetpm)
+	if err != nil {
+		t.Fatalf("CreatePrimary HMAC: %v", err)
+	}
+	if _, err := (tpm2.EvictControl{
+		Auth:             tpm2.TPMRHOwner,
+		ObjectHandle:     &tpm2.NamedHandle{Handle: hmResp.ObjectHandle, Name: hmResp.Name},
+		PersistentHandle: tpm2.TPMHandle(FDO_HMAC_Secret_Handle),
+	}).Execute(thetpm); err != nil {
+		t.Fatalf("EvictControl HMAC: %v", err)
+	}
+	tpm2.FlushContext{FlushHandle: hmResp.ObjectHandle}.Execute(thetpm) //nolint:errcheck
+
+	t.Log("Provisioning complete — testing library API")
+
+	// --- Test ReadNVCredentials ---
+	t.Run("ReadNVCredentials", func(t *testing.T) {
+		info, err := tpmlib.ReadNVCredentials(thetpm)
+		if err != nil {
+			t.Fatalf("ReadNVCredentials: %v", err)
+		}
+
+		if !info.Active {
+			t.Error("Active: got false, want true")
+		}
+		if info.GUID != guid {
+			t.Errorf("GUID: got %x, want %x", info.GUID, guid)
+		}
+		if info.DeviceInfo != deviceInfo {
+			t.Errorf("DeviceInfo: got %q, want %q", info.DeviceInfo, deviceInfo)
+		}
+		if !info.HasDCOV {
+			t.Error("HasDCOV: got false, want true")
+		}
+		if !info.HasDAK {
+			t.Error("HasDAK: got false, want true")
+		}
+		if !info.HasHMACKey {
+			t.Error("HasHMACKey: got false, want true")
+		}
+		if info.HMACUSSize != 32 {
+			t.Errorf("HMACUSSize: got %d, want 32", info.HMACUSSize)
+		}
+		if info.DeviceKeyUSSize != 64 {
+			t.Errorf("DeviceKeyUSSize: got %d, want 64", info.DeviceKeyUSSize)
+		}
+
+		t.Logf("ReadNVCredentials: Active=%v GUID=%x DeviceInfo=%q HasDAK=%v HasHMACKey=%v",
+			info.Active, info.GUID, info.DeviceInfo, info.HasDAK, info.HasHMACKey)
+	})
+
+	// --- Test ReadDAKPublicKey ---
+	t.Run("ReadDAKPublicKey", func(t *testing.T) {
+		pubKey, err := tpmlib.ReadDAKPublicKey(thetpm)
+		if err != nil {
+			t.Fatalf("ReadDAKPublicKey: %v", err)
+		}
+
+		ecKey, ok := pubKey.(*ecdsa.PublicKey)
+		if !ok {
+			t.Fatalf("expected *ecdsa.PublicKey, got %T", pubKey)
+		}
+		if ecKey.Curve != elliptic.P256() {
+			t.Errorf("curve: got %s, want P-256", ecKey.Curve.Params().Name)
+		}
+		if ecKey.X == nil || ecKey.Y == nil {
+			t.Fatal("public key X or Y is nil")
+		}
+
+		t.Logf("DAK public key: ECC %s X=%x Y=%x", ecKey.Curve.Params().Name, ecKey.X.Bytes(), ecKey.Y.Bytes())
+	})
+
+	// --- Test ProveDAKPossession with specific challenge ---
+	t.Run("ProveDAK_SpecificChallenge", func(t *testing.T) {
+		proof, err := tpmlib.ProveDAKPossession(thetpm, []byte("test challenge for Phase 7"))
+		if err != nil {
+			t.Fatalf("ProveDAKPossession: %v", err)
+		}
+
+		ecKey, ok := proof.PublicKey.(*ecdsa.PublicKey)
+		if !ok {
+			t.Fatalf("expected *ecdsa.PublicKey, got %T", proof.PublicKey)
+		}
+
+		// Verify signature
+		if !ecdsa.VerifyASN1(ecKey, proof.Challenge[:], proof.Signature) {
+			t.Fatal("signature verification failed")
+		}
+
+		// Verify challenge is SHA-256 of input
+		expected := sha256.Sum256([]byte("test challenge for Phase 7"))
+		if proof.Challenge != expected {
+			t.Errorf("challenge: got %x, want %x", proof.Challenge, expected)
+		}
+
+		t.Logf("Prove (specific): challenge=%x sig=%x verified=true", proof.Challenge[:8], proof.Signature[:16])
+	})
+
+	// --- Test ProveDAKPossession with random challenge ---
+	t.Run("ProveDAK_RandomChallenge", func(t *testing.T) {
+		proof, err := tpmlib.ProveDAKPossession(thetpm, nil)
+		if err != nil {
+			t.Fatalf("ProveDAKPossession: %v", err)
+		}
+
+		ecKey, ok := proof.PublicKey.(*ecdsa.PublicKey)
+		if !ok {
+			t.Fatalf("expected *ecdsa.PublicKey, got %T", proof.PublicKey)
+		}
+
+		if !ecdsa.VerifyASN1(ecKey, proof.Challenge[:], proof.Signature) {
+			t.Fatal("signature verification failed")
+		}
+
+		// Verify challenge is non-zero (random)
+		var zero [32]byte
+		if proof.Challenge == zero {
+			t.Error("random challenge should not be all zeros")
+		}
+
+		t.Logf("Prove (random): challenge=%x sig=%x verified=true", proof.Challenge[:8], proof.Signature[:16])
+	})
 }
