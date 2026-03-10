@@ -17,6 +17,8 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/google/go-tpm/tpm2/transport/linuxtpm"
 
+	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/protocol"
 	"github.com/fido-device-onboard/go-fdo/tpm"
 )
 
@@ -73,6 +75,33 @@ func tpmShowCredentials() error {
 
 	if info.HasDCOV {
 		fmt.Printf("  DCOV (0x%08X)       [%d bytes]\n", tpm.DCOVIndex, info.DCOVSize)
+		if len(info.DCOVData) > 0 {
+			var dcov dcovDisplay
+			if err := cbor.Unmarshal(info.DCOVData, &dcov); err != nil {
+				fmt.Printf("    (decode error: %v)\n", err)
+			} else {
+				fmt.Printf("    Version           %d\n", dcov.Version)
+				fmt.Printf("    KeyType           %s\n", dcov.KeyType)
+				fmt.Printf("    PublicKeyHash     alg=%d value=%s\n", dcov.PublicKeyHash.Algorithm, hex.EncodeToString(dcov.PublicKeyHash.Value))
+				if len(dcov.RvInfo) == 0 {
+					fmt.Println("    RvInfo            (none)")
+				} else {
+					directives := protocol.ParseDeviceRvInfo(dcov.RvInfo)
+					for i, dir := range directives {
+						fmt.Printf("    RvInfo[%d]\n", i)
+						for _, u := range dir.URLs {
+							fmt.Printf("      URL             %s\n", u)
+						}
+						if dir.Bypass {
+							fmt.Println("      Bypass          true")
+						}
+						if dir.Delay > 0 {
+							fmt.Printf("      Delay           %s\n", dir.Delay)
+						}
+					}
+				}
+			}
+		}
 	} else {
 		fmt.Printf("  DCOV (0x%08X)       [not defined]\n", tpm.DCOVIndex)
 	}
@@ -199,4 +228,14 @@ func tpmProveDAK() error {
 	fmt.Println("  # Verify with: openssl pkeyutl -verify -pubin -inkey dak.pem -in /tmp/digest.bin -sigfile /tmp/sig.bin")
 
 	return nil
+}
+
+// dcovDisplay mirrors the CBOR structure stored in the DCOV NV index.
+// Defined here (rather than importing from cred) because the cred package
+// type is unexported and requires a build tag.
+type dcovDisplay struct {
+	Version       uint16                     `cbor:"0,keyasint"`
+	RvInfo        [][]protocol.RvInstruction `cbor:"1,keyasint"`
+	PublicKeyHash protocol.Hash              `cbor:"2,keyasint"`
+	KeyType       protocol.KeyType           `cbor:"3,keyasint"`
 }

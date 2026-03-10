@@ -15,22 +15,30 @@ All tests are consolidated in a single file (`tpm/spec_compliance_test.go`) with
 ```bash
 cd tpm
 
-# Run all spec compliance tests (simulator)
-FDO_TPM=sim go test -v -tags=spec_compliance_test -run TestSpecCompliance -count=1
+# ── Hardware TPM on Linux (the standard way) ──
+# Platform hierarchy is locked after boot on Linux, even for root.
+# FDO_TPM_OWNER_HIERARCHY=1 is REQUIRED — without it NVDefineSpace
+# will fail with TPM_RC_BAD_AUTH.
 
-# Run against hardware TPM (default — tries /dev/tpmrm0 then /dev/tpm0)
-go test -v -tags=spec_compliance_test -run TestSpecCompliance -count=1
+# Run ALL tests (spec compliance + Phase 9) against hardware TPM
+FDO_TPM_OWNER_HIERARCHY=1 go test -v -tags=spec_compliance_test -count=1
 
-# Run a specific phase
+# Spec compliance phases only
+FDO_TPM_OWNER_HIERARCHY=1 go test -v -tags=spec_compliance_test -run TestSpecCompliance -count=1
+
+# Phase 9 library integration tests only
+FDO_TPM_OWNER_HIERARCHY=1 go test -v -tags=spec_compliance_test -run TestPhase9 -count=1
+
+# ── Software simulator (no hardware needed) ──
+FDO_TPM=sim go test -v -tags=spec_compliance_test -count=1
+
+# ── Run a specific phase (simulator example) ──
 FDO_TPM=sim go test -v -tags=spec_compliance_test -run TestSpecCompliance/Phase1 -count=1
 FDO_TPM=sim go test -v -tags=spec_compliance_test -run TestSpecCompliance/Phase3_Storage -count=1
 FDO_TPM=sim go test -v -tags=spec_compliance_test -run TestSpecCompliance/Phase5_Compliance -count=1
 
 # Disable P-384 tests (they are enabled by default)
-FDO_TPM=sim FDO_TPM_P384=0 go test -v -tags=spec_compliance_test -run TestSpecCompliance -count=1
-
-# Hardware TPM where Platform hierarchy is locked (e.g. Linux userspace)
-FDO_TPM_OWNER_HIERARCHY=1 go test -v -tags=spec_compliance_test -run TestSpecCompliance -count=1
+FDO_TPM=sim FDO_TPM_P384=0 go test -v -tags=spec_compliance_test -count=1
 ```
 
 ### Environment Variables
@@ -214,7 +222,13 @@ This is computed via trial session (`tpm2.PolicySession` with `tpm2.Trial()`) an
 **TPM-layer tests** (`tpm/phase9_integration_test.go`, build tag `spec_compliance_test`):
 
 ```bash
-cd tpm && FDO_TPM=sim go test -v -tags=spec_compliance_test -run TestPhase9 -count=1
+cd tpm
+
+# Hardware TPM on Linux (standard)
+FDO_TPM_OWNER_HIERARCHY=1 go test -v -tags=spec_compliance_test -run TestPhase9 -count=1
+
+# Software simulator
+FDO_TPM=sim go test -v -tags=spec_compliance_test -run TestPhase9 -count=1
 ```
 
 | Test | What it proves |

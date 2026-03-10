@@ -23,12 +23,123 @@ import (
 	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"testing"
 
 	"github.com/google/go-tpm/tpm2"
 
+	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/protocol"
 	tpmlib "github.com/fido-device-onboard/go-fdo/tpm"
 )
+
+// dumpTPMState reads all FDO NV indices and persistent handles, then logs
+// a human-readable summary. Useful for seeing exactly what the TPM holds
+// at a given point in the test.
+func dumpTPMState(t *testing.T, thetpm tpmlib.TPM, label string) {
+	t.Helper()
+	info, err := tpmlib.ReadNVCredentials(thetpm)
+	if err != nil {
+		t.Logf("[%s] ReadNVCredentials error: %v", label, err)
+		return
+	}
+	t.Logf("[%s] ── TPM FDO State ──", label)
+	active := "false"
+	if info.Active {
+		active = "true"
+	}
+	t.Logf("  DCActive  (0x%08X)    %s  [%d bytes]", tpmlib.DCActiveIndex, active, info.DCActiveSize)
+	if info.DCTPMSize > 0 {
+		t.Logf("  DCTPM     (0x%08X)    [%d bytes]  GUID=%x  DeviceInfo=%q", tpmlib.DCTPMIndex, info.DCTPMSize, info.GUID, info.DeviceInfo)
+	} else {
+		t.Logf("  DCTPM     (0x%08X)    [not defined]", tpmlib.DCTPMIndex)
+	}
+	if info.HasDCOV {
+		t.Logf("  DCOV      (0x%08X)    [%d bytes]", tpmlib.DCOVIndex, info.DCOVSize)
+		if len(info.DCOVData) > 0 {
+			var dcov dcovDump
+			if err := cbor.Unmarshal(info.DCOVData, &dcov); err != nil {
+				t.Logf("    (decode error: %v)", err)
+			} else {
+				t.Logf("    Version           %d", dcov.Version)
+				t.Logf("    KeyType           %s", dcov.KeyType)
+				t.Logf("    PublicKeyHash     alg=%d value=%s", dcov.PublicKeyHash.Algorithm, hex.EncodeToString(dcov.PublicKeyHash.Value))
+				if len(dcov.RvInfo) == 0 {
+					t.Log("    RvInfo            (none)")
+				} else {
+					directives := protocol.ParseDeviceRvInfo(dcov.RvInfo)
+					for i, dir := range directives {
+						t.Logf("    RvInfo[%d]", i)
+						for _, u := range dir.URLs {
+							t.Logf("      URL             %s", u)
+						}
+						if dir.Bypass {
+							t.Log("      Bypass          true")
+						}
+						if dir.Delay > 0 {
+							t.Logf("      Delay           %s", dir.Delay)
+						}
+					}
+				}
+			}
+		}
+	} else {
+		t.Logf("  DCOV      (0x%08X)    [not defined]", tpmlib.DCOVIndex)
+	}
+	if info.HMACUSSize > 0 {
+		t.Logf("  HMAC_US   (0x%08X)    [%d bytes]", tpmlib.HMACUSIndex, info.HMACUSSize)
+	} else {
+		t.Logf("  HMAC_US   (0x%08X)    [not defined]", tpmlib.HMACUSIndex)
+	}
+	if info.DeviceKeyUSSize > 0 {
+		t.Logf("  DevKeyUS  (0x%08X)    [%d bytes]", tpmlib.DeviceKeyUSIndex, info.DeviceKeyUSSize)
+	} else {
+		t.Logf("  DevKeyUS  (0x%08X)    [not defined]", tpmlib.DeviceKeyUSIndex)
+	}
+	if info.HasCert {
+		t.Logf("  FDO_Cert  (0x%08X)    [%d bytes]", tpmlib.FDOCertIndex, info.FDOCertSize)
+	} else {
+		t.Logf("  FDO_Cert  (0x%08X)    [not defined]", tpmlib.FDOCertIndex)
+	}
+	dak := "not present"
+	if info.HasDAK {
+		pubKey, err := tpmlib.ReadDAKPublicKey(thetpm)
+		if err != nil {
+			dak = fmt.Sprintf("present (read error: %v)", err)
+		} else if ecKey, ok := pubKey.(*ecdsa.PublicKey); ok {
+			dak = fmt.Sprintf("ECC %s  X=%x", ecKey.Curve.Params().Name, ecKey.X.Bytes())
+		} else {
+			dak = fmt.Sprintf("present (%T)", pubKey)
+		}
+	}
+	t.Logf("  DAK       (0x%08X)    %s", tpmlib.DAKHandle, dak)
+	hmacKey := "not present"
+	if info.HasHMACKey {
+		hmacKey = "present"
+	}
+	t.Logf("  HMAC Key  (0x%08X)    %s", tpmlib.HMACKeyHandle, hmacKey)
+	t.Logf("[%s] ── end ──", label)
+}
+
+// dcovDump mirrors the CBOR structure stored in the DCOV NV index.
+// Defined here because the cred package type is unexported.
+type dcovDump struct {
+	Version       uint16                     `cbor:"0,keyasint"`
+	RvInfo        [][]protocol.RvInstruction `cbor:"1,keyasint"`
+	PublicKeyHash protocol.Hash              `cbor:"2,keyasint"`
+	KeyType       protocol.KeyType           `cbor:"3,keyasint"`
+}
+
+// mustCBOR marshals v to CBOR, fatally failing the test on error.
+func mustCBOR(t *testing.T, v any) []byte {
+	t.Helper()
+	b, err := cbor.Marshal(v)
+	if err != nil {
+		t.Fatalf("cbor.Marshal: %v", err)
+	}
+	return b
+}
 
 // TestPhase9_ProductionAPI_NVOnly proves that the production exported
 // functions in tpm/nv.go, tpm/key.go, and tpm/hmac.go can perform a
@@ -43,8 +154,9 @@ import (
 //	  4. ComputeFDOAuthPolicy for each US NV
 //	  5. GenerateSpecECKey → PersistKey to DAKHandle
 //	  6. GenerateSpecHMACKey → PersistKey to HMACKeyHandle
-//	  7. NewSpecHmac → compute HMAC baseline over GUID
-//	  8. Record "owner voucher" data (public key, GUID, HMAC baseline)
+//	  7. Write DCOV with RV info, public key hash, key type
+//	  8. NewSpecHmac → compute HMAC baseline over GUID
+//	  9. Record "owner voucher" data (public key, GUID, HMAC baseline)
 //
 //	VERIFY PHASE (simulates Load → TO2, NO shared Go state from provision):
 //	  9. ReadNVCredentials — read all NV indices, verify Active=true
@@ -154,6 +266,44 @@ func TestPhase9_ProductionAPI_NVOnly(t *testing.T) {
 	}
 	t.Logf("Step 7: DCActive=0x01, DCTPM stored GUID=%x info=%q", guid, deviceInfo)
 
+	// Step 7b: Write DCOV NV index (Profile C) with RV info
+	// Build realistic rendezvous instructions: HTTP to 127.0.0.1:8080 with bypass
+	rvInfo := [][]protocol.RvInstruction{{
+		{Variable: protocol.RVProtocol, Value: mustCBOR(t, uint8(protocol.RVProtHTTP))},
+		{Variable: protocol.RVIPAddress, Value: mustCBOR(t, []byte{127, 0, 0, 1})},
+		{Variable: protocol.RVDevPort, Value: mustCBOR(t, uint16(8080))},
+		{Variable: protocol.RVBypass},
+	}}
+	// Compute public key hash from DAK (simulates what cred.Store.Save does)
+	provisionKeyForHash, err := tpmlib.LoadPersistentKey(thetpm, tpmlib.DAKHandle, tpmlib.DeviceKeyUSIndex)
+	if err != nil {
+		t.Fatalf("LoadPersistentKey (for pubkey hash): %v", err)
+	}
+	pubKeyForHash := provisionKeyForHash.Public().(*ecdsa.PublicKey)
+	_ = provisionKeyForHash.Close()
+	pubKeyHashBytes := sha256.Sum256(append(pubKeyForHash.X.Bytes(), pubKeyForHash.Y.Bytes()...))
+	dcovPayload := dcovDump{
+		Version: 101,
+		RvInfo:  rvInfo,
+		PublicKeyHash: protocol.Hash{
+			Algorithm: protocol.Sha256Hash,
+			Value:     pubKeyHashBytes[:],
+		},
+		KeyType: protocol.Secp256r1KeyType,
+	}
+	dcovBytes, err := cbor.Marshal(dcovPayload)
+	if err != nil {
+		t.Fatalf("CBOR Marshal DCOV: %v", err)
+	}
+	dcovName, err := tpmlib.DefineNVSpace(thetpm, tpmlib.DCOVIndex, uint16(len(dcovBytes)), tpmlib.NVProfileC, false)
+	if err != nil {
+		t.Fatalf("DefineNVSpace DCOV: %v", err)
+	}
+	if err := tpmlib.WriteNV(thetpm, tpmlib.DCOVIndex, dcovName, dcovBytes, tpmlib.NVProfileC); err != nil {
+		t.Fatalf("WriteNV DCOV: %v", err)
+	}
+	t.Logf("Step 7b: DCOV stored [%d bytes] — RV: http://127.0.0.1:8080 (bypass), KeyType=SECP256R1", len(dcovBytes))
+
 	// Step 8: Compute HMAC baseline over GUID using NewSpecHmac
 	provisionHmac, err := tpmlib.NewSpecHmac(thetpm, 0) // crypto.Hash(0) — hash arg is for Size()/BlockSize()
 	if err != nil {
@@ -180,6 +330,8 @@ func TestPhase9_ProductionAPI_NVOnly(t *testing.T) {
 	ownerPubKey := provisionKey.Public().(*ecdsa.PublicKey)
 	_ = provisionKey.Close()
 	t.Logf("Step 8b: DAK public key extracted (P-%d)", ownerPubKey.Curve.Params().BitSize)
+
+	dumpTPMState(t, thetpm, "AFTER PROVISION")
 
 	// =====================================================================
 	// OWNER VOUCHER — this is what the owner's server holds.
@@ -225,6 +377,27 @@ func TestPhase9_ProductionAPI_NVOnly(t *testing.T) {
 		t.Fatalf("DeviceInfo mismatch: NV=%q want=%q", info.DeviceInfo, deviceInfo)
 	}
 	t.Logf("Step 9: ReadNVCredentials OK — Active=true GUID=%x DAK=present HMAC=present", info.GUID)
+
+	// Step 9b: Verify DCOV from NV — RV info, key type, public key hash
+	if !info.HasDCOV {
+		t.Fatal("DCOV should be present after provision")
+	}
+	var verifyDCOV dcovDump
+	if err := cbor.Unmarshal(info.DCOVData, &verifyDCOV); err != nil {
+		t.Fatalf("DCOV decode: %v", err)
+	}
+	if verifyDCOV.Version != 101 {
+		t.Errorf("DCOV Version: got %d, want 101", verifyDCOV.Version)
+	}
+	if verifyDCOV.KeyType != protocol.Secp256r1KeyType {
+		t.Errorf("DCOV KeyType: got %d, want SECP256R1", verifyDCOV.KeyType)
+	}
+	if len(verifyDCOV.RvInfo) != 1 || len(verifyDCOV.RvInfo[0]) != 4 {
+		t.Errorf("DCOV RvInfo: got %d directives, want 1 with 4 instructions", len(verifyDCOV.RvInfo))
+	}
+	t.Logf("Step 9b: DCOV verified — Version=%d KeyType=%s RvDirectives=%d PubKeyHash=%s",
+		verifyDCOV.Version, verifyDCOV.KeyType, len(verifyDCOV.RvInfo),
+		hex.EncodeToString(verifyDCOV.PublicKeyHash.Value[:8])+"...")
 
 	// Step 10: LoadPersistentKey — get signing key with policy session auth
 	verifyKey, err := tpmlib.LoadPersistentKey(thetpm, tpmlib.DAKHandle, tpmlib.DeviceKeyUSIndex)
@@ -302,6 +475,8 @@ func TestPhase9_ProductionAPI_NVOnly(t *testing.T) {
 	}
 	t.Log("Step 13: ProveDAKPossession OK — pubkey matches, signature verified")
 
+	dumpTPMState(t, thetpm, "AFTER VERIFY")
+
 	t.Log("=== Phase 9 PASSED: Full DI→NV→Load→Sign→HMAC cycle with ZERO disk storage ===")
 }
 
@@ -311,7 +486,10 @@ func TestPhase9_ProductionAPI_NVOnly(t *testing.T) {
 func TestPhase9_HMACDeterminism(t *testing.T) {
 	thetpm := openTPM(t)
 	usePlatform := !ownerHierarchyFallback()
-	tpmlib.CleanupFDOState(thetpm)
+
+	// Only clean the resources this test uses — leave other state intact
+	_ = tpmlib.EvictPersistentHandle(thetpm, tpmlib.HMACKeyHandle)
+	_ = tpmlib.UndefineNVSpace(thetpm, tpmlib.HMACUSIndex)
 
 	// Provision HMAC key
 	hmacUS := make([]byte, 32)
@@ -386,7 +564,10 @@ func TestPhase9_HMACDeterminism(t *testing.T) {
 func TestPhase9_SignMultipleDigests(t *testing.T) {
 	thetpm := openTPM(t)
 	usePlatform := !ownerHierarchyFallback()
-	tpmlib.CleanupFDOState(thetpm)
+
+	// Only clean the resources this test uses — leave other state intact
+	_ = tpmlib.EvictPersistentHandle(thetpm, tpmlib.DAKHandle)
+	_ = tpmlib.UndefineNVSpace(thetpm, tpmlib.DeviceKeyUSIndex)
 
 	// Provision DAK
 	dkUS := make([]byte, 64)
@@ -441,7 +622,10 @@ func TestPhase9_SignMultipleDigests(t *testing.T) {
 func TestPhase9_PasswordAuthRejected(t *testing.T) {
 	thetpm := openTPM(t)
 	usePlatform := !ownerHierarchyFallback()
-	tpmlib.CleanupFDOState(thetpm)
+
+	// Only clean the resources this test uses — leave other state intact
+	_ = tpmlib.EvictPersistentHandle(thetpm, tpmlib.DAKHandle)
+	_ = tpmlib.UndefineNVSpace(thetpm, tpmlib.DeviceKeyUSIndex)
 
 	// Provision DAK with AuthPolicy
 	dkUS := make([]byte, 64)
@@ -545,8 +729,12 @@ func TestPhase9_CleanupFDOState(t *testing.T) {
 	}
 	t.Log("State provisioned: Active=true DAK=present HMAC=present")
 
+	dumpTPMState(t, thetpm, "BEFORE CLEANUP")
+
 	// Clean up
 	tpmlib.CleanupFDOState(thetpm)
+
+	dumpTPMState(t, thetpm, "AFTER CLEANUP")
 
 	// Verify state is gone
 	info2, err := tpmlib.ReadNVCredentials(thetpm)

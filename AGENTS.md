@@ -75,14 +75,43 @@ make          # Default: run lint + test
 
 #### TPM Spec Compliance Tests
 
-Separate build tag, must run from `tpm/` directory:
+Separate build tag, must run from `tpm/` directory. There are two test
+suites: the core spec compliance phases (`TestSpecCompliance`) and the
+Phase 9 library integration tests (`TestPhase9`).
+
+**Hardware TPM (Linux) — the standard way to run:**
+
+On Linux the Platform hierarchy is locked after boot, even for root.
+You **must** set `FDO_TPM_OWNER_HIERARCHY=1` so tests use Owner hierarchy
+instead of Platform for Profile A/B NV indices. Without it every
+`NVDefineSpace` call will fail with `TPM_RC_BAD_AUTH`.
 
 ```bash
-cd tpm && go test -v -tags=spec_compliance_test -count=1
+cd tpm
+
+# All spec compliance phases against hardware TPM
+FDO_TPM_OWNER_HIERARCHY=1 go test -v -tags=spec_compliance_test -run TestSpecCompliance -count=1
+
+# Phase 9 library integration tests against hardware TPM
+FDO_TPM_OWNER_HIERARCHY=1 go test -v -tags=spec_compliance_test -run TestPhase9 -count=1
+
+# Both at once
+FDO_TPM_OWNER_HIERARCHY=1 go test -v -tags=spec_compliance_test -count=1
 ```
 
-P-384/SHA-384 tests are skipped (hardware TPM does not support P-384).
-See `tpm/SPEC_COMPLIANCE_TODO.md` for phase tracking and details.
+**Software simulator (no TPM hardware needed):**
+
+```bash
+cd tpm
+FDO_TPM=sim go test -v -tags=spec_compliance_test -count=1
+```
+
+**Notes:**
+
+- P-384/SHA-384 tests are skipped when hardware TPM does not support P-384.
+- `FDO_TPM_OWNER_HIERARCHY=1` means `PlatformCreate` will be false — not
+  fully spec-compliant but required in Linux userspace.
+- See `tpm/SPEC_COMPLIANCE_TODO.md` for phase tracking and details.
 
 #### Integration Tests
 

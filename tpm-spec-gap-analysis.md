@@ -13,6 +13,7 @@ spec, or both. This analysis directly informs the proposed spec amendment
 (`proposed-amendment-securing-fdo-in-tpm.md`).
 
 The implementation has two layers:
+
 - **Production code** (`tpm/key.go`, `tpm/hmac.go`, `cred/tpm_store.go`): the
   library used by the FDO client/server
 - **Spec compliance tests** (`tpm/spec_compliance_test.go`, `tpm/nv.go`): test
@@ -60,6 +61,7 @@ mandate is a friction point for the most common deployment scenario.
 ### Spec Says (Table 11)
 
 Device Key and HMAC key templates SHALL have:
+
 - `fixedTPM = 1`
 - `fixedParent = 1`
 - `sensitiveDataOrigin = 1`
@@ -69,6 +71,7 @@ Device Key and HMAC key templates SHALL have:
 - `decrypt = 0`
 - `restricted = 0`
 - `noDA = 0`
+
 - AuthPolicy: `PolicyNV(Unique String, offset=0, size=1, op=GEQ, operand=0) || PolicySecret(Unique String NV Index)` (Table 12)
 - Unique field: populated from Unique String NV index (section 4.6)
 
@@ -255,6 +258,7 @@ read or write them. Only authValue access is permitted.
 ### Implementation Does
 
 **Spec compliance tests** implement exactly the spec's attributes:
+
 ```
 Profile A: OWNERWRITE|AUTHWRITE|OWNERREAD|AUTHREAD|NO_DA|PLATFORMCREATE
 Profile B: AUTHWRITE|AUTHREAD|NO_DA|PLATFORMCREATE
@@ -300,10 +304,12 @@ profiles a policy choice.
 ### Implementation Does
 
 **Production code:**
+
 - Keys: `userWithAuth=true`, accessed via HMAC session with empty password
 - No NV auth model (no NV indices in production)
 
 **Spec compliance tests and `tpm/nv.go`:**
+
 - Keys: `userWithAuth=false`, accessed via `fdoKeyPolicy()` which implements
   the compound PolicyNV + PolicySecret session
 - NV Profile A/C: read via Owner hierarchy (`nvReadOwner()`)
@@ -317,6 +323,7 @@ code uses the simplest possible auth (password with `userWithAuth=true`).
 
 The `fdoKeyPolicy()` function in `tpm/nv.go` is production-ready code that
 correctly implements the spec's compound policy:
+
 ```go
 func fdoKeyPolicy(usIndex uint32, usName tpm2.TPM2BName) tpm2.Session {
     return tpm2.Policy(tpm2.TPMAlgSHA256, 16, func(tpm transport.TPM, handle tpm2.TPMISHPolicy, _ tpm2.TPM2BNonce) error {
@@ -341,6 +348,7 @@ conflict the proposed amendment addresses.
 ### Spec Says (section 6.1)
 
 DI provisions all FDO credentials into TPM NV indices:
+
 1. Set DCActive = True at `0x01D10000`
 2. Write DCTPM structure to `0x01D10001`
 3. Generate and write Device Key Unique String to `0x01D10004`
@@ -352,12 +360,14 @@ DI provisions all FDO credentials into TPM NV indices:
 ### Implementation Does
 
 **Production DI flow** (`cred/tpm_store.go:NewDI()`):
+
 1. Create transient HMAC keys (SHA-256 and SHA-384) via `tpm.NewHmac()`
 2. Generate transient device key via `tpm.GenerateECKey()` (or RSA variant)
 3. Return `hash.Hash` and `crypto.Signer` to the DI protocol
 4. After DI completes, `Save()` writes key type metadata to disk file
 
 **Spec compliance test DI flow** (`spec_compliance_test.go`, Phase 6):
+
 1. Generate GUID
 2. Write DCActive to NV `0x01D10000` (Profile A, Platform hierarchy)
 3. Write DCTPM to NV `0x01D10001` (Profile B, Platform hierarchy)
@@ -388,6 +398,7 @@ storage into the TPM.
 ### Spec Says
 
 During TO2, the ROE:
+
 1. Reads DCActive from NV to determine if onboarding should proceed
 2. Reads DCTPM from NV to get GUID, RVInfo, PubKeyHash
 3. Uses Device Key (from persistent handle) to sign protocol messages via
@@ -399,6 +410,7 @@ During TO2, the ROE:
 ### Implementation Does
 
 **Production TO2 flow** (`cred/tpm_store.go:Load()`):
+
 1. Reads credential metadata from **disk file**
 2. Recreates transient HMAC keys via `tpm.NewHmac()`
 3. Recreates transient device key via `tpm.GenerateECKey()`
@@ -408,6 +420,7 @@ During TO2, the ROE:
    disk file rewritten
 
 **`tpm/nv.go` provides partial NV-based TO2 support:**
+
 - `ReadNVCredentials()`: reads all NV indices, checks persistent key presence
 - `ReadDAKPublicKey()`: reads public key from persistent DAK handle
 - `ProveDAKPossession()`: signs a nonce with the DAK using `fdoKeyPolicy()`
@@ -426,6 +439,7 @@ credentials after TO2 (no `UpdateCredential()` or equivalent).
 ### Spec Says
 
 After successful TO2, credentials are updated:
+
 - New GUID, RVInfo, PubKeyHash written to DCTPM NV index
 - New HMAC Unique String written (rotates HMAC key)
 - New HMAC computed over new credentials
@@ -473,6 +487,7 @@ credential reuse but blocks the mechanism to achieve it.
 ### Implementation Does
 
 **Constants defined** (`tpm/credential.go`):
+
 ```go
 const (
     FdoDeviceKey    DeviceKeyType = 0  // FDO key derived from Unique String
@@ -515,6 +530,7 @@ Minimum size: 384 bytes. Recommended: 512 bytes.
 ### Implementation Does
 
 **`tpm/credential.go`** defines:
+
 ```go
 type Credential struct {
     Version       uint16
@@ -555,6 +571,7 @@ has not yet developed governance for this range.
 ### Implementation Does
 
 Uses the same placeholder values:
+
 - NV: `0x01D10000` - `0x01D10005`
 - Persistent objects: `0x81020002` - `0x81020003`
 
