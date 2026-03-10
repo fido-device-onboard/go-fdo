@@ -198,12 +198,64 @@ This is computed via trial session (`tpm2.PolicySession` with `tpm2.Trial()`) an
 - [ ] Persistent vs derived key performance
 - [ ] TPM resource usage under load
 
-### Phase 9: Library Integration — BLOCKED (needs explicit approval)
+### Phase 9: Library Integration — DONE
 
-- [ ] Update `tpm.DeviceCredential` to use spec-defined handles
-- [ ] Implement NV storage in main library code
-- [ ] Add Unique String support
-- [ ] Update CLI tools
+- [x] NV write/provisioning functions in `tpm/nv.go` (DefineNVSpace, WriteNV, ComputeFDOAuthPolicy, PersistKey, EvictPersistentHandle, UndefineNVSpace, CleanupFDOState)
+- [x] Spec-compliant ECC key creation in `tpm/key.go` (GenerateSpecECKey: UserWithAuth=false, AuthPolicy, UniqueString)
+- [x] Spec-compliant HMAC key creation in `tpm/key.go` (GenerateSpecHMACKey: UserWithAuth=false, AuthPolicy, UniqueString)
+- [x] Persistent key loader in `tpm/key.go` (LoadPersistentKey: policy session auth via fdoKeyPolicy)
+- [x] Spec-compliant HMAC in `tpm/hmac.go` (NewSpecHmac: persistent key with policy session auth)
+- [x] NV-based credential storage in `cred/tpm_store.go` (NewDI provisions NV + persistent keys, Save writes DCTPM/DCOV/DCActive to NV, Load reads from NV with file fallback)
+- [x] Backward compatibility: Load() falls back to file-based credentials when NV not provisioned
+- [x] Save() handles re-save correctly (UndefineNVSpace before DefineNVSpace for DCTPM/DCOV)
+
+#### Phase 9 Integration Tests
+
+**TPM-layer tests** (`tpm/phase9_integration_test.go`, build tag `spec_compliance_test`):
+
+```bash
+cd tpm && FDO_TPM=sim go test -v -tags=spec_compliance_test -run TestPhase9 -count=1
+```
+
+| Test | What it proves |
+|------|---------------|
+| `TestPhase9_ProductionAPI_NVOnly` | Full DI→NV→Load→Sign→HMAC cycle using ONLY production exported API, zero disk storage, zero shared Go state between provision and verify phases |
+| `TestPhase9_HMACDeterminism` | Persistent HMAC key produces identical output across 3 separate `NewSpecHmac()` calls |
+| `TestPhase9_SignMultipleDigests` | Persistent DAK signs 10 different digests, all verifiable with same public key |
+| `TestPhase9_PasswordAuthRejected` | `UserWithAuth=false` enforced: password auth → `TPM_RC_AUTH_UNAVAILABLE`; policy session → success |
+| `TestPhase9_CleanupFDOState` | Full provision → cleanup → verify all NV indices + persistent handles removed |
+
+**cred.Store interface tests** (`cred/tpm_store_test.go`, build tag `tpmsim`):
+
+```bash
+cd cred && go test -v -tags=tpmsim -count=1
+```
+
+| Test | What it proves |
+|------|---------------|
+| `TestTPMStore_NVOnlyRoundTrip` | Production `cred.Store` interface: Open→NewDI→Save→(delete file)→Load from NV only→verify credential+sign+HMAC |
+| `TestTPMStore_FileFallback` | Load() succeeds via NV-first path when file also exists |
+| `TestTPMStore_SaveOverwrite` | Save() called twice (re-onboard), Load() from NV returns latest credential |
+
+### Phase 10: Hardware TPM Integration Testing — NOT STARTED
+
+**Prerequisite:** Access to `/dev/tpmrm0` (user must be in `tss` group or have appropriate permissions).
+
+- [ ] Run `cred.Store` integration tests against real hardware TPM with Owner hierarchy
+- [ ] Run Phase 9 integration tests against real hardware TPM
+- [ ] Verify NV state persists across TPM connections (hardware-only — simulator resets)
+- [ ] Test Platform hierarchy on systems where it is available (UEFI environment)
+- [ ] End-to-end FDO protocol (DI → TO1 → TO2) with TPM-backed credentials
+
+### TODO: TPM Simulator State Persistence
+
+The `go-tpm` software simulator (`simulator.OpenSimulator()`) creates a **fresh empty TPM** on each call. NV indices and persistent handles do NOT survive across connections. This means:
+
+1. Tests that require "close TPM → reopen → verify state" cannot use the simulator
+2. The `cred.Store` tests work because they use a single connection for the full lifecycle
+3. To test persistence across connections, hardware TPM is required
+
+**Possible future improvement:** Investigate `GetWithFixedSeedInsecure()` or file-backed simulator options that could preserve TPM state across connections. This would allow more thorough simulator-based testing without hardware TPM access.
 
 ## Key Helper Functions (all in spec_compliance_test.go)
 
