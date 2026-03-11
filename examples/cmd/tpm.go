@@ -39,6 +39,25 @@ func tpmOpen(tpmPath string) (tpm.Closer, error) {
 	return linuxtpm.Open(tpmPath)
 }
 
+// tpmClearCredentials removes all FDO NV indices and persistent handles from the TPM.
+// This works equally on hardware TPM and simulator.
+func tpmClearCredentials() error {
+	tpmc, err := tpmOpen(tpmPath)
+	if err != nil {
+		return fmt.Errorf("opening TPM: %w", err)
+	}
+	defer func() { _ = tpmc.Close() }()
+
+	source := tpmPath
+	if source == "" {
+		source = "default"
+	}
+	fmt.Printf("Clearing all FDO credentials from TPM [%s]...\n", source)
+	tpm.CleanupFDOState(tpmc)
+	fmt.Println("Done. All FDO NV indices and persistent keys removed.")
+	return nil
+}
+
 // tpmShowCredentials reads and displays all FDO credentials stored in TPM NV indices.
 func tpmShowCredentials() error {
 	tpmc, err := tpmOpen(tpmPath)

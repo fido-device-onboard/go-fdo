@@ -74,6 +74,7 @@ var (
 	tpmExportDak bool   // Export DAK public key as PEM
 	tpmProveDak  bool   // Prove DAK possession by signing a challenge
 	tpmChallenge string // Optional challenge for -tpm-prove (hashed with SHA-256)
+	tpmClear     bool   // Clear all FDO credentials from TPM
 )
 
 func sanitizeLogValue(s string) string {
@@ -191,6 +192,7 @@ func init() {
 	clientFlags.BoolVar(&tpmExportDak, "tpm-export-dak", false, "Export DAK public key as PEM")
 	clientFlags.BoolVar(&tpmProveDak, "tpm-prove", false, "Prove DAK possession by signing a challenge")
 	clientFlags.StringVar(&tpmChallenge, "tpm-challenge", "", "Optional challenge `string` for -tpm-prove (hashed with SHA-256; random if empty)")
+	clientFlags.BoolVar(&tpmClear, "tpm-clear", false, "Clear all FDO credentials from TPM (NV indices + persistent keys)")
 }
 
 func client(ctx context.Context) error {
@@ -200,8 +202,10 @@ func client(ctx context.Context) error {
 
 	// Handle TPM credential inspection operations (no -tpm flag needed;
 	// tpmOpen falls back to tpm.DefaultOpen which is build-tag-selected).
-	if tpmShow || tpmExportDak || tpmProveDak {
+	if tpmShow || tpmExportDak || tpmProveDak || tpmClear {
 		switch {
+		case tpmClear:
+			return tpmClearCredentials()
 		case tpmShow:
 			return tpmShowCredentials()
 		case tpmExportDak:

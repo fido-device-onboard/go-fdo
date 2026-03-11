@@ -27,14 +27,12 @@ import (
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/protocol"
+	"github.com/fido-device-onboard/go-fdo/tpm"
 )
 
 // TestTPMStore_NVOnlyRoundTrip proves that the production cred.Store
-// interface can perform a complete DI → Save → (delete file) → Load
-// cycle using ONLY TPM NV storage.
-//
-// This is the critical gap test: it proves the cred.Store code path
-// works without any file-based fallback.
+// interface can perform a complete DI → Save → Load cycle using ONLY
+// TPM NV storage, with no file created on disk at all.
 func TestTPMStore_NVOnlyRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	credPath := filepath.Join(dir, "cred.bin")
@@ -99,26 +97,16 @@ func TestTPMStore_NVOnlyRoundTrip(t *testing.T) {
 	if err := store.Save(dc); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	t.Log("Save completed — NV + file written")
+	t.Log("Save completed — NV only (no file)")
 
-	// Verify file was written (Save writes both NV and file)
-	if _, err := os.Stat(credPath); err != nil {
-		t.Fatalf("credential file not created: %v", err)
-	}
-
-	// =====================================================================
-	// DELETE THE FILE — force NV-only Load path
-	// =====================================================================
-	if err := os.Remove(credPath); err != nil {
-		t.Fatalf("remove credential file: %v", err)
-	}
+	// Verify NO file was created — Save no longer writes a file
 	if _, err := os.Stat(credPath); !os.IsNotExist(err) {
-		t.Fatal("credential file should not exist")
+		t.Fatal("credential file should NOT exist — Save must be NV-only")
 	}
-	t.Log("Credential file DELETED — Load must use NV only")
+	t.Log("Confirmed: no credential file on disk")
 
 	// =====================================================================
-	// LOAD: Must succeed from NV (file is gone)
+	// LOAD: Must succeed from NV (no file exists)
 	// =====================================================================
 	loadedDC, loadH256, _, loadKey, err := store.Load()
 	if err != nil {
@@ -177,66 +165,12 @@ func TestTPMStore_NVOnlyRoundTrip(t *testing.T) {
 	}
 	t.Log("HMAC matches baseline — persistent HMAC key works")
 
-	t.Log("=== PASSED: cred.Store NV-only round-trip (no file, full credential lifecycle) ===")
-}
-
-// TestTPMStore_FileFallback verifies that Load() falls back to file-based
-// loading when NV indices are NOT provisioned (backward compatibility).
-func TestTPMStore_FileFallback(t *testing.T) {
-	dir := t.TempDir()
-	credPath := filepath.Join(dir, "cred.bin")
-
-	t.Setenv("FDO_TPM_OWNER_HIERARCHY", "1")
-
-	store, err := Open(credPath)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer func() { _ = store.Close() }()
-
-	// Provision and save (this writes both NV and file)
-	_, _, _, err = store.NewDI(protocol.Secp256r1KeyType)
-	if err != nil {
-		t.Fatalf("NewDI: %v", err)
-	}
-
-	testGUID := protocol.GUID{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-		0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10}
-	dc := fdo.DeviceCredential{
-		Version:    101,
-		DeviceInfo: "fallback-test",
-		GUID:       testGUID,
-		RvInfo: [][]protocol.RvInstruction{
-			{{Variable: 13, Value: []byte{0}}},
-		},
-		PublicKeyHash: protocol.Hash{
-			Algorithm: protocol.Sha256Hash,
-			Value:     make([]byte, 32),
-		},
-	}
-	if err := store.Save(dc); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-
-	// File should exist
-	if _, err := os.Stat(credPath); err != nil {
-		t.Fatalf("credential file should exist: %v", err)
-	}
-
-	// Load should work (NV-first path)
-	loadedDC, _, _, _, err := store.Load()
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if loadedDC.GUID != testGUID {
-		t.Errorf("GUID mismatch: got %x, want %x", loadedDC.GUID, testGUID)
-	}
-	t.Log("Load succeeded (NV-first path with file also present)")
+	t.Log("=== PASSED: cred.Store NV-only round-trip (zero files, full credential lifecycle) ===")
 }
 
 // TestTPMStore_SaveOverwrite verifies that Save() can be called multiple
 // times (simulating credential reuse / re-onboard) and Load() returns
-// the latest credential.
+// the latest credential from NV.
 func TestTPMStore_SaveOverwrite(t *testing.T) {
 	dir := t.TempDir()
 	credPath := filepath.Join(dir, "cred.bin")
@@ -285,8 +219,10 @@ func TestTPMStore_SaveOverwrite(t *testing.T) {
 		t.Fatalf("Save(dc2): %v", err)
 	}
 
-	// Delete file to force NV load
-	os.Remove(credPath)
+	// Verify no file exists
+	if _, err := os.Stat(credPath); !os.IsNotExist(err) {
+		t.Fatal("credential file should NOT exist")
+	}
 
 	loadedDC, _, _, _, err := store.Load()
 	if err != nil {
@@ -300,5 +236,232 @@ func TestTPMStore_SaveOverwrite(t *testing.T) {
 	if loadedDC.DeviceInfo != dc2.DeviceInfo {
 		t.Errorf("DeviceInfo: got %q, want %q", loadedDC.DeviceInfo, dc2.DeviceInfo)
 	}
-	t.Log("Save overwrite + NV load OK — got latest credential")
+	t.Log("Save overwrite + NV-only load OK — got latest credential")
+}
+
+// TestTPMStore_CrossConnectionPersistence proves that TPM NV state
+// survives across Close → Reopen cycles on the simulator, thanks to
+// the singleton simulator introduced in open_sim.go.
+//
+// This is the key test for integration scenarios where the device
+// does DI (manufacturing), the store is closed, and later reopened
+// for TO1/TO2 onboarding.
+func TestTPMStore_CrossConnectionPersistence(t *testing.T) {
+	dir := t.TempDir()
+	credPath := filepath.Join(dir, "cred.bin")
+
+	t.Setenv("FDO_TPM_OWNER_HIERARCHY", "1")
+
+	// =====================================================================
+	// CONNECTION 1: DI + Save (manufacturing)
+	// =====================================================================
+	t.Log("--- Connection 1: Device Initialization ---")
+	store1, err := Open(credPath)
+	if err != nil {
+		t.Fatalf("Open (conn 1): %v", err)
+	}
+
+	h256, _, key, err := store1.NewDI(protocol.Secp256r1KeyType)
+	if err != nil {
+		t.Fatalf("NewDI: %v", err)
+	}
+
+	// Capture provision-time key for later comparison
+	ecPub, ok := key.Public().(*ecdsa.PublicKey)
+	if !ok {
+		t.Fatalf("expected *ecdsa.PublicKey, got %T", key.Public())
+	}
+	t.Logf("DAK public key (conn 1): P-%d X=%x", ecPub.Curve.Params().BitSize, ecPub.X.Bytes())
+
+	// Compute HMAC baseline
+	testGUID := protocol.GUID{0xAA, 0xBB, 0xCC, 0xDD, 0x11, 0x22, 0x33, 0x44,
+		0x55, 0x66, 0x77, 0x88, 0x99, 0x00, 0xEE, 0xFF}
+	h256.Write(testGUID[:])
+	hmacBaseline := h256.Sum(nil)
+
+	dc := fdo.DeviceCredential{
+		Version:    101,
+		DeviceInfo: "cross-conn-test-device",
+		GUID:       testGUID,
+		RvInfo: [][]protocol.RvInstruction{
+			{{Variable: 13, Value: []byte{0}}},
+		},
+		PublicKeyHash: protocol.Hash{
+			Algorithm: protocol.Sha256Hash,
+			Value:     make([]byte, 32),
+		},
+	}
+	if err := store1.Save(dc); err != nil {
+		t.Fatalf("Save (conn 1): %v", err)
+	}
+	t.Log("DI + Save completed on connection 1")
+
+	// CLOSE connection 1 — this is the critical step
+	if err := store1.Close(); err != nil {
+		t.Fatalf("Close (conn 1): %v", err)
+	}
+	t.Log("Connection 1 closed")
+
+	// =====================================================================
+	// CONNECTION 2: Reopen + Load (onboarding)
+	// =====================================================================
+	t.Log("--- Connection 2: Reopen + Load (simulates onboarding) ---")
+	store2, err := Open(credPath)
+	if err != nil {
+		t.Fatalf("Open (conn 2): %v", err)
+	}
+	defer func() { _ = store2.Close() }()
+
+	loadedDC, loadH256, _, loadKey, err := store2.Load()
+	if err != nil {
+		t.Fatalf("Load (conn 2): %v", err)
+	}
+	t.Log("Load from NV succeeded on connection 2")
+
+	// Verify credential fields survived the close/reopen
+	if loadedDC.Version != dc.Version {
+		t.Errorf("Version: got %d, want %d", loadedDC.Version, dc.Version)
+	}
+	if loadedDC.DeviceInfo != dc.DeviceInfo {
+		t.Errorf("DeviceInfo: got %q, want %q", loadedDC.DeviceInfo, dc.DeviceInfo)
+	}
+	if loadedDC.GUID != dc.GUID {
+		t.Errorf("GUID: got %x, want %x", loadedDC.GUID, dc.GUID)
+	}
+
+	// Verify the loaded key matches the provision-time key
+	loadedPub, ok := loadKey.Public().(*ecdsa.PublicKey)
+	if !ok {
+		t.Fatalf("loaded key: expected *ecdsa.PublicKey, got %T", loadKey.Public())
+	}
+	if ecPub.X.Cmp(loadedPub.X) != 0 || ecPub.Y.Cmp(loadedPub.Y) != 0 {
+		t.Fatal("DAK public key mismatch across connections")
+	}
+	t.Log("DAK public key matches across connections")
+
+	// Verify signing works with the loaded key
+	challenge := sha256.Sum256([]byte("cross-connection challenge"))
+	sig, err := loadKey.Sign(nil, challenge[:], nil)
+	if err != nil {
+		t.Fatalf("Sign (conn 2): %v", err)
+	}
+	if !ecdsa.VerifyASN1(ecPub, challenge[:], sig) {
+		t.Fatal("signature from conn 2 key does not verify with conn 1 pubkey")
+	}
+	t.Log("Sign+Verify across connections OK")
+
+	// Verify HMAC consistency across connections
+	loadH256.Write(testGUID[:])
+	loadedHmac := loadH256.Sum(nil)
+	if !bytes.Equal(loadedHmac, hmacBaseline) {
+		t.Fatalf("HMAC mismatch across connections:\n  conn2: %x\n  conn1: %x", loadedHmac, hmacBaseline)
+	}
+	t.Log("HMAC matches across connections")
+
+	t.Log("=== PASSED: Cross-connection persistence (DI on conn1 → Load on conn2) ===")
+}
+
+// TestTPMStore_ClearAndReprovision verifies that CleanupFDOState (the
+// operation behind --tpm-clear) properly wipes all FDO state, and that
+// a fresh DI can be performed afterward.
+func TestTPMStore_ClearAndReprovision(t *testing.T) {
+	dir := t.TempDir()
+	credPath := filepath.Join(dir, "cred.bin")
+
+	t.Setenv("FDO_TPM_OWNER_HIERARCHY", "1")
+
+	// =====================================================================
+	// Phase 1: Initial DI + Save
+	// =====================================================================
+	store1, err := Open(credPath)
+	if err != nil {
+		t.Fatalf("Open (phase 1): %v", err)
+	}
+
+	_, _, _, err = store1.NewDI(protocol.Secp256r1KeyType)
+	if err != nil {
+		t.Fatalf("NewDI (phase 1): %v", err)
+	}
+
+	dc1 := fdo.DeviceCredential{
+		Version:    101,
+		DeviceInfo: "device-before-clear",
+		GUID:       protocol.GUID{0x01, 0x02, 0x03},
+		PublicKeyHash: protocol.Hash{
+			Algorithm: protocol.Sha256Hash,
+			Value:     make([]byte, 32),
+		},
+	}
+	if err := store1.Save(dc1); err != nil {
+		t.Fatalf("Save (phase 1): %v", err)
+	}
+
+	// Verify Load works
+	if _, _, _, _, err := store1.Load(); err != nil {
+		t.Fatalf("Load (phase 1): %v", err)
+	}
+	t.Log("Phase 1: DI + Save + Load OK")
+	_ = store1.Close()
+
+	// =====================================================================
+	// Phase 2: Clear all FDO state (simulates --tpm-clear)
+	// =====================================================================
+	t.Log("Phase 2: Clearing FDO state...")
+	tpmc, err := Open(credPath)
+	if err != nil {
+		t.Fatalf("Open for clear: %v", err)
+	}
+	// Access the underlying tpm transport to call CleanupFDOState
+	ts := tpmc.(*tpmStore)
+	tpm.CleanupFDOState(ts.tpmc)
+	t.Log("CleanupFDOState completed")
+
+	// Verify Load fails after clear
+	_, _, _, _, err = tpmc.Load()
+	if err == nil {
+		t.Fatal("Load should fail after CleanupFDOState, but it succeeded")
+	}
+	t.Logf("Load after clear correctly failed: %v", err)
+	_ = tpmc.Close()
+
+	// =====================================================================
+	// Phase 3: Reprovision (fresh DI after clear)
+	// =====================================================================
+	t.Log("Phase 3: Reprovisioning...")
+	store3, err := Open(credPath)
+	if err != nil {
+		t.Fatalf("Open (phase 3): %v", err)
+	}
+	defer func() { _ = store3.Close() }()
+
+	_, _, _, err = store3.NewDI(protocol.Secp256r1KeyType)
+	if err != nil {
+		t.Fatalf("NewDI (phase 3): %v", err)
+	}
+
+	dc3 := fdo.DeviceCredential{
+		Version:    101,
+		DeviceInfo: "device-after-clear",
+		GUID:       protocol.GUID{0x0A, 0x0B, 0x0C},
+		PublicKeyHash: protocol.Hash{
+			Algorithm: protocol.Sha256Hash,
+			Value:     make([]byte, 32),
+		},
+	}
+	if err := store3.Save(dc3); err != nil {
+		t.Fatalf("Save (phase 3): %v", err)
+	}
+
+	loadedDC, _, _, _, err := store3.Load()
+	if err != nil {
+		t.Fatalf("Load (phase 3): %v", err)
+	}
+	if loadedDC.DeviceInfo != dc3.DeviceInfo {
+		t.Errorf("DeviceInfo: got %q, want %q", loadedDC.DeviceInfo, dc3.DeviceInfo)
+	}
+	if loadedDC.GUID != dc3.GUID {
+		t.Errorf("GUID: got %x, want %x", loadedDC.GUID, dc3.GUID)
+	}
+
+	t.Log("=== PASSED: Clear + Reprovision (--tpm-clear → fresh DI) ===")
 }

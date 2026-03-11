@@ -12,3 +12,7 @@ import "github.com/google/go-tpm/tpm2/transport/linuxtpm"
 func DefaultOpen() (Closer, error) {
 	return linuxtpm.Open("/dev/tpmrm0")
 }
+
+// ResetSimulator is a no-op on hardware TPM builds.
+// It exists for API compatibility with the simulator build (-tags=tpmsim).
+func ResetSimulator() {}

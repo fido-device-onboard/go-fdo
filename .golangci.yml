@@ -63,6 +63,29 @@ linters:
       - linters:
           - revive
         text: 'var-naming: avoid package names that conflict with Go standard library package names'
+      # G602: false positive on range iteration over fixed-size [256]int array
+      - linters:
+          - gosec
+        path: did/didkey\.go$
+        text: G602
+      # G704: SSRF via taint — HTTP client calls use configured URLs, not user input
+      - linters:
+          - gosec
+        text: G704
+      # G705: XSS via taint — responses use %q escaping or binary content-types
+      - linters:
+          - gosec
+        path: transfer/
+        text: G705
+      # G706: log injection — all logging uses structured slog key-value pairs
+      - linters:
+          - gosec
+        text: G706
+      # G117: SessionToken is the FDOKeyAuth protocol field name, not an exposed secret
+      - linters:
+          - gosec
+        path: transfer/
+        text: G117
     paths:
       - third_party$
       - builtin$

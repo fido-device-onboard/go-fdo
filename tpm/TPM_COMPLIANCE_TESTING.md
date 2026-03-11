@@ -76,7 +76,7 @@ sudo -E go test -v -tags=hardware_tpm ./tpm -run TestTPMDeviceHardware
 2. **Key Generation**: P256 EC keys can be generated in hardware
 3. **Cryptographic Operations**: HMAC SHA256/SHA384 using TPM keys
 4. **Digital Signing**: TPM keys can sign and verify data
-5. **FDO Integration**: Can create proper `tpm.DeviceCredential` structures
+5. **FDO Integration**: TPM keys can be used for FDO cryptographic operations
 
 ## Troubleshooting
 

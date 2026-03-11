@@ -98,6 +98,11 @@ TestSpecCompliance/
     DI_Provision          — Manufacturer: create DAK, HMAC key, NV credentials, extract evidence
     Onboard_Attest        — Device: discover TPM objects, sign nonce, compute HMAC; owner verifies
     Onboard_Attest_Again  — Fresh nonce, proves persistence + repeatability
+  Phase7_LibraryAPI/
+    ReadNVCredentials     — Read all FDO credentials from TPM NV indices
+    ReadDAKPublicKey      — Extract DAK public key from persistent handle
+    ProveDAK_SpecificChallenge  — Sign a specific challenge with DAK via policy session
+    ProveDAK_RandomChallenge    — Sign a random challenge with DAK via policy session
 ```
 
 ### Build Tag
@@ -194,13 +199,23 @@ This is computed via trial session (`tpm2.PolicySession` with `tpm2.Trial()`) an
 - [x] Onboard_Attest_Again: fresh nonce, proves persistence + repeatability
 - This phase is the basis for integrating TPM attestation into the actual DI and TO2 code
 
-### Phase 7: Edge Cases — NOT STARTED
+### Phase 7: Library API — DONE
+
+Tests that exercise the production `tpm/nv.go` exported functions (`ReadNVCredentials`,
+`ReadDAKPublicKey`, `ProveDAKPossession`) from the spec compliance test harness:
+
+- [x] ReadNVCredentials: reads all FDO credential NV indices + verifies persistent key presence
+- [x] ReadDAKPublicKey: extracts public key from persistent DAK handle
+- [x] ProveDAK_SpecificChallenge: signs a known challenge with DAK via policy session, verifies signature
+- [x] ProveDAK_RandomChallenge: signs a random challenge, verifies signature
+
+### Phase 11: Edge Cases — NOT STARTED
 
 - [ ] NV space exhaustion scenarios
 - [ ] Oversized data rejection
 - [ ] Concurrent access scenarios
 
-### Phase 8: Performance — NOT STARTED
+### Phase 12: Performance — NOT STARTED
 
 - [ ] NV storage/retrieval benchmarks
 - [ ] Persistent vs derived key performance
@@ -209,12 +224,13 @@ This is computed via trial session (`tpm2.PolicySession` with `tpm2.Trial()`) an
 ### Phase 9: Library Integration — DONE
 
 - [x] NV write/provisioning functions in `tpm/nv.go` (DefineNVSpace, WriteNV, ComputeFDOAuthPolicy, PersistKey, EvictPersistentHandle, UndefineNVSpace, CleanupFDOState)
+- [x] NV read/inspection functions in `tpm/nv.go` (ReadNVCredentials, ReadDAKPublicKey, ProveDAKPossession)
 - [x] Spec-compliant ECC key creation in `tpm/key.go` (GenerateSpecECKey: UserWithAuth=false, AuthPolicy, UniqueString)
 - [x] Spec-compliant HMAC key creation in `tpm/key.go` (GenerateSpecHMACKey: UserWithAuth=false, AuthPolicy, UniqueString)
 - [x] Persistent key loader in `tpm/key.go` (LoadPersistentKey: policy session auth via fdoKeyPolicy)
 - [x] Spec-compliant HMAC in `tpm/hmac.go` (NewSpecHmac: persistent key with policy session auth)
-- [x] NV-based credential storage in `cred/tpm_store.go` (NewDI provisions NV + persistent keys, Save writes DCTPM/DCOV/DCActive to NV, Load reads from NV with file fallback)
-- [x] Backward compatibility: Load() falls back to file-based credentials when NV not provisioned
+- [x] NV-based credential storage in `cred/tpm_store.go` (NewDI provisions NV + persistent keys, Save writes DCTPM/DCOV/DCActive to NV, Load reads exclusively from NV — no disk file written or read)
+- [x] ~~Backward compatibility: Load() falls back to file-based credentials when NV not provisioned~~ (removed — Load() is NV-only now)
 - [x] Save() handles re-save correctly (UndefineNVSpace before DefineNVSpace for DCTPM/DCOV)
 
 #### Phase 9 Integration Tests
@@ -261,15 +277,31 @@ cd cred && go test -v -tags=tpmsim -count=1
 - [ ] Test Platform hierarchy on systems where it is available (UEFI environment)
 - [ ] End-to-end FDO protocol (DI → TO1 → TO2) with TPM-backed credentials
 
-### TODO: TPM Simulator State Persistence
+### ~~TODO:~~ DONE: TPM Simulator State Persistence
 
-The `go-tpm` software simulator (`simulator.OpenSimulator()`) creates a **fresh empty TPM** on each call. NV indices and persistent handles do NOT survive across connections. This means:
+**Status: IMPLEMENTED** — The simulator now uses a singleton pattern
+(`open_sim.go`) that keeps the go-tpm-tools simulator alive across
+`DefaultOpen()`/`Close()` cycles within a process. NV indices and
+persistent handles survive across connections, enabling integration
+tests that do DI → Close → Reopen → Load.
 
-1. Tests that require "close TPM → reopen → verify state" cannot use the simulator
-2. The `cred.Store` tests work because they use a single connection for the full lifecycle
-3. To test persistence across connections, hardware TPM is required
+**Implementation:**
 
-**Possible future improvement:** Investigate `GetWithFixedSeedInsecure()` or file-backed simulator options that could preserve TPM state across connections. This would allow more thorough simulator-based testing without hardware TPM access.
+- `open_sim.go`: Singleton `*simtools.Simulator` via `GetWithFixedSeedInsecure(8086)`
+  with a `simConn` wrapper whose `Close()` is a no-op (doesn't destroy the simulator).
+- `ResetSimulator()`: Exported function to truly destroy the singleton (for test cleanup
+  or the `--tpm-clear` CLI command).
+- New tests in `cred/tpm_store_test.go`:
+  - `TestTPMStore_CrossConnectionPersistence`: DI on conn1 → Close → Load on conn2
+  - `TestTPMStore_ClearAndReprovision`: DI → Clear → verify Load fails → fresh DI
+
+**CLI command:** `fdo client --tpm-clear` removes all FDO NV indices and persistent
+keys, working equally on hardware TPM and simulator.
+
+**Limitation:** Persistence is within a single process lifetime. Cross-process
+persistence (separate CLI invocations) would require an external simulator
+(e.g., swtpm with TCP transport) or modifications to the MS TPM reference
+implementation's NV memory layer to use file-backed storage.
 
 ## Key Helper Functions (all in spec_compliance_test.go)
 
@@ -282,7 +314,7 @@ The `go-tpm` software simulator (`simulator.OpenSimulator()`) creates a **fresh 
 - `fdoKeyPolicy()` — JIT policy session for runtime key authorization
 - `createPersistentECCKey()` — Full ECC key creation flow
 - `createPersistentHMACKey()` — Full HMAC key creation flow
-- `onboardAndAttest()` — Simulates device-side TO2: discovers TPM objects, signs nonce, verifies HMAC
+- `onboardFromTPMOnly()` — Simulates device-side TO2: discovers TPM objects, signs nonce, verifies HMAC
 
 ## Implementation Notes
 
@@ -295,9 +327,20 @@ const (
     DCOV_Index          = 0x01D10002
     HMAC_US_Index       = 0x01D10003
     DeviceKey_US_Index  = 0x01D10004
-    FDO_Cert_Index      = 0x01D10005
+    FDO_Cert_Index      = 0x01D10005  // See note below
 )
 ```
+
+**Note on `FDO_Cert_Index` (`0x01D10005`):** The spec defines this as an
+optional "FDO Device Certificate" (X.509), but this is a **spec gap**. The FDO
+credential (Ownership Voucher) is not an X.509 certificate — it is a
+CBOR-encoded, variable-length data structure with no normalized format. It
+routinely exceeds the ~700-byte practical limit of older TPMs. The information
+it provides (proof of ownership) is recoverable at any time by re-running TO2
+and can be cached on non-TPM media without compromising the security model.
+The constant is defined and exercised in Profile C tests for completeness, but
+production code does not provision this index. See `tpm-spec-gap-analysis.md`
+§13 for full discussion.
 
 ### Persistent Object Handles
 

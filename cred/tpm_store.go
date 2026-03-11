@@ -7,13 +7,11 @@ package cred
 
 import (
 	"crypto"
-	"crypto/elliptic"
 	"crypto/rand"
 	"fmt"
 	"hash"
 	"log/slog"
 	"os"
-	"path/filepath"
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
@@ -22,13 +20,6 @@ import (
 
 	"github.com/google/go-tpm/tpm2"
 )
-
-// tpmCredData is the on-disk format for TPM-backed credentials.
-// Keys live in the TPM; this file stores credential metadata + key type.
-type tpmCredData struct {
-	fdo.DeviceCredential
-	KeyType protocol.KeyType
-}
 
 // dcovNVData is the CBOR structure stored in the DCOV NV index.
 // It holds the credential fields not in DCTPM (which has GUID + DeviceInfo).
@@ -40,7 +31,6 @@ type dcovNVData struct {
 }
 
 type tpmStore struct {
-	path        string
 	tpmc        tpm.Closer
 	h256        tpm.Hmac
 	h384        tpm.Hmac
@@ -51,6 +41,8 @@ type tpmStore struct {
 
 // Open returns a TPM-backed credential store.
 // The TPM transport is selected by build tag (hardware or simulator).
+// The path argument is accepted for interface compatibility but ignored —
+// all credential data is stored in TPM NV indices.
 func Open(path string) (Store, error) {
 	t, err := tpm.DefaultOpen()
 	if err != nil {
@@ -59,7 +51,7 @@ func Open(path string) (Store, error) {
 	// Default to Platform hierarchy; set FDO_TPM_OWNER_HIERARCHY=1 to
 	// use Owner hierarchy (not fully spec-compliant but works in userspace).
 	usePlatform := os.Getenv("FDO_TPM_OWNER_HIERARCHY") != "1"
-	return &tpmStore{path: path, tpmc: t, usePlatform: usePlatform}, nil
+	return &tpmStore{tpmc: t, usePlatform: usePlatform}, nil
 }
 
 // NewDI provisions NV indices, creates spec-compliant persistent keys,
@@ -179,7 +171,8 @@ func (s *tpmStore) NewDI(keyType protocol.KeyType) (hash.Hash, hash.Hash, crypto
 //   - DCTPM NV: GUID (16 bytes) + DeviceInfo string
 //   - DCOV NV: CBOR-encoded {Version, RvInfo, PublicKeyHash, KeyType}
 //   - DCActive NV: updated to 0x01 (device initialized)
-//   - Minimal file: credential metadata for backward compatibility
+//
+// No file is written — all credential data lives in the TPM.
 func (s *tpmStore) Save(dc fdo.DeviceCredential) error {
 	// Write DCTPM NV: GUID + DeviceInfo (Profile B)
 	// Undefine first in case this is a re-save (TO2 credential update);
@@ -231,11 +224,7 @@ func (s *tpmStore) Save(dc fdo.DeviceCredential) error {
 	}
 	slog.Debug("tpm: DCActive = 0x01 (device initialized)")
 
-	// Also write minimal file for backward compatibility / key type tracking
-	return writeCredFile(s.path, tpmCredData{
-		DeviceCredential: dc,
-		KeyType:          s.keyType,
-	})
+	return nil
 }
 
 // Load reads credentials from TPM NV indices and loads persistent keys.
@@ -246,13 +235,10 @@ func (s *tpmStore) Save(dc fdo.DeviceCredential) error {
 //   - DCOV NV: CBOR-decode {Version, RvInfo, PublicKeyHash, KeyType}
 //   - Persistent DAK at DAKHandle with policy session auth
 //   - Persistent HMAC key at HMACKeyHandle with policy session auth
-//   - Falls back to file-based load if NV indices are not provisioned
 func (s *tpmStore) Load() (*fdo.DeviceCredential, hash.Hash, hash.Hash, crypto.Signer, error) {
-	// Try NV-based load first; fall back to legacy file-based load
 	dc, err := s.loadFromNV()
 	if err != nil {
-		slog.Debug("tpm: NV load failed, trying file fallback", "error", err)
-		return s.loadFromFile()
+		return nil, nil, nil, nil, fmt.Errorf("loading credentials from TPM NV: %w", err)
 	}
 
 	// Load persistent DAK key with policy session auth
@@ -322,54 +308,6 @@ func (s *tpmStore) loadFromNV() (*fdo.DeviceCredential, error) {
 		"keyType", s.keyType,
 	)
 	return dc, nil
-}
-
-// loadFromFile is the legacy fallback that reads credential data from a
-// file and recreates ephemeral TPM keys. Used when NV indices are not
-// provisioned (backward compatibility with pre-Phase 9 credentials).
-func (s *tpmStore) loadFromFile() (*fdo.DeviceCredential, hash.Hash, hash.Hash, crypto.Signer, error) {
-	var cdata tpmCredData
-	data, err := os.ReadFile(filepath.Clean(s.path))
-	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("reading credential %q: %w", s.path, err)
-	}
-	if err := cbor.Unmarshal(data, &cdata); err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("parsing credential %q: %w", s.path, err)
-	}
-
-	s.keyType = cdata.KeyType
-
-	// Recreate HMAC handles (legacy: ephemeral primary keys)
-	s.h256, err = tpm.NewHmac(s.tpmc, crypto.SHA256)
-	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("TPM HMAC SHA-256: %w", err)
-	}
-	s.h384, err = tpm.NewHmac(s.tpmc, crypto.SHA384)
-	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("TPM HMAC SHA-384: %w", err)
-	}
-
-	// Recreate device key (legacy: ephemeral primary from seed)
-	switch s.keyType {
-	case protocol.Secp256r1KeyType:
-		s.key, err = tpm.GenerateECKey(s.tpmc, elliptic.P256())
-	case protocol.Secp384r1KeyType:
-		s.key, err = tpm.GenerateECKey(s.tpmc, elliptic.P384())
-	case protocol.Rsa2048RestrKeyType:
-		s.key, err = tpm.GenerateRSAKey(s.tpmc, 2048)
-	case protocol.RsaPkcsKeyType:
-		s.key, err = tpm.GenerateRSAKey(s.tpmc, 3072)
-	case protocol.RsaPssKeyType:
-		s.key, err = tpm.GenerateRSAPSSKey(s.tpmc, 3072)
-	default:
-		return nil, nil, nil, nil, fmt.Errorf("unsupported key type: %s", s.keyType)
-	}
-	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("TPM device key: %w", err)
-	}
-
-	slog.Debug("tpm: loaded credentials from file (legacy)", "path", s.path)
-	return &cdata.DeviceCredential, s.h256, s.h384, s.key, nil
 }
 
 func (s *tpmStore) Close() error {
