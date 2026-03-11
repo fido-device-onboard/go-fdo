@@ -363,12 +363,22 @@ cred.Store tests (`cred/tpm_store_test.go`):
 2. `TestTPMStore_FileFallback` — Load succeeds via NV-first with file present
 3. `TestTPMStore_SaveOverwrite` — Save twice, Load returns latest credential
 
-### WI-8: Update Integration Test Script — PARTIALLY DONE
+### WI-8: Update Integration Test Script — DONE
 
-**Files**: `test_examples.sh`
+**Files**: `test_tpm_examples.sh`, `Makefile`
 
-TPM test scenarios may have been added; requires verification against current
-`test_examples.sh` content.
+TPM hardware integration tests implemented as a separate script
+(`test_tpm_examples.sh`) with a dedicated Makefile target (`make test-tpm`).
+Tests cover DI and onboarding (TO1/TO2) flows using real TPM hardware:
+
+1. `basic` — DI + TO1/TO2 with TPM NV credential storage
+2. `basic-reuse` — DI + multiple onboards with credential reuse
+3. `fdo200` — DI + TO1/TO2 with FDO 2.0 protocol
+
+The script builds the client with `-tags=tpm`, sets
+`FDO_TPM_OWNER_HIERARCHY=1` for Linux userspace, checks for
+`/dev/tpmrm0` access, and verifies no `cred.bin` file is created
+(all credentials stored in TPM NV only).
 
 ---
 
@@ -466,9 +476,9 @@ Phase C: Credential Lifecycle (WI-4) — DONE
 Phase D: CLI Integration (WI-5) — DONE
   CLI refactored to use cred.Store. Build tags select backend.
 
-Phase E: Testing (WI-7, WI-8) — MOSTLY DONE
+Phase E: Testing (WI-7, WI-8) — DONE
   Phase 9 integration tests + cred.Store tests complete.
-  test_examples.sh updates partially done.
+  TPM hardware integration tests in test_tpm_examples.sh (make test-tpm).
 ```
 
 ### Remaining Work

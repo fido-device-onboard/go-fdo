@@ -69,22 +69,38 @@ func Open(path string) (Store, error) {
 func (s *tpmStore) NewDI(keyType protocol.KeyType) (hash.Hash, hash.Hash, crypto.Signer, error) {
 	s.keyType = keyType
 
+	// Derive curve-dependent parameters from keyType
+	var (
+		curveID   tpm2.TPMECCCurve
+		hashAlg   tpm2.TPMAlgID
+		coordSize int // bytes per coordinate (X or Y)
+	)
+	switch keyType {
+	case protocol.Secp256r1KeyType:
+		curveID, hashAlg, coordSize = tpm2.TPMECCNistP256, tpm2.TPMAlgSHA256, 32
+	case protocol.Secp384r1KeyType:
+		curveID, hashAlg, coordSize = tpm2.TPMECCNistP384, tpm2.TPMAlgSHA384, 48
+	default:
+		return nil, nil, nil, fmt.Errorf("unsupported key type for TPM: %v", keyType)
+	}
+	dkUSSize := uint16(coordSize * 2) // X + Y
+
 	// Step 1: Clean up any existing FDO NV indices and persistent handles
 	tpm.CleanupFDOState(s.tpmc)
 	slog.Debug("tpm: cleaned up previous FDO state")
 
 	// Step 2: Generate random Unique Strings
-	deviceKeyUS := make([]byte, 64) // ECC P-256: 32 bytes X + 32 bytes Y
+	deviceKeyUS := make([]byte, dkUSSize)
 	if _, err := rand.Read(deviceKeyUS); err != nil {
 		return nil, nil, nil, fmt.Errorf("generating device key unique string: %w", err)
 	}
-	hmacUS := make([]byte, 32) // HMAC SHA-256 key derivation seed
+	hmacUS := make([]byte, 32) // HMAC SHA-256 key derivation seed (not curve-dependent)
 	if _, err := rand.Read(hmacUS); err != nil {
 		return nil, nil, nil, fmt.Errorf("generating HMAC unique string: %w", err)
 	}
 
 	// Step 3: Define and write DeviceKey_US NV index (Profile B)
-	dkUSName, err := tpm.DefineNVSpace(s.tpmc, tpm.DeviceKeyUSIndex, 64, tpm.NVProfileB, s.usePlatform)
+	dkUSName, err := tpm.DefineNVSpace(s.tpmc, tpm.DeviceKeyUSIndex, dkUSSize, tpm.NVProfileB, s.usePlatform)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("define DeviceKey_US NV: %w", err)
 	}
@@ -114,7 +130,7 @@ func (s *tpmStore) NewDI(keyType protocol.KeyType) (hash.Hash, hash.Hash, crypto
 	}
 
 	// Step 5: Create ECC signing key (DAK) with spec-compliant template → persist
-	dkHandle, pubKey, err := tpm.GenerateSpecECKey(s.tpmc, tpm2.TPMECCNistP256, tpm2.TPMAlgSHA256, deviceKeyUS, dkPolicy)
+	dkHandle, pubKey, err := tpm.GenerateSpecECKey(s.tpmc, curveID, hashAlg, deviceKeyUS, dkPolicy)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("create spec ECC key: %w", err)
 	}

@@ -428,6 +428,30 @@ Inspect TPM-stored credentials:
 The `-tpm <path>` flag overrides the default TPM device for inspection commands
 (e.g., `-tpm /dev/tpm0` or `-tpm simulator`).
 
+#### End-to-End TPM Integration Tests
+
+A dedicated test script (`test_tpm_examples.sh`) runs the full DI → TO1/TO2
+flow with all credential storage going through the TPM. The server runs in
+standard (non-TPM) mode — only the client uses the TPM.
+
+```bash
+# Hardware TPM (requires /dev/tpmrm0 read/write access)
+./test_tpm_examples.sh all
+
+# Software TPM via swtpm (no hardware needed)
+TPM_MODE=sim ./test_tpm_examples.sh all
+
+# Or use the Makefile targets
+make test-tpm          # hardware TPM
+make test-tpm-sim      # software TPM (swtpm)
+```
+
+Available tests: `basic`, `basic-reuse`, `fdo200`, `all` (default).
+
+**Software TPM prerequisites:** Install `swtpm` (`sudo apt install swtpm`).
+The test script manages the swtpm lifecycle automatically — no manual setup
+required.
+
 See [TPM.md](TPM.md) for NV index details, the `cred.Store` library API for
 downstream applications, and TPM spec compliance testing.
 
@@ -463,10 +487,12 @@ Attested payloads combine data with cryptographic proof of authenticity, allowin
 A `Makefile` is provided for convenience during development:
 
 ```bash
-make setup    # Initialize Go workspace (run once after clone)
-make lint     # Run golangci-lint and shellcheck
-make test     # Run unit and integration tests
-make          # Run lint + test (useful before commits)
+make setup         # Initialize Go workspace (run once after clone)
+make lint          # Run golangci-lint and shellcheck
+make test          # Run unit and integration tests
+make test-tpm      # Run TPM integration tests (hardware TPM)
+make test-tpm-sim  # Run TPM integration tests (swtpm, no hardware)
+make               # Run lint + test (useful before commits)
 ```
 
 ## FIPS Compliance

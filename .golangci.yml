@@ -68,6 +68,11 @@ linters:
           - gosec
         path: did/didkey\.go$
         text: G602
+      # G703: path traversal — TPM device paths come from env vars, not user input
+      - linters:
+          - gosec
+        path: (tpm/open_linux|examples/cmd/tpm)\.go$
+        text: G703
       # G704: SSRF via taint — HTTP client calls use configured URLs, not user input
       - linters:
           - gosec
