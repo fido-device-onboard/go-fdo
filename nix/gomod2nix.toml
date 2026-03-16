@@ -14,14 +14,14 @@ schema = 3
     version = "v0.14.0"
     hash = "sha256-7OtU0mbvC88aRh9oSS01e6KgU/+QNGYYkSxeaWcRynA="
   [mod."github.com/google/go-tdx-guest"]
-    version = "v0.3.2-0.20241009005452-097ee70d0843"
-    hash = "sha256-ZvqoLlg4VfnGOGGF2PN65qpdmiVFqfPpu5iLjkQe2ao="
+    version = "v0.3.2-0.20250814004405-ffb0869e6f4d"
+    hash = "sha256-O9PArCKvvHLLR7ESFdkGf7VFISa4C42goVCLmamg+dY="
   [mod."github.com/google/go-tpm"]
     version = "v0.9.8"
     hash = "sha256-L9lF8qj0N1mH5pwzXQNKw4CAP340P0PTTG0OmZkCQZw="
   [mod."github.com/google/go-tpm-tools"]
-    version = "v0.4.7"
-    hash = "sha256-Wwecp81g7cJHQNslkibj7V2RstFxL0Yw9s9vCgHanQI="
+    version = "v0.4.8"
+    hash = "sha256-4+jCPitjGfHxFBtOAIvM1TXASQWjw8Z+gdyR9MBxHsQ="
   [mod."github.com/google/logger"]
     version = "v1.1.1"
     hash = "sha256-92ECLiBcM8ahLducThWxaAzB0P3wA72Wycu66fetTfQ="
@@ -83,8 +83,8 @@ schema = 3
     version = "v0.33.0"
     hash = "sha256-XdA6D39ESuJkaaM/SRBnqZzjKUwi6Gbt1Si1nvauTr4="
   [mod."google.golang.org/protobuf"]
-    version = "v1.35.1"
-    hash = "sha256-4NtUQoBvlPGFGjo7c+E1EBS/sb8oy50MGy45KGWPpWo="
+    version = "v1.36.11"
+    hash = "sha256-7W+6jntfI/awWL3JP6yQedxqP5S9o3XvPgJ2XxxsIeE="
   [mod."gopkg.in/yaml.v3"]
     version = "v3.0.1"
     hash = "sha256-FqL9TKYJ0XkNwJFnq9j0VvJ5ZUU1RvH/52h/f5bkYAU="
