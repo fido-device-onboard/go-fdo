@@ -62,8 +62,8 @@ schema = 3
     version = "v1.9.0"
     hash = "sha256-uUp/On+1nK+lARkTVtb5RxlW15zxtw2kaAFuIASA+J0="
   [mod."github.com/syumai/workers"]
-    version = "v0.27.0"
-    hash = "sha256-acWyf6OhF+2vpejyVsTXF250RlsY52gWvLz/2SvYueU="
+    version = "v0.32.0"
+    hash = "sha256-ovzySgtIOZ70eKsKJjx9I//wi60VvMIjl4M5acnEXhM="
   [mod."github.com/tetratelabs/wazero"]
     version = "v1.11.0"
     hash = "sha256-bXmvMmQLsfyEa3C1kjE0AAVhGzj2tIiO67MxI3otMo8="
