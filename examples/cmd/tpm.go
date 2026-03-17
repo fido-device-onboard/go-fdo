@@ -16,6 +16,7 @@ import (
 	"github.com/google/go-tpm-tools/simulator"
 	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/google/go-tpm/tpm2/transport/linuxtpm"
+	"github.com/google/go-tpm/tpm2/transport/linuxudstpm"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/protocol"
@@ -36,7 +37,34 @@ func tpmOpen(tpmPath string) (tpm.Closer, error) {
 		}
 		return transport.FromReadWriteCloser(sim), nil
 	}
+	// Auto-detect Unix socket (swtpm) vs character device (hardware TPM)
+	fi, err := os.Stat(tpmPath)
+	if err != nil {
+		return nil, fmt.Errorf("opening TPM at %s: %w", tpmPath, err)
+	}
+	if fi.Mode()&os.ModeSocket != 0 {
+		return linuxudstpm.Open(tpmPath)
+	}
 	return linuxtpm.Open(tpmPath)
+}
+
+// tpmClearCredentials removes all FDO NV indices and persistent handles from the TPM.
+// This works equally on hardware TPM and simulator.
+func tpmClearCredentials() error {
+	tpmc, err := tpmOpen(tpmPath)
+	if err != nil {
+		return fmt.Errorf("opening TPM: %w", err)
+	}
+	defer func() { _ = tpmc.Close() }()
+
+	source := tpmPath
+	if source == "" {
+		source = "default"
+	}
+	fmt.Printf("Clearing all FDO credentials from TPM [%s]...\n", source)
+	tpm.CleanupFDOState(tpmc)
+	fmt.Println("Done. All FDO NV indices and persistent keys removed.")
+	return nil
 }
 
 // tpmShowCredentials reads and displays all FDO credentials stored in TPM NV indices.

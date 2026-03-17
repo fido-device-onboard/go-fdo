@@ -44,7 +44,7 @@ This document provides guidance for AI agents and automated tools working with t
 
 - **Go Workspaces**: Uses Go workspaces (`go.work`) for multi-module development
 - **Makefile**: Provides convenience targets for development workflows
-- **Test Scripts**: Comprehensive test suite in `test_examples.sh`
+- **Test Scripts**: Comprehensive test suite in `test_examples.sh`; TPM hardware tests in `test_tpm_examples.sh`
 
 ## Development Workflow
 
@@ -59,6 +59,8 @@ make setup    # Initialize Go workspace (run once after clone)
 ```bash
 make build    # Build the project
 make test     # Run all tests (unit + integration)
+make test-tpm     # Run TPM hardware integration tests (requires /dev/tpmrm0)
+make test-tpm-sim # Run TPM simulator integration tests (no hardware needed)
 make lint     # Run all linters
 make          # Default: run lint + test
 ```
@@ -135,6 +137,26 @@ Run via `./test_examples.sh` with specific test scenarios:
 | `bmo-meta-signed` | BMO signed meta-payload + tampered-signature negative test |
 | `auth` | FDOKeyAuth CLI - obtain bearer token via challenge-response handshake |
 | `all` | Run all tests (default) |
+
+#### TPM Hardware Integration Tests
+
+Run via `./test_tpm_examples.sh` (or `make test-tpm`). Requires `/dev/tpmrm0`
+and read/write access. These test DI and onboarding flows with all credential
+storage going through real TPM hardware (NV indices + persistent keys).
+
+| Test | Description |
+| ---- | ----------- |
+| `basic` | DI + TO1/TO2 with TPM NV credential storage |
+| `basic-reuse` | DI + multiple onboards with credential reuse |
+| `fdo200` | DI + TO1/TO2 with FDO 2.0 protocol |
+| `all` | Run all TPM tests (default) |
+
+```bash
+./test_tpm_examples.sh all         # Run all TPM tests (hardware)
+./test_tpm_examples.sh basic       # Run specific TPM test
+TPM_MODE=sim ./test_tpm_examples.sh  # Use software simulator (no hardware)
+TPM_DEVICE=/dev/tpm0 ./test_tpm_examples.sh  # Use alternate TPM device
+```
 
 ### Running Tests
 

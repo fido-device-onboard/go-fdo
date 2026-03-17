@@ -15,8 +15,6 @@ import (
 
 	"github.com/google/go-tpm/tpm2/transport/linuxtpm"
 
-	"github.com/fido-device-onboard/go-fdo"
-	"github.com/fido-device-onboard/go-fdo/protocol"
 	"github.com/fido-device-onboard/go-fdo/tpm"
 )
 
@@ -65,27 +63,9 @@ func TestTPMDeviceHardware(t *testing.T) {
 	}
 	defer key.Close()
 
-	t.Log("✅ TPM basic functionality test passed")
-	t.Log("✅ P256 key generation works")
-	t.Log("✅ HMAC SHA256/SHA384 work")
-
-	// Test that we can create a device credential with the TPM key
-	guid := protocol.GUID{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
-	deviceCred := tpm.DeviceCredential{
-		DeviceCredential: fdo.DeviceCredential{
-			Version:    1,
-			DeviceInfo: "test-device",
-			GUID:       guid,
-			PublicKeyHash: protocol.Hash{
-				Algorithm: protocol.Sha256Hash,
-				Value:     []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32},
-			},
-		},
-		DeviceKey:       tpm.FdoDeviceKey,
-		DeviceKeyHandle: 0x81000001, // Example handle
-	}
-
-	t.Logf("✅ Created device credential: %s", deviceCred.String())
+	t.Log("TPM basic functionality test passed")
+	t.Log("P256 key generation works")
+	t.Log("HMAC SHA256/SHA384 work")
 
 	// Test signing with the TPM key
 	hash := crypto.SHA256.New()
@@ -97,15 +77,15 @@ func TestTPMDeviceHardware(t *testing.T) {
 		t.Fatalf("Failed to sign with TPM key: %v", err)
 	}
 
-	t.Logf("✅ Successfully signed data with TPM key (signature length: %d)", len(signature))
+	t.Logf("Successfully signed data with TPM key (signature length: %d)", len(signature))
 
 	// Verify the signature
 	if !ecdsa.VerifyASN1(key.Public().(*ecdsa.PublicKey), digest, signature) {
 		t.Fatal("Signature verification failed")
 	}
 
-	t.Log("✅ Signature verification passed")
-	t.Log("🎉 Hardware TPM test completed successfully!")
+	t.Log("Signature verification passed")
+	t.Log("Hardware TPM test completed successfully")
 }
 
 var p384Supported bool

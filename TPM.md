@@ -155,6 +155,33 @@ proof, err := tpm.ProveDAKPossession(t, []byte("challenge"))
 // proof.PublicKey, proof.Challenge, proof.Signature
 ```
 
+## 5. End-to-End Integration Tests
+
+The `test_tpm_examples.sh` script runs the full DI → TO1/TO2 flow with all
+client credential storage going through the TPM. The server runs in standard
+(non-TPM) mode.
+
+```bash
+# Hardware TPM (requires /dev/tpmrm0 read/write access)
+./test_tpm_examples.sh all
+make test-tpm
+
+# Software TPM via swtpm (no hardware needed; install: sudo apt install swtpm)
+TPM_MODE=sim ./test_tpm_examples.sh all
+make test-tpm-sim
+```
+
+| Test | Description |
+|------|-------------|
+| `basic` | DI + TO1/TO2 with TPM NV credential storage |
+| `basic-reuse` | DI + multiple onboards with credential reuse |
+| `fdo200` | DI + TO1/TO2 with FDO 2.0 protocol |
+| `all` | Run all TPM tests (default) |
+
+The swtpm mode uses a Unix domain socket for cross-process TPM state
+persistence. The test script manages the swtpm lifecycle (start, restart per
+test, stop) automatically.
+
 ## NV Index Map
 
 | Index | Handle | Contents | Auth |

@@ -1,4 +1,4 @@
-.PHONY: all setup build test test-unit test-integration lint lint-go lint-shell clean help
+.PHONY: all setup build test test-unit test-integration test-tpm test-tpm-sim lint lint-go lint-shell clean help
 
 # Default target
 all: lint test
@@ -42,6 +42,14 @@ test-unit:
 # Run integration/example tests
 test-integration:
 	./test_examples.sh
+
+# Run TPM hardware integration tests (requires /dev/tpmrm0)
+test-tpm:
+	./test_tpm_examples.sh
+
+# Run TPM simulator integration tests (no hardware needed)
+test-tpm-sim:
+	TPM_MODE=sim ./test_tpm_examples.sh
 
 # Run all linters
 lint:
@@ -98,6 +106,8 @@ help:
 	@echo "  test             - Run all tests (unit + integration)"
 	@echo "  test-unit        - Run Go unit tests"
 	@echo "  test-integration - Run integration tests (test_examples.sh)"
+	@echo "  test-tpm         - Run TPM hardware integration tests (test_tpm_examples.sh)"
+	@echo "  test-tpm-sim     - Run TPM simulator integration tests (no hardware needed)"
 	@echo "  lint             - Run all linters (Go + shell)"
 	@echo "  lint-go          - Run golangci-lint"
 	@echo "  lint-shell       - Check shell script formatting"

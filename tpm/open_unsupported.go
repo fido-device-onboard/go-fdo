@@ -12,3 +12,7 @@ import "fmt"
 func DefaultOpen() (Closer, error) {
 	return nil, fmt.Errorf("no TPM support on this platform; build with -tags=tpmsim or on Linux/Windows")
 }
+
+// ResetSimulator is a no-op on unsupported platforms.
+// It exists for API compatibility with the simulator build (-tags=tpmsim).
+func ResetSimulator() {}

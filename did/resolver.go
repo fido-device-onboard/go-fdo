@@ -189,7 +189,7 @@ func jwkToECPublicKey(jwk *JWK) (*ecdsa.PublicKey, error) {
 	x := new(big.Int).SetBytes(xBytes)
 	y := new(big.Int).SetBytes(yBytes)
 
-	if !curve.IsOnCurve(x, y) {
+	if err := validateECPoint(curve, x, y); err != nil {
 		return nil, fmt.Errorf("EC point is not on curve %s", jwk.Crv)
 	}
 

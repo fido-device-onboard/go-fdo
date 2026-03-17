@@ -5,6 +5,7 @@ package did
 
 import (
 	"crypto"
+	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"fmt"
@@ -60,7 +61,7 @@ func ParseDIDKey(didURI string) (crypto.PublicKey, error) {
 	}
 
 	pub := &ecdsa.PublicKey{Curve: curve, X: x, Y: y}
-	if !curve.IsOnCurve(x, y) {
+	if err := validateECPoint(curve, x, y); err != nil {
 		return nil, fmt.Errorf("did:key: decoded point is not on curve %s", curve.Params().Name)
 	}
 
@@ -162,4 +163,26 @@ func decodeBase58BTC(s string) ([]byte, error) {
 	}
 
 	return decoded, nil
+}
+
+// validateECPoint validates that (x, y) lies on the given curve using crypto/ecdh.
+// This replaces the deprecated elliptic.Curve.IsOnCurve.
+func validateECPoint(c elliptic.Curve, x, y *big.Int) error {
+	byteLen := (c.Params().BitSize + 7) / 8
+	uncompressed := make([]byte, 1+2*byteLen)
+	uncompressed[0] = 0x04
+	x.FillBytes(uncompressed[1 : 1+byteLen])
+	y.FillBytes(uncompressed[1+byteLen:])
+
+	var ecdhCurve ecdh.Curve
+	switch c {
+	case elliptic.P256():
+		ecdhCurve = ecdh.P256()
+	case elliptic.P384():
+		ecdhCurve = ecdh.P384()
+	default:
+		return fmt.Errorf("unsupported curve: %s", c.Params().Name)
+	}
+	_, err := ecdhCurve.NewPublicKey(uncompressed)
+	return err
 }
