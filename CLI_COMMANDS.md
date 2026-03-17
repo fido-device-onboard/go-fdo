@@ -4,12 +4,13 @@ This document provides comprehensive documentation for all FDO (FIDO Device Onbo
 
 ## Overview
 
-The FDO CLI provides five main commands:
+The FDO CLI provides six main commands:
 
 - `client` - Device-side operations (DI, TO1, TO2, voucher management)
 - `server` - Owner-side operations (DI server, TO2 server, rendezvous)
 - `delegate` - Delegate certificate management
 - `attestpayload` - Attested payload creation and verification
+- `auth` - FDOKeyAuth authentication (obtain bearer token for voucher transfer APIs)
 - `meta` - BMO meta-payload creation, signing, and verification
 
 ## Client Commands
@@ -544,6 +545,135 @@ go run ./cmd attestpayload -db fdo.db -voucher voucher.pem -payload "Config v2" 
 # Use encrypted database (production security)
 go run ./cmd attestpayload -db fdo.db -db-pass "password" -voucher voucher.pem -payload "Data"
 ```
+
+## Auth Command (FDOKeyAuth)
+
+### Overview
+
+The `auth` command performs an [FDOKeyAuth] challenge-response handshake against
+a Voucher Transfer service and prints the resulting bearer token to stdout.
+This token is then used as `Authorization: Bearer <token>` in subsequent
+pull/push API calls.
+
+The handshake is three messages over two HTTP round-trips:
+
+```
+Caller                         Server
+  |  ── Hello (CallerKey) ──>    |
+  |  <── Challenge (Nonce) ──    |
+  |  ── Prove  (Sign1)    ──>   |
+  |  <── Result (Token)   ──    |
+```
+
+[FDOKeyAuth]: transfer/README.md
+
+### Basic Usage
+
+```bash
+go run ./cmd auth [flags]
+```
+
+### Flags
+
+| Flag | Required | Default | Description |
+|------|----------|---------|-------------|
+| `-url` | Yes | — | Base URL of the FDOKeyAuth service |
+| `-key` | Yes | — | Path to PEM-encoded private key (use `-` for stdin) |
+| `-hash` | No | `sha256` | Hash algorithm: `sha256` or `sha384` |
+| `-path-prefix` | No | `/api/v1/pull/vouchers` | Service Root path prefix |
+| `-verbose` | No | `false` | Print expiry, fingerprint, and voucher count to stderr |
+| `-insecure-tls` | No | `false` | Skip TLS certificate verification |
+| `-debug` | No | `false` | Enable debug logging |
+
+### Key Format
+
+The `-key` flag accepts any PEM-encoded private key:
+
+- `EC PRIVATE KEY` (SEC 1 / OpenSSL format)
+- `PRIVATE KEY` (PKCS#8 — EC or RSA)
+- `RSA PRIVATE KEY` (PKCS#1)
+
+### Examples
+
+#### Authenticate and capture the token
+
+```bash
+TOKEN=$(go run ./cmd auth -url https://mfg.example.com -key owner.pem)
+echo "$TOKEN"
+```
+
+#### Pipe the key from stdin
+
+```bash
+cat owner.pem | go run ./cmd auth -url https://mfg.example.com -key -
+```
+
+This is useful when the key is stored in a secrets manager or vault:
+
+```bash
+vault kv get -field=key secret/fdo/owner | \
+  go run ./cmd auth -url https://mfg.example.com -key -
+```
+
+#### Verbose output (stderr)
+
+```bash
+go run ./cmd auth -url https://mfg.example.com -key owner.pem -verbose
+# stdout: integration-test-token-12345
+# stderr:
+#   Status:          authenticated
+#   Token expires:   2025-06-15T14:30:00Z
+#   Key fingerprint: a1b2c3d4...
+#   Voucher count:   42
+```
+
+#### Use SHA-384 hash
+
+```bash
+go run ./cmd auth -url https://mfg.example.com -key owner.pem -hash sha384
+```
+
+#### Use with a pull-model voucher download
+
+```bash
+# 1. Authenticate
+TOKEN=$(go run ./cmd auth -url https://mfg.example.com -key owner.pem)
+
+# 2. List available vouchers
+curl -H "Authorization: Bearer $TOKEN" \
+     https://mfg.example.com/api/v1/pull/vouchers
+
+# 3. Download a specific voucher
+curl -H "Authorization: Bearer $TOKEN" \
+     https://mfg.example.com/api/v1/pull/vouchers/<guid> \
+     -o voucher.cbor
+```
+
+#### Self-signed / development TLS
+
+```bash
+go run ./cmd auth -url https://localhost:9998 -key owner.pem -insecure-tls
+```
+
+### Output Convention
+
+| Stream | Content |
+|--------|---------|
+| stdout | Bearer token only (one line, no trailing whitespace) |
+| stderr | Warnings, verbose details, debug logs |
+
+This makes `fdo auth` composable in shell pipelines — stdout is always safe to
+capture with `$()` or pipe into another command.
+
+### Error Cases
+
+| Scenario | Exit code | Message |
+|----------|-----------|---------|
+| Missing `-url` | 2 | `auth: -url is required` |
+| Missing `-key` | 2 | `auth: -key is required` |
+| Unreadable key file | 2 | `auth: failed to read key file "...": ...` |
+| Server rejects signature | 2 | `auth: authentication failed: HTTP 401 ...` |
+| Server unreachable | 2 | `auth: authentication failed: ...` |
 
 ## Meta Commands (BMO Meta-Payload Tooling)
 

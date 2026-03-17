@@ -63,6 +63,7 @@ Makefile included is for convenience, and to prove some quick ways to build, run
 | `fdo200` | FDO 2.0 protocol |
 | `delegate` | Delegate certificate support (FDO 1.01) |
 | `delegate-fdo200` | Delegate certificate support with FDO 2.0 |
+| `auth` | FDOKeyAuth CLI — obtain bearer token via challenge-response handshake |
 | `all` | Run all tests (default) |
 
 Run a specific test:
@@ -430,6 +431,29 @@ The `-tpm <path>` flag overrides the default TPM device for inspection commands
 
 See [TPM.md](TPM.md) for NV index details, the `cred.Store` library API for
 downstream applications, and TPM spec compliance testing.
+
+### FDOKeyAuth Authentication
+
+The `auth` subcommand performs an FDOKeyAuth challenge-response handshake to
+obtain a bearer token for voucher transfer APIs. The token is printed to stdout,
+making it easy to capture in scripts.
+
+```console
+$ openssl ecparam -name prime256v1 -genkey -noout -o owner.pem
+$ TOKEN=$(go run ./examples/cmd auth -url https://mfg.example.com -key owner.pem)
+$ curl -H "Authorization: Bearer $TOKEN" https://mfg.example.com/api/v1/pull/vouchers
+[{"guid":"abc123...","serial":"SN-001"}]
+```
+
+Keys can also be piped from stdin (e.g., from a vault or secrets manager):
+
+```console
+$ vault kv get -field=key secret/fdo/owner | go run ./examples/cmd auth -url https://mfg.example.com -key -
+eyJhbGciOiJFUzI1NiJ9...
+```
+
+See [CLI_COMMANDS.md](CLI_COMMANDS.md#auth-command-fdokeyauth) for all flags and
+examples, and [VOUCHER_TRANSFER.md](VOUCHER_TRANSFER.md) for the full library API.
 
 ## Delegate Support
 

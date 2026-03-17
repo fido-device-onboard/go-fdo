@@ -133,6 +133,7 @@ Run via `./test_examples.sh` with specific test scenarios:
 | `bmo` | Bare Metal Onboarding FSIM |
 | `bmo-meta-url` | BMO meta-URL delivery (unsigned meta-payload via CLI) |
 | `bmo-meta-signed` | BMO signed meta-payload + tampered-signature negative test |
+| `auth` | FDOKeyAuth CLI - obtain bearer token via challenge-response handshake |
 | `all` | Run all tests (default) |
 
 ### Running Tests
@@ -168,6 +169,9 @@ FSIMs extend FDO functionality with device-specific services:
 - `serviceinfo.OwnerModule`: Owner-side FSIM interface
 - `fdo.TO2Config`: Configuration for TO2 protocol
 - `fdo.TO2Server`: Server-side implementation
+- `transfer.FDOKeyAuthClient`: Client for FDOKeyAuth challenge-response handshake
+- `transfer.FDOKeyAuthServer`: Server with `KeyLookup` and `TokenIssuer` callbacks
+- `transfer.VoucherStore`: Storage interface for push/pull voucher transfer
 
 ## Testing Guidelines
 
@@ -244,10 +248,12 @@ go-fdo/
 ├── test_examples.sh             # Integration tests
 ├── AGENTS.md                    # This file
 ├── examples/                    # Reference implementation
-│   └── cmd/                     # CLI tool
+│   ├── cmd/                     # CLI tool (client, server, delegate, auth, etc.)
+│   └── authtest/                # FDOKeyAuth test server helper
 ├── fsim/                        # Service Info Modules
 ├── sqlite/                      # Database integration
 ├── tpm/                         # TPM support
+├── transfer/                    # Voucher Transfer Protocol (FDOKeyAuth, push, pull)
 ├── serviceinfo/                 # Core FSIM interfaces
 ├── fdo/                         # Main FDO protocol
 └── internal/                    # Internal packages

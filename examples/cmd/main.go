@@ -29,7 +29,7 @@ func init() {
 func usage() {
 	_, _ = fmt.Fprintf(os.Stderr, `
 Usage:
-  fdo [global_options] [client|server|delegate|attestpayload|meta] [--] [options]
+  fdo [global_options] [client|server|delegate|attestpayload|meta|auth] [--] [options]
 
 Global options:
 %s
@@ -40,6 +40,8 @@ Server options:
 Delegate options:
 %s
 Attested Payload options:
+%s
+Auth options:
 %s
 
 "delegate help" for more delegate commands
@@ -71,7 +73,7 @@ Key exchange suites:
   - ASYMKEX3072
   - ECDH256
   - ECDH384
-`, options(flags), options(clientFlags), options(serverFlags), options(delegateFlags), options(attestPayloadFlags))
+`, options(flags), options(clientFlags), options(serverFlags), options(delegateFlags), options(attestPayloadFlags), options(authFlags))
 }
 
 func options(flags *flag.FlagSet) string {
@@ -141,6 +143,15 @@ func main() {
 	case "meta", "m":
 		if err := metaPayload(args); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "meta error: %v\n", err)
+			os.Exit(2)
+		}
+	case "auth":
+		if err := authFlags.Parse(args); err != nil {
+			usage()
+			os.Exit(1)
+		}
+		if err := auth(); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "auth error: %v\n", err)
 			os.Exit(2)
 		}
 	default:

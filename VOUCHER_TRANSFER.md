@@ -397,6 +397,26 @@ Run all tests including integration:
 make test
 ```
 
+## CLI: `fdo auth`
+
+For quick scripting or manual testing, the `fdo auth` CLI subcommand performs
+an FDOKeyAuth handshake and prints the bearer token to stdout:
+
+```bash
+# Authenticate and capture the token
+TOKEN=$(go run ./examples/cmd auth -url https://mfg.example.com -key owner.pem)
+
+# Use the token with curl to list/download vouchers
+curl -H "Authorization: Bearer $TOKEN" \
+     https://mfg.example.com/api/v1/pull/vouchers
+```
+
+The key can be piped from stdin (`-key -`), which is useful for secrets managers
+and vault integrations.
+
+See [CLI_COMMANDS.md](CLI_COMMANDS.md#auth-command-fdokeyauth) for the full
+flag reference and examples.
+
 ## See Also
 
 - [transfer/README.md](transfer/README.md) — Package-level documentation

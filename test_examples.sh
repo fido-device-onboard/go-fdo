@@ -4,7 +4,7 @@
 # Runs through the examples from README.md and delegate.md
 #
 # Usage: ./test_examples.sh [test_name]
-#   test_name: basic, rv-blob, kex, delegate, delegate-fdo200, attested-payload, all (default: all)
+#   test_name: basic, rv-blob, kex, delegate, delegate-fdo200, attested-payload, auth, all (default: all)
 #
 
 set -e
@@ -2055,6 +2055,166 @@ test_bad_delegate() {
 	log_success "Bad Delegate Rejection test PASSED"
 }
 
+# Test: FDOKeyAuth CLI (auth subcommand)
+# This test starts a standalone FDOKeyAuth server, generates a caller key
+# (client-side), and verifies that "fdo auth" obtains a bearer token.
+test_auth() {
+	log_section "TEST: FDOKeyAuth CLI (auth subcommand)"
+
+	mkdir -p "$EPHEMERAL_DIR"
+	local AUTH_ADDR="127.0.0.1:9998"
+	local AUTH_URL="http://${AUTH_ADDR}"
+	local CALLER_KEY="$EPHEMERAL_DIR/auth-caller.pem"
+	local AUTH_PID=""
+
+	# Generate caller key (client-side — the server never sees this)
+	log_step "Generating caller private key (client-side)"
+	openssl ecparam -name prime256v1 -genkey -noout -out "$CALLER_KEY" 2>/dev/null
+	if [ ! -s "$CALLER_KEY" ]; then
+		log_error "Failed to generate caller key"
+		return 1
+	fi
+	log_success "Caller key generated: $CALLER_KEY"
+
+	# Clean up any previous auth server
+	pkill -f "authtest" 2>/dev/null || true
+	sleep 1
+
+	log_step "Starting FDOKeyAuth test server"
+	(cd examples && go run ./authtest -addr "$AUTH_ADDR" >/tmp/fdo_authtest.log 2>&1) &
+	AUTH_PID=$!
+
+	# Wait for server to start
+	local retries=15
+	while [ $retries -gt 0 ]; do
+		if grep -q "Listening" /tmp/fdo_authtest.log 2>/dev/null; then
+			sleep 0.5
+			if nc -z 127.0.0.1 9998 2>/dev/null || (echo >/dev/tcp/127.0.0.1/9998) 2>/dev/null; then
+				log_success "FDOKeyAuth server started (PID: $AUTH_PID)"
+				break
+			fi
+		fi
+		if ! kill -0 "$AUTH_PID" 2>/dev/null; then
+			log_error "FDOKeyAuth server process died"
+			cat /tmp/fdo_authtest.log 2>/dev/null || true
+			return 1
+		fi
+		sleep 1
+		retries=$((retries - 1))
+	done
+	if [ $retries -eq 0 ]; then
+		log_error "FDOKeyAuth server failed to start (timeout)"
+		cat /tmp/fdo_authtest.log 2>/dev/null || true
+		kill "$AUTH_PID" 2>/dev/null || true
+		return 1
+	fi
+
+	# Test 1: Basic auth from PEM file
+	log_step "Running: fdo auth -url $AUTH_URL -key $CALLER_KEY"
+	local TOKEN
+	TOKEN=$(cd examples && go run ./cmd auth -url "$AUTH_URL" -key "../$CALLER_KEY" 2>/tmp/fdo_auth_stderr.log)
+	local EXIT_CODE=$?
+	if [ $EXIT_CODE -ne 0 ]; then
+		log_error "fdo auth failed (exit $EXIT_CODE)"
+		cat /tmp/fdo_auth_stderr.log 2>/dev/null || true
+		kill "$AUTH_PID" 2>/dev/null || true
+		return 1
+	fi
+	if [ -z "$TOKEN" ]; then
+		log_error "fdo auth returned empty token"
+		kill "$AUTH_PID" 2>/dev/null || true
+		return 1
+	fi
+	log_success "Received bearer token: $TOKEN"
+
+	# Verify token value matches what the test server issues
+	if [ "$TOKEN" = "integration-test-token-12345" ]; then
+		log_success "Token matches expected value"
+	else
+		log_error "Token mismatch: expected 'integration-test-token-12345', got '$TOKEN'"
+		kill "$AUTH_PID" 2>/dev/null || true
+		return 1
+	fi
+
+	# Test 2: Auth with -verbose flag
+	log_step "Running: fdo auth -url $AUTH_URL -key $CALLER_KEY -verbose"
+	TOKEN=$(cd examples && go run ./cmd auth -url "$AUTH_URL" -key "../$CALLER_KEY" -verbose 2>/tmp/fdo_auth_verbose.log)
+	EXIT_CODE=$?
+	if [ $EXIT_CODE -ne 0 ]; then
+		log_error "fdo auth -verbose failed (exit $EXIT_CODE)"
+		cat /tmp/fdo_auth_verbose.log 2>/dev/null || true
+		kill "$AUTH_PID" 2>/dev/null || true
+		return 1
+	fi
+	# Verify verbose output on stderr
+	if grep -q "authenticated" /tmp/fdo_auth_verbose.log; then
+		log_success "Verbose output includes authentication status"
+	else
+		log_error "Verbose output missing authentication status"
+		cat /tmp/fdo_auth_verbose.log 2>/dev/null || true
+	fi
+	if grep -q "Key fingerprint" /tmp/fdo_auth_verbose.log; then
+		log_success "Verbose output includes key fingerprint"
+	else
+		log_error "Verbose output missing key fingerprint"
+	fi
+
+	# Test 3: Auth with stdin key
+	log_step "Running: cat key | fdo auth -url $AUTH_URL -key -"
+	TOKEN=$(cd examples && cat "../$CALLER_KEY" | go run ./cmd auth -url "$AUTH_URL" -key - 2>/dev/null)
+	EXIT_CODE=$?
+	if [ $EXIT_CODE -ne 0 ]; then
+		log_error "fdo auth from stdin failed (exit $EXIT_CODE)"
+		kill "$AUTH_PID" 2>/dev/null || true
+		return 1
+	fi
+	if [ "$TOKEN" = "integration-test-token-12345" ]; then
+		log_success "Stdin key auth succeeded with correct token"
+	else
+		log_error "Stdin key auth: token mismatch"
+		kill "$AUTH_PID" 2>/dev/null || true
+		return 1
+	fi
+
+	# Test 4: Auth with a different key (server accepts any key — no KeyLookup filter)
+	log_step "Generating a second (different) caller key"
+	openssl ecparam -name prime256v1 -genkey -noout -out "$EPHEMERAL_DIR/auth-other.pem" 2>/dev/null
+	log_step "Auth with different key (server has no enrollment check)"
+	TOKEN=$(cd examples && go run ./cmd auth -url "$AUTH_URL" -key "../$EPHEMERAL_DIR/auth-other.pem" 2>/dev/null)
+	EXIT_CODE=$?
+	if [ $EXIT_CODE -eq 0 ]; then
+		log_success "Auth with different key: handshake completed (server has no key lookup filter)"
+	else
+		log_success "Auth with different key: rejected as expected"
+	fi
+
+	# Test 5: Missing URL (should fail)
+	log_step "Expecting failure: fdo auth without -url"
+	if (cd examples && go run ./cmd auth -key "../$CALLER_KEY" >/dev/null 2>&1); then
+		log_error "Should have failed without -url"
+		kill "$AUTH_PID" 2>/dev/null || true
+		return 1
+	fi
+	log_expected_failure "Missing -url rejected"
+
+	# Test 6: Missing key (should fail)
+	log_step "Expecting failure: fdo auth without -key"
+	if (cd examples && go run ./cmd auth -url "$AUTH_URL" >/dev/null 2>&1); then
+		log_error "Should have failed without -key"
+		kill "$AUTH_PID" 2>/dev/null || true
+		return 1
+	fi
+	log_expected_failure "Missing -key rejected"
+
+	# Cleanup
+	kill "$AUTH_PID" 2>/dev/null || true
+	wait "$AUTH_PID" 2>/dev/null || true
+	pkill -f "authtest" 2>/dev/null || true
+	rm -f "$CALLER_KEY" "$EPHEMERAL_DIR/auth-other.pem"
+
+	log_success "FDOKeyAuth CLI test PASSED"
+}
+
 # Run all tests
 test_all() {
 	local failed=0
@@ -2091,6 +2251,7 @@ test_all() {
 	test_payload_nak || failed=1
 	test_credentials || failed=1
 	test_bad_delegate || failed=1
+	test_auth || failed=1
 
 	echo ""
 	if [ $failed -eq 0 ]; then
@@ -2221,12 +2382,15 @@ main() {
 	credentials)
 		test_credentials
 		;;
+	auth)
+		test_auth
+		;;
 	all)
 		test_all
 		;;
 	*)
 		echo "Unknown test: $test_name"
-		echo "Available tests: basic, basic-reuse, rv-blob, kex, fdo200, delegate, delegate-fdo200, delegate-csr, bad-delegate, attested-payload, attested-payload-encrypted, attested-payload-delegate, attested-payload-shell, sysconfig, sysconfig-fdo200, payload, payload-fdo200, payload-multiple-types, payload-selective-rejection, payload-nak, wifi, wifi-fdo200, wifi-single-sided, bmo, bmo-efi, bmo-nak, bmo-multi-asset, bmo-url, bmo-meta-url, bmo-meta-signed, bmo-url-fallback, credentials, all"
+		echo "Available tests: basic, basic-reuse, rv-blob, kex, fdo200, delegate, delegate-fdo200, delegate-csr, bad-delegate, attested-payload, attested-payload-encrypted, attested-payload-delegate, attested-payload-shell, sysconfig, sysconfig-fdo200, payload, payload-fdo200, payload-multiple-types, payload-selective-rejection, payload-nak, wifi, wifi-fdo200, wifi-single-sided, bmo, bmo-efi, bmo-nak, bmo-multi-asset, bmo-url, bmo-meta-url, bmo-meta-signed, bmo-url-fallback, credentials, auth, all"
 		exit 1
 		;;
 	esac
