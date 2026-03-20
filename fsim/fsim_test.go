@@ -35,10 +35,10 @@ import (
 )
 
 func TestClientWithDataModules(t *testing.T) {
-	if err := os.MkdirAll("testdata/downloads", 0755); err != nil {
+	if err := os.MkdirAll("testdata/downloads", 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll("testdata/uploads", 0755); err != nil {
+	if err := os.MkdirAll("testdata/uploads", 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -75,7 +75,7 @@ func TestClientWithDataModules(t *testing.T) {
 			"fdo.upload": &fsim.Upload{FS: fstest.MapFS{
 				"bigfile.test": &fstest.MapFile{
 					Data: data,
-					Mode: 0777,
+					Mode: 0o777,
 				},
 			}},
 			"fdo.wget": &fsim.Wget{
@@ -99,8 +99,9 @@ func TestClientWithDataModules(t *testing.T) {
 				}
 
 				if !yield("fdo.upload", &fsim.UploadRequest{
-					Dir:  "testdata/uploads",
-					Name: "bigfile.test",
+					Dir:       "testdata/uploads",
+					Name:      "bigfile.test",
+					Overwrite: true,
 					CreateTemp: func() (*os.File, error) {
 						return os.CreateTemp("testdata", "fdo.upload_*")
 					},
@@ -171,12 +172,14 @@ func TestClientWithMockDownloadOwner(t *testing.T) {
 					return false, false, err
 				}
 				if err := producer.WriteChunk("sha-384",
-					[]byte{0x58, 0x30, 0x9c, 0xa3, 0x46, 0xe2, 0xd3,
+					[]byte{
+						0x58, 0x30, 0x9c, 0xa3, 0x46, 0xe2, 0xd3,
 						0x47, 0x94, 0x3f, 0xa6, 0xfe, 0x18, 0xb5, 0x33, 0x23, 0x76,
 						0xa8, 0x28, 0x1a, 0xae, 0x7f, 0x92, 0x3c, 0x82, 0x37, 0xd3,
 						0x83, 0x70, 0xcb, 0x78, 0xdf, 0x41, 0x7d, 0x41, 0x4e, 0x0f,
 						0x38, 0x04, 0xfb, 0x89, 0x97, 0x00, 0x0e, 0x79, 0xcb, 0xd5,
-						0xb7, 0xbe, 0xb4}); err != nil {
+						0xb7, 0xbe, 0xb4,
+					}); err != nil {
 					return false, false, err
 				}
 				if err := producer.WriteChunk("length",
@@ -184,12 +187,15 @@ func TestClientWithMockDownloadOwner(t *testing.T) {
 					return false, false, err
 				}
 				if err := producer.WriteChunk("name",
-					[]byte{0x67, 0x6e, 0x65, 0x77, 0x66, 0x69, 0x6c,
-						0x65}); err != nil {
+					[]byte{
+						0x67, 0x6e, 0x65, 0x77, 0x66, 0x69, 0x6c,
+						0x65,
+					}); err != nil {
 					return false, false, err
 				}
 				if err := producer.WriteChunk("data",
-					[]byte{0x58, 0x1c, 0x54, 0x68, 0x69, 0x73, 0x20, 0x69,
+					[]byte{
+						0x58, 0x1c, 0x54, 0x68, 0x69, 0x73, 0x20, 0x69,
 						0x73, 0x20, 0x61, 0x20, 0x6e, 0x65, 0x77, 0x20, 0x66, 0x69, 0x6c,
 						0x65, 0x2c, 0x20, 0x66, 0x6f, 0x72, 0x20, 0x53, 0x56, 0x49, 0x0a,
 					}); err != nil {
