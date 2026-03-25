@@ -38,7 +38,7 @@ func signPayload(t *testing.T, privKey *ecdsa.PrivateKey, payload []byte) []byte
 	s1 := cose.Sign1[[]byte, []byte]{
 		Payload: cbor.NewByteWrap(payload),
 	}
-	if err := s1.Sign(privKey, nil, nil, nil); err != nil {
+	if err := s1.Sign(privKey, nil, cose.AADMetaPayload, nil); err != nil {
 		t.Fatalf("failed to sign: %v", err)
 	}
 	// Marshal as tagged COSE_Sign1
@@ -196,7 +196,7 @@ func TestCoseSign1Verifier_TamperedSignature(t *testing.T) {
 	s1 := cose.Sign1[[]byte, []byte]{
 		Payload: cbor.NewByteWrap(innerPayload),
 	}
-	if err := s1.Sign(privKey, nil, nil, nil); err != nil {
+	if err := s1.Sign(privKey, nil, cose.AADMetaPayload, nil); err != nil {
 		t.Fatalf("failed to sign: %v", err)
 	}
 

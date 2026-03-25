@@ -90,7 +90,7 @@ func SignMetaPayload(metaPayloadCBOR []byte, signer crypto.Signer) ([]byte, erro
 	var sign1 cose.Sign1[[]byte, []byte]
 	sign1.Payload = cbor.NewByteWrap(metaPayloadCBOR)
 
-	if err := sign1.Sign(signer, nil, []byte(nil), opts); err != nil {
+	if err := sign1.Sign(signer, nil, cose.AADMetaPayload, opts); err != nil {
 		return nil, fmt.Errorf("COSE Sign1 signing failed: %w", err)
 	}
 

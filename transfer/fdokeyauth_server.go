@@ -140,7 +140,7 @@ func (s *FDOKeyAuthServer) HandleHello(w http.ResponseWriter, r *http.Request) {
 		CallerKey:   hello.CallerKey,
 	}
 
-	serverSig, err := SignPayload(s.ServerKey, s.UsePSS, challengePayload)
+	serverSig, err := SignChallengePayload(s.ServerKey, s.UsePSS, challengePayload)
 	if err != nil {
 		slog.Error("FDOKeyAuth.Hello: failed to sign challenge", "error", err)
 		s.writeError(w, http.StatusInternalServerError, "internal error")
@@ -248,7 +248,7 @@ func (s *FDOKeyAuthServer) HandleProve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Verify COSE_Sign1 signature
-	payloadBytes, err := VerifyPayload(verifyKey, prove.CallerSignature)
+	payloadBytes, err := VerifyProvePayload(verifyKey, prove.CallerSignature)
 	if err != nil {
 		s.writeError(w, http.StatusUnauthorized, "signature verification failed: "+err.Error())
 		return

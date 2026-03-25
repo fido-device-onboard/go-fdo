@@ -239,10 +239,36 @@ func HashBytes(alg protocol.HashAlg, data []byte) protocol.Hash {
 	}
 }
 
-// SignPayload creates a COSE_Sign1 signature over a CBOR-encoded payload.
-// The payload is first CBOR-encoded, then signed using the provided key.
-// Set usePSS to true for RSA-PSS signing; false uses PKCS1v15 for RSA keys.
-func SignPayload(signer crypto.Signer, usePSS bool, payload any) ([]byte, error) {
+// SignChallengePayload creates a COSE_Sign1 signature over a CBOR-encoded
+// FDOKeyAuth.Challenge payload, using the FDO-KeyAuth-Challenge-v1 domain
+// separation tag in external_aad.
+func SignChallengePayload(signer crypto.Signer, usePSS bool, payload any) ([]byte, error) {
+	return signPayloadWithAAD(signer, usePSS, payload, cose.AADKeyAuthChallenge)
+}
+
+// VerifyChallengePayload verifies a COSE_Sign1 FDOKeyAuth.Challenge signature
+// and returns the decoded payload. Uses the FDO-KeyAuth-Challenge-v1 domain
+// separation tag in external_aad.
+func VerifyChallengePayload(key crypto.PublicKey, sigBytes []byte) ([]byte, error) {
+	return verifyPayloadWithAAD(key, sigBytes, cose.AADKeyAuthChallenge)
+}
+
+// SignProvePayload creates a COSE_Sign1 signature over a CBOR-encoded
+// FDOKeyAuth.Prove payload, using the FDO-KeyAuth-Prove-v1 domain
+// separation tag in external_aad.
+func SignProvePayload(signer crypto.Signer, usePSS bool, payload any) ([]byte, error) {
+	return signPayloadWithAAD(signer, usePSS, payload, cose.AADKeyAuthProve)
+}
+
+// VerifyProvePayload verifies a COSE_Sign1 FDOKeyAuth.Prove signature
+// and returns the decoded payload. Uses the FDO-KeyAuth-Prove-v1 domain
+// separation tag in external_aad.
+func VerifyProvePayload(key crypto.PublicKey, sigBytes []byte) ([]byte, error) {
+	return verifyPayloadWithAAD(key, sigBytes, cose.AADKeyAuthProve)
+}
+
+// signPayloadWithAAD creates a COSE_Sign1 signature with the given external_aad.
+func signPayloadWithAAD(signer crypto.Signer, usePSS bool, payload any, aad []byte) ([]byte, error) {
 	payloadBytes, err := cbor.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to CBOR-encode payload for signing: %w", err)
@@ -256,22 +282,21 @@ func SignPayload(signer crypto.Signer, usePSS bool, payload any) ([]byte, error)
 		return nil, err
 	}
 
-	if err := sig.Sign(signer, nil, nil, opts); err != nil {
+	if err := sig.Sign(signer, nil, aad, opts); err != nil {
 		return nil, fmt.Errorf("COSE_Sign1 signing failed: %w", err)
 	}
 
 	return cbor.Marshal(sig.Tag())
 }
 
-// VerifyPayload verifies a COSE_Sign1 signature and returns the decoded payload.
-// The caller must unmarshal the returned bytes into the expected payload type.
-func VerifyPayload(key crypto.PublicKey, sigBytes []byte) ([]byte, error) {
+// verifyPayloadWithAAD verifies a COSE_Sign1 signature with the given external_aad.
+func verifyPayloadWithAAD(key crypto.PublicKey, sigBytes []byte, aad []byte) ([]byte, error) {
 	var sig cose.Sign1Tag[cbor.RawBytes, []byte]
 	if err := cbor.Unmarshal(sigBytes, &sig); err != nil {
 		return nil, fmt.Errorf("failed to decode COSE_Sign1: %w", err)
 	}
 
-	ok, err := sig.Untag().Verify(key, nil, nil)
+	ok, err := sig.Untag().Verify(key, nil, aad)
 	if err != nil {
 		return nil, fmt.Errorf("COSE_Sign1 verification error: %w", err)
 	}

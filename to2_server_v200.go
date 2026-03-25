@@ -124,7 +124,7 @@ func (s *TO2Server) proveOVHdr20(ctx context.Context, msg io.Reader) (*cose.Sign
 
 	// Verify device signature on ProveDevice20
 	devicePubKey := (*deviceCert[0]).PublicKey
-	if ok, err := proveDevice.Verify(devicePubKey, nil, nil); err != nil {
+	if ok, err := proveDevice.Verify(devicePubKey, nil, cose.AADProveDevice); err != nil {
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
 		return nil, fmt.Errorf("error verifying device signature: %w", err)
 	} else if !ok {
@@ -247,7 +247,7 @@ func (s *TO2Server) proveOVHdr20(ctx context.Context, msg io.Reader) (*cose.Sign
 	if err != nil {
 		return nil, fmt.Errorf("error determining signing options for ProveOVHdr20: %w", err)
 	}
-	if err := s1.Sign(ownerKey, nil, nil, opts); err != nil {
+	if err := s1.Sign(ownerKey, nil, cose.AADProveOVHdr, opts); err != nil {
 		return nil, fmt.Errorf("error signing ProveOVHdr20: %w", err)
 	}
 

@@ -47,8 +47,8 @@ func (v *CoseSign1Verifier) Verify(signedPayload []byte, signerKey []byte) ([]by
 		return nil, fmt.Errorf("failed to parse COSE_Sign1: %w", err)
 	}
 
-	// Verify the signature (no external AAD for meta-payloads)
-	valid, err := sign1Tag.Verify(pubKey, nil, nil)
+	// Verify the signature with MetaPayload domain separation tag
+	valid, err := sign1Tag.Verify(pubKey, nil, cose.AADMetaPayload)
 	if err != nil {
 		return nil, fmt.Errorf("signature verification error: %w", err)
 	}

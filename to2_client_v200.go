@@ -307,7 +307,7 @@ func sendProveDevice20(ctx context.Context, transport Transport, ack *HelloDevic
 		clear(xA)
 		return protocol.Nonce{}, nil, nil, fmt.Errorf("error determining signing options for ProveDevice20: %w", err)
 	}
-	if err := s1.Sign(c.Key, nil, nil, opts); err != nil {
+	if err := s1.Sign(c.Key, nil, cose.AADProveDevice, opts); err != nil {
 		clear(xA)
 		return protocol.Nonce{}, nil, nil, fmt.Errorf("error signing ProveDevice20: %w", err)
 	}
@@ -360,7 +360,7 @@ func sendProveDevice20(ctx context.Context, transport Transport, ack *HelloDevic
 		}
 
 		// Verify owner's (or delegate's) signature
-		if ok, err := proveOVHdr.Verify(ownerPubKey, nil, nil); err != nil {
+		if ok, err := proveOVHdr.Verify(ownerPubKey, nil, cose.AADProveOVHdr); err != nil {
 			captureErr(ctx, protocol.InvalidMessageErrCode, "")
 			sess.Destroy()
 			return protocol.Nonce{}, nil, nil, fmt.Errorf("error verifying owner signature: %w", err)

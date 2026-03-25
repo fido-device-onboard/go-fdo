@@ -583,7 +583,7 @@ func sendHelloDevice(ctx context.Context, transport Transport, c *TO2Config) (pr
 
 	// Skip signature verification in single-sided mode (algorithm=0 means no signature)
 	if attestationMode == ModeFullOwner {
-		if ok, err := proveOVHdr.Verify(key, nil, nil); err != nil {
+		if ok, err := proveOVHdr.Verify(key, nil, cose.AADProveOVHdr); err != nil {
 			captureErr(ctx, protocol.InvalidMessageErrCode, "")
 			return protocol.Nonce{}, nil, nil, fmt.Errorf("error verifying TO2.ProveOVHdr payload signature: %w", err)
 		} else if !ok {
@@ -846,7 +846,7 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 		s1.Protected = cose.HeaderMap{}
 		s1.Signature = []byte{}
 	} else {
-		if err := s1.Sign(ownerKey, nil, nil, opts); err != nil {
+		if err := s1.Sign(ownerKey, nil, cose.AADProveOVHdr, opts); err != nil {
 			clear(xA)
 			return nil, fmt.Errorf("error signing TO2.ProveOVHdr payload: %w", err)
 		}
@@ -1009,7 +1009,7 @@ func proveDevice(ctx context.Context, transport Transport, proveDeviceNonce prot
 	if err != nil {
 		return protocol.Nonce{}, nil, fmt.Errorf("error determining signing options for TO2.ProveDevice: %w", err)
 	}
-	if err := token.Sign(c.Key, nil, nil, opts); err != nil {
+	if err := token.Sign(c.Key, nil, cose.AADProveDevice, opts); err != nil {
 		return protocol.Nonce{}, nil, fmt.Errorf("error signing EAT payload for TO2.ProveDevice: %w", err)
 	}
 	msg := token.Tag()
@@ -1128,7 +1128,7 @@ func (s *TO2Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1
 	if err != nil {
 		return nil, fmt.Errorf("error parsing device public key from ownership voucher: %w", err)
 	}
-	if ok, err := proof.Verify(devicePublicKey, nil, nil); err != nil {
+	if ok, err := proof.Verify(devicePublicKey, nil, cose.AADProveDevice); err != nil {
 		return nil, fmt.Errorf("error verifying signature of device EAT: %w", err)
 	} else if !ok {
 		return nil, fmt.Errorf("device EAT verification failed")
@@ -1209,7 +1209,7 @@ func (s *TO2Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1
 	if err != nil {
 		return nil, fmt.Errorf("error determining signing options for TO2.SetupDevice message: %w", err)
 	}
-	if err := s1.Sign(ownerKey, nil, nil, opts); err != nil {
+	if err := s1.Sign(ownerKey, nil, cose.AADSetupDevice, opts); err != nil {
 		return nil, fmt.Errorf("error signing TO2.SetupDevice payload: %w", err)
 	}
 	return s1.Tag(), nil

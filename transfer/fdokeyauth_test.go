@@ -286,7 +286,7 @@ func TestSignAndVerifyPayload(t *testing.T) {
 		CallerKey:     protocol.PublicKey{},
 	}
 
-	sigBytes, err := transfer.SignPayload(key, false, payload)
+	sigBytes, err := transfer.SignProvePayload(key, false, payload)
 	if err != nil {
 		t.Fatalf("SignPayload failed: %v", err)
 	}
@@ -296,14 +296,14 @@ func TestSignAndVerifyPayload(t *testing.T) {
 	}
 
 	// Verify with correct key
-	_, err = transfer.VerifyPayload(key.Public(), sigBytes)
+	_, err = transfer.VerifyProvePayload(key.Public(), sigBytes)
 	if err != nil {
 		t.Fatalf("VerifyPayload failed with correct key: %v", err)
 	}
 
 	// Verify with wrong key should fail
 	wrongKey := newTestECKey(t)
-	_, err = transfer.VerifyPayload(wrongKey.Public(), sigBytes)
+	_, err = transfer.VerifyProvePayload(wrongKey.Public(), sigBytes)
 	if err == nil {
 		t.Fatal("VerifyPayload should fail with wrong key")
 	}

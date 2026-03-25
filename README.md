@@ -454,7 +454,10 @@ The test script manages the swtpm lifecycle automatically — no manual setup
 required.
 
 See [TPM.md](TPM.md) for NV index details, the `cred.Store` library API for
-downstream applications, and TPM spec compliance testing.
+downstream applications, TPM spec compliance testing, and cross-language
+TPM verification (using Go's inspection commands to validate credentials
+written by other implementations such as the
+[Rust FDO client](../fido-device-onboard-rs)).
 
 ### FDOKeyAuth Authentication
 

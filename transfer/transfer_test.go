@@ -637,19 +637,19 @@ func TestFDOKeyAuthSignatureVerification(t *testing.T) {
 	}
 
 	// Sign with key
-	sigBytes, err := transfer.SignPayload(key, false, payload)
+	sigBytes, err := transfer.SignProvePayload(key, false, payload)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Verify with correct key - should succeed
-	_, err = transfer.VerifyPayload(key.Public(), sigBytes)
+	_, err = transfer.VerifyProvePayload(key.Public(), sigBytes)
 	if err != nil {
 		t.Fatalf("verification with correct key failed: %v", err)
 	}
 
 	// Verify with wrong key - should fail
-	_, err = transfer.VerifyPayload(wrongKey.Public(), sigBytes)
+	_, err = transfer.VerifyProvePayload(wrongKey.Public(), sigBytes)
 	if err == nil {
 		t.Fatal("verification with wrong key should fail")
 	}

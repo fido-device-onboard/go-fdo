@@ -170,7 +170,7 @@ func (c *FDOKeyAuthClient) Authenticate() (*FDOKeyAuthClientResult, error) {
 	}
 
 	signingKey := c.signingKey()
-	sigBytes, err := SignPayload(signingKey, c.UsePSS, provePayload)
+	sigBytes, err := SignProvePayload(signingKey, c.UsePSS, provePayload)
 	if err != nil {
 		return nil, fmt.Errorf("FDOKeyAuth.Prove: failed to sign: %w", err)
 	}
@@ -267,7 +267,7 @@ func (c *FDOKeyAuthClient) verifyServerSignature(challenge FDOKeyAuthChallenge, 
 	}
 
 	// Step 1: Verify the COSE_Sign1 signature
-	payloadBytes, err := VerifyPayload(c.ServerPublicKey, challenge.ServerSignature)
+	payloadBytes, err := VerifyChallengePayload(c.ServerPublicKey, challenge.ServerSignature)
 	if err != nil {
 		return fmt.Errorf("ServerSignature verification failed: %w", err)
 	}

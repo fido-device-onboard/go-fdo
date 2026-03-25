@@ -209,7 +209,7 @@ func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid pro
 		}
 		header.Unprotected[to2DelegateClaim] = chain
 
-		if err := to1d.Sign(delegateKey, nil, nil, delegateOpts); err != nil {
+		if err := to1d.Sign(delegateKey, nil, cose.AADOwnerSign, delegateOpts); err != nil {
 			return 0, fmt.Errorf("error signing To1d payload for w/ Delegate TO0.OwnerSign: %w", err)
 		}
 
@@ -222,7 +222,7 @@ func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid pro
 		if err != nil {
 			return 0, fmt.Errorf("Error getting public key from delegate chain: %v", err)
 		}
-		ok, err := to1d.Verify(p, nil, nil)
+		ok, err := to1d.Verify(p, nil, cose.AADOwnerSign)
 		if err != nil {
 			return 0, fmt.Errorf("To1d verify failed: %w", err)
 		}
@@ -230,7 +230,7 @@ func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid pro
 			return 0, fmt.Errorf("To1d verify failed")
 		}
 	} else {
-		if err := to1d.Sign(ownerKey, nil, nil, opts); err != nil {
+		if err := to1d.Sign(ownerKey, nil, cose.AADOwnerSign, opts); err != nil {
 			return 0, fmt.Errorf("error signing To1d payload for TO0.OwnerSign: %w", err)
 		}
 	}

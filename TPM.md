@@ -197,6 +197,72 @@ test, stop) automatically.
 
 Per "Securing FDO Credentials in the TPM v1.0" specification.
 
+## 6. Cross-Language TPM Verification
+
+The Go FDO CLI can inspect TPM credentials written by any spec-compliant
+implementation -- including the [Rust FDO client](../fido-device-onboard-rs).
+This serves as a practical proof of interoperability: if Go can parse
+credentials provisioned by Rust, both implementations agree on NV index
+layout, CBOR encoding, and key formats.
+
+### Go TPM inspection commands
+
+| Command | What it reads | Output |
+|---------|---------------|--------|
+| `-tpm-show` | All 6 NV indices + 2 persistent handles | GUID, DeviceInfo, version, key type, RV URLs, DAK curve/coords, HMAC key presence |
+| `-tpm-export-dak` | DAK persistent handle (`0x81020002`) | PEM-encoded public key |
+| `-tpm-prove` | DAK + DeviceKey_US (for policy auth) | Challenge, signature, self-verification result |
+| `-tpm-clear` | All FDO NV indices + persistent handles | Removes everything (factory reset) |
+
+### Build the Go TPM inspector
+
+```bash
+cd go-fdo/examples
+
+# Hardware TPM (pure Go, no CGO)
+go build -tags=tpm -o fdo ./cmd
+
+# Software TPM / swtpm (also pure Go for socket-based swtpm)
+go build -tags=tpm -o fdo ./cmd
+
+# In-process simulator (requires CGO)
+CGO_ENABLED=1 go build -tags=tpmsim -o fdo ./cmd
+```
+
+### Verification workflow
+
+After another implementation (e.g. Rust) provisions a device via DI:
+
+```bash
+# Read all credentials from TPM
+./fdo client -tpm-show
+
+# Export the DAK public key for external signature verification
+./fdo client -tpm-export-dak > dak.pem
+
+# Prove the DAK private key is present (sign + self-verify)
+./fdo client -tpm-prove
+
+# Prove with a specific challenge string
+./fdo client -tpm-prove -tpm-challenge "interop-test-2026"
+```
+
+If `-tpm-show` displays valid GUID, DeviceInfo, RV URLs, and key type, and
+`-tpm-prove` succeeds, the provisioning implementation is spec-compliant.
+
+### Using an alternate TPM device
+
+```bash
+# Explicit hardware TPM path
+./fdo client -tpm /dev/tpm0 -tpm-show
+
+# swtpm Unix domain socket
+./fdo client -tpm /tmp/swtpm.sock -tpm-show
+
+# In-process simulator (tpmsim build only)
+./fdo client -tpm simulator -tpm-show
+```
+
 ## CGO Requirements
 
 CGO is needed **only** for the software simulator (Microsoft's C reference TPM).

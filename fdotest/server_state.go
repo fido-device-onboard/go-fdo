@@ -581,7 +581,7 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := expectBlob.Sign(testKey, nil, nil, nil); err != nil {
+		if err := expectBlob.Sign(testKey, nil, cose.AADOwnerSign, nil); err != nil {
 			t.Fatal(err)
 		}
 

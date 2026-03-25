@@ -137,9 +137,17 @@ func TestSomethingThatFailedSignatureVerificationOnceInCIForUnknownReasons(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Verification with domain separation AAD must fail for this legacy binary
+	// (signed without external_aad)
+	if ok, err := proveOVHdr.Verify(key, nil, cose.AADProveOVHdr); err == nil && ok {
+		t.Fatal("expected verification to fail for legacy binary signed without domain separation AAD")
+	}
+
+	// Verification without AAD should still succeed (proves the binary is valid,
+	// just not domain-separated)
 	if ok, err := proveOVHdr.Verify(key, nil, nil); err != nil {
-		t.Fatal(err)
+		t.Fatalf("legacy verification failed: %v", err)
 	} else if !ok {
-		t.Fatal("verification failed")
+		t.Fatal("legacy verification failed")
 	}
 }

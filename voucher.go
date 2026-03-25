@@ -261,7 +261,7 @@ func (v *Voucher) VerifyCrypto(o VerifyOptions) error {
 		verifyKey = delegateKey
 	}
 
-	if ok, err := o.To1d.Verify(verifyKey, nil, nil); err != nil {
+	if ok, err := o.To1d.Verify(verifyKey, nil, cose.AADOwnerSign); err != nil {
 		return fmt.Errorf("error verifying to1d signature: %w", err)
 	} else if !ok {
 		return fmt.Errorf("%w: to1d signature verification failed", ErrCryptoVerifyFailed)
@@ -437,7 +437,7 @@ func validateNextEntry(prevOwnerKey crypto.PublicKey, alg protocol.HashAlg, prev
 	entry := entries[0].Untag()
 
 	// Check payload has a valid COSE signature from the previous owner key
-	if ok, err := entry.Verify(prevOwnerKey, nil, nil); err != nil {
+	if ok, err := entry.Verify(prevOwnerKey, nil, cose.AADOVEntry); err != nil {
 		return fmt.Errorf("COSE signature for entry %d could not be verified: %w", i, err)
 	} else if !ok {
 		return fmt.Errorf("%w: COSE signature for entry %d did not match previous owner key", ErrCryptoVerifyFailed, i)
@@ -703,7 +703,7 @@ func newSignedEntry(owner crypto.Signer, usePSS bool, payload VoucherEntryPayloa
 		return nil, err
 	}
 
-	if err := entry.Sign(owner, nil, nil, signOpts); err != nil {
+	if err := entry.Sign(owner, nil, cose.AADOVEntry, signOpts); err != nil {
 		return nil, fmt.Errorf("error signing voucher entry payload: %w", err)
 	}
 
