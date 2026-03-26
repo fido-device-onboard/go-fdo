@@ -331,18 +331,18 @@ func getMaxInputBuffer(t TPM) uint32 {
 // Spec-compliant HMAC — persistent key with policy session auth
 // =========================================================================
 
-// NewSpecHmac returns an HMAC backed by the persistent HMAC key at
-// HMACKeyHandle (0x81020003). It uses policy session authorization via
-// the HMAC Unique String NV index (fdoKeyPolicy: PolicyNV + PolicySecret).
+// NewSpecHmac returns an HMAC backed by a persistent HMAC key at the given
+// handle. It uses policy session authorization via the HMAC Unique String NV
+// index (fdoKeyPolicy: PolicyNV + PolicySecret).
 //
 // Unlike NewHmac which creates an ephemeral primary key, this uses the
 // pre-provisioned persistent key created during Device Initialization.
-// The key must already exist at HMACKeyHandle.
-func NewSpecHmac(t TPM, h crypto.Hash) (Hmac, error) {
+// The key must already exist at the specified handle.
+func NewSpecHmac(t TPM, h crypto.Hash, handle uint32) (Hmac, error) {
 	// Read persistent HMAC key name
-	readResp, err := (tpm2.ReadPublic{ObjectHandle: tpm2.TPMHandle(HMACKeyHandle)}).Execute(t)
+	readResp, err := (tpm2.ReadPublic{ObjectHandle: tpm2.TPMHandle(handle)}).Execute(t)
 	if err != nil {
-		return nil, fmt.Errorf("ReadPublic HMAC key (0x%08X): %w", HMACKeyHandle, err)
+		return nil, fmt.Errorf("ReadPublic HMAC key (0x%08X): %w", handle, err)
 	}
 
 	// Read HMAC_US NV name for policy session

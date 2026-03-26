@@ -110,6 +110,9 @@ func tpmShowCredentials() error {
 			} else {
 				fmt.Printf("    Version           %d\n", dcov.Version)
 				fmt.Printf("    KeyType           %s\n", dcov.KeyType)
+				if dcov.HMACHandle != 0 {
+					fmt.Printf("    HMACHandle        0x%08X\n", dcov.HMACHandle)
+				}
 				fmt.Printf("    PublicKeyHash     alg=%d value=%s\n", dcov.PublicKeyHash.Algorithm, hex.EncodeToString(dcov.PublicKeyHash.Value))
 				if len(dcov.RvInfo) == 0 {
 					fmt.Println("    RvInfo            (none)")
@@ -266,4 +269,5 @@ type dcovDisplay struct {
 	RvInfo        [][]protocol.RvInstruction `cbor:"1,keyasint"`
 	PublicKeyHash protocol.Hash              `cbor:"2,keyasint"`
 	KeyType       protocol.KeyType           `cbor:"3,keyasint"`
+	HMACHandle    uint32                     `cbor:"4,keyasint,omitempty"`
 }

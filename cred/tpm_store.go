@@ -28,6 +28,7 @@ type dcovNVData struct {
 	RvInfo        [][]protocol.RvInstruction `cbor:"1,keyasint"`
 	PublicKeyHash protocol.Hash              `cbor:"2,keyasint"`
 	KeyType       protocol.KeyType           `cbor:"3,keyasint"`
+	HMACHandle    uint32                     `cbor:"4,keyasint,omitempty"` // persistent handle for HMAC key (0 = use default HMACKeyHandle)
 }
 
 type tpmStore struct {
@@ -36,7 +37,8 @@ type tpmStore struct {
 	h384        tpm.Hmac
 	key         tpm.Key
 	keyType     protocol.KeyType
-	usePlatform bool // true = use Platform hierarchy for Profile A/B NV indices
+	hmacHandle  uint32 // resolved HMAC key handle (from DCOV or default)
+	usePlatform bool   // true = use Platform hierarchy for Profile A/B NV indices
 }
 
 // Open returns a TPM-backed credential store.
@@ -161,7 +163,7 @@ func (s *tpmStore) NewDI(keyType protocol.KeyType) (hash.Hash, hash.Hash, crypto
 	slog.Debug("tpm: DCActive = 0x00 (DI in progress)")
 
 	// Step 8: Create spec-compliant HMAC (SHA-256) from persistent key
-	s.h256, err = tpm.NewSpecHmac(s.tpmc, crypto.SHA256)
+	s.h256, err = tpm.NewSpecHmac(s.tpmc, crypto.SHA256, tpm.HMACKeyHandle)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("spec HMAC SHA-256: %w", err)
 	}
@@ -214,6 +216,7 @@ func (s *tpmStore) Save(dc fdo.DeviceCredential) error {
 		RvInfo:        dc.RvInfo,
 		PublicKeyHash: dc.PublicKeyHash,
 		KeyType:       s.keyType,
+		HMACHandle:    tpm.HMACKeyHandle,
 	}
 	dcovBytes, err := cbor.Marshal(dcovPayload)
 	if err != nil {
@@ -264,8 +267,8 @@ func (s *tpmStore) Load() (*fdo.DeviceCredential, hash.Hash, hash.Hash, crypto.S
 		return nil, nil, nil, nil, fmt.Errorf("load persistent DAK: %w", loadErr)
 	}
 
-	// Create spec HMAC (SHA-256) from persistent key
-	s.h256, loadErr = tpm.NewSpecHmac(s.tpmc, crypto.SHA256)
+	// Create spec HMAC (SHA-256) from persistent key at resolved handle
+	s.h256, loadErr = tpm.NewSpecHmac(s.tpmc, crypto.SHA256, s.hmacHandle)
 	if loadErr != nil {
 		return nil, nil, nil, nil, fmt.Errorf("spec HMAC SHA-256: %w", loadErr)
 	}
@@ -291,15 +294,12 @@ func (s *tpmStore) loadFromNV() (*fdo.DeviceCredential, error) {
 		return nil, fmt.Errorf("device not initialized (DCActive != 0x01)")
 	}
 
-	// Verify persistent keys exist
+	// Verify DAK exists
 	if !info.HasDAK {
 		return nil, fmt.Errorf("DAK not found at 0x%08X", tpm.DAKHandle)
 	}
-	if !info.HasHMACKey {
-		return nil, fmt.Errorf("HMAC key not found at 0x%08X", tpm.HMACKeyHandle)
-	}
 
-	// Read DCOV NV to get full credential data
+	// Read DCOV NV to get full credential data (includes HMAC handle)
 	if !info.HasDCOV || len(info.DCOVData) == 0 {
 		return nil, fmt.Errorf("DCOV NV not found or empty")
 	}
@@ -309,6 +309,18 @@ func (s *tpmStore) loadFromNV() (*fdo.DeviceCredential, error) {
 		return nil, fmt.Errorf("decoding DCOV NV: %w", err)
 	}
 	s.keyType = dcov.KeyType
+
+	// Resolve HMAC handle: use stored value if present, else default
+	if dcov.HMACHandle != 0 {
+		s.hmacHandle = dcov.HMACHandle
+	} else {
+		s.hmacHandle = tpm.HMACKeyHandle
+	}
+
+	// Verify HMAC key exists at the resolved handle
+	if _, err := (tpm2.ReadPublic{ObjectHandle: tpm2.TPMHandle(s.hmacHandle)}).Execute(s.tpmc); err != nil {
+		return nil, fmt.Errorf("HMAC key not found at 0x%08X: %w", s.hmacHandle, err)
+	}
 
 	dc := &fdo.DeviceCredential{
 		Version:       dcov.Version,

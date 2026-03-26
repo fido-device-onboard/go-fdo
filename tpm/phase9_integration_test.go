@@ -305,7 +305,7 @@ func TestPhase9_ProductionAPI_NVOnly(t *testing.T) {
 	t.Logf("Step 7b: DCOV stored [%d bytes] — RV: http://127.0.0.1:8080 (bypass), KeyType=SECP256R1", len(dcovBytes))
 
 	// Step 8: Compute HMAC baseline over GUID using NewSpecHmac
-	provisionHmac, err := tpmlib.NewSpecHmac(thetpm, 0) // crypto.Hash(0) — hash arg is for Size()/BlockSize()
+	provisionHmac, err := tpmlib.NewSpecHmac(thetpm, 0, tpmlib.HMACKeyHandle) // crypto.Hash(0) — hash arg is for Size()/BlockSize()
 	if err != nil {
 		t.Fatalf("NewSpecHmac (provision): %v", err)
 	}
@@ -435,7 +435,7 @@ func TestPhase9_ProductionAPI_NVOnly(t *testing.T) {
 	t.Log("Step 11b: Second Sign+Verify OK — different challenge, different signature, both valid")
 
 	// Step 12: NewSpecHmac — compute HMAC over GUID from NV, verify baseline
-	verifyHmac, err := tpmlib.NewSpecHmac(thetpm, 0)
+	verifyHmac, err := tpmlib.NewSpecHmac(thetpm, 0, tpmlib.HMACKeyHandle)
 	if err != nil {
 		t.Fatalf("NewSpecHmac (verify): %v", err)
 	}
@@ -520,7 +520,7 @@ func TestPhase9_HMACDeterminism(t *testing.T) {
 	// Compute HMAC three times with separate NewSpecHmac() calls
 	var results [3][]byte
 	for i := range results {
-		h, err := tpmlib.NewSpecHmac(thetpm, 0)
+		h, err := tpmlib.NewSpecHmac(thetpm, 0, tpmlib.HMACKeyHandle)
 		if err != nil {
 			t.Fatalf("NewSpecHmac(%d): %v", i, err)
 		}
@@ -543,7 +543,7 @@ func TestPhase9_HMACDeterminism(t *testing.T) {
 	}
 
 	// Different data → different HMAC
-	h, _ := tpmlib.NewSpecHmac(thetpm, 0)
+	h, _ := tpmlib.NewSpecHmac(thetpm, 0, tpmlib.HMACKeyHandle)
 	h.Write([]byte("different data"))
 	different := h.Sum(nil)
 	_ = h.Close()

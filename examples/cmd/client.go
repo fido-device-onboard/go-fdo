@@ -21,6 +21,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -352,6 +353,30 @@ func di(ctx context.Context) (err error) {
 func transferOwnership(ctx context.Context, rvInfo [][]protocol.RvInstruction, conf fdo.TO2Config) (*fdo.DeviceCredential, error) { //nolint:gocyclo
 	var to2URLs []string
 	directives := protocol.ParseDeviceRvInfo(rvInfo)
+
+	// FDO 2.0: rvserver.local is an implied fallback directive even if omitted
+	// from DCRVInfo. Append it only if no directive already references it.
+	hasRVServerLocal := false
+	for _, dir := range directives {
+		for _, u := range dir.URLs {
+			if u.Hostname() == "rvserver.local" {
+				hasRVServerLocal = true
+				break
+			}
+		}
+		if hasRVServerLocal {
+			break
+		}
+	}
+	if !hasRVServerLocal {
+		localDirective := protocol.RvDirective{
+			URLs: []*url.URL{
+				{Scheme: "http", Host: net.JoinHostPort("rvserver.local", "8080")},
+			},
+		}
+		directives = append(directives, localDirective)
+	}
+
 	for _, directive := range directives {
 		if !directive.Bypass {
 			continue

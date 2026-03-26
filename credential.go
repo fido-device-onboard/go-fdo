@@ -18,6 +18,7 @@ import (
 //	    DCPubKeyHash: Hash
 //	    DeviceKeyType: uint
 //	    DeviceKeyHandle: uint
+//	    HMACKeyHandle: uint
 //	]
 //
 // [TPM Draft Spec]: https://fidoalliance.org/specs/FDO/securing-fdo-in-tpm-v1.0-rd-20231010/securing-fdo-in-tpm-v1.0-rd-20231010.html

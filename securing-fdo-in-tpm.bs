@@ -622,11 +622,12 @@ two items.  An implementation SHOULD decide to add additional space to
 allow more flexibility for the TO2 protocol by increasing the size of
 these items unless extra TPM storage is unavailable. 
 
-When initializing the DCTPM.* NV value, 67 bytes are fixed in size;
+When initializing the DCTPM.* NV value, 72 bytes are fixed in size
+(including the HMACKeyHandle field);
 the DeviceInfo and RVInfo fields can vary. The NV index’s size SHALL
-be at least 384 bytes (leaving 317 bytes variable for DeviceInfo and
+be at least 384 bytes (leaving 312 bytes variable for DeviceInfo and
 RVInfo).  This leaves modest expansion room for the variable fields. A
-size of 512 bytes is recommended (leaving 445 bytes variable). The
+size of 512 bytes is recommended (leaving 440 bytes variable). The
 content SHALL be encoded in CBOR. 
 
 The following FDO parameters require availability and integrity. 
@@ -713,6 +714,15 @@ Changes after each onboard. Leave space for expansion.
 defined in FDO specification.
 <p>
 Changes after each onboard. Leave space for expansion.
+<p>
+<strong>Note:</strong> The FDO 2.0 specification requires that all
+compliant devices be initialized with an <code>rvserver.local</code>
+RendezvousDirective.  Because this entry is mandatory per the base
+specification, TO1 client implementations SHALL always behave as
+though the <code>rvserver.local</code> directive is present, even if
+it is not explicitly stored in DCRVInfo.  Consequently, Device
+Initialization clients MAY omit the <code>rvserver.local</code>
+entry from DCRVInfo to conserve TPM NV storage space.
    </td>
   </tr>
   <tr>
@@ -746,6 +756,14 @@ Changes after each onboard. Leave space for expansion.
     &bull; An LDevID in the TPM
    </td>
   </tr>
+  <tr>
+   <td>HMACKeyHandle
+   </td>
+   <td>TPM_Handle
+   </td>
+   <td>MUST be the handle of the HMAC key used for FDO credential binding.
+   </td>
+  </tr>
 </table>
 
 
@@ -766,7 +784,11 @@ run to completion (i.e., onboarding succeeds).
 For each of FDO device key and HMAC Secret, a Unique String determines
 the value of the item.  If an existing value is to be preserved, the
 same Unique String MAY be used; if a different value is needed, a new
-Unique String MAY be chosen at random.  For purposes of typographic
+Unique String SHOULD be generated from a cryptographically suitable
+random source.  A Unique String that is blank, zero-filled, or
+well-known across devices provides no rotation capability and exposes
+the derived key as a permanent correlatable device identifier.
+For purposes of typographic
 spacing, the abbreviation <strong>"U/S"</strong> is used
 for Unique String in this document.
 
@@ -980,7 +1002,7 @@ or LDevID key is used as the FDO key.
    </td>
    <td><s>0x81020003</s>
    </td>
-   <td>Persistent (Ordinary) Object in the provisioning entity's chosen hierarchy.
+   <td>Persistent Object in the provisioning entity's chosen hierarchy.
     Contains HMAC secret (SHA-256 / SHA-384).  User program SHALL query
    object size to determine which size HMAC is present.
    </td>
@@ -1144,7 +1166,7 @@ The policies and template used to enforce this behavior are defined in Section 7
 <br>
 (optionally persistent)
    </td>
-   <td>Primary object in the provisioning entity's chosen hierarchy
+   <td>Primary or ordinary object in the provisioning entity's chosen hierarchy
 <br>
 (optionally persistent)
    </td>
@@ -1154,7 +1176,7 @@ The policies and template used to enforce this behavior are defined in Section 7
    </td>
    <td>TPM2_CreatePrimary w/ hierarchy authorization using DeviceKey Unique String NV Index
    </td>
-   <td>TPM2_CreatePrimary w/ hierarchy authorization using HMAC Unique String NV Index
+   <td>TPM2_CreatePrimary w/ hierarchy authorization using HMAC Unique String NV Index, or TPM2_Create under a suitable parent
    </td>
   </tr>
   <tr>
@@ -1404,6 +1426,7 @@ the FDO 1.1 specification [[!FDO-Specification]].
         DCPubKeyHash: Hash
         DeviceKeyType: uint
         DeviceKeyHandle: uint
+        HMACKeyHandle: uint
     ]
 
 ```
@@ -1552,7 +1575,8 @@ When an LDevID or IDevID key is **not** used as the Device key:
 1. Device key SHALL be created as a Primary key in a TPM hierarchy appropriate to the provisioning entity's role. The Endorsement hierarchy MAY be used (e.g., by a TPM vendor); the Platform hierarchy MAY be used (e.g., by an OEM during manufacturing); the Owner hierarchy MAY be used (e.g., by an end user or supply chain entity).
 2. The Device key SHALL be created using one of the default Templates for the FDO Device key (defined in [[#Storage_LABEL]]).
 3. The Device key creation SHOULD include a unique string, which is provided to the TPM in the *inPublic.unique* field of the TPM2_CreatePrimary command. A Unique String is REQUIRED if key rotation is desired (see [[#CREDREUSE_LABEL]]), and OPTIONAL if the provisioning entity does not intend to rotate the key.
-    * If a unique string is used, it SHALL be populated in an NV Index 
+    * If a unique string is used, it SHALL be populated in an NV Index
+    * The unique string SHALL be generated using a cryptographically suitable random number generator and SHALL be unique per device. Because primary keys are deterministically derived from the hierarchy seed, the template, and the unique string, a blank or well-known unique string would allow any entity with hierarchy authorization to recreate the same Device key. This creates both a rollback vector (a rotated-away key can be re-derived by restoring a previous unique string) and a privacy concern (without a per-device random unique string, the Device key becomes a permanent correlatable device identifier, analogous to an unmasked Endorsement Key).
 4. The Device key SHOULD be persisted within the TPM (see option 1 above). 
     * If persisted, the Device key SHALL be stored using the persistent object handle for the FDO Device key (defined in [[#Handles_LABEL]]).
 5. The size and structure of the unique string SHALL be as follows:
@@ -1783,24 +1807,24 @@ deleted.
 
 <span style="text-decoration:underline;">Storage:</span>
 
-The HMAC secret’s unique string is stored in an NV index under the
-Platform hierarchy (or other hierarchy as appropriate to the
-provisioning entity). The HMAC secret itself can be stored persistently
+The HMAC secret can be stored persistently
 in the TPM for improved performance or to remain usable in case the
-hierarchy password is set. 
+hierarchy password is set. If the HMAC key is created as a Primary key,
+its unique string is stored in an NV index; if created as a child key,
+the wrapped key blob is managed by the provisioning entity.
 
-**Note:** Primary keys are derived in a deterministic way from a Primary Unique String, which allows the same Primary key to be recreated as long as the Primary Unique String does not change and the same Template and unique string is used.
+**Note:** If the HMAC key is a Primary key, it is derived deterministically from the hierarchy’s Primary Seed, the key template, and the unique string. The same key can be recreated as long as these inputs do not change.
 
 
 </div>
 
-1. The HMAC secret SHALL be created as Primary key under a TPM hierarchy appropriate to the provisioning entity's role, using a unique string from an NV index. The same hierarchy used for the Device key SHOULD be used for the HMAC secret.
-2. The HMAC secret SHOULD be created using one of the default Templates for the FDO HMAC secret, see below ([[#KEYTEMPL_LABEL]]).
+1. The HMAC secret SHALL be created using one of the default Templates for the FDO HMAC secret (see [[#KEYTEMPL_LABEL]]). The handle of the HMAC key SHALL be recorded in `DCTPM.HMACKeyHandle`. The HMAC key MAY be created as a Primary key (via TPM2_CreatePrimary) or as an ordinary child key (via TPM2_Create under a suitable parent), at the provisioning entity's discretion.
+2. The HMAC key SHALL have the object attributes specified in [[#KEYTEMPL_LABEL]], including `fixedTPM=1` and `sensitiveDataOrigin=1`.
 3. The HMAC secret MAY be persisted within the TPM.
-    1. If persisted, the HMAC secret SHALL be stored using the persistent object handle for FDO HMAC secret ([[#Handles_LABEL]]). 
-    2. If persisted, the HMAC secret SHALL be evicted during TO2.
-4. The HMAC secret unique string SHOULD be recreated during TO2 to provide cryptographic credential rotation. If the HMAC secret unique string is not recreated, the same HMAC key persists across onboarding cycles.
-5. The size and structure of the unique string SHALL be as follows:
+    1. If persisted, the persistent handle SHALL be recorded in `DCTPM.HMACKeyHandle`.
+    2. If persisted, the HMAC secret SHALL be evicted and recreated during TO2, unless credential reuse is being performed (see [[#CREDREUSE_LABEL]]), in which case the existing HMAC secret is retained.
+4. If the HMAC key is created as a Primary key, a unique string from an NV index SHALL be used to allow rotation. The HMAC secret unique string SHALL be recreated during TO2 to provide cryptographic credential rotation, unless credential reuse is being performed. If the HMAC key is created as an ordinary child key, no unique string NV index is required; rotation is achieved by creating a new child key.
+5. If a unique string is used, its size and structure SHALL be as follows:
 
     For a HMAC-SHA256, the unique string SHALL contain 32 bytes.
     For a HMAC-SHA384, the unique string SHALL contain 48 bytes.
@@ -3336,7 +3360,7 @@ HMAC-SHA384
 <br>
 HMAC signature 
    </td>
-   <td>TPM2_Create, TPM2_Load, TPM2_EvictControl (to persist key)
+   <td>TPM2_CreatePrimary or TPM2_Create, TPM2_Load, TPM2_EvictControl (to persist key)
 <br>
 TPM2_HMAC or HMAC sequence commands
    </td>
