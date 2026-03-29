@@ -67,7 +67,7 @@ func tpmClearCredentials() error {
 	return nil
 }
 
-// tpmShowCredentials reads and displays all FDO credentials stored in TPM NV indices.
+// tpmShowCredentials reads and displays all FDO credentials stored in the consolidated DCTPM NV index.
 func tpmShowCredentials() error {
 	tpmc, err := tpmOpen(tpmPath)
 	if err != nil {
@@ -85,56 +85,49 @@ func tpmShowCredentials() error {
 		source = "default"
 	}
 	fmt.Printf("tpm-credentials[%s]\n", source)
-	fmt.Printf("  DCActive (0x%08X)    %v", tpm.DCActiveIndex, info.Active)
-	if info.DCActiveSize > 0 {
-		fmt.Printf("  [%d bytes]", info.DCActiveSize)
-	} else {
-		fmt.Print("  [not defined]")
-	}
-	fmt.Println()
 
-	if info.DCTPMSize > 0 {
+	if info.HasDCTPM {
 		fmt.Printf("  DCTPM (0x%08X)      [%d bytes]\n", tpm.DCTPMIndex, info.DCTPMSize)
-		fmt.Printf("    GUID              %x\n", info.GUID)
-		fmt.Printf("    DeviceInfo        %q\n", info.DeviceInfo)
-	} else {
-		fmt.Printf("  DCTPM (0x%08X)      [not defined]\n", tpm.DCTPMIndex)
-	}
 
-	if info.HasDCOV {
-		fmt.Printf("  DCOV (0x%08X)       [%d bytes]\n", tpm.DCOVIndex, info.DCOVSize)
-		if len(info.DCOVData) > 0 {
-			var dcov dcovDisplay
-			if err := cbor.Unmarshal(info.DCOVData, &dcov); err != nil {
-				fmt.Printf("    (decode error: %v)\n", err)
+		var dctpm dctpmDisplay
+		if err := cbor.Unmarshal(info.RawDCTPM, &dctpm); err != nil {
+			fmt.Printf("    (decode error: %v)\n", err)
+		} else {
+			fmt.Printf("    Magic             0x%08X", dctpm.Magic)
+			if dctpm.Magic == tpm.DCTPMMagic {
+				fmt.Print(" (FDO1)")
 			} else {
-				fmt.Printf("    Version           %d\n", dcov.Version)
-				fmt.Printf("    KeyType           %s\n", dcov.KeyType)
-				if dcov.HMACHandle != 0 {
-					fmt.Printf("    HMACHandle        0x%08X\n", dcov.HMACHandle)
-				}
-				fmt.Printf("    PublicKeyHash     alg=%d value=%s\n", dcov.PublicKeyHash.Algorithm, hex.EncodeToString(dcov.PublicKeyHash.Value))
-				if len(dcov.RvInfo) == 0 {
-					fmt.Println("    RvInfo            (none)")
-				} else {
-					directives := protocol.ParseDeviceRvInfo(dcov.RvInfo)
-					for i, dir := range directives {
-						fmt.Printf("    RvInfo[%d]\n", i)
-						for _, u := range dir.URLs {
-							fmt.Printf("      URL             %s\n", u)
-						}
-						if dir.Bypass {
-							fmt.Println("      Bypass          true")
-						}
-						if dir.Delay > 0 {
-							fmt.Printf("      Delay           %s\n", dir.Delay)
-						}
+				fmt.Print(" (INVALID)")
+			}
+			fmt.Println()
+			fmt.Printf("    Active            %v\n", dctpm.Active)
+			fmt.Printf("    Version           %d\n", dctpm.Version)
+			fmt.Printf("    DeviceInfo        %q\n", dctpm.DeviceInfo)
+			fmt.Printf("    GUID              %x\n", dctpm.GUID)
+			fmt.Printf("    KeyType           %s\n", dctpm.KeyType)
+			fmt.Printf("    DeviceKeyHandle   0x%08X\n", dctpm.DeviceKeyHandle)
+			fmt.Printf("    HMACKeyHandle     0x%08X\n", dctpm.HMACKeyHandle)
+			fmt.Printf("    PublicKeyHash     alg=%d value=%s\n", dctpm.PublicKeyHash.Algorithm, hex.EncodeToString(dctpm.PublicKeyHash.Value))
+			if len(dctpm.RvInfo) == 0 {
+				fmt.Println("    RvInfo            (none)")
+			} else {
+				directives := protocol.ParseDeviceRvInfo(dctpm.RvInfo)
+				for i, dir := range directives {
+					fmt.Printf("    RvInfo[%d]\n", i)
+					for _, u := range dir.URLs {
+						fmt.Printf("      URL             %s\n", u)
+					}
+					if dir.Bypass {
+						fmt.Println("      Bypass          true")
+					}
+					if dir.Delay > 0 {
+						fmt.Printf("      Delay           %s\n", dir.Delay)
 					}
 				}
 			}
 		}
 	} else {
-		fmt.Printf("  DCOV (0x%08X)       [not defined]\n", tpm.DCOVIndex)
+		fmt.Printf("  DCTPM (0x%08X)      [not defined]\n", tpm.DCTPMIndex)
 	}
 
 	if info.HMACUSSize > 0 {
@@ -143,16 +136,10 @@ func tpmShowCredentials() error {
 		fmt.Printf("  HMAC_US (0x%08X)    [not defined]\n", tpm.HMACUSIndex)
 	}
 
-	if info.DeviceKeyUSSize > 0 {
-		fmt.Printf("  DeviceKey_US (0x%08X) [%d bytes]\n", tpm.DeviceKeyUSIndex, info.DeviceKeyUSSize)
+	if info.DevKeyUSSize > 0 {
+		fmt.Printf("  DeviceKey_US (0x%08X) [%d bytes]\n", tpm.DeviceKeyUSIndex, info.DevKeyUSSize)
 	} else {
 		fmt.Printf("  DeviceKey_US (0x%08X) [not defined]\n", tpm.DeviceKeyUSIndex)
-	}
-
-	if info.HasCert {
-		fmt.Printf("  FDO_Cert (0x%08X)   [%d bytes]\n", tpm.FDOCertIndex, info.FDOCertSize)
-	} else {
-		fmt.Printf("  FDO_Cert (0x%08X)   [not defined]\n", tpm.FDOCertIndex)
 	}
 
 	fmt.Printf("  DAK (0x%08X)        ", tpm.DAKHandle)
@@ -261,13 +248,18 @@ func tpmProveDAK() error {
 	return nil
 }
 
-// dcovDisplay mirrors the CBOR structure stored in the DCOV NV index.
+// dctpmDisplay mirrors the CBOR structure stored in the consolidated DCTPM NV index.
 // Defined here (rather than importing from cred) because the cred package
 // type is unexported and requires a build tag.
-type dcovDisplay struct {
-	Version       uint16                     `cbor:"0,keyasint"`
-	RvInfo        [][]protocol.RvInstruction `cbor:"1,keyasint"`
-	PublicKeyHash protocol.Hash              `cbor:"2,keyasint"`
-	KeyType       protocol.KeyType           `cbor:"3,keyasint"`
-	HMACHandle    uint32                     `cbor:"4,keyasint,omitempty"`
+type dctpmDisplay struct {
+	Magic           uint32                     `cbor:"0,keyasint"`
+	Active          bool                       `cbor:"1,keyasint"`
+	Version         uint16                     `cbor:"2,keyasint"`
+	DeviceInfo      string                     `cbor:"3,keyasint"`
+	GUID            protocol.GUID              `cbor:"4,keyasint"`
+	RvInfo          [][]protocol.RvInstruction `cbor:"5,keyasint"`
+	PublicKeyHash   protocol.Hash              `cbor:"6,keyasint"`
+	KeyType         protocol.KeyType           `cbor:"7,keyasint"`
+	DeviceKeyHandle uint32                     `cbor:"8,keyasint"`
+	HMACKeyHandle   uint32                     `cbor:"9,keyasint"`
 }

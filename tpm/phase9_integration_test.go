@@ -34,9 +34,8 @@ import (
 	tpmlib "github.com/fido-device-onboard/go-fdo/tpm"
 )
 
-// dumpTPMState reads all FDO NV indices and persistent handles, then logs
-// a human-readable summary. Useful for seeing exactly what the TPM holds
-// at a given point in the test.
+// dumpTPMState reads the consolidated DCTPM NV index and persistent handles,
+// then logs a human-readable summary.
 func dumpTPMState(t *testing.T, thetpm tpmlib.TPM, label string) {
 	t.Helper()
 	info, err := tpmlib.ReadNVCredentials(thetpm)
@@ -45,62 +44,51 @@ func dumpTPMState(t *testing.T, thetpm tpmlib.TPM, label string) {
 		return
 	}
 	t.Logf("[%s] ── TPM FDO State ──", label)
-	active := "false"
-	if info.Active {
-		active = "true"
-	}
-	t.Logf("  DCActive  (0x%08X)    %s  [%d bytes]", tpmlib.DCActiveIndex, active, info.DCActiveSize)
-	if info.DCTPMSize > 0 {
-		t.Logf("  DCTPM     (0x%08X)    [%d bytes]  GUID=%x  DeviceInfo=%q", tpmlib.DCTPMIndex, info.DCTPMSize, info.GUID, info.DeviceInfo)
-	} else {
-		t.Logf("  DCTPM     (0x%08X)    [not defined]", tpmlib.DCTPMIndex)
-	}
-	if info.HasDCOV {
-		t.Logf("  DCOV      (0x%08X)    [%d bytes]", tpmlib.DCOVIndex, info.DCOVSize)
-		if len(info.DCOVData) > 0 {
-			var dcov dcovDump
-			if err := cbor.Unmarshal(info.DCOVData, &dcov); err != nil {
-				t.Logf("    (decode error: %v)", err)
+	if info.HasDCTPM {
+		t.Logf("  DCTPM     (0x%08X)    [%d bytes]", tpmlib.DCTPMIndex, info.DCTPMSize)
+		var dctpm dctpmDump
+		if err := cbor.Unmarshal(info.RawDCTPM, &dctpm); err != nil {
+			t.Logf("    (decode error: %v)", err)
+		} else {
+			t.Logf("    Magic             0x%08X", dctpm.Magic)
+			t.Logf("    Active            %v", dctpm.Active)
+			t.Logf("    Version           %d", dctpm.Version)
+			t.Logf("    DeviceInfo        %q", dctpm.DeviceInfo)
+			t.Logf("    GUID              %x", dctpm.GUID)
+			t.Logf("    KeyType           %s", dctpm.KeyType)
+			t.Logf("    DeviceKeyHandle   0x%08X", dctpm.DeviceKeyHandle)
+			t.Logf("    HMACKeyHandle     0x%08X", dctpm.HMACKeyHandle)
+			t.Logf("    PublicKeyHash     alg=%d value=%s", dctpm.PublicKeyHash.Algorithm, hex.EncodeToString(dctpm.PublicKeyHash.Value))
+			if len(dctpm.RvInfo) == 0 {
+				t.Log("    RvInfo            (none)")
 			} else {
-				t.Logf("    Version           %d", dcov.Version)
-				t.Logf("    KeyType           %s", dcov.KeyType)
-				t.Logf("    PublicKeyHash     alg=%d value=%s", dcov.PublicKeyHash.Algorithm, hex.EncodeToString(dcov.PublicKeyHash.Value))
-				if len(dcov.RvInfo) == 0 {
-					t.Log("    RvInfo            (none)")
-				} else {
-					directives := protocol.ParseDeviceRvInfo(dcov.RvInfo)
-					for i, dir := range directives {
-						t.Logf("    RvInfo[%d]", i)
-						for _, u := range dir.URLs {
-							t.Logf("      URL             %s", u)
-						}
-						if dir.Bypass {
-							t.Log("      Bypass          true")
-						}
-						if dir.Delay > 0 {
-							t.Logf("      Delay           %s", dir.Delay)
-						}
+				directives := protocol.ParseDeviceRvInfo(dctpm.RvInfo)
+				for i, dir := range directives {
+					t.Logf("    RvInfo[%d]", i)
+					for _, u := range dir.URLs {
+						t.Logf("      URL             %s", u)
+					}
+					if dir.Bypass {
+						t.Log("      Bypass          true")
+					}
+					if dir.Delay > 0 {
+						t.Logf("      Delay           %s", dir.Delay)
 					}
 				}
 			}
 		}
 	} else {
-		t.Logf("  DCOV      (0x%08X)    [not defined]", tpmlib.DCOVIndex)
+		t.Logf("  DCTPM     (0x%08X)    [not defined]", tpmlib.DCTPMIndex)
 	}
 	if info.HMACUSSize > 0 {
 		t.Logf("  HMAC_US   (0x%08X)    [%d bytes]", tpmlib.HMACUSIndex, info.HMACUSSize)
 	} else {
 		t.Logf("  HMAC_US   (0x%08X)    [not defined]", tpmlib.HMACUSIndex)
 	}
-	if info.DeviceKeyUSSize > 0 {
-		t.Logf("  DevKeyUS  (0x%08X)    [%d bytes]", tpmlib.DeviceKeyUSIndex, info.DeviceKeyUSSize)
+	if info.DevKeyUSSize > 0 {
+		t.Logf("  DevKeyUS  (0x%08X)    [%d bytes]", tpmlib.DeviceKeyUSIndex, info.DevKeyUSSize)
 	} else {
 		t.Logf("  DevKeyUS  (0x%08X)    [not defined]", tpmlib.DeviceKeyUSIndex)
-	}
-	if info.HasCert {
-		t.Logf("  FDO_Cert  (0x%08X)    [%d bytes]", tpmlib.FDOCertIndex, info.FDOCertSize)
-	} else {
-		t.Logf("  FDO_Cert  (0x%08X)    [not defined]", tpmlib.FDOCertIndex)
 	}
 	dak := "not present"
 	if info.HasDAK {
@@ -122,13 +110,19 @@ func dumpTPMState(t *testing.T, thetpm tpmlib.TPM, label string) {
 	t.Logf("[%s] ── end ──", label)
 }
 
-// dcovDump mirrors the CBOR structure stored in the DCOV NV index.
+// dctpmDump mirrors the consolidated DCTPM CBOR structure stored in NV.
 // Defined here because the cred package type is unexported.
-type dcovDump struct {
-	Version       uint16                     `cbor:"0,keyasint"`
-	RvInfo        [][]protocol.RvInstruction `cbor:"1,keyasint"`
-	PublicKeyHash protocol.Hash              `cbor:"2,keyasint"`
-	KeyType       protocol.KeyType           `cbor:"3,keyasint"`
+type dctpmDump struct {
+	Magic           uint32                     `cbor:"0,keyasint"`
+	Active          bool                       `cbor:"1,keyasint"`
+	Version         uint16                     `cbor:"2,keyasint"`
+	DeviceInfo      string                     `cbor:"3,keyasint"`
+	GUID            protocol.GUID              `cbor:"4,keyasint"`
+	RvInfo          [][]protocol.RvInstruction `cbor:"5,keyasint"`
+	PublicKeyHash   protocol.Hash              `cbor:"6,keyasint"`
+	KeyType         protocol.KeyType           `cbor:"7,keyasint"`
+	DeviceKeyHandle uint32                     `cbor:"8,keyasint"`
+	HMACKeyHandle   uint32                     `cbor:"9,keyasint"`
 }
 
 // mustCBOR marshals v to CBOR, fatally failing the test on error.
@@ -150,16 +144,16 @@ func mustCBOR(t *testing.T, v any) []byte {
 //	PROVISION PHASE (simulates NewDI + Save):
 //	  1. CleanupFDOState — remove any prior state
 //	  2. Generate random Unique Strings
-//	  3. DefineNVSpace + WriteNV for DeviceKey_US, HMAC_US, DCActive, DCTPM
+//	  3. DefineNVSpace + WriteNV for DeviceKey_US, HMAC_US
 //	  4. ComputeFDOAuthPolicy for each US NV
 //	  5. GenerateSpecECKey → PersistKey to DAKHandle
 //	  6. GenerateSpecHMACKey → PersistKey to HMACKeyHandle
-//	  7. Write DCOV with RV info, public key hash, key type
+//	  7. Write consolidated DCTPM NV (CBOR blob with all credential data)
 //	  8. NewSpecHmac → compute HMAC baseline over GUID
 //	  9. Record "owner voucher" data (public key, GUID, HMAC baseline)
 //
 //	VERIFY PHASE (simulates Load → TO2, NO shared Go state from provision):
-//	  9. ReadNVCredentials — read all NV indices, verify Active=true
+//	  9. ReadNVCredentials — read DCTPM NV, decode, verify Magic + Active
 //	 10. LoadPersistentKey(DAKHandle) — get signing key with policy auth
 //	 11. Sign a fresh challenge nonce, verify with owner's public key
 //	 12. NewSpecHmac → compute HMAC over GUID from NV, verify against baseline
@@ -239,34 +233,13 @@ func TestPhase9_ProductionAPI_NVOnly(t *testing.T) {
 	}
 	t.Logf("Step 6: Created and persisted HMAC key at 0x%08X", tpmlib.HMACKeyHandle)
 
-	// Step 7: Write DCActive + DCTPM NV indices
+	// Step 7: Write consolidated DCTPM NV index (single CBOR blob)
 	guid := [16]byte{
 		0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE,
 		0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
 	}
 	deviceInfo := "Phase9-Test-Device"
-	dctpmData := make([]byte, 0, 16+len(deviceInfo))
-	dctpmData = append(dctpmData, guid[:]...)
-	dctpmData = append(dctpmData, []byte(deviceInfo)...)
 
-	dcActiveName, err := tpmlib.DefineNVSpace(thetpm, tpmlib.DCActiveIndex, 1, tpmlib.NVProfileA, usePlatform)
-	if err != nil {
-		t.Fatalf("DefineNVSpace DCActive: %v", err)
-	}
-	if err := tpmlib.WriteNV(thetpm, tpmlib.DCActiveIndex, dcActiveName, []byte{0x01}, tpmlib.NVProfileA); err != nil {
-		t.Fatalf("WriteNV DCActive: %v", err)
-	}
-
-	dctpmName, err := tpmlib.DefineNVSpace(thetpm, tpmlib.DCTPMIndex, uint16(len(dctpmData)), tpmlib.NVProfileB, usePlatform)
-	if err != nil {
-		t.Fatalf("DefineNVSpace DCTPM: %v", err)
-	}
-	if err := tpmlib.WriteNV(thetpm, tpmlib.DCTPMIndex, dctpmName, dctpmData, tpmlib.NVProfileB); err != nil {
-		t.Fatalf("WriteNV DCTPM: %v", err)
-	}
-	t.Logf("Step 7: DCActive=0x01, DCTPM stored GUID=%x info=%q", guid, deviceInfo)
-
-	// Step 7b: Write DCOV NV index (Profile C) with RV info
 	// Build realistic rendezvous instructions: HTTP to 127.0.0.1:8080 with bypass
 	rvInfo := [][]protocol.RvInstruction{{
 		{Variable: protocol.RVProtocol, Value: mustCBOR(t, uint8(protocol.RVProtHTTP))},
@@ -274,7 +247,8 @@ func TestPhase9_ProductionAPI_NVOnly(t *testing.T) {
 		{Variable: protocol.RVDevPort, Value: mustCBOR(t, uint16(8080))},
 		{Variable: protocol.RVBypass},
 	}}
-	// Compute public key hash from DAK (simulates what cred.Store.Save does)
+
+	// Compute public key hash from DAK
 	provisionKeyForHash, err := tpmlib.LoadPersistentKey(thetpm, tpmlib.DAKHandle, tpmlib.DeviceKeyUSIndex)
 	if err != nil {
 		t.Fatalf("LoadPersistentKey (for pubkey hash): %v", err)
@@ -282,27 +256,35 @@ func TestPhase9_ProductionAPI_NVOnly(t *testing.T) {
 	pubKeyForHash := provisionKeyForHash.Public().(*ecdsa.PublicKey)
 	_ = provisionKeyForHash.Close()
 	pubKeyHashBytes := sha256.Sum256(append(pubKeyForHash.X.Bytes(), pubKeyForHash.Y.Bytes()...))
-	dcovPayload := dcovDump{
-		Version: 101,
-		RvInfo:  rvInfo,
+
+	dctpmPayload := dctpmDump{
+		Magic:      tpmlib.DCTPMMagic,
+		Active:     true,
+		Version:    101,
+		DeviceInfo: deviceInfo,
+		GUID:       guid,
+		RvInfo:     rvInfo,
 		PublicKeyHash: protocol.Hash{
 			Algorithm: protocol.Sha256Hash,
 			Value:     pubKeyHashBytes[:],
 		},
-		KeyType: protocol.Secp256r1KeyType,
+		KeyType:         protocol.Secp256r1KeyType,
+		DeviceKeyHandle: tpmlib.DAKHandle,
+		HMACKeyHandle:   tpmlib.HMACKeyHandle,
 	}
-	dcovBytes, err := cbor.Marshal(dcovPayload)
+	dctpmBytes, err := cbor.Marshal(dctpmPayload)
 	if err != nil {
-		t.Fatalf("CBOR Marshal DCOV: %v", err)
+		t.Fatalf("CBOR Marshal DCTPM: %v", err)
 	}
-	dcovName, err := tpmlib.DefineNVSpace(thetpm, tpmlib.DCOVIndex, uint16(len(dcovBytes)), tpmlib.NVProfileC, false)
+
+	dctpmName, err := tpmlib.DefineNVSpace(thetpm, tpmlib.DCTPMIndex, uint16(len(dctpmBytes)), tpmlib.NVProfileDCTPM, usePlatform)
 	if err != nil {
-		t.Fatalf("DefineNVSpace DCOV: %v", err)
+		t.Fatalf("DefineNVSpace DCTPM: %v", err)
 	}
-	if err := tpmlib.WriteNV(thetpm, tpmlib.DCOVIndex, dcovName, dcovBytes, tpmlib.NVProfileC); err != nil {
-		t.Fatalf("WriteNV DCOV: %v", err)
+	if err := tpmlib.WriteNV(thetpm, tpmlib.DCTPMIndex, dctpmName, dctpmBytes, tpmlib.NVProfileDCTPM); err != nil {
+		t.Fatalf("WriteNV DCTPM: %v", err)
 	}
-	t.Logf("Step 7b: DCOV stored [%d bytes] — RV: http://127.0.0.1:8080 (bypass), KeyType=SECP256R1", len(dcovBytes))
+	t.Logf("Step 7: DCTPM NV stored [%d bytes] — Magic=FDO1, Active=true, GUID=%x, info=%q", len(dctpmBytes), guid, deviceInfo)
 
 	// Step 8: Compute HMAC baseline over GUID using NewSpecHmac
 	provisionHmac, err := tpmlib.NewSpecHmac(thetpm, 0, tpmlib.HMACKeyHandle) // crypto.Hash(0) — hash arg is for Size()/BlockSize()
@@ -354,13 +336,13 @@ func TestPhase9_ProductionAPI_NVOnly(t *testing.T) {
 	// =====================================================================
 	t.Log("=== VERIFY PHASE: reading ALL state from TPM (zero shared Go variables) ===")
 
-	// Step 9: ReadNVCredentials — read all NV indices
+	// Step 9: ReadNVCredentials — read consolidated DCTPM NV
 	info, err := tpmlib.ReadNVCredentials(thetpm)
 	if err != nil {
 		t.Fatalf("ReadNVCredentials: %v", err)
 	}
-	if !info.Active {
-		t.Fatal("DCActive should be true (0x01)")
+	if !info.HasDCTPM || len(info.RawDCTPM) == 0 {
+		t.Fatal("DCTPM NV should be present")
 	}
 	if !info.HasDAK {
 		t.Fatal("DAK should be present")
@@ -369,35 +351,43 @@ func TestPhase9_ProductionAPI_NVOnly(t *testing.T) {
 		t.Fatal("HMAC key should be present")
 	}
 
-	// Verify GUID from NV matches owner voucher
-	if info.GUID != owner.guid {
-		t.Fatalf("GUID mismatch: NV=%x owner=%x", info.GUID, owner.guid)
+	// Decode consolidated DCTPM
+	var verifyDCTPM dctpmDump
+	if err := cbor.Unmarshal(info.RawDCTPM, &verifyDCTPM); err != nil {
+		t.Fatalf("DCTPM decode: %v", err)
 	}
-	if info.DeviceInfo != deviceInfo {
-		t.Fatalf("DeviceInfo mismatch: NV=%q want=%q", info.DeviceInfo, deviceInfo)
+	if verifyDCTPM.Magic != tpmlib.DCTPMMagic {
+		t.Fatalf("DCTPM Magic: got 0x%08X, want 0x%08X", verifyDCTPM.Magic, tpmlib.DCTPMMagic)
 	}
-	t.Logf("Step 9: ReadNVCredentials OK — Active=true GUID=%x DAK=present HMAC=present", info.GUID)
+	if !verifyDCTPM.Active {
+		t.Fatal("DCTPM Active should be true")
+	}
 
-	// Step 9b: Verify DCOV from NV — RV info, key type, public key hash
-	if !info.HasDCOV {
-		t.Fatal("DCOV should be present after provision")
+	// Verify GUID from NV matches owner voucher
+	if verifyDCTPM.GUID != owner.guid {
+		t.Fatalf("GUID mismatch: NV=%x owner=%x", verifyDCTPM.GUID, owner.guid)
 	}
-	var verifyDCOV dcovDump
-	if err := cbor.Unmarshal(info.DCOVData, &verifyDCOV); err != nil {
-		t.Fatalf("DCOV decode: %v", err)
+	if verifyDCTPM.DeviceInfo != deviceInfo {
+		t.Fatalf("DeviceInfo mismatch: NV=%q want=%q", verifyDCTPM.DeviceInfo, deviceInfo)
 	}
-	if verifyDCOV.Version != 101 {
-		t.Errorf("DCOV Version: got %d, want 101", verifyDCOV.Version)
+	if verifyDCTPM.Version != 101 {
+		t.Errorf("DCTPM Version: got %d, want 101", verifyDCTPM.Version)
 	}
-	if verifyDCOV.KeyType != protocol.Secp256r1KeyType {
-		t.Errorf("DCOV KeyType: got %d, want SECP256R1", verifyDCOV.KeyType)
+	if verifyDCTPM.KeyType != protocol.Secp256r1KeyType {
+		t.Errorf("DCTPM KeyType: got %d, want SECP256R1", verifyDCTPM.KeyType)
 	}
-	if len(verifyDCOV.RvInfo) != 1 || len(verifyDCOV.RvInfo[0]) != 4 {
-		t.Errorf("DCOV RvInfo: got %d directives, want 1 with 4 instructions", len(verifyDCOV.RvInfo))
+	if len(verifyDCTPM.RvInfo) != 1 || len(verifyDCTPM.RvInfo[0]) != 4 {
+		t.Errorf("DCTPM RvInfo: got %d directives, want 1 with 4 instructions", len(verifyDCTPM.RvInfo))
 	}
-	t.Logf("Step 9b: DCOV verified — Version=%d KeyType=%s RvDirectives=%d PubKeyHash=%s",
-		verifyDCOV.Version, verifyDCOV.KeyType, len(verifyDCOV.RvInfo),
-		hex.EncodeToString(verifyDCOV.PublicKeyHash.Value[:8])+"...")
+	if verifyDCTPM.DeviceKeyHandle != tpmlib.DAKHandle {
+		t.Errorf("DCTPM DeviceKeyHandle: got 0x%08X, want 0x%08X", verifyDCTPM.DeviceKeyHandle, tpmlib.DAKHandle)
+	}
+	if verifyDCTPM.HMACKeyHandle != tpmlib.HMACKeyHandle {
+		t.Errorf("DCTPM HMACKeyHandle: got 0x%08X, want 0x%08X", verifyDCTPM.HMACKeyHandle, tpmlib.HMACKeyHandle)
+	}
+	t.Logf("Step 9: DCTPM verified — Magic=FDO1 Active=true Version=%d GUID=%x KeyType=%s DAK=0x%08X HMAC=0x%08X",
+		verifyDCTPM.Version, verifyDCTPM.GUID, verifyDCTPM.KeyType,
+		verifyDCTPM.DeviceKeyHandle, verifyDCTPM.HMACKeyHandle)
 
 	// Step 10: LoadPersistentKey — get signing key with policy session auth
 	verifyKey, err := tpmlib.LoadPersistentKey(thetpm, tpmlib.DAKHandle, tpmlib.DeviceKeyUSIndex)
@@ -439,8 +429,8 @@ func TestPhase9_ProductionAPI_NVOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSpecHmac (verify): %v", err)
 	}
-	// Use the GUID read from NV (info.GUID), NOT from owner voucher
-	if _, err := verifyHmac.Write(info.GUID[:]); err != nil {
+	// Use the GUID read from NV (verifyDCTPM.GUID), NOT from owner voucher
+	if _, err := verifyHmac.Write(verifyDCTPM.GUID[:]); err != nil {
 		t.Fatalf("HMAC Write (verify): %v", err)
 	}
 	if verifyHmac.Err() != nil {
@@ -697,7 +687,7 @@ func TestPhase9_CleanupFDOState(t *testing.T) {
 	usePlatform := !ownerHierarchyFallback()
 	tpmlib.CleanupFDOState(thetpm)
 
-	// Provision some state
+	// Provision some state: US indices + persistent keys + consolidated DCTPM
 	dkUS := make([]byte, 64)
 	rand.Read(dkUS)
 	dkUSName, _ := tpmlib.DefineNVSpace(thetpm, tpmlib.DeviceKeyUSIndex, 64, tpmlib.NVProfileB, usePlatform)
@@ -708,9 +698,6 @@ func TestPhase9_CleanupFDOState(t *testing.T) {
 	hmacUSName, _ := tpmlib.DefineNVSpace(thetpm, tpmlib.HMACUSIndex, 32, tpmlib.NVProfileB, usePlatform)
 	tpmlib.WriteNV(thetpm, tpmlib.HMACUSIndex, hmacUSName, hmacUS, tpmlib.NVProfileB)
 
-	dcActiveName, _ := tpmlib.DefineNVSpace(thetpm, tpmlib.DCActiveIndex, 1, tpmlib.NVProfileA, usePlatform)
-	tpmlib.WriteNV(thetpm, tpmlib.DCActiveIndex, dcActiveName, []byte{0x01}, tpmlib.NVProfileA)
-
 	dkPolicy, _ := tpmlib.ComputeFDOAuthPolicy(thetpm, tpmlib.DeviceKeyUSIndex, dkUSName)
 	dkHandle, _, _ := tpmlib.GenerateSpecECKey(thetpm, tpm2.TPMECCNistP256, tpm2.TPMAlgSHA256, dkUS, dkPolicy)
 	tpmlib.PersistKey(thetpm, *dkHandle, tpmlib.DAKHandle)
@@ -719,15 +706,30 @@ func TestPhase9_CleanupFDOState(t *testing.T) {
 	hmacHandle, _ := tpmlib.GenerateSpecHMACKey(thetpm, hmacUS, hmacPolicy)
 	tpmlib.PersistKey(thetpm, *hmacHandle, tpmlib.HMACKeyHandle)
 
+	// Write a consolidated DCTPM NV blob
+	dctpmPayload := dctpmDump{
+		Magic:           tpmlib.DCTPMMagic,
+		Active:          true,
+		Version:         101,
+		DeviceInfo:      "cleanup-test",
+		GUID:            [16]byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10},
+		KeyType:         protocol.Secp256r1KeyType,
+		DeviceKeyHandle: tpmlib.DAKHandle,
+		HMACKeyHandle:   tpmlib.HMACKeyHandle,
+	}
+	dctpmBytes, _ := cbor.Marshal(dctpmPayload)
+	dctpmName, _ := tpmlib.DefineNVSpace(thetpm, tpmlib.DCTPMIndex, uint16(len(dctpmBytes)), tpmlib.NVProfileDCTPM, usePlatform)
+	tpmlib.WriteNV(thetpm, tpmlib.DCTPMIndex, dctpmName, dctpmBytes, tpmlib.NVProfileDCTPM)
+
 	// Verify state exists
 	info, err := tpmlib.ReadNVCredentials(thetpm)
 	if err != nil {
 		t.Fatalf("ReadNVCredentials before cleanup: %v", err)
 	}
-	if !info.Active || !info.HasDAK || !info.HasHMACKey {
-		t.Fatal("expected Active + DAK + HMAC before cleanup")
+	if !info.HasDCTPM || !info.HasDAK || !info.HasHMACKey {
+		t.Fatal("expected DCTPM + DAK + HMAC before cleanup")
 	}
-	t.Log("State provisioned: Active=true DAK=present HMAC=present")
+	t.Log("State provisioned: DCTPM=present DAK=present HMAC=present")
 
 	dumpTPMState(t, thetpm, "BEFORE CLEANUP")
 
@@ -741,8 +743,8 @@ func TestPhase9_CleanupFDOState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadNVCredentials after cleanup: %v", err)
 	}
-	if info2.Active {
-		t.Error("DCActive should be false after cleanup")
+	if info2.HasDCTPM {
+		t.Error("DCTPM should be gone after cleanup")
 	}
 	if info2.HasDAK {
 		t.Error("DAK should be gone after cleanup")

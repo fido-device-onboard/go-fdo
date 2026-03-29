@@ -18,12 +18,20 @@ import (
 
 // NV Index range reserved for FDO per "Securing FDO Credentials in the TPM v1.0".
 const (
-	DCActiveIndex    = 0x01D10000 // OS action flag (1=initialized, 0=not)
-	DCTPMIndex       = 0x01D10001 // GUID + device info (Profile B)
-	DCOVIndex        = 0x01D10002 // Ownership Voucher data (Profile C)
-	HMACUSIndex      = 0x01D10003 // HMAC Unique String (Profile B)
-	DeviceKeyUSIndex = 0x01D10004 // Device Key Unique String (Profile B)
-	FDOCertIndex     = 0x01D10005 // Optional X.509 certificate (Profile C)
+	DCTPMIndex       = 0x01D10001 // Single consolidated NV index for all FDO credentials (CBOR-encoded)
+	HMACUSIndex      = 0x01D10003 // (Optional) HMAC Unique String (Profile B) — provisioning entity artifact
+	DeviceKeyUSIndex = 0x01D10004 // (Optional) Device Key Unique String (Profile B) — provisioning entity artifact
+)
+
+// DCTPMMagic identifies the DCTPM NV data as FDO version 1 ("FDO1").
+// Readers MUST verify this value before interpreting the structure.
+const DCTPMMagic uint32 = 0x46444F31
+
+// Legacy NV index constants — kept for CleanupFDOState to remove old-format indices.
+const (
+	legacyDCActiveIndex = 0x01D10000
+	legacyDCOVIndex     = 0x01D10002
+	legacyFDOCertIndex  = 0x01D10005
 )
 
 // Persistent object handles reserved for FDO.
@@ -32,92 +40,46 @@ const (
 	HMACKeyHandle = 0x81020003 // HMAC key
 )
 
-// NVCredentialInfo holds all credential data read from TPM NV indices.
+// NVCredentialInfo holds credential data read from the consolidated DCTPM NV index.
 type NVCredentialInfo struct {
-	Active     bool // DCActive flag (true = device initialized)
-	GUID       [16]byte
-	DeviceInfo string
-	HasDCOV    bool   // true if DCOV NV index exists
-	DCOVData   []byte // raw DCOV content (ownership voucher placeholder)
-	HasCert    bool   // true if FDO_Cert NV index exists
-	CertData   []byte // raw certificate data
-
-	// NV index metadata
-	DCActiveSize    uint16
-	DCTPMSize       uint16
-	DCOVSize        uint16
-	HMACUSSize      uint16
-	DeviceKeyUSSize uint16
-	FDOCertSize     uint16
+	HasDCTPM    bool   // true if DCTPM NV index exists and contains valid data
+	RawDCTPM    []byte // raw CBOR from DCTPM NV index
+	DCTPMSize   uint16
+	HMACUSSize  uint16 // 0 if HMAC_US NV not defined (optional)
+	DevKeyUSSize uint16 // 0 if DeviceKey_US NV not defined (optional)
 
 	// Persistent key presence
 	HasDAK     bool
 	HasHMACKey bool
 }
 
-// ReadNVCredentials reads all FDO credential data from TPM NV indices.
-// It returns information about what is stored without requiring any
-// authorization beyond NV public reads and owner/auth reads.
+// ReadNVCredentials reads FDO credential data from the consolidated DCTPM NV index.
+// It also checks for optional Unique String NV indices and persistent key handles.
 func ReadNVCredentials(t TPM) (*NVCredentialInfo, error) {
 	info := &NVCredentialInfo{}
 
-	// DCActive (Profile A: OwnerRead)
-	if nvPub, err := (tpm2.NVReadPublic{NVIndex: tpm2.TPMHandle(DCActiveIndex)}).Execute(t); err == nil {
-		pub, _ := nvPub.NVPublic.Contents()
-		info.DCActiveSize = pub.DataSize
-		data, err := nvReadOwner(t, DCActiveIndex, nvPub.NVName, pub.DataSize)
-		if err != nil {
-			return nil, fmt.Errorf("read DCActive: %w", err)
-		}
-		info.Active = len(data) > 0 && data[0] == 0x01
-	}
-
-	// DCTPM (Profile B: AuthRead — NV index auth)
+	// DCTPM consolidated NV index (Owner+Auth R/W)
 	if nvPub, err := (tpm2.NVReadPublic{NVIndex: tpm2.TPMHandle(DCTPMIndex)}).Execute(t); err == nil {
 		pub, _ := nvPub.NVPublic.Contents()
 		info.DCTPMSize = pub.DataSize
-		data, err := nvReadAuth(t, DCTPMIndex, nvPub.NVName, pub.DataSize)
+		data, err := nvReadOwner(t, DCTPMIndex, nvPub.NVName, pub.DataSize)
 		if err != nil {
 			return nil, fmt.Errorf("read DCTPM: %w", err)
 		}
-		if len(data) >= 16 {
-			copy(info.GUID[:], data[:16])
-			info.DeviceInfo = string(data[16:])
-		}
+		info.HasDCTPM = len(data) > 0
+		info.RawDCTPM = data
 	}
 
-	// DCOV (Profile C: OwnerRead)
-	if nvPub, err := (tpm2.NVReadPublic{NVIndex: tpm2.TPMHandle(DCOVIndex)}).Execute(t); err == nil {
-		pub, _ := nvPub.NVPublic.Contents()
-		info.DCOVSize = pub.DataSize
-		info.HasDCOV = true
-		data, err := nvReadOwner(t, DCOVIndex, nvPub.NVName, pub.DataSize)
-		if err == nil {
-			info.DCOVData = data
-		}
-	}
-
-	// HMAC_US (Profile B: AuthRead)
+	// Optional: HMAC_US (Profile B: AuthRead)
 	if nvPub, err := (tpm2.NVReadPublic{NVIndex: tpm2.TPMHandle(HMACUSIndex)}).Execute(t); err == nil {
 		pub, _ := nvPub.NVPublic.Contents()
 		info.HMACUSSize = pub.DataSize
 	}
 
-	// DeviceKey_US (Profile B: AuthRead)
+	// Optional: DeviceKey_US (Profile B: AuthRead)
 	if nvPub, err := (tpm2.NVReadPublic{NVIndex: tpm2.TPMHandle(DeviceKeyUSIndex)}).Execute(t); err == nil {
 		pub, _ := nvPub.NVPublic.Contents()
-		info.DeviceKeyUSSize = pub.DataSize
-	}
-
-	// FDO_Cert (Profile C: OwnerRead)
-	if nvPub, err := (tpm2.NVReadPublic{NVIndex: tpm2.TPMHandle(FDOCertIndex)}).Execute(t); err == nil {
-		pub, _ := nvPub.NVPublic.Contents()
-		info.FDOCertSize = pub.DataSize
-		info.HasCert = true
-		data, err := nvReadOwner(t, FDOCertIndex, nvPub.NVName, pub.DataSize)
-		if err == nil {
-			info.CertData = data
-		}
+		info.DevKeyUSSize = pub.DataSize
 	}
 
 	// Check persistent key handles
@@ -298,32 +260,27 @@ func nvReadAuth(t TPM, index uint32, nvName tpm2.TPM2BName, size uint16) ([]byte
 // NV Write/Provisioning — Production counterparts to read functions above
 // =========================================================================
 
-// NVProfile identifies the NV attribute profile per spec Table 8.
+// NVProfile identifies the NV attribute profile per spec.
 type NVProfile int
 
 const (
-	// NVProfileA is for DCActive: Owner+Auth R/W, NoDA, PlatformCreate.
-	NVProfileA NVProfile = iota
-	// NVProfileB is for DCTPM, Unique String indices: Auth R/W, NoDA, PlatformCreate.
-	NVProfileB
-	// NVProfileC is for DCOV, FDO_Cert: Owner+Auth R/W, NoDA (no PlatformCreate).
-	NVProfileC
+	// NVProfileB is for Unique String indices: Auth R/W, NoDA, PlatformCreate.
+	NVProfileB NVProfile = iota
+	// NVProfileDCTPM is for the consolidated DCTPM index: Owner+Auth R/W, NoDA.
+	// Per spec: "OWNERWRITE=1, OWNERREAD=1, AuthWrite=1, AuthRead=1" with
+	// empty authValue.
+	NVProfileDCTPM
 )
 
 // nvProfileAttrs returns the TPMANV attributes for a given profile.
 func nvProfileAttrs(profile NVProfile) tpm2.TPMANV {
 	switch profile {
-	case NVProfileA:
-		return tpm2.TPMANV{
-			OwnerWrite: true, AuthWrite: true, OwnerRead: true, AuthRead: true,
-			NoDA: true, PlatformCreate: true, NT: tpm2.TPMNTOrdinary,
-		}
 	case NVProfileB:
 		return tpm2.TPMANV{
 			AuthWrite: true, AuthRead: true, NoDA: true,
 			PlatformCreate: true, NT: tpm2.TPMNTOrdinary,
 		}
-	case NVProfileC:
+	case NVProfileDCTPM:
 		return tpm2.TPMANV{
 			OwnerWrite: true, AuthWrite: true, OwnerRead: true, AuthRead: true,
 			NoDA: true, NT: tpm2.TPMNTOrdinary,
@@ -336,7 +293,7 @@ func nvProfileAttrs(profile NVProfile) tpm2.TPMANV {
 // nvProfileAuthHandle returns the hierarchy handle used to define the NV index.
 func nvProfileAuthHandle(profile NVProfile) tpm2.TPMHandle {
 	switch profile {
-	case NVProfileA, NVProfileB:
+	case NVProfileB:
 		return tpm2.TPMRHPlatform
 	default:
 		return tpm2.TPMRHOwner
@@ -346,7 +303,7 @@ func nvProfileAuthHandle(profile NVProfile) tpm2.TPMHandle {
 // DefineNVSpace creates an NV index with the specified profile attributes.
 // Returns the NV Name needed for subsequent operations.
 //
-// Profile A/B indices are created under Platform hierarchy (PlatformCreate=1)
+// Profile B indices are created under Platform hierarchy (PlatformCreate=1)
 // per the spec. If usePlatform is false, Owner hierarchy is used instead
 // (PlatformCreate will be cleared — not fully spec-compliant but works in
 // userspace contexts where Platform hierarchy is locked).
@@ -354,7 +311,7 @@ func DefineNVSpace(t TPM, index uint32, size uint16, profile NVProfile, usePlatf
 	attrs := nvProfileAttrs(profile)
 	authHandle := nvProfileAuthHandle(profile)
 
-	if !usePlatform && (profile == NVProfileA || profile == NVProfileB) {
+	if !usePlatform && profile == NVProfileB {
 		authHandle = tpm2.TPMRHOwner
 		attrs.PlatformCreate = false
 	}
@@ -497,10 +454,12 @@ func UndefineNVSpace(t TPM, index uint32) error {
 
 // CleanupFDOState removes all FDO NV indices and persistent handles,
 // ignoring errors for indices/handles that don't exist.
+// Also cleans up legacy indices from the old multi-NV model.
 func CleanupFDOState(t TPM) {
 	for _, idx := range []uint32{
-		DCActiveIndex, DCTPMIndex, DCOVIndex,
-		HMACUSIndex, DeviceKeyUSIndex, FDOCertIndex,
+		DCTPMIndex, HMACUSIndex, DeviceKeyUSIndex,
+		// Legacy indices from old multi-NV model
+		legacyDCActiveIndex, legacyDCOVIndex, legacyFDOCertIndex,
 	} {
 		_ = UndefineNVSpace(t, idx)
 	}

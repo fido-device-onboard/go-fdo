@@ -39,6 +39,8 @@ import (
 	"github.com/google/go-tpm/tpm2/transport/linuxtpm"
 	"github.com/google/go-tpm/tpm2/transport/simulator"
 
+	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/protocol"
 	tpmlib "github.com/fido-device-onboard/go-fdo/tpm"
 )
 
@@ -1974,20 +1976,6 @@ func runPhase7(t *testing.T) {
 		0x29, 0x3a, 0x4b, 0x5c, 0x6d, 0x7e, 0x8f, 0x90}
 	deviceInfo := "FDO-Test-Device-v1.0"
 
-	// DCActive
-	nvNameActive := defineNVSpec(t, thetpm, DCActive_Index, 1, nvAttrsProfileA, tpm2.TPMRHPlatform)
-	writeNV(t, thetpm, DCActive_Index, nvNameActive, []byte{0x01}, profileA)
-
-	// DCTPM: GUID + device info
-	dctpmData := append(guid[:], []byte(deviceInfo)...)
-	nvNameDCTPM := defineNVSpec(t, thetpm, DCTPM_Index, uint16(len(dctpmData)), nvAttrsProfileB, tpm2.TPMRHPlatform)
-	writeNV(t, thetpm, DCTPM_Index, nvNameDCTPM, dctpmData, profileB)
-
-	// DCOV placeholder
-	dcovData := []byte("test-ownership-voucher")
-	nvNameDCOV := defineNVSpec(t, thetpm, DCOV_Index, uint16(len(dcovData)), nvAttrsProfileC, tpm2.TPMRHOwner)
-	writeNV(t, thetpm, DCOV_Index, nvNameDCOV, dcovData, profileC)
-
 	// DeviceKey_US + persistent DAK
 	dkUS := generateTestDeviceKeyUniqueString(64)
 	nvNameDKUS := defineNVSpec(t, thetpm, DeviceKey_US_Index, 64, nvAttrsProfileB, tpm2.TPMRHPlatform)
@@ -2058,6 +2046,44 @@ func runPhase7(t *testing.T) {
 	}
 	tpm2.FlushContext{FlushHandle: hmResp.ObjectHandle}.Execute(thetpm) //nolint:errcheck
 
+	// Consolidated DCTPM NV: CBOR-encoded structure matching the spec
+	type dctpmData struct {
+		Magic           uint32                     `cbor:"0,keyasint"`
+		Active          bool                       `cbor:"1,keyasint"`
+		Version         uint16                     `cbor:"2,keyasint"`
+		DeviceInfo      string                     `cbor:"3,keyasint"`
+		GUID            [16]byte                   `cbor:"4,keyasint"`
+		RvInfo          [][]protocol.RvInstruction `cbor:"5,keyasint"`
+		PublicKeyHash   protocol.Hash              `cbor:"6,keyasint"`
+		KeyType         protocol.KeyType           `cbor:"7,keyasint"`
+		DeviceKeyHandle uint32                     `cbor:"8,keyasint"`
+		HMACKeyHandle   uint32                     `cbor:"9,keyasint"`
+	}
+	dctpmPayload := dctpmData{
+		Magic:           tpmlib.DCTPMMagic,
+		Active:          true,
+		Version:         101,
+		DeviceInfo:      deviceInfo,
+		GUID:            guid,
+		KeyType:         protocol.Secp256r1KeyType,
+		DeviceKeyHandle: FDO_Device_Key_Handle,
+		HMACKeyHandle:   FDO_HMAC_Secret_Handle,
+	}
+	dctpmBytes, err := cbor.Marshal(dctpmPayload)
+	if err != nil {
+		t.Fatalf("CBOR Marshal DCTPM: %v", err)
+	}
+	// Use Owner+Auth R/W attributes (NVProfileDCTPM equivalent)
+	nvAttrsDCTPM := tpm2.TPMANV{
+		OwnerWrite: true,
+		AuthWrite:  true,
+		OwnerRead:  true,
+		AuthRead:   true,
+		NoDA:       true,
+	}
+	nvNameDCTPM := defineNVSpec(t, thetpm, DCTPM_Index, uint16(len(dctpmBytes)), nvAttrsDCTPM, tpm2.TPMRHOwner)
+	writeNV(t, thetpm, DCTPM_Index, nvNameDCTPM, dctpmBytes, profileC) // profileC uses Owner auth
+
 	t.Log("Provisioning complete — testing library API")
 
 	// --- Test ReadNVCredentials ---
@@ -2067,17 +2093,11 @@ func runPhase7(t *testing.T) {
 			t.Fatalf("ReadNVCredentials: %v", err)
 		}
 
-		if !info.Active {
-			t.Error("Active: got false, want true")
+		if !info.HasDCTPM {
+			t.Error("HasDCTPM: got false, want true")
 		}
-		if info.GUID != guid {
-			t.Errorf("GUID: got %x, want %x", info.GUID, guid)
-		}
-		if info.DeviceInfo != deviceInfo {
-			t.Errorf("DeviceInfo: got %q, want %q", info.DeviceInfo, deviceInfo)
-		}
-		if !info.HasDCOV {
-			t.Error("HasDCOV: got false, want true")
+		if len(info.RawDCTPM) == 0 {
+			t.Error("RawDCTPM: empty")
 		}
 		if !info.HasDAK {
 			t.Error("HasDAK: got false, want true")
@@ -2088,12 +2108,12 @@ func runPhase7(t *testing.T) {
 		if info.HMACUSSize != 32 {
 			t.Errorf("HMACUSSize: got %d, want 32", info.HMACUSSize)
 		}
-		if info.DeviceKeyUSSize != 64 {
-			t.Errorf("DeviceKeyUSSize: got %d, want 64", info.DeviceKeyUSSize)
+		if info.DevKeyUSSize != 64 {
+			t.Errorf("DevKeyUSSize: got %d, want 64", info.DevKeyUSSize)
 		}
 
-		t.Logf("ReadNVCredentials: Active=%v GUID=%x DeviceInfo=%q HasDAK=%v HasHMACKey=%v",
-			info.Active, info.GUID, info.DeviceInfo, info.HasDAK, info.HasHMACKey)
+		t.Logf("ReadNVCredentials: HasDCTPM=%v DCTPMSize=%d HasDAK=%v HasHMACKey=%v",
+			info.HasDCTPM, info.DCTPMSize, info.HasDAK, info.HasHMACKey)
 	})
 
 	// --- Test ReadDAKPublicKey ---

@@ -352,19 +352,21 @@ func NewSpecHmac(t TPM, h crypto.Hash, handle uint32) (Hmac, error) {
 	}
 
 	return &specHmac{
-		Device:  t,
-		Hash:    h,
-		keyName: readResp.Name,
-		usIndex: HMACUSIndex,
-		usName:  nvPub.NVName,
+		Device:    t,
+		Hash:      h,
+		keyHandle: handle,
+		keyName:   readResp.Name,
+		usIndex:   HMACUSIndex,
+		usName:    nvPub.NVName,
 	}, nil
 }
 
 // specHmac is a hash.Hash backed by a persistent TPM HMAC key with
 // policy session authorization.
 type specHmac struct {
-	Device TPM
-	Hash   crypto.Hash
+	Device    TPM
+	Hash      crypto.Hash
+	keyHandle uint32 // persistent HMAC key handle
 
 	keyName tpm2.TPM2BName // persistent HMAC key name
 	usIndex uint32         // Unique String NV index
@@ -391,7 +393,7 @@ func (h *specHmac) start() {
 
 	hmacStartResp, err := tpm2.HmacStart{
 		Handle: tpm2.AuthHandle{
-			Handle: tpm2.TPMHandle(HMACKeyHandle),
+			Handle: tpm2.TPMHandle(h.keyHandle),
 			Name:   h.keyName,
 			Auth:   fdoKeyPolicy(h.usIndex, h.usName),
 		},

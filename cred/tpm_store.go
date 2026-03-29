@@ -21,24 +21,34 @@ import (
 	"github.com/google/go-tpm/tpm2"
 )
 
-// dcovNVData is the CBOR structure stored in the DCOV NV index.
-// It holds the credential fields not in DCTPM (which has GUID + DeviceInfo).
-type dcovNVData struct {
-	Version       uint16                     `cbor:"0,keyasint"`
-	RvInfo        [][]protocol.RvInstruction `cbor:"1,keyasint"`
-	PublicKeyHash protocol.Hash              `cbor:"2,keyasint"`
-	KeyType       protocol.KeyType           `cbor:"3,keyasint"`
-	HMACHandle    uint32                     `cbor:"4,keyasint,omitempty"` // persistent handle for HMAC key (0 = use default HMACKeyHandle)
+// dctpmNVData is the consolidated CBOR structure stored in the single DCTPM NV index.
+// Per the spec CDDL: DCTPM = [DCTPMMagic, DCActive, DCProtVer, DCDeviceInfo,
+//   DCGuid, DCRVInfo, DCPubKeyHash, DeviceKeyType, DeviceKeyHandle, HMACKeyHandle]
+//
+// The Go CBOR library encodes structs as CBOR arrays (not maps), with field
+// ordering determined by the keyasint tags. This matches the spec's array encoding.
+type dctpmNVData struct {
+	Magic           uint32                     `cbor:"0,keyasint"`
+	Active          bool                       `cbor:"1,keyasint"`
+	Version         uint16                     `cbor:"2,keyasint"`
+	DeviceInfo      string                     `cbor:"3,keyasint"`
+	GUID            protocol.GUID              `cbor:"4,keyasint"`
+	RvInfo          [][]protocol.RvInstruction `cbor:"5,keyasint"`
+	PublicKeyHash   protocol.Hash              `cbor:"6,keyasint"`
+	KeyType         protocol.KeyType           `cbor:"7,keyasint"`
+	DeviceKeyHandle uint32                     `cbor:"8,keyasint"`
+	HMACKeyHandle   uint32                     `cbor:"9,keyasint,omitempty"`
 }
 
 type tpmStore struct {
-	tpmc        tpm.Closer
-	h256        tpm.Hmac
-	h384        tpm.Hmac
-	key         tpm.Key
-	keyType     protocol.KeyType
-	hmacHandle  uint32 // resolved HMAC key handle (from DCOV or default)
-	usePlatform bool   // true = use Platform hierarchy for Profile A/B NV indices
+	tpmc           tpm.Closer
+	h256           tpm.Hmac
+	h384           tpm.Hmac
+	key            tpm.Key
+	keyType        protocol.KeyType
+	dakHandle      uint32 // resolved DAK handle (from DCTPM or default)
+	hmacHandle     uint32 // resolved HMAC key handle (from DCTPM or default)
+	usePlatform    bool   // true = use Platform hierarchy for Profile B NV indices
 }
 
 // Open returns a TPM-backed credential store.
@@ -66,8 +76,10 @@ func Open(path string) (Store, error) {
 //  4. Compute auth policies (PolicyNV + PolicySecret)
 //  5. Create ECC signing key with AuthPolicy → persist to DAKHandle
 //  6. Create HMAC key with AuthPolicy → persist to HMACKeyHandle
-//  7. Define DCActive NV (Profile A) → write 0x00 (pending)
-//  8. Return spec-compliant HMAC (SHA-256) + legacy HMAC (SHA-384) + persistent key
+//  7. Return spec-compliant HMAC (SHA-256) + legacy HMAC (SHA-384) + persistent key
+//
+// Note: The consolidated DCTPM NV index is NOT written here — it is written
+// by Save() after DI completes with the full credential data.
 func (s *tpmStore) NewDI(keyType protocol.KeyType) (hash.Hash, hash.Hash, crypto.Signer, error) {
 	s.keyType = keyType
 
@@ -152,17 +164,11 @@ func (s *tpmStore) NewDI(keyType protocol.KeyType) (hash.Hash, hash.Hash, crypto
 	}
 	slog.Debug("tpm: created and persisted HMAC key", "handle", fmt.Sprintf("0x%08X", tpm.HMACKeyHandle))
 
-	// Step 7: Define DCActive NV (Profile A) → write 0x00 (not yet fully initialized)
-	dcActiveName, err := tpm.DefineNVSpace(s.tpmc, tpm.DCActiveIndex, 1, tpm.NVProfileA, s.usePlatform)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("define DCActive NV: %w", err)
-	}
-	if err := tpm.WriteNV(s.tpmc, tpm.DCActiveIndex, dcActiveName, []byte{0x00}, tpm.NVProfileA); err != nil {
-		return nil, nil, nil, fmt.Errorf("write DCActive NV: %w", err)
-	}
-	slog.Debug("tpm: DCActive = 0x00 (DI in progress)")
+	// Store resolved handles
+	s.dakHandle = tpm.DAKHandle
+	s.hmacHandle = tpm.HMACKeyHandle
 
-	// Step 8: Create spec-compliant HMAC (SHA-256) from persistent key
+	// Step 7: Create spec-compliant HMAC (SHA-256) from persistent key
 	s.h256, err = tpm.NewSpecHmac(s.tpmc, crypto.SHA256, tpm.HMACKeyHandle)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("spec HMAC SHA-256: %w", err)
@@ -174,7 +180,7 @@ func (s *tpmStore) NewDI(keyType protocol.KeyType) (hash.Hash, hash.Hash, crypto
 		return nil, nil, nil, fmt.Errorf("TPM HMAC SHA-384: %w", err)
 	}
 
-	// Step 9: Load persistent DAK as signing key with policy session auth
+	// Step 8: Load persistent DAK as signing key with policy session auth
 	s.key, err = tpm.LoadPersistentKey(s.tpmc, tpm.DAKHandle, tpm.DeviceKeyUSIndex)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("load persistent DAK: %w", err)
@@ -183,76 +189,65 @@ func (s *tpmStore) NewDI(keyType protocol.KeyType) (hash.Hash, hash.Hash, crypto
 	return s.h256, s.h384, s.key, nil
 }
 
-// Save persists credential metadata to TPM NV indices after DI completes.
+// Save persists all credential data to the single consolidated DCTPM NV index.
 //
-// This writes:
-//   - DCTPM NV: GUID (16 bytes) + DeviceInfo string
-//   - DCOV NV: CBOR-encoded {Version, RvInfo, PublicKeyHash, KeyType}
-//   - DCActive NV: updated to 0x01 (device initialized)
+// Per the spec, DCTPM is a CBOR array:
+//   [Magic, Active, Version, DeviceInfo, GUID, RvInfo, PubKeyHash,
+//    KeyType, DeviceKeyHandle, HMACKeyHandle]
 //
-// No file is written — all credential data lives in the TPM.
+// No separate DCActive or DCOV indices are written.
 func (s *tpmStore) Save(dc fdo.DeviceCredential) error {
-	// Write DCTPM NV: GUID + DeviceInfo (Profile B)
-	// Undefine first in case this is a re-save (TO2 credential update);
-	// size may change if DeviceInfo differs.
-	dctpmData := make([]byte, 0, 16+len(dc.DeviceInfo))
-	dctpmData = append(dctpmData, dc.GUID[:]...)
-	dctpmData = append(dctpmData, []byte(dc.DeviceInfo)...)
+	dctpm := dctpmNVData{
+		Magic:           tpm.DCTPMMagic,
+		Active:          true,
+		Version:         dc.Version,
+		DeviceInfo:      dc.DeviceInfo,
+		GUID:            dc.GUID,
+		RvInfo:          dc.RvInfo,
+		PublicKeyHash:   dc.PublicKeyHash,
+		KeyType:         s.keyType,
+		DeviceKeyHandle: s.dakHandle,
+		HMACKeyHandle:   s.hmacHandle,
+	}
+	// Default handles if not yet set (e.g. loaded from old-format TPM)
+	if dctpm.DeviceKeyHandle == 0 {
+		dctpm.DeviceKeyHandle = tpm.DAKHandle
+	}
+	if dctpm.HMACKeyHandle == 0 {
+		dctpm.HMACKeyHandle = tpm.HMACKeyHandle
+	}
 
-	_ = tpm.UndefineNVSpace(s.tpmc, tpm.DCTPMIndex) // ignore error if not defined
-	dctpmName, err := tpm.DefineNVSpace(s.tpmc, tpm.DCTPMIndex, uint16(len(dctpmData)), tpm.NVProfileB, s.usePlatform)
+	dctpmBytes, err := cbor.Marshal(dctpm)
+	if err != nil {
+		return fmt.Errorf("encoding DCTPM: %w", err)
+	}
+
+	// Undefine first in case this is a re-save (TO2 credential update);
+	// CBOR size may change if RvInfo or DeviceInfo differs.
+	_ = tpm.UndefineNVSpace(s.tpmc, tpm.DCTPMIndex)
+	dctpmName, err := tpm.DefineNVSpace(s.tpmc, tpm.DCTPMIndex, uint16(len(dctpmBytes)), tpm.NVProfileDCTPM, s.usePlatform)
 	if err != nil {
 		return fmt.Errorf("define DCTPM NV: %w", err)
 	}
-	if err := tpm.WriteNV(s.tpmc, tpm.DCTPMIndex, dctpmName, dctpmData, tpm.NVProfileB); err != nil {
+	if err := tpm.WriteNV(s.tpmc, tpm.DCTPMIndex, dctpmName, dctpmBytes, tpm.NVProfileDCTPM); err != nil {
 		return fmt.Errorf("write DCTPM NV: %w", err)
 	}
-	slog.Debug("tpm: wrote DCTPM NV", "guid", fmt.Sprintf("%x", dc.GUID), "info", dc.DeviceInfo)
-
-	// Write DCOV NV: CBOR-encoded credential data (Profile C)
-	// Undefine first in case this is a re-save; CBOR size may differ.
-	dcovPayload := dcovNVData{
-		Version:       dc.Version,
-		RvInfo:        dc.RvInfo,
-		PublicKeyHash: dc.PublicKeyHash,
-		KeyType:       s.keyType,
-		HMACHandle:    tpm.HMACKeyHandle,
-	}
-	dcovBytes, err := cbor.Marshal(dcovPayload)
-	if err != nil {
-		return fmt.Errorf("encoding DCOV: %w", err)
-	}
-
-	_ = tpm.UndefineNVSpace(s.tpmc, tpm.DCOVIndex) // ignore error if not defined
-	dcovName, err := tpm.DefineNVSpace(s.tpmc, tpm.DCOVIndex, uint16(len(dcovBytes)), tpm.NVProfileC, s.usePlatform)
-	if err != nil {
-		return fmt.Errorf("define DCOV NV: %w", err)
-	}
-	if err := tpm.WriteNV(s.tpmc, tpm.DCOVIndex, dcovName, dcovBytes, tpm.NVProfileC); err != nil {
-		return fmt.Errorf("write DCOV NV: %w", err)
-	}
-	slog.Debug("tpm: wrote DCOV NV", "size", len(dcovBytes))
-
-	// Update DCActive to 0x01 (device fully initialized)
-	nvPub, err := (tpm2.NVReadPublic{NVIndex: tpm2.TPMHandle(tpm.DCActiveIndex)}).Execute(s.tpmc)
-	if err != nil {
-		return fmt.Errorf("reading DCActive NV public: %w", err)
-	}
-	if err := tpm.WriteNV(s.tpmc, tpm.DCActiveIndex, nvPub.NVName, []byte{0x01}, tpm.NVProfileA); err != nil {
-		return fmt.Errorf("update DCActive NV: %w", err)
-	}
-	slog.Debug("tpm: DCActive = 0x01 (device initialized)")
+	slog.Debug("tpm: wrote consolidated DCTPM NV",
+		"size", len(dctpmBytes),
+		"guid", fmt.Sprintf("%x", dc.GUID),
+		"version", dc.Version,
+		"active", true,
+	)
 
 	return nil
 }
 
-// Load reads credentials from TPM NV indices and loads persistent keys.
+// Load reads credentials from the consolidated DCTPM NV index and loads persistent keys.
 //
 // This reads:
-//   - DCActive NV: verify device is initialized (0x01)
-//   - DCTPM NV: extract GUID + DeviceInfo
-//   - DCOV NV: CBOR-decode {Version, RvInfo, PublicKeyHash, KeyType}
-//   - Persistent DAK at DAKHandle with policy session auth
+//   - DCTPM NV: CBOR-decode consolidated structure (Magic, Active, Version,
+//     DeviceInfo, GUID, RvInfo, PubKeyHash, KeyType, DeviceKeyHandle, HMACKeyHandle)
+//   - Persistent DAK at DeviceKeyHandle with policy session auth
 //   - Persistent HMAC key at HMACKeyHandle with policy session auth
 func (s *tpmStore) Load() (*fdo.DeviceCredential, hash.Hash, hash.Hash, crypto.Signer, error) {
 	dc, err := s.loadFromNV()
@@ -262,7 +257,7 @@ func (s *tpmStore) Load() (*fdo.DeviceCredential, hash.Hash, hash.Hash, crypto.S
 
 	// Load persistent DAK key with policy session auth
 	var loadErr error
-	s.key, loadErr = tpm.LoadPersistentKey(s.tpmc, tpm.DAKHandle, tpm.DeviceKeyUSIndex)
+	s.key, loadErr = tpm.LoadPersistentKey(s.tpmc, s.dakHandle, tpm.DeviceKeyUSIndex)
 	if loadErr != nil {
 		return nil, nil, nil, nil, fmt.Errorf("load persistent DAK: %w", loadErr)
 	}
@@ -282,39 +277,53 @@ func (s *tpmStore) Load() (*fdo.DeviceCredential, hash.Hash, hash.Hash, crypto.S
 	return dc, s.h256, s.h384, s.key, nil
 }
 
-// loadFromNV reads all credential data from TPM NV indices.
+// loadFromNV reads credential data from the consolidated DCTPM NV index.
 func (s *tpmStore) loadFromNV() (*fdo.DeviceCredential, error) {
 	info, err := tpm.ReadNVCredentials(s.tpmc)
 	if err != nil {
 		return nil, fmt.Errorf("reading NV credentials: %w", err)
 	}
 
-	// Verify device is initialized
-	if !info.Active {
-		return nil, fmt.Errorf("device not initialized (DCActive != 0x01)")
+	// Verify DCTPM index exists
+	if !info.HasDCTPM || len(info.RawDCTPM) == 0 {
+		return nil, fmt.Errorf("DCTPM NV not found or empty")
 	}
 
-	// Verify DAK exists
-	if !info.HasDAK {
-		return nil, fmt.Errorf("DAK not found at 0x%08X", tpm.DAKHandle)
+	// Decode consolidated DCTPM CBOR structure
+	var dctpm dctpmNVData
+	if err := cbor.Unmarshal(info.RawDCTPM, &dctpm); err != nil {
+		return nil, fmt.Errorf("decoding DCTPM NV: %w", err)
 	}
 
-	// Read DCOV NV to get full credential data (includes HMAC handle)
-	if !info.HasDCOV || len(info.DCOVData) == 0 {
-		return nil, fmt.Errorf("DCOV NV not found or empty")
+	// Verify magic
+	if dctpm.Magic != tpm.DCTPMMagic {
+		return nil, fmt.Errorf("DCTPM magic mismatch: got 0x%08X, want 0x%08X", dctpm.Magic, tpm.DCTPMMagic)
 	}
 
-	var dcov dcovNVData
-	if err := cbor.Unmarshal(info.DCOVData, &dcov); err != nil {
-		return nil, fmt.Errorf("decoding DCOV NV: %w", err)
+	// Verify device is active
+	if !dctpm.Active {
+		return nil, fmt.Errorf("device not active (DCActive == false)")
 	}
-	s.keyType = dcov.KeyType
+
+	s.keyType = dctpm.KeyType
+
+	// Resolve DAK handle: use stored value if present, else default
+	if dctpm.DeviceKeyHandle != 0 {
+		s.dakHandle = dctpm.DeviceKeyHandle
+	} else {
+		s.dakHandle = tpm.DAKHandle
+	}
 
 	// Resolve HMAC handle: use stored value if present, else default
-	if dcov.HMACHandle != 0 {
-		s.hmacHandle = dcov.HMACHandle
+	if dctpm.HMACKeyHandle != 0 {
+		s.hmacHandle = dctpm.HMACKeyHandle
 	} else {
 		s.hmacHandle = tpm.HMACKeyHandle
+	}
+
+	// Verify DAK exists at the resolved handle
+	if _, err := (tpm2.ReadPublic{ObjectHandle: tpm2.TPMHandle(s.dakHandle)}).Execute(s.tpmc); err != nil {
+		return nil, fmt.Errorf("DAK not found at 0x%08X: %w", s.dakHandle, err)
 	}
 
 	// Verify HMAC key exists at the resolved handle
@@ -323,17 +332,19 @@ func (s *tpmStore) loadFromNV() (*fdo.DeviceCredential, error) {
 	}
 
 	dc := &fdo.DeviceCredential{
-		Version:       dcov.Version,
-		DeviceInfo:    info.DeviceInfo,
-		GUID:          info.GUID,
-		RvInfo:        dcov.RvInfo,
-		PublicKeyHash: dcov.PublicKeyHash,
+		Version:       dctpm.Version,
+		DeviceInfo:    dctpm.DeviceInfo,
+		GUID:          dctpm.GUID,
+		RvInfo:        dctpm.RvInfo,
+		PublicKeyHash: dctpm.PublicKeyHash,
 	}
 
-	slog.Debug("tpm: loaded credentials from NV",
+	slog.Debug("tpm: loaded credentials from consolidated DCTPM NV",
 		"guid", fmt.Sprintf("%x", dc.GUID),
 		"version", dc.Version,
 		"keyType", s.keyType,
+		"dakHandle", fmt.Sprintf("0x%08X", s.dakHandle),
+		"hmacHandle", fmt.Sprintf("0x%08X", s.hmacHandle),
 	)
 	return dc, nil
 }
