@@ -49,6 +49,7 @@ type tpmStore struct {
 	dakHandle      uint32 // resolved DAK handle (from DCTPM or default)
 	hmacHandle     uint32 // resolved HMAC key handle (from DCTPM or default)
 	usePlatform    bool   // true = use Platform hierarchy for Profile B NV indices
+	useChildMethod bool   // true = child-of-SRK (default), false = primary with unique string
 }
 
 // Open returns a TPM-backed credential store.
@@ -63,20 +64,21 @@ func Open(path string) (Store, error) {
 	// Default to Platform hierarchy; set FDO_TPM_OWNER_HIERARCHY=1 to
 	// use Owner hierarchy (not fully spec-compliant but works in userspace).
 	usePlatform := os.Getenv("FDO_TPM_OWNER_HIERARCHY") != "1"
-	return &tpmStore{tpmc: t, usePlatform: usePlatform}, nil
+	// Default to child-of-SRK method; set FDO_TPM_KEY_METHOD=primary to
+	// use primary key with unique string (rollback-resistant but WinPE-incompatible).
+	useChildMethod := os.Getenv("FDO_TPM_KEY_METHOD") != "primary"
+	return &tpmStore{tpmc: t, usePlatform: usePlatform, useChildMethod: useChildMethod}, nil
 }
 
-// NewDI provisions NV indices, creates spec-compliant persistent keys,
-// and returns HMAC + signing key handles for Device Initialization.
+// NewDI provisions persistent keys and returns HMAC + signing key handles
+// for Device Initialization.
 //
-// This implements the manufacturer provisioning step:
-//  1. Cleanup any existing FDO state in the TPM
-//  2. Generate random Unique Strings for device key and HMAC key
-//  3. Define and write Unique String NV indices (Profile B)
-//  4. Compute auth policies (PolicyNV + PolicySecret)
-//  5. Create ECC signing key with AuthPolicy → persist to DAKHandle
-//  6. Create HMAC key with AuthPolicy → persist to HMACKeyHandle
-//  7. Return spec-compliant HMAC (SHA-256) + legacy HMAC (SHA-384) + persistent key
+// Supports two creation methods (same outcome — persistent key at handle):
+//   - useChildMethod=true:  Child key under SRK (WinPE-compatible, RNG-based)
+//   - useChildMethod=false: Primary key with unique string (rollback-resistant)
+//
+// Both produce: persistent ECC signing key at DAKHandle and HMAC key at
+// HMACKeyHandle, with userWithAuth=1, adminWithPolicy=1, empty authValue.
 //
 // Note: The consolidated DCTPM NV index is NOT written here — it is written
 // by Save() after DI completes with the full credential data.
@@ -97,78 +99,80 @@ func (s *tpmStore) NewDI(keyType protocol.KeyType) (hash.Hash, hash.Hash, crypto
 	default:
 		return nil, nil, nil, fmt.Errorf("unsupported key type for TPM: %v", keyType)
 	}
-	dkUSSize := uint16(coordSize * 2) // X + Y
 
 	// Step 1: Clean up any existing FDO NV indices and persistent handles
 	tpm.CleanupFDOState(s.tpmc)
 	slog.Debug("tpm: cleaned up previous FDO state")
 
-	// Step 2: Generate random Unique Strings
-	deviceKeyUS := make([]byte, dkUSSize)
-	if _, err := rand.Read(deviceKeyUS); err != nil {
-		return nil, nil, nil, fmt.Errorf("generating device key unique string: %w", err)
-	}
-	hmacUS := make([]byte, 32) // HMAC SHA-256 key derivation seed (not curve-dependent)
-	if _, err := rand.Read(hmacUS); err != nil {
-		return nil, nil, nil, fmt.Errorf("generating HMAC unique string: %w", err)
-	}
+	// Step 2: Create keys using the selected method
+	if s.useChildMethod {
+		// Approach 1: Child key under deterministic SRK (WinPE-compatible)
+		slog.Info("tpm: creating keys as children of SRK (child method)")
 
-	// Step 3: Define and write DeviceKey_US NV index (Profile B)
-	dkUSName, err := tpm.DefineNVSpace(s.tpmc, tpm.DeviceKeyUSIndex, dkUSSize, tpm.NVProfileB, s.usePlatform)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("define DeviceKey_US NV: %w", err)
-	}
-	if err := tpm.WriteNV(s.tpmc, tpm.DeviceKeyUSIndex, dkUSName, deviceKeyUS, tpm.NVProfileB); err != nil {
-		return nil, nil, nil, fmt.Errorf("write DeviceKey_US NV: %w", err)
-	}
-	slog.Debug("tpm: provisioned DeviceKey_US NV", "index", fmt.Sprintf("0x%08X", tpm.DeviceKeyUSIndex))
+		srk, err := tpm.CreateSRK(s.tpmc)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("create SRK: %w", err)
+		}
+		defer func() { _, _ = (tpm2.FlushContext{FlushHandle: srk.Handle}).Execute(s.tpmc) }()
 
-	// Step 3b: Define and write HMAC_US NV index (Profile B)
-	hmacUSName, err := tpm.DefineNVSpace(s.tpmc, tpm.HMACUSIndex, 32, tpm.NVProfileB, s.usePlatform)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("define HMAC_US NV: %w", err)
-	}
-	if err := tpm.WriteNV(s.tpmc, tpm.HMACUSIndex, hmacUSName, hmacUS, tpm.NVProfileB); err != nil {
-		return nil, nil, nil, fmt.Errorf("write HMAC_US NV: %w", err)
-	}
-	slog.Debug("tpm: provisioned HMAC_US NV", "index", fmt.Sprintf("0x%08X", tpm.HMACUSIndex))
+		// Create + persist DAK
+		dkHandle, _, err := tpm.CreateChildECKey(s.tpmc, *srk, curveID, hashAlg)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("create child ECC key: %w", err)
+		}
+		if err := tpm.PersistKey(s.tpmc, *dkHandle, tpm.DAKHandle); err != nil {
+			return nil, nil, nil, fmt.Errorf("persist DAK: %w", err)
+		}
+		slog.Info("tpm: DAK persisted (child method)", "handle", fmt.Sprintf("0x%08X", tpm.DAKHandle))
 
-	// Step 4: Compute auth policies for both keys
-	dkPolicy, err := tpm.ComputeFDOAuthPolicy(s.tpmc, tpm.DeviceKeyUSIndex, dkUSName)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("compute device key auth policy: %w", err)
-	}
-	hmacPolicy, err := tpm.ComputeFDOAuthPolicy(s.tpmc, tpm.HMACUSIndex, hmacUSName)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("compute HMAC key auth policy: %w", err)
-	}
+		// Create + persist HMAC key
+		hmacHandle, err := tpm.CreateChildHMACKey(s.tpmc, *srk)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("create child HMAC key: %w", err)
+		}
+		if err := tpm.PersistKey(s.tpmc, *hmacHandle, tpm.HMACKeyHandle); err != nil {
+			return nil, nil, nil, fmt.Errorf("persist HMAC key: %w", err)
+		}
+		slog.Info("tpm: HMAC key persisted (child method)", "handle", fmt.Sprintf("0x%08X", tpm.HMACKeyHandle))
+	} else {
+		// Approach 2: Primary key with unique string (rollback-resistant)
+		slog.Info("tpm: creating keys as primaries with unique strings (primary method)")
 
-	// Step 5: Create ECC signing key (DAK) with spec-compliant template → persist
-	dkHandle, pubKey, err := tpm.GenerateSpecECKey(s.tpmc, curveID, hashAlg, deviceKeyUS, dkPolicy)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("create spec ECC key: %w", err)
-	}
-	if err := tpm.PersistKey(s.tpmc, *dkHandle, tpm.DAKHandle); err != nil {
-		return nil, nil, nil, fmt.Errorf("persist DAK: %w", err)
-	}
-	slog.Debug("tpm: created and persisted DAK", "handle", fmt.Sprintf("0x%08X", tpm.DAKHandle))
-	_ = pubKey // used later by the FDO protocol via the Key interface
+		dkUSSize := uint16(coordSize * 2) // X + Y
+		deviceKeyUS := make([]byte, dkUSSize)
+		if _, err := rand.Read(deviceKeyUS); err != nil {
+			return nil, nil, nil, fmt.Errorf("generating device key unique string: %w", err)
+		}
+		hmacUS := make([]byte, 32)
+		if _, err := rand.Read(hmacUS); err != nil {
+			return nil, nil, nil, fmt.Errorf("generating HMAC unique string: %w", err)
+		}
 
-	// Step 6: Create HMAC key with spec-compliant template → persist
-	hmacHandle, err := tpm.GenerateSpecHMACKey(s.tpmc, hmacUS, hmacPolicy)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("create spec HMAC key: %w", err)
+		dkHandle, _, err := tpm.GenerateSpecECKey(s.tpmc, curveID, hashAlg, deviceKeyUS)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("create primary ECC key: %w", err)
+		}
+		if err := tpm.PersistKey(s.tpmc, *dkHandle, tpm.DAKHandle); err != nil {
+			return nil, nil, nil, fmt.Errorf("persist DAK: %w", err)
+		}
+		slog.Info("tpm: DAK persisted (primary method)", "handle", fmt.Sprintf("0x%08X", tpm.DAKHandle))
+
+		hmacHandle, err := tpm.GenerateSpecHMACKey(s.tpmc, hmacUS)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("create primary HMAC key: %w", err)
+		}
+		if err := tpm.PersistKey(s.tpmc, *hmacHandle, tpm.HMACKeyHandle); err != nil {
+			return nil, nil, nil, fmt.Errorf("persist HMAC key: %w", err)
+		}
+		slog.Info("tpm: HMAC key persisted (primary method)", "handle", fmt.Sprintf("0x%08X", tpm.HMACKeyHandle))
 	}
-	if err := tpm.PersistKey(s.tpmc, *hmacHandle, tpm.HMACKeyHandle); err != nil {
-		return nil, nil, nil, fmt.Errorf("persist HMAC key: %w", err)
-	}
-	slog.Debug("tpm: created and persisted HMAC key", "handle", fmt.Sprintf("0x%08X", tpm.HMACKeyHandle))
 
 	// Store resolved handles
 	s.dakHandle = tpm.DAKHandle
 	s.hmacHandle = tpm.HMACKeyHandle
 
-	// Step 7: Create spec-compliant HMAC (SHA-256) from persistent key
+	// Step 3: Create spec-compliant HMAC (SHA-256) from persistent key
+	var err error
 	s.h256, err = tpm.NewSpecHmac(s.tpmc, crypto.SHA256, tpm.HMACKeyHandle)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("spec HMAC SHA-256: %w", err)
@@ -180,8 +184,8 @@ func (s *tpmStore) NewDI(keyType protocol.KeyType) (hash.Hash, hash.Hash, crypto
 		return nil, nil, nil, fmt.Errorf("TPM HMAC SHA-384: %w", err)
 	}
 
-	// Step 8: Load persistent DAK as signing key with policy session auth
-	s.key, err = tpm.LoadPersistentKey(s.tpmc, tpm.DAKHandle, tpm.DeviceKeyUSIndex)
+	// Step 7: Load persistent DAK as signing key (empty password auth)
+	s.key, err = tpm.LoadPersistentKey(s.tpmc, tpm.DAKHandle)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("load persistent DAK: %w", err)
 	}
@@ -255,9 +259,9 @@ func (s *tpmStore) Load() (*fdo.DeviceCredential, hash.Hash, hash.Hash, crypto.S
 		return nil, nil, nil, nil, fmt.Errorf("loading credentials from TPM NV: %w", err)
 	}
 
-	// Load persistent DAK key with policy session auth
+	// Load persistent DAK key (empty password auth, userWithAuth=1)
 	var loadErr error
-	s.key, loadErr = tpm.LoadPersistentKey(s.tpmc, s.dakHandle, tpm.DeviceKeyUSIndex)
+	s.key, loadErr = tpm.LoadPersistentKey(s.tpmc, s.dakHandle)
 	if loadErr != nil {
 		return nil, nil, nil, nil, fmt.Errorf("load persistent DAK: %w", loadErr)
 	}

@@ -16,11 +16,9 @@ import (
 	"github.com/google/go-tpm/tpm2"
 )
 
-// NV Index range reserved for FDO per "Securing FDO Credentials in the TPM v1.0".
+// NV Index range reserved for FDO per "Securing FDO Credentials in the TPM".
 const (
-	DCTPMIndex       = 0x01D10001 // Single consolidated NV index for all FDO credentials (CBOR-encoded)
-	HMACUSIndex      = 0x01D10003 // (Optional) HMAC Unique String (Profile B) — provisioning entity artifact
-	DeviceKeyUSIndex = 0x01D10004 // (Optional) Device Key Unique String (Profile B) — provisioning entity artifact
+	DCTPMIndex = 0x01D10001 // Single consolidated NV index for all FDO credentials (CBOR-encoded)
 )
 
 // DCTPMMagic identifies the DCTPM NV data as FDO version 1 ("FDO1").
@@ -31,6 +29,8 @@ const DCTPMMagic uint32 = 0x46444F31
 const (
 	legacyDCActiveIndex = 0x01D10000
 	legacyDCOVIndex     = 0x01D10002
+	legacyHMACUSIndex   = 0x01D10003
+	legacyDevKeyUSIndex = 0x01D10004
 	legacyFDOCertIndex  = 0x01D10005
 )
 
@@ -42,11 +42,9 @@ const (
 
 // NVCredentialInfo holds credential data read from the consolidated DCTPM NV index.
 type NVCredentialInfo struct {
-	HasDCTPM    bool   // true if DCTPM NV index exists and contains valid data
-	RawDCTPM    []byte // raw CBOR from DCTPM NV index
-	DCTPMSize   uint16
-	HMACUSSize  uint16 // 0 if HMAC_US NV not defined (optional)
-	DevKeyUSSize uint16 // 0 if DeviceKey_US NV not defined (optional)
+	HasDCTPM  bool   // true if DCTPM NV index exists and contains valid data
+	RawDCTPM  []byte // raw CBOR from DCTPM NV index
+	DCTPMSize uint16
 
 	// Persistent key presence
 	HasDAK     bool
@@ -54,7 +52,7 @@ type NVCredentialInfo struct {
 }
 
 // ReadNVCredentials reads FDO credential data from the consolidated DCTPM NV index.
-// It also checks for optional Unique String NV indices and persistent key handles.
+// It also checks for persistent key handles.
 func ReadNVCredentials(t TPM) (*NVCredentialInfo, error) {
 	info := &NVCredentialInfo{}
 
@@ -68,18 +66,6 @@ func ReadNVCredentials(t TPM) (*NVCredentialInfo, error) {
 		}
 		info.HasDCTPM = len(data) > 0
 		info.RawDCTPM = data
-	}
-
-	// Optional: HMAC_US (Profile B: AuthRead)
-	if nvPub, err := (tpm2.NVReadPublic{NVIndex: tpm2.TPMHandle(HMACUSIndex)}).Execute(t); err == nil {
-		pub, _ := nvPub.NVPublic.Contents()
-		info.HMACUSSize = pub.DataSize
-	}
-
-	// Optional: DeviceKey_US (Profile B: AuthRead)
-	if nvPub, err := (tpm2.NVReadPublic{NVIndex: tpm2.TPMHandle(DeviceKeyUSIndex)}).Execute(t); err == nil {
-		pub, _ := nvPub.NVPublic.Contents()
-		info.DevKeyUSSize = pub.DataSize
 	}
 
 	// Check persistent key handles
@@ -140,9 +126,9 @@ type DAKProof struct {
 }
 
 // ProveDAKPossession signs a random challenge with the Device Attestation Key
-// using policy session authorization (PolicyNV + PolicySecret on the
-// DeviceKey_US NV index). This proves the TPM holds the private key
-// corresponding to the DAK public key.
+// using empty password authorization (userWithAuth=1 with empty authValue per
+// spec Table 11). This proves the TPM holds the private key corresponding to
+// the DAK public key.
 //
 // If challenge is nil, a random 32-byte challenge is generated.
 func ProveDAKPossession(t TPM, challenge []byte) (*DAKProof, error) {
@@ -168,24 +154,18 @@ func ProveDAKPossession(t TPM, challenge []byte) (*DAKProof, error) {
 		return nil, fmt.Errorf("ReadPublic DAK: %w", err)
 	}
 
-	// Discover DeviceKey_US NV name for policy session
-	nvPub, err := (tpm2.NVReadPublic{NVIndex: tpm2.TPMHandle(DeviceKeyUSIndex)}).Execute(t)
-	if err != nil {
-		return nil, fmt.Errorf("NVReadPublic DeviceKey_US: %w", err)
-	}
-
-	// Sign with policy session auth
+	// Sign with empty password auth (userWithAuth=1, empty authValue)
 	sigResp, err := (tpm2.Sign{
 		KeyHandle: tpm2.AuthHandle{
 			Handle: tpm2.TPMHandle(DAKHandle),
 			Name:   dkResp.Name,
-			Auth:   fdoKeyPolicy(DeviceKeyUSIndex, nvPub.NVName),
+			Auth:   tpm2.PasswordAuth(nil),
 		},
 		Digest:     tpm2.TPM2BDigest{Buffer: digest[:]},
 		Validation: tpm2.TPMTTKHashCheck{Tag: tpm2.TPMSTHashCheck},
 	}).Execute(t)
 	if err != nil {
-		return nil, fmt.Errorf("DAK Sign (policy auth): %w", err)
+		return nil, fmt.Errorf("DAK Sign: %w", err)
 	}
 
 	// Extract signature
@@ -209,27 +189,6 @@ func ProveDAKPossession(t TPM, challenge []byte) (*DAKProof, error) {
 	}, nil
 }
 
-// fdoKeyPolicy returns a policy session callback for key authorization.
-// This implements: PolicyNV(US_NV, offset=0, operand=0x00, UnsignedGE) || PolicySecret(US_NV)
-func fdoKeyPolicy(usIndex uint32, usName tpm2.TPM2BName) tpm2.Session {
-	return tpm2.Policy(tpm2.TPMAlgSHA256, 16, func(tpm TPM, handle tpm2.TPMISHPolicy, _ tpm2.TPM2BNonce) error {
-		ah := tpm2.AuthHandle{Handle: tpm2.TPMHandle(usIndex), Name: usName, Auth: tpm2.PasswordAuth(nil)}
-		nh := tpm2.NamedHandle{Handle: tpm2.TPMHandle(usIndex), Name: usName}
-		if _, err := (tpm2.PolicyNV{
-			AuthHandle: ah, NVIndex: nh, PolicySession: handle,
-			OperandB: tpm2.TPM2BOperand{Buffer: []byte{0}}, Operation: tpm2.TPMEOUnsignedGE,
-		}).Execute(tpm); err != nil {
-			return err
-		}
-		if _, err := (tpm2.PolicySecret{
-			AuthHandle: ah, PolicySession: handle,
-		}).Execute(tpm); err != nil {
-			return err
-		}
-		return nil
-	})
-}
-
 // nvReadOwner reads NV data using Owner hierarchy authorization.
 func nvReadOwner(t TPM, index uint32, nvName tpm2.TPM2BName, size uint16) ([]byte, error) {
 	resp, err := (tpm2.NVRead{
@@ -243,32 +202,21 @@ func nvReadOwner(t TPM, index uint32, nvName tpm2.TPM2BName, size uint16) ([]byt
 	return resp.Data.Buffer, nil
 }
 
-// nvReadAuth reads NV data using NV index authorization.
-func nvReadAuth(t TPM, index uint32, nvName tpm2.TPM2BName, size uint16) ([]byte, error) {
-	resp, err := (tpm2.NVRead{
-		AuthHandle: tpm2.AuthHandle{Handle: tpm2.TPMHandle(index), Name: nvName, Auth: tpm2.PasswordAuth(nil)},
-		NVIndex:    tpm2.NamedHandle{Handle: tpm2.TPMHandle(index), Name: nvName},
-		Size:       size,
-	}).Execute(t)
-	if err != nil {
-		return nil, err
-	}
-	return resp.Data.Buffer, nil
-}
-
 // =========================================================================
 // NV Write/Provisioning — Production counterparts to read functions above
 // =========================================================================
 
-// NVProfile identifies the NV attribute profile per spec.
+// NVProfile identifies the NV attribute profile per spec Table 9.
 type NVProfile int
 
 const (
-	// NVProfileB is for Unique String indices: Auth R/W, NoDA, PlatformCreate.
+	// NVProfileB is for Unique String indices: Owner+Auth R/W, NoDA, PlatformCreate.
+	// Per spec Table 9, ALL NV indices have OWNERWRITE=1, OWNERREAD=1.
 	NVProfileB NVProfile = iota
 	// NVProfileDCTPM is for the consolidated DCTPM index: Owner+Auth R/W, NoDA.
 	// Per spec: "OWNERWRITE=1, OWNERREAD=1, AuthWrite=1, AuthRead=1" with
-	// empty authValue.
+	// empty authValue. PLATFORMCREATE SHOULD be 1 when Platform hierarchy
+	// is available (survives TPM2_Clear).
 	NVProfileDCTPM
 )
 
@@ -277,8 +225,8 @@ func nvProfileAttrs(profile NVProfile) tpm2.TPMANV {
 	switch profile {
 	case NVProfileB:
 		return tpm2.TPMANV{
-			AuthWrite: true, AuthRead: true, NoDA: true,
-			PlatformCreate: true, NT: tpm2.TPMNTOrdinary,
+			OwnerWrite: true, AuthWrite: true, OwnerRead: true, AuthRead: true,
+			NoDA: true, PlatformCreate: true, NT: tpm2.TPMNTOrdinary,
 		}
 	case NVProfileDCTPM:
 		return tpm2.TPMANV{
@@ -307,6 +255,9 @@ func nvProfileAuthHandle(profile NVProfile) tpm2.TPMHandle {
 // per the spec. If usePlatform is false, Owner hierarchy is used instead
 // (PlatformCreate will be cleared — not fully spec-compliant but works in
 // userspace contexts where Platform hierarchy is locked).
+//
+// DCTPM indices: if usePlatform is true, PlatformCreate=1 is set (SHOULD per spec)
+// so the index survives TPM2_Clear. Otherwise Owner hierarchy is used.
 func DefineNVSpace(t TPM, index uint32, size uint16, profile NVProfile, usePlatform bool) (tpm2.TPM2BName, error) {
 	attrs := nvProfileAttrs(profile)
 	authHandle := nvProfileAuthHandle(profile)
@@ -314,6 +265,10 @@ func DefineNVSpace(t TPM, index uint32, size uint16, profile NVProfile, usePlatf
 	if !usePlatform && profile == NVProfileB {
 		authHandle = tpm2.TPMRHOwner
 		attrs.PlatformCreate = false
+	}
+	if usePlatform && profile == NVProfileDCTPM {
+		authHandle = tpm2.TPMRHPlatform
+		attrs.PlatformCreate = true
 	}
 
 	def := tpm2.NVDefineSpace{
@@ -373,8 +328,9 @@ func WriteNV(t TPM, index uint32, nvName tpm2.TPM2BName, data []byte, profile NV
 //
 //	PolicyNV(US_NV, offset=0, operand=0x00, UnsignedGE) || PolicySecret(US_NV)
 //
-// This digest is embedded in key templates (AuthPolicy field) to require
-// policy session authorization instead of password auth.
+// LEGACY: With the current spec (userWithAuth=1, empty authValue), this function
+// is not needed for default key creation. Keys no longer require an AuthPolicy
+// for usage. This is retained for compatibility with the old model and for reference.
 func ComputeFDOAuthPolicy(t TPM, usIndex uint32, usName tpm2.TPM2BName) (tpm2.TPM2BDigest, error) {
 	sess, cleanup, err := tpm2.PolicySession(t, tpm2.TPMAlgSHA256, 16, tpm2.Trial())
 	if err != nil {
@@ -457,9 +413,10 @@ func UndefineNVSpace(t TPM, index uint32) error {
 // Also cleans up legacy indices from the old multi-NV model.
 func CleanupFDOState(t TPM) {
 	for _, idx := range []uint32{
-		DCTPMIndex, HMACUSIndex, DeviceKeyUSIndex,
-		// Legacy indices from old multi-NV model
-		legacyDCActiveIndex, legacyDCOVIndex, legacyFDOCertIndex,
+		DCTPMIndex,
+		// Legacy indices from old model — clean up if they exist
+		legacyDCActiveIndex, legacyDCOVIndex,
+		legacyHMACUSIndex, legacyDevKeyUSIndex, legacyFDOCertIndex,
 	} {
 		_ = UndefineNVSpace(t, idx)
 	}

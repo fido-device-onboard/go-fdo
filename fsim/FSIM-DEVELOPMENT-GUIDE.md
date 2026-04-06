@@ -1679,7 +1679,7 @@ The server log often contains more detail than the client error:
 ```bash
 # Run test and capture server log
 ./test_examples.sh mytest 2>&1
-cat /tmp/fdo_server.log | tail -50
+cat ephemeral-test-files/fdo_server.log | tail -50
 ```
 
 If the server log is empty but the client fails, the error is likely in:

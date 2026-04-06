@@ -54,10 +54,14 @@ SWTPM_SOCK="$EPHEMERAL_DIR/swtpm.sock"
 # Both modes build with -tags=tpm (swtpm is an external TPM, not in-process sim)
 TPM_BUILD_TAG="tpm"
 
+# Key type: P-384 is the default but not all hardware TPMs support it.
+# Use P-256 for hardware mode (universally supported), P-384 for simulator.
 if [ "$TPM_MODE" = "sim" ]; then
 	TPM_LABEL="swtpm (software)"
+	DI_KEY_TYPE="ec384"
 else
 	TPM_LABEL="hardware ($TPM_DEVICE)"
+	DI_KEY_TYPE="${DI_KEY_TYPE:-ec256}"
 fi
 
 # Force Owner hierarchy — Platform hierarchy is locked on Linux after boot
@@ -161,12 +165,12 @@ start_server() {
 	# shellcheck disable=SC2086
 	log_step "go run ./cmd server -http \"$SERVER_ADDR\" -db \"../$DB_FILE\" $flags"
 	# shellcheck disable=SC2086
-	(cd examples && go run ./cmd server -http "$SERVER_ADDR" -db "../$DB_FILE" $flags >/tmp/fdo_tpm_server.log 2>&1) &
+	(cd examples && go run ./cmd server -http "$SERVER_ADDR" -db "../$DB_FILE" $flags >"../$EPHEMERAL_DIR/fdo_tpm_server.log" 2>&1) &
 	SERVER_PID=$!
 
 	local retries=15
 	while [ $retries -gt 0 ]; do
-		if grep -q "Listening" /tmp/fdo_tpm_server.log 2>/dev/null; then
+		if grep -q "Listening" $EPHEMERAL_DIR/fdo_tpm_server.log 2>/dev/null; then
 			sleep 0.5
 			if nc -z 127.0.0.1 9999 2>/dev/null || (echo >/dev/tcp/127.0.0.1/9999) 2>/dev/null; then
 				log_success "Server started (PID: $SERVER_PID)"
@@ -174,13 +178,13 @@ start_server() {
 			fi
 			if ! kill -0 "$SERVER_PID" 2>/dev/null; then
 				log_error "Server process died after logging Listening"
-				cat /tmp/fdo_tpm_server.log 2>/dev/null || true
+				cat $EPHEMERAL_DIR/fdo_tpm_server.log 2>/dev/null || true
 				return 1
 			fi
 		fi
 		if ! kill -0 "$SERVER_PID" 2>/dev/null; then
 			log_error "Server process died"
-			cat /tmp/fdo_tpm_server.log 2>/dev/null || true
+			cat $EPHEMERAL_DIR/fdo_tpm_server.log 2>/dev/null || true
 			return 1
 		fi
 		sleep 1
@@ -188,7 +192,7 @@ start_server() {
 	done
 
 	log_error "Server failed to start (timeout)"
-	cat /tmp/fdo_tpm_server.log 2>/dev/null || true
+	cat $EPHEMERAL_DIR/fdo_tpm_server.log 2>/dev/null || true
 	return 1
 }
 
@@ -220,7 +224,7 @@ build_tpm_client() {
 	log_step "Building client with -tags=$TPM_BUILD_TAG"
 	mkdir -p "$EPHEMERAL_DIR"
 	TPM_CLIENT="$(pwd)/$EPHEMERAL_DIR/fdo-tpm-client"
-	(cd examples && go build -tags="$TPM_BUILD_TAG" -o "$TPM_CLIENT" ./cmd)
+	(cd examples && go build -buildvcs=false -tags="$TPM_BUILD_TAG" -o "$TPM_CLIENT" ./cmd)
 	log_success "TPM client built: $TPM_CLIENT"
 }
 
@@ -306,7 +310,7 @@ test_tpm_basic() {
 	start_server "" || return 1
 
 	log_step "Running DI (Device Initialization) via TPM"
-	run_tpm_client client -di "$SERVER_URL" || {
+	run_tpm_client client -di "$SERVER_URL" -di-key "$DI_KEY_TYPE" || {
 		stop_server
 		return 1
 	}
@@ -353,7 +357,7 @@ test_tpm_basic_reuse() {
 	start_server "-reuse-cred" || return 1
 
 	log_step "Running DI via TPM"
-	run_tpm_client client -di "$SERVER_URL" || {
+	run_tpm_client client -di "$SERVER_URL" -di-key "$DI_KEY_TYPE" || {
 		stop_server
 		return 1
 	}
@@ -400,7 +404,7 @@ test_tpm_fdo200() {
 	start_server "-reuse-cred" || return 1
 
 	log_step "Running DI via TPM"
-	run_tpm_client client -di "$SERVER_URL" || {
+	run_tpm_client client -di "$SERVER_URL" -di-key "$DI_KEY_TYPE" || {
 		stop_server
 		return 1
 	}

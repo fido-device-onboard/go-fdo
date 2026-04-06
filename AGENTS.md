@@ -113,7 +113,7 @@ FDO_TPM=sim go test -v -tags=spec_compliance_test -count=1
 - P-384/SHA-384 tests are skipped when hardware TPM does not support P-384.
 - `FDO_TPM_OWNER_HIERARCHY=1` means `PlatformCreate` will be false — not
   fully spec-compliant but required in Linux userspace.
-- See `tpm/SPEC_COMPLIANCE_TODO.md` for phase tracking and details.
+- See `tpm/TPM_COMPLIANCE_TESTING.md` for detailed test instructions.
 
 #### Integration Tests
 
@@ -218,7 +218,7 @@ Each test in `test_examples.sh` follows this pattern:
 
 ### Debugging Tests
 
-- Server logs: `/tmp/fdo_server.log`
+- Server logs: `ephemeral-test-files/fdo_server.log`
 - Use `-debug` flag for verbose protocol output
 - Ephemeral files preserved for debugging
 
@@ -299,7 +299,7 @@ go-fdo/
 ### Debugging Tips
 
 - Enable debug logging with `-debug` flag
-- Check server logs in `/tmp/fdo_server.log`
+- Check server logs in `ephemeral-test-files/fdo_server.log`
 - Use `sqlite3` to inspect database state
 - Ephemeral files preserved for post-mortem analysis
 

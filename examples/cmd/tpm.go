@@ -130,18 +130,6 @@ func tpmShowCredentials() error {
 		fmt.Printf("  DCTPM (0x%08X)      [not defined]\n", tpm.DCTPMIndex)
 	}
 
-	if info.HMACUSSize > 0 {
-		fmt.Printf("  HMAC_US (0x%08X)    [%d bytes]\n", tpm.HMACUSIndex, info.HMACUSSize)
-	} else {
-		fmt.Printf("  HMAC_US (0x%08X)    [not defined]\n", tpm.HMACUSIndex)
-	}
-
-	if info.DevKeyUSSize > 0 {
-		fmt.Printf("  DeviceKey_US (0x%08X) [%d bytes]\n", tpm.DeviceKeyUSIndex, info.DevKeyUSSize)
-	} else {
-		fmt.Printf("  DeviceKey_US (0x%08X) [not defined]\n", tpm.DeviceKeyUSIndex)
-	}
-
 	fmt.Printf("  DAK (0x%08X)        ", tpm.DAKHandle)
 	if info.HasDAK {
 		pubKey, err := tpm.ReadDAKPublicKey(tpmc)

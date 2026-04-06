@@ -328,12 +328,12 @@ func getMaxInputBuffer(t TPM) uint32 {
 }
 
 // =========================================================================
-// Spec-compliant HMAC — persistent key with policy session auth
+// Spec-compliant HMAC — persistent key with empty-auth (userWithAuth=1)
 // =========================================================================
 
 // NewSpecHmac returns an HMAC backed by a persistent HMAC key at the given
-// handle. It uses policy session authorization via the HMAC Unique String NV
-// index (fdoKeyPolicy: PolicyNV + PolicySecret).
+// handle. Per spec Table 11, the key has userWithAuth=1 with empty authValue,
+// so key usage requires only an empty password auth session.
 //
 // Unlike NewHmac which creates an ephemeral primary key, this uses the
 // pre-provisioned persistent key created during Device Initialization.
@@ -345,32 +345,21 @@ func NewSpecHmac(t TPM, h crypto.Hash, handle uint32) (Hmac, error) {
 		return nil, fmt.Errorf("ReadPublic HMAC key (0x%08X): %w", handle, err)
 	}
 
-	// Read HMAC_US NV name for policy session
-	nvPub, err := (tpm2.NVReadPublic{NVIndex: tpm2.TPMHandle(HMACUSIndex)}).Execute(t)
-	if err != nil {
-		return nil, fmt.Errorf("NVReadPublic HMAC_US (0x%08X): %w", HMACUSIndex, err)
-	}
-
 	return &specHmac{
 		Device:    t,
 		Hash:      h,
 		keyHandle: handle,
 		keyName:   readResp.Name,
-		usIndex:   HMACUSIndex,
-		usName:    nvPub.NVName,
 	}, nil
 }
 
 // specHmac is a hash.Hash backed by a persistent TPM HMAC key with
-// policy session authorization.
+// empty-auth authorization (userWithAuth=1, empty authValue).
 type specHmac struct {
 	Device    TPM
 	Hash      crypto.Hash
-	keyHandle uint32 // persistent HMAC key handle
-
-	keyName tpm2.TPM2BName // persistent HMAC key name
-	usIndex uint32         // Unique String NV index
-	usName  tpm2.TPM2BName // Unique String NV name
+	keyHandle uint32         // persistent HMAC key handle
+	keyName   tpm2.TPM2BName // persistent HMAC key name
 
 	bufSize uint32
 
@@ -384,7 +373,7 @@ func (h *specHmac) start() {
 		return
 	}
 
-	// Start HMAC sequence with policy session auth on persistent key
+	// Start HMAC sequence with empty password auth on persistent key
 	sequenceAuth := make([]byte, 16)
 	if _, err := rand.Read(sequenceAuth); err != nil {
 		h.err = fmt.Errorf("generating auth buffer: %w", err)
@@ -395,7 +384,7 @@ func (h *specHmac) start() {
 		Handle: tpm2.AuthHandle{
 			Handle: tpm2.TPMHandle(h.keyHandle),
 			Name:   h.keyName,
-			Auth:   fdoKeyPolicy(h.usIndex, h.usName),
+			Auth:   tpm2.PasswordAuth(nil), // empty authValue per spec
 		},
 		Auth: tpm2.TPM2BAuth{
 			Buffer: sequenceAuth,

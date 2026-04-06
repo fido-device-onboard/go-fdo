@@ -21,7 +21,6 @@ package tpm_test
 import (
 	"bytes"
 	"crypto/ecdsa"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -80,16 +79,6 @@ func dumpTPMState(t *testing.T, thetpm tpmlib.TPM, label string) {
 	} else {
 		t.Logf("  DCTPM     (0x%08X)    [not defined]", tpmlib.DCTPMIndex)
 	}
-	if info.HMACUSSize > 0 {
-		t.Logf("  HMAC_US   (0x%08X)    [%d bytes]", tpmlib.HMACUSIndex, info.HMACUSSize)
-	} else {
-		t.Logf("  HMAC_US   (0x%08X)    [not defined]", tpmlib.HMACUSIndex)
-	}
-	if info.DevKeyUSSize > 0 {
-		t.Logf("  DevKeyUS  (0x%08X)    [%d bytes]", tpmlib.DeviceKeyUSIndex, info.DevKeyUSSize)
-	} else {
-		t.Logf("  DevKeyUS  (0x%08X)    [not defined]", tpmlib.DeviceKeyUSIndex)
-	}
 	dak := "not present"
 	if info.HasDAK {
 		pubKey, err := tpmlib.ReadDAKPublicKey(thetpm)
@@ -143,21 +132,19 @@ func mustCBOR(t *testing.T, v any) []byte {
 //
 //	PROVISION PHASE (simulates NewDI + Save):
 //	  1. CleanupFDOState — remove any prior state
-//	  2. Generate random Unique Strings
-//	  3. DefineNVSpace + WriteNV for DeviceKey_US, HMAC_US
-//	  4. ComputeFDOAuthPolicy for each US NV
-//	  5. GenerateSpecECKey → PersistKey to DAKHandle
-//	  6. GenerateSpecHMACKey → PersistKey to HMACKeyHandle
-//	  7. Write consolidated DCTPM NV (CBOR blob with all credential data)
-//	  8. NewSpecHmac → compute HMAC baseline over GUID
-//	  9. Record "owner voucher" data (public key, GUID, HMAC baseline)
+//	  2. CreateSRK — create Storage Root Key as parent
+//	  3. CreateChildECKey → PersistKey to DAKHandle
+//	  4. CreateChildHMACKey → PersistKey to HMACKeyHandle
+//	  5. Write consolidated DCTPM NV (CBOR blob with all credential data)
+//	  6. NewSpecHmac → compute HMAC baseline over GUID
+//	  7. Record "owner voucher" data (public key, GUID, HMAC baseline)
 //
 //	VERIFY PHASE (simulates Load → TO2, NO shared Go state from provision):
-//	  9. ReadNVCredentials — read DCTPM NV, decode, verify Magic + Active
-//	 10. LoadPersistentKey(DAKHandle) — get signing key with policy auth
-//	 11. Sign a fresh challenge nonce, verify with owner's public key
-//	 12. NewSpecHmac → compute HMAC over GUID from NV, verify against baseline
-//	 13. ProveDAKPossession — library-level DAK proof
+//	  7. ReadNVCredentials — read DCTPM NV, decode, verify Magic + Active
+//	  8. LoadPersistentKey(DAKHandle) — get signing key with empty password auth
+//	  9. Sign a fresh challenge nonce, verify with owner's public key
+//	 10. NewSpecHmac → compute HMAC over GUID from NV, verify against baseline
+//	 11. ProveDAKPossession — library-level DAK proof
 //
 // The VERIFY PHASE receives ONLY the TPM connection and the owner voucher
 // data. It reads ALL device-side state from TPM NV/persistent handles.
@@ -173,67 +160,35 @@ func TestPhase9_ProductionAPI_NVOnly(t *testing.T) {
 	tpmlib.CleanupFDOState(thetpm)
 	t.Log("Step 1: CleanupFDOState — removed any prior FDO state")
 
-	// Step 2: Generate random Unique Strings (production uses crypto/rand)
-	deviceKeyUS := make([]byte, 64)
-	if _, err := rand.Read(deviceKeyUS); err != nil {
-		t.Fatalf("generate device key US: %v", err)
+	// Step 2: Create SRK (Storage Root Key) as parent for child keys
+	srk, err := tpmlib.CreateSRK(thetpm)
+	if err != nil {
+		t.Fatalf("CreateSRK: %v", err)
 	}
-	hmacUS := make([]byte, 32)
-	if _, err := rand.Read(hmacUS); err != nil {
-		t.Fatalf("generate HMAC US: %v", err)
-	}
-	t.Log("Step 2: Generated random Unique Strings (64 bytes device key, 32 bytes HMAC)")
+	defer func() { tpm2.FlushContext{FlushHandle: srk.Handle}.Execute(thetpm) }()
+	t.Log("Step 2: Created SRK (Storage Root Key)")
 
-	// Step 3: Define and write Unique String NV indices
-	dkUSName, err := tpmlib.DefineNVSpace(thetpm, tpmlib.DeviceKeyUSIndex, 64, tpmlib.NVProfileB, usePlatform)
+	// Step 3: Create ECC signing key (DAK) as child of SRK → persist
+	dkHandle, _, err := tpmlib.CreateChildECKey(thetpm, *srk, tpm2.TPMECCNistP256, tpm2.TPMAlgSHA256)
 	if err != nil {
-		t.Fatalf("DefineNVSpace DeviceKey_US: %v", err)
-	}
-	if err := tpmlib.WriteNV(thetpm, tpmlib.DeviceKeyUSIndex, dkUSName, deviceKeyUS, tpmlib.NVProfileB); err != nil {
-		t.Fatalf("WriteNV DeviceKey_US: %v", err)
-	}
-
-	hmacUSName, err := tpmlib.DefineNVSpace(thetpm, tpmlib.HMACUSIndex, 32, tpmlib.NVProfileB, usePlatform)
-	if err != nil {
-		t.Fatalf("DefineNVSpace HMAC_US: %v", err)
-	}
-	if err := tpmlib.WriteNV(thetpm, tpmlib.HMACUSIndex, hmacUSName, hmacUS, tpmlib.NVProfileB); err != nil {
-		t.Fatalf("WriteNV HMAC_US: %v", err)
-	}
-	t.Log("Step 3: Defined and wrote DeviceKey_US + HMAC_US NV indices")
-
-	// Step 4: Compute auth policies
-	dkPolicy, err := tpmlib.ComputeFDOAuthPolicy(thetpm, tpmlib.DeviceKeyUSIndex, dkUSName)
-	if err != nil {
-		t.Fatalf("ComputeFDOAuthPolicy (device key): %v", err)
-	}
-	hmacPolicy, err := tpmlib.ComputeFDOAuthPolicy(thetpm, tpmlib.HMACUSIndex, hmacUSName)
-	if err != nil {
-		t.Fatalf("ComputeFDOAuthPolicy (HMAC): %v", err)
-	}
-	t.Log("Step 4: Computed auth policies (PolicyNV + PolicySecret) for both keys")
-
-	// Step 5: Create ECC signing key (DAK) → persist
-	dkHandle, _, err := tpmlib.GenerateSpecECKey(thetpm, tpm2.TPMECCNistP256, tpm2.TPMAlgSHA256, deviceKeyUS, dkPolicy)
-	if err != nil {
-		t.Fatalf("GenerateSpecECKey: %v", err)
+		t.Fatalf("CreateChildECKey: %v", err)
 	}
 	if err := tpmlib.PersistKey(thetpm, *dkHandle, tpmlib.DAKHandle); err != nil {
 		t.Fatalf("PersistKey (DAK): %v", err)
 	}
-	t.Logf("Step 5: Created and persisted DAK at 0x%08X", tpmlib.DAKHandle)
+	t.Logf("Step 3: Created and persisted DAK at 0x%08X", tpmlib.DAKHandle)
 
-	// Step 6: Create HMAC key → persist
-	hmacHandle, err := tpmlib.GenerateSpecHMACKey(thetpm, hmacUS, hmacPolicy)
+	// Step 4: Create HMAC key as child of SRK → persist
+	hmacHandle, err := tpmlib.CreateChildHMACKey(thetpm, *srk)
 	if err != nil {
-		t.Fatalf("GenerateSpecHMACKey: %v", err)
+		t.Fatalf("CreateChildHMACKey: %v", err)
 	}
 	if err := tpmlib.PersistKey(thetpm, *hmacHandle, tpmlib.HMACKeyHandle); err != nil {
 		t.Fatalf("PersistKey (HMAC): %v", err)
 	}
-	t.Logf("Step 6: Created and persisted HMAC key at 0x%08X", tpmlib.HMACKeyHandle)
+	t.Logf("Step 4: Created and persisted HMAC key at 0x%08X", tpmlib.HMACKeyHandle)
 
-	// Step 7: Write consolidated DCTPM NV index (single CBOR blob)
+	// Step 5: Write consolidated DCTPM NV index (single CBOR blob)
 	guid := [16]byte{
 		0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE,
 		0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
@@ -249,7 +204,7 @@ func TestPhase9_ProductionAPI_NVOnly(t *testing.T) {
 	}}
 
 	// Compute public key hash from DAK
-	provisionKeyForHash, err := tpmlib.LoadPersistentKey(thetpm, tpmlib.DAKHandle, tpmlib.DeviceKeyUSIndex)
+	provisionKeyForHash, err := tpmlib.LoadPersistentKey(thetpm, tpmlib.DAKHandle)
 	if err != nil {
 		t.Fatalf("LoadPersistentKey (for pubkey hash): %v", err)
 	}
@@ -284,9 +239,9 @@ func TestPhase9_ProductionAPI_NVOnly(t *testing.T) {
 	if err := tpmlib.WriteNV(thetpm, tpmlib.DCTPMIndex, dctpmName, dctpmBytes, tpmlib.NVProfileDCTPM); err != nil {
 		t.Fatalf("WriteNV DCTPM: %v", err)
 	}
-	t.Logf("Step 7: DCTPM NV stored [%d bytes] — Magic=FDO1, Active=true, GUID=%x, info=%q", len(dctpmBytes), guid, deviceInfo)
+	t.Logf("Step 5: DCTPM NV stored [%d bytes] — Magic=FDO1, Active=true, GUID=%x, info=%q", len(dctpmBytes), guid, deviceInfo)
 
-	// Step 8: Compute HMAC baseline over GUID using NewSpecHmac
+	// Step 6: Compute HMAC baseline over GUID using NewSpecHmac
 	provisionHmac, err := tpmlib.NewSpecHmac(thetpm, 0, tpmlib.HMACKeyHandle) // crypto.Hash(0) — hash arg is for Size()/BlockSize()
 	if err != nil {
 		t.Fatalf("NewSpecHmac (provision): %v", err)
@@ -302,16 +257,16 @@ func TestPhase9_ProductionAPI_NVOnly(t *testing.T) {
 		t.Fatalf("HMAC Sum Err (provision): %v", provisionHmac.Err())
 	}
 	_ = provisionHmac.Close()
-	t.Logf("Step 8: HMAC baseline over GUID: %x", hmacBaseline)
+	t.Logf("Step 6: HMAC baseline over GUID: %x", hmacBaseline)
 
 	// Extract DAK public key for owner voucher
-	provisionKey, err := tpmlib.LoadPersistentKey(thetpm, tpmlib.DAKHandle, tpmlib.DeviceKeyUSIndex)
+	provisionKey, err := tpmlib.LoadPersistentKey(thetpm, tpmlib.DAKHandle)
 	if err != nil {
 		t.Fatalf("LoadPersistentKey (provision): %v", err)
 	}
 	ownerPubKey := provisionKey.Public().(*ecdsa.PublicKey)
 	_ = provisionKey.Close()
-	t.Logf("Step 8b: DAK public key extracted (P-%d)", ownerPubKey.Curve.Params().BitSize)
+	t.Logf("Step 6b: DAK public key extracted (P-%d)", ownerPubKey.Curve.Params().BitSize)
 
 	dumpTPMState(t, thetpm, "AFTER PROVISION")
 
@@ -336,7 +291,7 @@ func TestPhase9_ProductionAPI_NVOnly(t *testing.T) {
 	// =====================================================================
 	t.Log("=== VERIFY PHASE: reading ALL state from TPM (zero shared Go variables) ===")
 
-	// Step 9: ReadNVCredentials — read consolidated DCTPM NV
+	// Step 7: ReadNVCredentials — read consolidated DCTPM NV
 	info, err := tpmlib.ReadNVCredentials(thetpm)
 	if err != nil {
 		t.Fatalf("ReadNVCredentials: %v", err)
@@ -385,32 +340,32 @@ func TestPhase9_ProductionAPI_NVOnly(t *testing.T) {
 	if verifyDCTPM.HMACKeyHandle != tpmlib.HMACKeyHandle {
 		t.Errorf("DCTPM HMACKeyHandle: got 0x%08X, want 0x%08X", verifyDCTPM.HMACKeyHandle, tpmlib.HMACKeyHandle)
 	}
-	t.Logf("Step 9: DCTPM verified — Magic=FDO1 Active=true Version=%d GUID=%x KeyType=%s DAK=0x%08X HMAC=0x%08X",
+	t.Logf("Step 7: DCTPM verified — Magic=FDO1 Active=true Version=%d GUID=%x KeyType=%s DAK=0x%08X HMAC=0x%08X",
 		verifyDCTPM.Version, verifyDCTPM.GUID, verifyDCTPM.KeyType,
 		verifyDCTPM.DeviceKeyHandle, verifyDCTPM.HMACKeyHandle)
 
-	// Step 10: LoadPersistentKey — get signing key with policy session auth
-	verifyKey, err := tpmlib.LoadPersistentKey(thetpm, tpmlib.DAKHandle, tpmlib.DeviceKeyUSIndex)
+	// Step 8: LoadPersistentKey — get signing key with empty password auth
+	verifyKey, err := tpmlib.LoadPersistentKey(thetpm, tpmlib.DAKHandle)
 	if err != nil {
 		t.Fatalf("LoadPersistentKey (verify): %v", err)
 	}
 	defer func() { _ = verifyKey.Close() }()
-	t.Log("Step 10: LoadPersistentKey OK — DAK loaded with policy session auth")
+	t.Log("Step 8: LoadPersistentKey OK — DAK loaded with empty password auth")
 
-	// Step 11: Sign a fresh challenge, verify with owner's public key
+	// Step 9: Sign a fresh challenge, verify with owner's public key
 	challenge := sha256.Sum256([]byte("Phase 9 integration test challenge nonce"))
 	sig, err := verifyKey.Sign(nil, challenge[:], nil)
 	if err != nil {
-		t.Fatalf("Sign (policy auth): %v", err)
+		t.Fatalf("Sign (empty-auth): %v", err)
 	}
 
 	// Verify using owner's public key (NOT from TPM — from owner voucher)
 	if !ecdsa.VerifyASN1(owner.pubKey, challenge[:], sig) {
 		t.Fatal("DAK signature verification FAILED — owner pubkey does not match")
 	}
-	t.Logf("Step 11: Sign+Verify OK — DAK signature verified against owner voucher pubkey")
+	t.Logf("Step 9: Sign+Verify OK — DAK signature verified against owner voucher pubkey")
 
-	// Step 11b: Sign a DIFFERENT challenge to prove it's not cached
+	// Step 9b: Sign a DIFFERENT challenge to prove it's not cached
 	challenge2 := sha256.Sum256([]byte("second challenge — must produce different signature"))
 	sig2, err := verifyKey.Sign(nil, challenge2[:], nil)
 	if err != nil {
@@ -422,9 +377,9 @@ func TestPhase9_ProductionAPI_NVOnly(t *testing.T) {
 	if bytes.Equal(sig, sig2) {
 		t.Error("two different challenges produced identical signatures — suspicious")
 	}
-	t.Log("Step 11b: Second Sign+Verify OK — different challenge, different signature, both valid")
+	t.Log("Step 9b: Second Sign+Verify OK — different challenge, different signature, both valid")
 
-	// Step 12: NewSpecHmac — compute HMAC over GUID from NV, verify baseline
+	// Step 10: NewSpecHmac — compute HMAC over GUID from NV, verify baseline
 	verifyHmac, err := tpmlib.NewSpecHmac(thetpm, 0, tpmlib.HMACKeyHandle)
 	if err != nil {
 		t.Fatalf("NewSpecHmac (verify): %v", err)
@@ -445,9 +400,9 @@ func TestPhase9_ProductionAPI_NVOnly(t *testing.T) {
 	if !bytes.Equal(verifyResult, owner.hmacBaseline) {
 		t.Fatalf("HMAC mismatch:\n  verify:   %x\n  baseline: %x", verifyResult, owner.hmacBaseline)
 	}
-	t.Logf("Step 12: HMAC verified — matches baseline from provision phase")
+	t.Logf("Step 10: HMAC verified — matches baseline from provision phase")
 
-	// Step 13: ProveDAKPossession — high-level library API
+	// Step 11: ProveDAKPossession — high-level library API
 	proof, err := tpmlib.ProveDAKPossession(thetpm, []byte("Phase 9 final possession proof"))
 	if err != nil {
 		t.Fatalf("ProveDAKPossession: %v", err)
@@ -463,7 +418,7 @@ func TestPhase9_ProductionAPI_NVOnly(t *testing.T) {
 	if !ecdsa.VerifyASN1(ecKey, proof.Challenge[:], proof.Signature) {
 		t.Fatal("ProveDAKPossession self-verification FAILED")
 	}
-	t.Log("Step 13: ProveDAKPossession OK — pubkey matches, signature verified")
+	t.Log("Step 11: ProveDAKPossession OK — pubkey matches, signature verified")
 
 	dumpTPMState(t, thetpm, "AFTER VERIFY")
 
@@ -475,29 +430,17 @@ func TestPhase9_ProductionAPI_NVOnly(t *testing.T) {
 // same data → same HMAC).
 func TestPhase9_HMACDeterminism(t *testing.T) {
 	thetpm := openTPM(t)
-	usePlatform := !ownerHierarchyFallback()
 
 	// Only clean the resources this test uses — leave other state intact
 	_ = tpmlib.EvictPersistentHandle(thetpm, tpmlib.HMACKeyHandle)
-	_ = tpmlib.UndefineNVSpace(thetpm, tpmlib.HMACUSIndex)
 
-	// Provision HMAC key
-	hmacUS := make([]byte, 32)
-	if _, err := rand.Read(hmacUS); err != nil {
-		t.Fatal(err)
-	}
-	hmacUSName, err := tpmlib.DefineNVSpace(thetpm, tpmlib.HMACUSIndex, 32, tpmlib.NVProfileB, usePlatform)
+	// Provision HMAC key via child-of-SRK method
+	srk, err := tpmlib.CreateSRK(thetpm)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := tpmlib.WriteNV(thetpm, tpmlib.HMACUSIndex, hmacUSName, hmacUS, tpmlib.NVProfileB); err != nil {
-		t.Fatal(err)
-	}
-	policy, err := tpmlib.ComputeFDOAuthPolicy(thetpm, tpmlib.HMACUSIndex, hmacUSName)
-	if err != nil {
-		t.Fatal(err)
-	}
-	handle, err := tpmlib.GenerateSpecHMACKey(thetpm, hmacUS, policy)
+	defer func() { tpm2.FlushContext{FlushHandle: srk.Handle}.Execute(thetpm) }()
+	handle, err := tpmlib.CreateChildHMACKey(thetpm, *srk)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -553,29 +496,17 @@ func TestPhase9_HMACDeterminism(t *testing.T) {
 // multiple different digests, all verifiable with the same public key.
 func TestPhase9_SignMultipleDigests(t *testing.T) {
 	thetpm := openTPM(t)
-	usePlatform := !ownerHierarchyFallback()
 
 	// Only clean the resources this test uses — leave other state intact
 	_ = tpmlib.EvictPersistentHandle(thetpm, tpmlib.DAKHandle)
-	_ = tpmlib.UndefineNVSpace(thetpm, tpmlib.DeviceKeyUSIndex)
 
-	// Provision DAK
-	dkUS := make([]byte, 64)
-	if _, err := rand.Read(dkUS); err != nil {
-		t.Fatal(err)
-	}
-	dkUSName, err := tpmlib.DefineNVSpace(thetpm, tpmlib.DeviceKeyUSIndex, 64, tpmlib.NVProfileB, usePlatform)
+	// Provision DAK via child-of-SRK method
+	srk, err := tpmlib.CreateSRK(thetpm)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := tpmlib.WriteNV(thetpm, tpmlib.DeviceKeyUSIndex, dkUSName, dkUS, tpmlib.NVProfileB); err != nil {
-		t.Fatal(err)
-	}
-	policy, err := tpmlib.ComputeFDOAuthPolicy(thetpm, tpmlib.DeviceKeyUSIndex, dkUSName)
-	if err != nil {
-		t.Fatal(err)
-	}
-	handle, _, err := tpmlib.GenerateSpecECKey(thetpm, tpm2.TPMECCNistP256, tpm2.TPMAlgSHA256, dkUS, policy)
+	defer func() { tpm2.FlushContext{FlushHandle: srk.Handle}.Execute(thetpm) }()
+	handle, _, err := tpmlib.CreateChildECKey(thetpm, *srk, tpm2.TPMECCNistP256, tpm2.TPMAlgSHA256)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -584,7 +515,7 @@ func TestPhase9_SignMultipleDigests(t *testing.T) {
 	}
 
 	// Load the key back using production API
-	key, err := tpmlib.LoadPersistentKey(thetpm, tpmlib.DAKHandle, tpmlib.DeviceKeyUSIndex)
+	key, err := tpmlib.LoadPersistentKey(thetpm, tpmlib.DAKHandle)
 	if err != nil {
 		t.Fatalf("LoadPersistentKey: %v", err)
 	}
@@ -604,36 +535,24 @@ func TestPhase9_SignMultipleDigests(t *testing.T) {
 			t.Fatalf("Verify(%d) failed", i)
 		}
 	}
-	t.Logf("Signed and verified 10 different digests with persistent DAK (policy session auth)")
+	t.Logf("Signed and verified 10 different digests with persistent DAK (empty-auth)")
 }
 
-// TestPhase9_PasswordAuthRejected proves that policy-protected keys
-// CANNOT be used with simple password auth — only policy session works.
-func TestPhase9_PasswordAuthRejected(t *testing.T) {
+// TestPhase9_EmptyAuthWorks proves that keys created with userWithAuth=1
+// can be used with empty password auth — the standard auth mechanism.
+func TestPhase9_EmptyAuthWorks(t *testing.T) {
 	thetpm := openTPM(t)
-	usePlatform := !ownerHierarchyFallback()
 
 	// Only clean the resources this test uses — leave other state intact
 	_ = tpmlib.EvictPersistentHandle(thetpm, tpmlib.DAKHandle)
-	_ = tpmlib.UndefineNVSpace(thetpm, tpmlib.DeviceKeyUSIndex)
 
-	// Provision DAK with AuthPolicy
-	dkUS := make([]byte, 64)
-	if _, err := rand.Read(dkUS); err != nil {
-		t.Fatal(err)
-	}
-	dkUSName, err := tpmlib.DefineNVSpace(thetpm, tpmlib.DeviceKeyUSIndex, 64, tpmlib.NVProfileB, usePlatform)
+	// Provision DAK with empty-auth via child-of-SRK method
+	srk, err := tpmlib.CreateSRK(thetpm)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := tpmlib.WriteNV(thetpm, tpmlib.DeviceKeyUSIndex, dkUSName, dkUS, tpmlib.NVProfileB); err != nil {
-		t.Fatal(err)
-	}
-	policy, err := tpmlib.ComputeFDOAuthPolicy(thetpm, tpmlib.DeviceKeyUSIndex, dkUSName)
-	if err != nil {
-		t.Fatal(err)
-	}
-	handle, _, err := tpmlib.GenerateSpecECKey(thetpm, tpm2.TPMECCNistP256, tpm2.TPMAlgSHA256, dkUS, policy)
+	defer func() { tpm2.FlushContext{FlushHandle: srk.Handle}.Execute(thetpm) }()
+	handle, _, err := tpmlib.CreateChildECKey(thetpm, *srk, tpm2.TPMECCNistP256, tpm2.TPMAlgSHA256)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -641,43 +560,47 @@ func TestPhase9_PasswordAuthRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Try to sign with simple password auth (should FAIL because UserWithAuth=false)
+	// Sign with empty password auth (should SUCCEED because UserWithAuth=1)
 	readResp, err := tpm2.ReadPublic{ObjectHandle: tpm2.TPMHandle(tpmlib.DAKHandle)}.Execute(thetpm)
 	if err != nil {
 		t.Fatalf("ReadPublic: %v", err)
 	}
 
-	digest := sha256.Sum256([]byte("password auth should fail"))
-	_, err = tpm2.Sign{
+	digest := sha256.Sum256([]byte("empty password auth should succeed"))
+	signResp, err := tpm2.Sign{
 		KeyHandle: tpm2.AuthHandle{
 			Handle: tpm2.TPMHandle(tpmlib.DAKHandle),
 			Name:   readResp.Name,
-			Auth:   tpm2.PasswordAuth(nil), // password auth, NOT policy session
+			Auth:   tpm2.PasswordAuth(nil), // empty password auth
 		},
 		Digest:     tpm2.TPM2BDigest{Buffer: digest[:]},
 		Validation: tpm2.TPMTTKHashCheck{Tag: tpm2.TPMSTHashCheck},
 	}.Execute(thetpm)
-	if err == nil {
-		t.Fatal("password auth should have been REJECTED for policy-protected key, but Sign succeeded")
+	if err != nil {
+		t.Fatalf("empty password auth should have SUCCEEDED, but Sign failed: %v", err)
 	}
-	t.Logf("Password auth correctly rejected: %v", err)
+	t.Logf("Empty password auth correctly accepted")
 
-	// Now sign with proper policy session auth (should succeed)
-	key, err := tpmlib.LoadPersistentKey(thetpm, tpmlib.DAKHandle, tpmlib.DeviceKeyUSIndex)
+	// Verify the signature using the public key
+	key, err := tpmlib.LoadPersistentKey(thetpm, tpmlib.DAKHandle)
 	if err != nil {
 		t.Fatalf("LoadPersistentKey: %v", err)
 	}
 	defer func() { _ = key.Close() }()
 
+	pubKey := key.Public().(*ecdsa.PublicKey)
+
+	// Convert TPM signature to ASN1 for verification
+	rsig := signResp.Signature.Signature.ECDSA
 	sig, err := key.Sign(nil, digest[:], nil)
 	if err != nil {
-		t.Fatalf("Sign (policy auth): %v", err)
+		t.Fatalf("Sign (empty-auth via library): %v", err)
 	}
-	pubKey := key.Public().(*ecdsa.PublicKey)
+	_ = rsig // raw TPM signature confirmed success above
 	if !ecdsa.VerifyASN1(pubKey, digest[:], sig) {
-		t.Fatal("policy auth signature verification failed")
+		t.Fatal("empty-auth signature verification failed")
 	}
-	t.Log("Policy session auth correctly accepted — Sign succeeded + verified")
+	t.Log("Empty password auth correctly accepted — Sign succeeded + verified")
 }
 
 // TestPhase9_CleanupFDOState proves that CleanupFDOState properly
@@ -687,24 +610,28 @@ func TestPhase9_CleanupFDOState(t *testing.T) {
 	usePlatform := !ownerHierarchyFallback()
 	tpmlib.CleanupFDOState(thetpm)
 
-	// Provision some state: US indices + persistent keys + consolidated DCTPM
-	dkUS := make([]byte, 64)
-	rand.Read(dkUS)
-	dkUSName, _ := tpmlib.DefineNVSpace(thetpm, tpmlib.DeviceKeyUSIndex, 64, tpmlib.NVProfileB, usePlatform)
-	tpmlib.WriteNV(thetpm, tpmlib.DeviceKeyUSIndex, dkUSName, dkUS, tpmlib.NVProfileB)
+	// Provision some state: persistent keys + consolidated DCTPM
+	srk, err := tpmlib.CreateSRK(thetpm)
+	if err != nil {
+		t.Fatalf("CreateSRK: %v", err)
+	}
+	defer func() { tpm2.FlushContext{FlushHandle: srk.Handle}.Execute(thetpm) }()
 
-	hmacUS := make([]byte, 32)
-	rand.Read(hmacUS)
-	hmacUSName, _ := tpmlib.DefineNVSpace(thetpm, tpmlib.HMACUSIndex, 32, tpmlib.NVProfileB, usePlatform)
-	tpmlib.WriteNV(thetpm, tpmlib.HMACUSIndex, hmacUSName, hmacUS, tpmlib.NVProfileB)
+	dkHandle, _, err := tpmlib.CreateChildECKey(thetpm, *srk, tpm2.TPMECCNistP256, tpm2.TPMAlgSHA256)
+	if err != nil {
+		t.Fatalf("CreateChildECKey: %v", err)
+	}
+	if err := tpmlib.PersistKey(thetpm, *dkHandle, tpmlib.DAKHandle); err != nil {
+		t.Fatalf("PersistKey (DAK): %v", err)
+	}
 
-	dkPolicy, _ := tpmlib.ComputeFDOAuthPolicy(thetpm, tpmlib.DeviceKeyUSIndex, dkUSName)
-	dkHandle, _, _ := tpmlib.GenerateSpecECKey(thetpm, tpm2.TPMECCNistP256, tpm2.TPMAlgSHA256, dkUS, dkPolicy)
-	tpmlib.PersistKey(thetpm, *dkHandle, tpmlib.DAKHandle)
-
-	hmacPolicy, _ := tpmlib.ComputeFDOAuthPolicy(thetpm, tpmlib.HMACUSIndex, hmacUSName)
-	hmacHandle, _ := tpmlib.GenerateSpecHMACKey(thetpm, hmacUS, hmacPolicy)
-	tpmlib.PersistKey(thetpm, *hmacHandle, tpmlib.HMACKeyHandle)
+	hmacHandle, err := tpmlib.CreateChildHMACKey(thetpm, *srk)
+	if err != nil {
+		t.Fatalf("CreateChildHMACKey: %v", err)
+	}
+	if err := tpmlib.PersistKey(thetpm, *hmacHandle, tpmlib.HMACKeyHandle); err != nil {
+		t.Fatalf("PersistKey (HMAC): %v", err)
+	}
 
 	// Write a consolidated DCTPM NV blob
 	dctpmPayload := dctpmDump{

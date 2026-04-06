@@ -77,9 +77,11 @@ var nvAttrsProfileA = tpm2.TPMANV{
 	NT:             tpm2.TPMNTOrdinary,
 }
 
-// Profile B (DCTPM, HMAC_US, DeviceKey_US): AuthWrite, AuthRead, NoDA, PlatformCreate
+// Profile B (DCTPM, HMAC_US, DeviceKey_US): OwnerWrite, AuthWrite, OwnerRead, AuthRead, NoDA, PlatformCreate
 var nvAttrsProfileB = tpm2.TPMANV{
+	OwnerWrite:     true,
 	AuthWrite:      true,
+	OwnerRead:      true,
 	AuthRead:       true,
 	NoDA:           true,
 	PlatformCreate: true,
@@ -404,23 +406,22 @@ func fdoKeyPolicy(usIndex tpm2.TPMHandle, usName tpm2.TPM2BName) tpm2.Session {
 // =========================================================================
 
 // createPersistentECCKey provisions the DeviceKey_US NV index (Profile B),
-// computes auth policy, creates an ECC P-256 primary, and persists it.
-// Returns the NV name needed for policy session authorization.
+// creates an ECC P-256 primary with UserWithAuth=1/AdminWithPolicy=1, and persists it.
+// Returns the NV name (retained for legacy policy testing if needed).
 func createPersistentECCKey(t *testing.T, thetpm transport.TPM) tpm2.TPM2BName {
 	t.Helper()
 	us := generateTestDeviceKeyUniqueString(64)
 	nvName := defineNVSpec(t, thetpm, DeviceKey_US_Index, 64, nvAttrsProfileB, tpm2.TPMRHPlatform)
 	writeNVAuth(t, thetpm, DeviceKey_US_Index, nvName, us)
 
-	policy := computeFDOAuthPolicy(t, thetpm, DeviceKey_US_Index, nvName)
 	resp, err := tpm2.CreatePrimary{
 		PrimaryHandle: tpm2.TPMRHEndorsement,
 		InPublic: tpm2.New2B(tpm2.TPMTPublic{
 			Type: tpm2.TPMAlgECC, NameAlg: tpm2.TPMAlgSHA256,
 			ObjectAttributes: tpm2.TPMAObject{
 				FixedTPM: true, FixedParent: true, SensitiveDataOrigin: true, SignEncrypt: true,
+				UserWithAuth: true, AdminWithPolicy: true,
 			},
-			AuthPolicy: policy,
 			Parameters: tpm2.NewTPMUPublicParms(tpm2.TPMAlgECC, &tpm2.TPMSECCParms{
 				CurveID: tpm2.TPMECCNistP256,
 				Scheme: tpm2.TPMTECCScheme{Scheme: tpm2.TPMAlgECDSA,
@@ -447,22 +448,21 @@ func createPersistentECCKey(t *testing.T, thetpm transport.TPM) tpm2.TPM2BName {
 }
 
 // createPersistentHMACKey provisions the HMAC_US NV index (Profile B),
-// computes auth policy, creates an HMAC SHA-256 primary, and persists it.
+// creates an HMAC SHA-256 primary with UserWithAuth=1/AdminWithPolicy=1, and persists it.
 func createPersistentHMACKey(t *testing.T, thetpm transport.TPM) tpm2.TPM2BName {
 	t.Helper()
 	us := generateTestHMACUniqueString(32)
 	nvName := defineNVSpec(t, thetpm, HMAC_US_Index, 32, nvAttrsProfileB, tpm2.TPMRHPlatform)
 	writeNVAuth(t, thetpm, HMAC_US_Index, nvName, us)
 
-	policy := computeFDOAuthPolicy(t, thetpm, HMAC_US_Index, nvName)
 	resp, err := tpm2.CreatePrimary{
 		PrimaryHandle: tpm2.TPMRHEndorsement,
 		InPublic: tpm2.New2B(tpm2.TPMTPublic{
 			Type: tpm2.TPMAlgKeyedHash, NameAlg: tpm2.TPMAlgSHA256,
 			ObjectAttributes: tpm2.TPMAObject{
 				FixedTPM: true, FixedParent: true, SensitiveDataOrigin: true, SignEncrypt: true,
+				UserWithAuth: true, AdminWithPolicy: true,
 			},
-			AuthPolicy: policy,
 			Parameters: tpm2.NewTPMUPublicParms(tpm2.TPMAlgKeyedHash, &tpm2.TPMSKeyedHashParms{
 				Scheme: tpm2.TPMTKeyedHashScheme{Scheme: tpm2.TPMAlgHMAC,
 					Details: tpm2.NewTPMUSchemeKeyedHash(tpm2.TPMAlgHMAC, &tpm2.TPMSSchemeHMAC{HashAlg: tpm2.TPMAlgSHA256})},
@@ -784,8 +784,6 @@ func runPhase3(t *testing.T) {
 					t.Fatal("US NV round-trip mismatch")
 				}
 
-				policy := computeFDOAuthPolicy(t, thetpm, tpm2.TPMHandle(tc.usIndex), nvName)
-
 				// Select curve/hash based on key variant
 				curveID := tpm2.TPMECCNistP256
 				hashAlg := tpm2.TPMAlgSHA256
@@ -801,8 +799,8 @@ func runPhase3(t *testing.T) {
 						Type: tpm2.TPMAlgECC, NameAlg: tpm2.TPMAlgSHA256,
 						ObjectAttributes: tpm2.TPMAObject{
 							FixedTPM: true, FixedParent: true, SensitiveDataOrigin: true, SignEncrypt: true,
+							UserWithAuth: true, AdminWithPolicy: true,
 						},
-						AuthPolicy: policy,
 						Parameters: tpm2.NewTPMUPublicParms(tpm2.TPMAlgECC, &tpm2.TPMSECCParms{
 							CurveID: curveID,
 							Scheme: tpm2.TPMTECCScheme{Scheme: tpm2.TPMAlgECDSA,
@@ -818,8 +816,8 @@ func runPhase3(t *testing.T) {
 						Type: tpm2.TPMAlgKeyedHash, NameAlg: tpm2.TPMAlgSHA256,
 						ObjectAttributes: tpm2.TPMAObject{
 							FixedTPM: true, FixedParent: true, SensitiveDataOrigin: true, SignEncrypt: true,
+							UserWithAuth: true, AdminWithPolicy: true,
 						},
-						AuthPolicy: policy,
 						Parameters: tpm2.NewTPMUPublicParms(tpm2.TPMAlgKeyedHash, &tpm2.TPMSKeyedHashParms{
 							Scheme: tpm2.TPMTKeyedHashScheme{Scheme: tpm2.TPMAlgHMAC,
 								Details: tpm2.NewTPMUSchemeKeyedHash(tpm2.TPMAlgHMAC, &tpm2.TPMSSchemeHMAC{HashAlg: hashAlg})},
@@ -853,13 +851,12 @@ func runPhase3(t *testing.T) {
 		nvName := defineNVSpec(t, thetpm, DeviceKey_US_Index, 64, nvAttrsProfileB, tpm2.TPMRHPlatform)
 		writeNVAuth(t, thetpm, DeviceKey_US_Index, nvName, us)
 
-		policy := computeFDOAuthPolicy(t, thetpm, DeviceKey_US_Index, nvName)
 		tmpl := tpm2.TPMTPublic{
 			Type: tpm2.TPMAlgECC, NameAlg: tpm2.TPMAlgSHA256,
 			ObjectAttributes: tpm2.TPMAObject{
 				FixedTPM: true, FixedParent: true, SensitiveDataOrigin: true, SignEncrypt: true,
+				UserWithAuth: true, AdminWithPolicy: true,
 			},
-			AuthPolicy: policy,
 			Parameters: tpm2.NewTPMUPublicParms(tpm2.TPMAlgECC, &tpm2.TPMSECCParms{
 				CurveID: tpm2.TPMECCNistP256,
 				Scheme: tpm2.TPMTECCScheme{Scheme: tpm2.TPMAlgECDSA,
@@ -896,7 +893,7 @@ func runPhase3(t *testing.T) {
 }
 
 // =========================================================================
-// Phase 4 — Cryptographic Operations (policy session auth)
+// Phase 4 — Cryptographic Operations (password auth)
 // =========================================================================
 
 func runPhase4(t *testing.T) {
@@ -904,7 +901,7 @@ func runPhase4(t *testing.T) {
 		t.Run("BasicSign", func(t *testing.T) {
 			thetpm := openTPM(t)
 			cleanupFDOState(t, thetpm)
-			dkNVName := createPersistentECCKey(t, thetpm)
+			createPersistentECCKey(t, thetpm)
 
 			readResp, err := tpm2.ReadPublic{ObjectHandle: tpm2.TPMHandle(FDO_Device_Key_Handle)}.Execute(thetpm)
 			if err != nil {
@@ -922,7 +919,7 @@ func runPhase4(t *testing.T) {
 			sigResp, err := tpm2.Sign{
 				KeyHandle: tpm2.AuthHandle{
 					Handle: tpm2.TPMHandle(FDO_Device_Key_Handle), Name: readResp.Name,
-					Auth: fdoKeyPolicy(DeviceKey_US_Index, dkNVName),
+					Auth: tpm2.PasswordAuth(nil),
 				},
 				Digest:     tpm2.TPM2BDigest{Buffer: digest[:]},
 				Validation: tpm2.TPMTTKHashCheck{Tag: tpm2.TPMSTHashCheck},
@@ -936,13 +933,13 @@ func runPhase4(t *testing.T) {
 			if !ecdsa.Verify(pubKey, digest[:], r, s) {
 				t.Fatal("ECDSA verify failed")
 			}
-			t.Logf("Signed+verified at 0x%08X (policy auth)", FDO_Device_Key_Handle)
+			t.Logf("Signed+verified at 0x%08X (password auth)", FDO_Device_Key_Handle)
 		})
 
 		t.Run("Determinism", func(t *testing.T) {
 			thetpm := openTPM(t)
 			cleanupFDOState(t, thetpm)
-			dkNVName := createPersistentECCKey(t, thetpm)
+			createPersistentECCKey(t, thetpm)
 
 			readResp, _ := tpm2.ReadPublic{ObjectHandle: tpm2.TPMHandle(FDO_Device_Key_Handle)}.Execute(thetpm)
 			pub, _ := readResp.OutPublic.Contents()
@@ -954,13 +951,12 @@ func runPhase4(t *testing.T) {
 			}
 
 			digest := sha256.Sum256([]byte("determinism test"))
-			policy := fdoKeyPolicy(DeviceKey_US_Index, dkNVName)
 
 			var sigs [2]*tpm2.SignResponse
 			for i := range sigs {
 				var err error
 				sigs[i], err = tpm2.Sign{
-					KeyHandle:  tpm2.AuthHandle{Handle: tpm2.TPMHandle(FDO_Device_Key_Handle), Name: readResp.Name, Auth: policy},
+					KeyHandle:  tpm2.AuthHandle{Handle: tpm2.TPMHandle(FDO_Device_Key_Handle), Name: readResp.Name, Auth: tpm2.PasswordAuth(nil)},
 					Digest:     tpm2.TPM2BDigest{Buffer: digest[:]},
 					Validation: tpm2.TPMTTKHashCheck{Tag: tpm2.TPMSTHashCheck},
 				}.Execute(thetpm)
@@ -976,13 +972,13 @@ func runPhase4(t *testing.T) {
 					t.Errorf("sig %d failed verify", i)
 				}
 			}
-			t.Log("Both signatures verified (policy auth)")
+			t.Log("Both signatures verified (password auth)")
 		})
 
 		t.Run("DifferentDigests", func(t *testing.T) {
 			thetpm := openTPM(t)
 			cleanupFDOState(t, thetpm)
-			dkNVName := createPersistentECCKey(t, thetpm)
+			createPersistentECCKey(t, thetpm)
 
 			readResp, _ := tpm2.ReadPublic{ObjectHandle: tpm2.TPMHandle(FDO_Device_Key_Handle)}.Execute(thetpm)
 			pub, _ := readResp.OutPublic.Contents()
@@ -992,7 +988,6 @@ func runPhase4(t *testing.T) {
 				X:     new(big.Int).SetBytes(ecc.X.Buffer),
 				Y:     new(big.Int).SetBytes(ecc.Y.Buffer),
 			}
-			policy := fdoKeyPolicy(DeviceKey_US_Index, dkNVName)
 
 			for _, msg := range []string{"DI message", "TO1", "TO2", "", "special!@#"} {
 				label := msg
@@ -1002,7 +997,7 @@ func runPhase4(t *testing.T) {
 				t.Run(label, func(t *testing.T) {
 					digest := sha256.Sum256([]byte(msg))
 					sigResp, err := tpm2.Sign{
-						KeyHandle:  tpm2.AuthHandle{Handle: tpm2.TPMHandle(FDO_Device_Key_Handle), Name: readResp.Name, Auth: policy},
+						KeyHandle:  tpm2.AuthHandle{Handle: tpm2.TPMHandle(FDO_Device_Key_Handle), Name: readResp.Name, Auth: tpm2.PasswordAuth(nil)},
 						Digest:     tpm2.TPM2BDigest{Buffer: digest[:]},
 						Validation: tpm2.TPMTTKHashCheck{Tag: tpm2.TPMSTHashCheck},
 					}.Execute(thetpm)
@@ -1024,13 +1019,13 @@ func runPhase4(t *testing.T) {
 		t.Run("Basic", func(t *testing.T) {
 			thetpm := openTPM(t)
 			cleanupFDOState(t, thetpm)
-			hmacNVName := createPersistentHMACKey(t, thetpm)
+			createPersistentHMACKey(t, thetpm)
 
 			computeHMAC := func(data []byte) []byte {
 				t.Helper()
 				rr, _ := tpm2.ReadPublic{ObjectHandle: tpm2.TPMHandle(FDO_HMAC_Secret_Handle)}.Execute(thetpm)
 				hs, err := tpm2.HmacStart{
-					Handle:  tpm2.AuthHandle{Handle: tpm2.TPMHandle(FDO_HMAC_Secret_Handle), Name: rr.Name, Auth: fdoKeyPolicy(HMAC_US_Index, hmacNVName)},
+					Handle:  tpm2.AuthHandle{Handle: tpm2.TPMHandle(FDO_HMAC_Secret_Handle), Name: rr.Name, Auth: tpm2.PasswordAuth(nil)},
 					Auth:    tpm2.TPM2BAuth{},
 					HashAlg: tpm2.TPMAlgNull,
 				}.Execute(thetpm)
@@ -1061,13 +1056,13 @@ func runPhase4(t *testing.T) {
 			if len(h1) != 32 {
 				t.Errorf("HMAC length: got %d, want 32", len(h1))
 			}
-			t.Logf("HMAC at 0x%08X: %x (policy auth)", FDO_HMAC_Secret_Handle, h1)
+			t.Logf("HMAC at 0x%08X: %x (password auth)", FDO_HMAC_Secret_Handle, h1)
 		})
 
 		t.Run("LargeData", func(t *testing.T) {
 			thetpm := openTPM(t)
 			cleanupFDOState(t, thetpm)
-			hmacNVName := createPersistentHMACKey(t, thetpm)
+			createPersistentHMACKey(t, thetpm)
 
 			largeData := make([]byte, 4096)
 			for i := range largeData {
@@ -1078,7 +1073,7 @@ func runPhase4(t *testing.T) {
 				t.Helper()
 				rr, _ := tpm2.ReadPublic{ObjectHandle: tpm2.TPMHandle(FDO_HMAC_Secret_Handle)}.Execute(thetpm)
 				hs, err := tpm2.HmacStart{
-					Handle:  tpm2.AuthHandle{Handle: tpm2.TPMHandle(FDO_HMAC_Secret_Handle), Name: rr.Name, Auth: fdoKeyPolicy(HMAC_US_Index, hmacNVName)},
+					Handle:  tpm2.AuthHandle{Handle: tpm2.TPMHandle(FDO_HMAC_Secret_Handle), Name: rr.Name, Auth: tpm2.PasswordAuth(nil)},
 					Auth:    tpm2.TPM2BAuth{},
 					HashAlg: tpm2.TPMAlgNull,
 				}.Execute(thetpm)
@@ -1122,8 +1117,8 @@ func runPhase4(t *testing.T) {
 	t.Run("PersistentHandleOps", func(t *testing.T) {
 		thetpm := openTPM(t)
 		cleanupFDOState(t, thetpm)
-		dkNVName := createPersistentECCKey(t, thetpm)
-		hmacNVName := createPersistentHMACKey(t, thetpm)
+		createPersistentECCKey(t, thetpm)
+		createPersistentHMACKey(t, thetpm)
 
 		t.Run("ReadPublic_DeviceKey", func(t *testing.T) {
 			resp, err := tpm2.ReadPublic{ObjectHandle: tpm2.TPMHandle(FDO_Device_Key_Handle)}.Execute(thetpm)
@@ -1158,7 +1153,7 @@ func runPhase4(t *testing.T) {
 			}
 			digest := sha256.Sum256([]byte("persistent sign"))
 			sigResp, err := tpm2.Sign{
-				KeyHandle:  tpm2.AuthHandle{Handle: tpm2.TPMHandle(FDO_Device_Key_Handle), Name: rr.Name, Auth: fdoKeyPolicy(DeviceKey_US_Index, dkNVName)},
+				KeyHandle:  tpm2.AuthHandle{Handle: tpm2.TPMHandle(FDO_Device_Key_Handle), Name: rr.Name, Auth: tpm2.PasswordAuth(nil)},
 				Digest:     tpm2.TPM2BDigest{Buffer: digest[:]},
 				Validation: tpm2.TPMTTKHashCheck{Tag: tpm2.TPMSTHashCheck},
 			}.Execute(thetpm)
@@ -1174,7 +1169,7 @@ func runPhase4(t *testing.T) {
 		t.Run("HMAC", func(t *testing.T) {
 			rr, _ := tpm2.ReadPublic{ObjectHandle: tpm2.TPMHandle(FDO_HMAC_Secret_Handle)}.Execute(thetpm)
 			hs, err := tpm2.HmacStart{
-				Handle:  tpm2.AuthHandle{Handle: tpm2.TPMHandle(FDO_HMAC_Secret_Handle), Name: rr.Name, Auth: fdoKeyPolicy(HMAC_US_Index, hmacNVName)},
+				Handle:  tpm2.AuthHandle{Handle: tpm2.TPMHandle(FDO_HMAC_Secret_Handle), Name: rr.Name, Auth: tpm2.PasswordAuth(nil)},
 				Auth:    tpm2.TPM2BAuth{},
 				HashAlg: tpm2.TPMAlgNull,
 			}.Execute(thetpm)
@@ -1254,8 +1249,8 @@ func runPhase5(t *testing.T) {
 					assertBool(t, "AuthRead", a.AuthRead, true)
 					assertBool(t, "NoDA", a.NoDA, true)
 					assertBool(t, "PlatformCreate", a.PlatformCreate, expectPlatformCreate)
-					assertBool(t, "OwnerWrite", a.OwnerWrite, false)
-					assertBool(t, "OwnerRead", a.OwnerRead, false)
+					assertBool(t, "OwnerWrite", a.OwnerWrite, true)
+					assertBool(t, "OwnerRead", a.OwnerRead, true)
 				})
 			}
 		})
@@ -1306,25 +1301,27 @@ func runPhase5(t *testing.T) {
 			pB := readAttrs(DCTPM_Index)
 			pC := readAttrs(DCOV_Index)
 
-			// A vs B: Owner access (always distinguishable)
-			if !pA.OwnerWrite || pB.OwnerWrite {
-				t.Error("A should have OwnerWrite, B should not")
+			// All profiles now have OwnerWrite and OwnerRead
+			for name, a := range map[string]tpm2.TPMANV{"A": pA, "B": pB, "C": pC} {
+				if !a.OwnerWrite {
+					t.Errorf("Profile %s missing OwnerWrite", name)
+				}
+				if !a.OwnerRead {
+					t.Errorf("Profile %s missing OwnerRead", name)
+				}
 			}
 			// PlatformCreate checks only meaningful when using Platform hierarchy
 			if expectPlatformCreate {
-				if !pA.PlatformCreate || pC.PlatformCreate {
-					t.Error("A should have PlatformCreate, C should not")
+				if !pA.PlatformCreate || !pB.PlatformCreate {
+					t.Error("A and B should have PlatformCreate")
 				}
-				if !pB.PlatformCreate || !pC.OwnerWrite {
-					t.Error("B should have PlatformCreate, C should have OwnerWrite")
+				if pC.PlatformCreate {
+					t.Error("C should not have PlatformCreate")
 				}
 			} else {
 				// With FDO_TPM_OWNER_HIERARCHY=1, A/B don't have PlatformCreate
 				if pA.PlatformCreate || pB.PlatformCreate || pC.PlatformCreate {
 					t.Error("PlatformCreate should be false when using Owner hierarchy")
-				}
-				if !pC.OwnerWrite {
-					t.Error("C should have OwnerWrite")
 				}
 			}
 			// All share AuthWrite, AuthRead, NoDA
@@ -1350,14 +1347,14 @@ func runPhase5(t *testing.T) {
 			assertBool(t, "FixedParent", oa.FixedParent, true)
 			assertBool(t, "SensitiveDataOrigin", oa.SensitiveDataOrigin, true)
 			assertBool(t, "SignEncrypt", oa.SignEncrypt, true)
-			assertBool(t, "UserWithAuth", oa.UserWithAuth, false)
+			assertBool(t, "UserWithAuth", oa.UserWithAuth, true)
+			assertBool(t, "AdminWithPolicy", oa.AdminWithPolicy, true)
 			assertBool(t, "STClear", oa.STClear, false)
 			assertBool(t, "Restricted", oa.Restricted, false)
 			assertBool(t, "Decrypt", oa.Decrypt, false)
 
-			if len(pub.AuthPolicy.Buffer) == 0 {
-				t.Error("AuthPolicy empty; spec requires Table 12 digest")
-			}
+			// With userWithAuth=1, AuthPolicy is no longer required for key usage
+			// (adminWithPolicy=1 only requires policy for admin operations)
 			if pub.Type != tpm2.TPMAlgECC {
 				t.Errorf("Type: got %v, want ECC", pub.Type)
 			}
@@ -1376,11 +1373,11 @@ func runPhase5(t *testing.T) {
 			assertBool(t, "FixedParent", oa.FixedParent, true)
 			assertBool(t, "SensitiveDataOrigin", oa.SensitiveDataOrigin, true)
 			assertBool(t, "SignEncrypt", oa.SignEncrypt, true)
-			assertBool(t, "UserWithAuth", oa.UserWithAuth, false)
+			assertBool(t, "UserWithAuth", oa.UserWithAuth, true)
+			assertBool(t, "AdminWithPolicy", oa.AdminWithPolicy, true)
 
-			if len(pub.AuthPolicy.Buffer) == 0 {
-				t.Error("AuthPolicy empty; spec requires Table 12 digest")
-			}
+			// With userWithAuth=1, AuthPolicy is no longer required for key usage
+			// (adminWithPolicy=1 only requires policy for admin operations)
 			if pub.Type != tpm2.TPMAlgKeyedHash {
 				t.Errorf("Type: got %v, want KeyedHash", pub.Type)
 			}
@@ -1388,93 +1385,81 @@ func runPhase5(t *testing.T) {
 	})
 
 	t.Run("AuthPolicyDigest", func(t *testing.T) {
+		// With userWithAuth=1, keys are created without an AuthPolicy.
+		// These tests verify that keys work with empty (password) auth
+		// and that AuthPolicy is empty as expected.
 		t.Run("DeviceKey", func(t *testing.T) {
 			thetpm := openTPM(t)
 			cleanupFDOState(t, thetpm)
-
-			us := generateTestDeviceKeyUniqueString(64)
-			nvName := defineNVSpec(t, thetpm, DeviceKey_US_Index, 64, nvAttrsProfileB, tpm2.TPMRHPlatform)
-			writeNVAuth(t, thetpm, DeviceKey_US_Index, nvName, us)
-
-			expected := computeFDOAuthPolicy(t, thetpm, DeviceKey_US_Index, nvName)
-			resp, err := tpm2.CreatePrimary{
-				PrimaryHandle: tpm2.TPMRHEndorsement,
-				InPublic: tpm2.New2B(tpm2.TPMTPublic{
-					Type: tpm2.TPMAlgECC, NameAlg: tpm2.TPMAlgSHA256,
-					ObjectAttributes: tpm2.TPMAObject{
-						FixedTPM: true, FixedParent: true, SensitiveDataOrigin: true, SignEncrypt: true,
-					},
-					AuthPolicy: expected,
-					Parameters: tpm2.NewTPMUPublicParms(tpm2.TPMAlgECC, &tpm2.TPMSECCParms{
-						CurveID: tpm2.TPMECCNistP256,
-						Scheme: tpm2.TPMTECCScheme{Scheme: tpm2.TPMAlgECDSA,
-							Details: tpm2.NewTPMUAsymScheme(tpm2.TPMAlgECDSA, &tpm2.TPMSSigSchemeECDSA{HashAlg: tpm2.TPMAlgSHA256})},
-					}),
-					Unique: tpm2.NewTPMUPublicID(tpm2.TPMAlgECC, &tpm2.TPMSECCPoint{
-						X: tpm2.TPM2BECCParameter{Buffer: us[:32]},
-						Y: tpm2.TPM2BECCParameter{Buffer: us[32:]},
-					}),
-				}),
-			}.Execute(thetpm)
-			if err != nil {
-				t.Fatalf("CreatePrimary: %v", err)
-			}
-			tpm2.EvictControl{
-				Auth:             tpm2.TPMRHOwner,
-				ObjectHandle:     &tpm2.NamedHandle{Handle: resp.ObjectHandle, Name: resp.Name},
-				PersistentHandle: tpm2.TPMHandle(FDO_Device_Key_Handle),
-			}.Execute(thetpm) //nolint:errcheck
-			tpm2.FlushContext{FlushHandle: resp.ObjectHandle}.Execute(thetpm) //nolint:errcheck
+			createPersistentECCKey(t, thetpm)
 
 			rr, _ := tpm2.ReadPublic{ObjectHandle: tpm2.TPMHandle(FDO_Device_Key_Handle)}.Execute(thetpm)
 			pub, _ := rr.OutPublic.Contents()
-			if !bytes.Equal(pub.AuthPolicy.Buffer, expected.Buffer) {
-				t.Errorf("digest mismatch:\n  stored: %x\n  trial:  %x", pub.AuthPolicy.Buffer, expected.Buffer)
+
+			// AuthPolicy should be empty (userWithAuth=1 doesn't need it)
+			if len(pub.AuthPolicy.Buffer) != 0 {
+				t.Errorf("AuthPolicy should be empty with userWithAuth=1, got %x", pub.AuthPolicy.Buffer)
 			}
-			if len(pub.AuthPolicy.Buffer) != sha256.Size {
-				t.Errorf("digest length %d, want %d", len(pub.AuthPolicy.Buffer), sha256.Size)
+
+			// Verify the key works with empty password auth
+			digest := sha256.Sum256([]byte("auth policy test"))
+			sigResp, err := tpm2.Sign{
+				KeyHandle:  tpm2.AuthHandle{Handle: tpm2.TPMHandle(FDO_Device_Key_Handle), Name: rr.Name, Auth: tpm2.PasswordAuth(nil)},
+				Digest:     tpm2.TPM2BDigest{Buffer: digest[:]},
+				Validation: tpm2.TPMTTKHashCheck{Tag: tpm2.TPMSTHashCheck},
+			}.Execute(thetpm)
+			if err != nil {
+				t.Fatalf("Sign with empty auth: %v", err)
 			}
+			ecc, _ := pub.Unique.ECC()
+			pubKey := &ecdsa.PublicKey{
+				Curve: elliptic.P256(),
+				X:     new(big.Int).SetBytes(ecc.X.Buffer),
+				Y:     new(big.Int).SetBytes(ecc.Y.Buffer),
+			}
+			ecSig, _ := sigResp.Signature.Signature.ECDSA()
+			r := new(big.Int).SetBytes(ecSig.SignatureR.Buffer)
+			s := new(big.Int).SetBytes(ecSig.SignatureS.Buffer)
+			if !ecdsa.Verify(pubKey, digest[:], r, s) {
+				t.Fatal("ECDSA verify failed with empty auth")
+			}
+			t.Log("DeviceKey works with empty password auth (userWithAuth=1)")
 		})
 
 		t.Run("HMACSecret", func(t *testing.T) {
 			thetpm := openTPM(t)
 			cleanupFDOState(t, thetpm)
-
-			us := generateTestHMACUniqueString(32)
-			nvName := defineNVSpec(t, thetpm, HMAC_US_Index, 32, nvAttrsProfileB, tpm2.TPMRHPlatform)
-			writeNVAuth(t, thetpm, HMAC_US_Index, nvName, us)
-
-			expected := computeFDOAuthPolicy(t, thetpm, HMAC_US_Index, nvName)
-			resp, err := tpm2.CreatePrimary{
-				PrimaryHandle: tpm2.TPMRHEndorsement,
-				InPublic: tpm2.New2B(tpm2.TPMTPublic{
-					Type: tpm2.TPMAlgKeyedHash, NameAlg: tpm2.TPMAlgSHA256,
-					ObjectAttributes: tpm2.TPMAObject{
-						FixedTPM: true, FixedParent: true, SensitiveDataOrigin: true, SignEncrypt: true,
-					},
-					AuthPolicy: expected,
-					Parameters: tpm2.NewTPMUPublicParms(tpm2.TPMAlgKeyedHash, &tpm2.TPMSKeyedHashParms{
-						Scheme: tpm2.TPMTKeyedHashScheme{Scheme: tpm2.TPMAlgHMAC,
-							Details: tpm2.NewTPMUSchemeKeyedHash(tpm2.TPMAlgHMAC, &tpm2.TPMSSchemeHMAC{HashAlg: tpm2.TPMAlgSHA256})},
-					}),
-					Unique: tpm2.NewTPMUPublicID(tpm2.TPMAlgKeyedHash, &tpm2.TPM2BDigest{Buffer: us}),
-				}),
-			}.Execute(thetpm)
-			if err != nil {
-				t.Fatalf("CreatePrimary: %v", err)
-			}
-			tpm2.EvictControl{
-				Auth:             tpm2.TPMRHOwner,
-				ObjectHandle:     &tpm2.NamedHandle{Handle: resp.ObjectHandle, Name: resp.Name},
-				PersistentHandle: tpm2.TPMHandle(FDO_HMAC_Secret_Handle),
-			}.Execute(thetpm) //nolint:errcheck
-			tpm2.FlushContext{FlushHandle: resp.ObjectHandle}.Execute(thetpm) //nolint:errcheck
+			createPersistentHMACKey(t, thetpm)
 
 			rr, _ := tpm2.ReadPublic{ObjectHandle: tpm2.TPMHandle(FDO_HMAC_Secret_Handle)}.Execute(thetpm)
 			pub, _ := rr.OutPublic.Contents()
-			if !bytes.Equal(pub.AuthPolicy.Buffer, expected.Buffer) {
-				t.Errorf("digest mismatch:\n  stored: %x\n  trial:  %x", pub.AuthPolicy.Buffer, expected.Buffer)
+
+			// AuthPolicy should be empty (userWithAuth=1 doesn't need it)
+			if len(pub.AuthPolicy.Buffer) != 0 {
+				t.Errorf("AuthPolicy should be empty with userWithAuth=1, got %x", pub.AuthPolicy.Buffer)
 			}
+
+			// Verify the key works with empty password auth
+			hs, err := tpm2.HmacStart{
+				Handle:  tpm2.AuthHandle{Handle: tpm2.TPMHandle(FDO_HMAC_Secret_Handle), Name: rr.Name, Auth: tpm2.PasswordAuth(nil)},
+				Auth:    tpm2.TPM2BAuth{},
+				HashAlg: tpm2.TPMAlgNull,
+			}.Execute(thetpm)
+			if err != nil {
+				t.Fatalf("HmacStart with empty auth: %v", err)
+			}
+			sc, err := tpm2.SequenceComplete{
+				SequenceHandle: tpm2.AuthHandle{Handle: hs.SequenceHandle, Auth: tpm2.PasswordAuth(nil)},
+				Buffer:         tpm2.TPM2BMaxBuffer{Buffer: []byte("auth policy test")},
+				Hierarchy:      tpm2.TPMRHNull,
+			}.Execute(thetpm)
+			if err != nil {
+				t.Fatalf("SequenceComplete: %v", err)
+			}
+			if len(sc.Result.Buffer) != 32 {
+				t.Errorf("HMAC length: got %d, want 32", len(sc.Result.Buffer))
+			}
+			t.Log("HMACSecret works with empty password auth (userWithAuth=1)")
 		})
 	})
 
@@ -1485,16 +1470,16 @@ func runPhase5(t *testing.T) {
 			createPersistentECCKey(t, thetpm)
 
 			rr, _ := tpm2.ReadPublic{ObjectHandle: tpm2.TPMHandle(FDO_Device_Key_Handle)}.Execute(thetpm)
-			digest := sha256.Sum256([]byte("negative auth"))
+			digest := sha256.Sum256([]byte("password auth test"))
 			_, err := tpm2.Sign{
 				KeyHandle:  tpm2.AuthHandle{Handle: tpm2.TPMHandle(FDO_Device_Key_Handle), Name: rr.Name, Auth: tpm2.PasswordAuth(nil)},
 				Digest:     tpm2.TPM2BDigest{Buffer: digest[:]},
 				Validation: tpm2.TPMTTKHashCheck{Tag: tpm2.TPMSTHashCheck},
 			}.Execute(thetpm)
-			if err == nil {
-				t.Fatal("password auth should fail (UserWithAuth=0)")
+			if err != nil {
+				t.Fatalf("password auth should succeed (UserWithAuth=1): %v", err)
 			}
-			t.Logf("Correctly rejected: %v", err)
+			t.Log("Password auth on signing key accepted (UserWithAuth=1)")
 		})
 
 		t.Run("PasswordOnHMACKey", func(t *testing.T) {
@@ -1503,15 +1488,21 @@ func runPhase5(t *testing.T) {
 			createPersistentHMACKey(t, thetpm)
 
 			rr, _ := tpm2.ReadPublic{ObjectHandle: tpm2.TPMHandle(FDO_HMAC_Secret_Handle)}.Execute(thetpm)
-			_, err := tpm2.HmacStart{
+			hs, err := tpm2.HmacStart{
 				Handle:  tpm2.AuthHandle{Handle: tpm2.TPMHandle(FDO_HMAC_Secret_Handle), Name: rr.Name, Auth: tpm2.PasswordAuth(nil)},
 				Auth:    tpm2.TPM2BAuth{},
 				HashAlg: tpm2.TPMAlgNull,
 			}.Execute(thetpm)
-			if err == nil {
-				t.Fatal("password auth should fail (UserWithAuth=0)")
+			if err != nil {
+				t.Fatalf("password auth should succeed (UserWithAuth=1): %v", err)
 			}
-			t.Logf("Correctly rejected: %v", err)
+			// Complete the HMAC sequence to clean up
+			tpm2.SequenceComplete{
+				SequenceHandle: tpm2.AuthHandle{Handle: hs.SequenceHandle, Auth: tpm2.PasswordAuth(nil)},
+				Buffer:         tpm2.TPM2BMaxBuffer{Buffer: []byte("test")},
+				Hierarchy:      tpm2.TPMRHNull,
+			}.Execute(thetpm) //nolint:errcheck
+			t.Log("Password auth on HMAC key accepted (UserWithAuth=1)")
 		})
 
 		t.Run("OwnerWriteOnProfileB", func(t *testing.T) {
@@ -1522,15 +1513,16 @@ func runPhase5(t *testing.T) {
 			nvName := defineNVSpec(t, thetpm, HMAC_US_Index, 32, nvAttrsProfileB, tpm2.TPMRHPlatform)
 			writeNVAuth(t, thetpm, HMAC_US_Index, nvName, data) // should work
 
+			// Profile B now includes OwnerWrite=1, so Owner write should succeed
 			_, err := (tpm2.NVWrite{
 				AuthHandle: tpm2.AuthHandle{Handle: tpm2.TPMRHOwner, Auth: tpm2.PasswordAuth(nil)},
 				NVIndex:    tpm2.NamedHandle{Handle: HMAC_US_Index, Name: nvName},
 				Data:       tpm2.TPM2BMaxNVBuffer{Buffer: data},
 			}).Execute(thetpm)
-			if err == nil {
-				t.Fatal("Owner write should fail on Profile B (OwnerWrite=0)")
+			if err != nil {
+				t.Fatalf("Owner write should succeed on Profile B (OwnerWrite=1): %v", err)
 			}
-			t.Logf("Correctly rejected: %v", err)
+			t.Log("Owner write on Profile B accepted (OwnerWrite=1)")
 		})
 
 		t.Run("OwnerReadOnProfileB", func(t *testing.T) {
@@ -1541,23 +1533,31 @@ func runPhase5(t *testing.T) {
 			nvName := defineNVSpec(t, thetpm, HMAC_US_Index, 32, nvAttrsProfileB, tpm2.TPMRHPlatform)
 			writeNVAuth(t, thetpm, HMAC_US_Index, nvName, data)
 
-			_, err := (tpm2.NVRead{
+			// Profile B now includes OwnerRead=1, so Owner read should succeed
+			resp, err := (tpm2.NVRead{
 				AuthHandle: tpm2.AuthHandle{Handle: tpm2.TPMRHOwner, Auth: tpm2.PasswordAuth(nil)},
 				NVIndex:    tpm2.NamedHandle{Handle: HMAC_US_Index, Name: nvName},
 				Size:       32,
 			}).Execute(thetpm)
-			if err == nil {
-				t.Fatal("Owner read should fail on Profile B (OwnerRead=0)")
+			if err != nil {
+				t.Fatalf("Owner read should succeed on Profile B (OwnerRead=1): %v", err)
 			}
-			t.Logf("Correctly rejected: %v", err)
+			if !bytes.Equal(resp.Data.Buffer, data) {
+				t.Error("Owner read data mismatch")
+			}
+			t.Log("Owner read on Profile B accepted (OwnerRead=1)")
 		})
 
 		t.Run("WrongPolicyNVIndex", func(t *testing.T) {
+			// With userWithAuth=1, password auth works for signing — policy sessions
+			// are only needed for admin operations (adminWithPolicy=1). This test
+			// verifies that a policy session (legacy behavior) fails when the key
+			// has no AuthPolicy set.
 			thetpm := openTPM(t)
 			cleanupFDOState(t, thetpm)
-			createPersistentECCKey(t, thetpm) // bound to DeviceKey_US
+			createPersistentECCKey(t, thetpm)
 
-			// Create a separate HMAC US NV index
+			// Create a separate HMAC US NV index for a policy session
 			hmacUS := generateTestHMACUniqueString(32)
 			hmacNVName := defineNVSpec(t, thetpm, HMAC_US_Index, 32, nvAttrsProfileB, tpm2.TPMRHPlatform)
 			writeNVAuth(t, thetpm, HMAC_US_Index, hmacNVName, hmacUS)
@@ -1565,16 +1565,16 @@ func runPhase5(t *testing.T) {
 			rr, _ := tpm2.ReadPublic{ObjectHandle: tpm2.TPMHandle(FDO_Device_Key_Handle)}.Execute(thetpm)
 			digest := sha256.Sum256([]byte("wrong policy"))
 
-			// Use HMAC_US policy for Device Key — should fail
+			// Policy session should fail — key has no AuthPolicy (userWithAuth=1)
 			_, err := tpm2.Sign{
 				KeyHandle:  tpm2.AuthHandle{Handle: tpm2.TPMHandle(FDO_Device_Key_Handle), Name: rr.Name, Auth: fdoKeyPolicy(HMAC_US_Index, hmacNVName)},
 				Digest:     tpm2.TPM2BDigest{Buffer: digest[:]},
 				Validation: tpm2.TPMTTKHashCheck{Tag: tpm2.TPMSTHashCheck},
 			}.Execute(thetpm)
 			if err == nil {
-				t.Fatal("wrong policy NV index should fail (digest mismatch)")
+				t.Fatal("policy session should fail (key has no AuthPolicy with userWithAuth=1)")
 			}
-			t.Logf("Correctly rejected: %v", err)
+			t.Logf("Policy session correctly rejected: %v", err)
 		})
 	})
 }
@@ -1689,15 +1689,14 @@ func runPhase6(t *testing.T) {
 		nvNameDKUS := defineNVSpec(t, thetpm, DeviceKey_US_Index, 64, profileB.attrs, profileB.authHandle)
 		writeNVAuth(t, thetpm, DeviceKey_US_Index, nvNameDKUS, dkUS)
 
-		dkPolicy := computeFDOAuthPolicy(t, thetpm, DeviceKey_US_Index, nvNameDKUS)
 		dkResp, err := tpm2.CreatePrimary{
 			PrimaryHandle: tpm2.TPMRHEndorsement,
 			InPublic: tpm2.New2B(tpm2.TPMTPublic{
 				Type: tpm2.TPMAlgECC, NameAlg: tpm2.TPMAlgSHA256,
 				ObjectAttributes: tpm2.TPMAObject{
 					FixedTPM: true, FixedParent: true, SensitiveDataOrigin: true, SignEncrypt: true,
+					UserWithAuth: true, AdminWithPolicy: true,
 				},
-				AuthPolicy: dkPolicy,
 				Parameters: tpm2.NewTPMUPublicParms(tpm2.TPMAlgECC, &tpm2.TPMSECCParms{
 					CurveID: tpm2.TPMECCNistP256,
 					Scheme: tpm2.TPMTECCScheme{Scheme: tpm2.TPMAlgECDSA,
@@ -1742,15 +1741,14 @@ func runPhase6(t *testing.T) {
 		nvNameHMACUS := defineNVSpec(t, thetpm, HMAC_US_Index, 32, profileB.attrs, profileB.authHandle)
 		writeNVAuth(t, thetpm, HMAC_US_Index, nvNameHMACUS, hmacUS)
 
-		hmacPolicy := computeFDOAuthPolicy(t, thetpm, HMAC_US_Index, nvNameHMACUS)
 		hmacResp, err := tpm2.CreatePrimary{
 			PrimaryHandle: tpm2.TPMRHEndorsement,
 			InPublic: tpm2.New2B(tpm2.TPMTPublic{
 				Type: tpm2.TPMAlgKeyedHash, NameAlg: tpm2.TPMAlgSHA256,
 				ObjectAttributes: tpm2.TPMAObject{
 					FixedTPM: true, FixedParent: true, SensitiveDataOrigin: true, SignEncrypt: true,
+					UserWithAuth: true, AdminWithPolicy: true,
 				},
-				AuthPolicy: hmacPolicy,
 				Parameters: tpm2.NewTPMUPublicParms(tpm2.TPMAlgKeyedHash, &tpm2.TPMSKeyedHashParms{
 					Scheme: tpm2.TPMTKeyedHashScheme{Scheme: tpm2.TPMAlgHMAC,
 						Details: tpm2.NewTPMUSchemeKeyedHash(tpm2.TPMAlgHMAC, &tpm2.TPMSSchemeHMAC{HashAlg: tpm2.TPMAlgSHA256})},
@@ -1774,7 +1772,7 @@ func runPhase6(t *testing.T) {
 		//    Ownership Voucher on the OWNER'S server
 		hmacRR, _ := tpm2.ReadPublic{ObjectHandle: tpm2.TPMHandle(FDO_HMAC_Secret_Handle)}.Execute(thetpm)
 		hs, err := tpm2.HmacStart{
-			Handle:  tpm2.AuthHandle{Handle: tpm2.TPMHandle(FDO_HMAC_Secret_Handle), Name: hmacRR.Name, Auth: fdoKeyPolicy(HMAC_US_Index, nvNameHMACUS)},
+			Handle:  tpm2.AuthHandle{Handle: tpm2.TPMHandle(FDO_HMAC_Secret_Handle), Name: hmacRR.Name, Auth: tpm2.PasswordAuth(nil)},
 			HashAlg: tpm2.TPMAlgNull,
 		}.Execute(thetpm)
 		if err != nil {
@@ -1837,7 +1835,7 @@ func runPhase6(t *testing.T) {
 //  2. Read DCTPM from NV 0x01D10001 — extract GUID and device info
 //  3. Discover DAK at persistent handle 0x81020002 via ReadPublic
 //  4. Discover DeviceKey_US NV Name via NVReadPublic
-//  5. Sign challenge nonce with DAK using policy session auth
+//  5. Sign challenge nonce with DAK using password auth (empty authValue)
 //  6. Discover HMAC key at persistent handle 0x81020003 via ReadPublic
 //  7. Discover HMAC_US NV Name via NVReadPublic
 //  8. Compute HMAC over GUID (read from NV, not from any Go variable)
@@ -1883,16 +1881,11 @@ func onboardFromTPMOnly(t *testing.T, thetpm transport.TPM, voucher *ownerVouche
 		t.Fatalf("[%s] ReadPublic DAK: %v", label, err)
 	}
 
-	nvPubDKUS, err := tpm2.NVReadPublic{NVIndex: tpm2.TPMHandle(DeviceKey_US_Index)}.Execute(thetpm)
-	if err != nil {
-		t.Fatalf("[%s] NVReadPublic DeviceKey_US: %v", label, err)
-	}
-
 	sigResp, err := tpm2.Sign{
 		KeyHandle: tpm2.AuthHandle{
 			Handle: tpm2.TPMHandle(FDO_Device_Key_Handle),
 			Name:   dkReadResp.Name,
-			Auth:   fdoKeyPolicy(DeviceKey_US_Index, nvPubDKUS.NVName),
+			Auth:   tpm2.PasswordAuth(nil),
 		},
 		Digest:     tpm2.TPM2BDigest{Buffer: nonce[:]},
 		Validation: tpm2.TPMTTKHashCheck{Tag: tpm2.TPMSTHashCheck},
@@ -1900,21 +1893,16 @@ func onboardFromTPMOnly(t *testing.T, thetpm transport.TPM, voucher *ownerVouche
 	if err != nil {
 		t.Fatalf("[%s] DAK Sign: %v", label, err)
 	}
-	t.Logf("[%s] Signed nonce with DAK (policy session auth)", label)
+	t.Logf("[%s] Signed nonce with DAK (password auth)", label)
 
 	// ── Device step 6-8: Compute HMAC over GUID from NV ──
 	// CRITICAL: uses deviceGUID (read from TPM NV), not voucher.guid
-	nvPubHMACUS, err := tpm2.NVReadPublic{NVIndex: tpm2.TPMHandle(HMAC_US_Index)}.Execute(thetpm)
-	if err != nil {
-		t.Fatalf("[%s] NVReadPublic HMAC_US: %v", label, err)
-	}
-
 	hmacRR, err := tpm2.ReadPublic{ObjectHandle: tpm2.TPMHandle(FDO_HMAC_Secret_Handle)}.Execute(thetpm)
 	if err != nil {
 		t.Fatalf("[%s] ReadPublic HMAC key: %v", label, err)
 	}
 	hs, err := tpm2.HmacStart{
-		Handle:  tpm2.AuthHandle{Handle: tpm2.TPMHandle(FDO_HMAC_Secret_Handle), Name: hmacRR.Name, Auth: fdoKeyPolicy(HMAC_US_Index, nvPubHMACUS.NVName)},
+		Handle:  tpm2.AuthHandle{Handle: tpm2.TPMHandle(FDO_HMAC_Secret_Handle), Name: hmacRR.Name, Auth: tpm2.PasswordAuth(nil)},
 		HashAlg: tpm2.TPMAlgNull,
 	}.Execute(thetpm)
 	if err != nil {
@@ -1981,15 +1969,14 @@ func runPhase7(t *testing.T) {
 	nvNameDKUS := defineNVSpec(t, thetpm, DeviceKey_US_Index, 64, nvAttrsProfileB, tpm2.TPMRHPlatform)
 	writeNVAuth(t, thetpm, DeviceKey_US_Index, nvNameDKUS, dkUS)
 
-	dkPolicy := computeFDOAuthPolicy(t, thetpm, DeviceKey_US_Index, nvNameDKUS)
 	dkResp, err := tpm2.CreatePrimary{
 		PrimaryHandle: tpm2.TPMRHEndorsement,
 		InPublic: tpm2.New2B(tpm2.TPMTPublic{
 			Type: tpm2.TPMAlgECC, NameAlg: tpm2.TPMAlgSHA256,
 			ObjectAttributes: tpm2.TPMAObject{
 				FixedTPM: true, FixedParent: true, SensitiveDataOrigin: true, SignEncrypt: true,
+				UserWithAuth: true, AdminWithPolicy: true,
 			},
-			AuthPolicy: dkPolicy,
 			Parameters: tpm2.NewTPMUPublicParms(tpm2.TPMAlgECC, &tpm2.TPMSECCParms{
 				CurveID: tpm2.TPMECCNistP256,
 				Scheme: tpm2.TPMTECCScheme{Scheme: tpm2.TPMAlgECDSA,
@@ -2018,15 +2005,14 @@ func runPhase7(t *testing.T) {
 	nvNameHMACUS := defineNVSpec(t, thetpm, HMAC_US_Index, 32, nvAttrsProfileB, tpm2.TPMRHPlatform)
 	writeNVAuth(t, thetpm, HMAC_US_Index, nvNameHMACUS, hmacUS)
 
-	hmacPolicy := computeFDOAuthPolicy(t, thetpm, HMAC_US_Index, nvNameHMACUS)
 	hmResp, err := tpm2.CreatePrimary{
 		PrimaryHandle: tpm2.TPMRHEndorsement,
 		InPublic: tpm2.New2B(tpm2.TPMTPublic{
 			Type: tpm2.TPMAlgKeyedHash, NameAlg: tpm2.TPMAlgSHA256,
 			ObjectAttributes: tpm2.TPMAObject{
 				FixedTPM: true, FixedParent: true, SensitiveDataOrigin: true, SignEncrypt: true,
+				UserWithAuth: true, AdminWithPolicy: true,
 			},
-			AuthPolicy: hmacPolicy,
 			Parameters: tpm2.NewTPMUPublicParms(tpm2.TPMAlgKeyedHash, &tpm2.TPMSKeyedHashParms{
 				Scheme: tpm2.TPMTKeyedHashScheme{Scheme: tpm2.TPMAlgHMAC,
 					Details: tpm2.NewTPMUSchemeKeyedHash(tpm2.TPMAlgHMAC, &tpm2.TPMSSchemeHMAC{HashAlg: tpm2.TPMAlgSHA256})},
@@ -2104,12 +2090,6 @@ func runPhase7(t *testing.T) {
 		}
 		if !info.HasHMACKey {
 			t.Error("HasHMACKey: got false, want true")
-		}
-		if info.HMACUSSize != 32 {
-			t.Errorf("HMACUSSize: got %d, want 32", info.HMACUSSize)
-		}
-		if info.DevKeyUSSize != 64 {
-			t.Errorf("DevKeyUSSize: got %d, want 64", info.DevKeyUSSize)
 		}
 
 		t.Logf("ReadNVCredentials: HasDCTPM=%v DCTPMSize=%d HasDAK=%v HasHMACKey=%v",

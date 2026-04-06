@@ -126,13 +126,13 @@ start_server() {
 	# shellcheck disable=SC2086 # $flags intentionally unquoted for word splitting
 	log_step "go run ./cmd server -http \"$SERVER_ADDR\" -db \"../$DB_FILE\" $flags"
 	# shellcheck disable=SC2086
-	(cd examples && go run ./cmd server -http "$SERVER_ADDR" -db "../$DB_FILE" $flags >/tmp/fdo_server.log 2>&1) &
+	(cd examples && go run ./cmd server -http "$SERVER_ADDR" -db "../$DB_FILE" $flags >../$EPHEMERAL_DIR/fdo_server.log 2>&1) &
 	SERVER_PID=$!
 
 	# Wait for server to start listening AND verify it's actually accepting connections
 	local retries=15
 	while [ $retries -gt 0 ]; do
-		if grep -q "Listening" /tmp/fdo_server.log 2>/dev/null; then
+		if grep -q "Listening" $EPHEMERAL_DIR/fdo_server.log 2>/dev/null; then
 			# Log says listening - now verify the port is actually open
 			sleep 0.5
 			if nc -z 127.0.0.1 9999 2>/dev/null || (echo >/dev/tcp/127.0.0.1/9999) 2>/dev/null; then
@@ -142,13 +142,13 @@ start_server() {
 			# Port not open yet, check if process died
 			if ! kill -0 "$SERVER_PID" 2>/dev/null; then
 				log_error "Server process died after logging Listening"
-				cat /tmp/fdo_server.log 2>/dev/null || true
+				cat $EPHEMERAL_DIR/fdo_server.log 2>/dev/null || true
 				return 1
 			fi
 		fi
 		if ! kill -0 "$SERVER_PID" 2>/dev/null; then
 			log_error "Server process died"
-			cat /tmp/fdo_server.log 2>/dev/null || true
+			cat $EPHEMERAL_DIR/fdo_server.log 2>/dev/null || true
 			return 1
 		fi
 		sleep 1
@@ -156,7 +156,7 @@ start_server() {
 	done
 
 	log_error "Server failed to start (timeout)"
-	cat /tmp/fdo_server.log 2>/dev/null || true
+	cat $EPHEMERAL_DIR/fdo_server.log 2>/dev/null || true
 	return 1
 }
 
@@ -715,13 +715,13 @@ test_sysconfig_fdo200() {
 
 	log_step "Running TO1/TO2 with FDO 2.0 and sysconfig parameters"
 	echo ">>> PROOF TEST: Capturing FDO 2.0 client output to show sysconfig parameters:"
-	run_cmd go run ./cmd client -fdo-version 200 2>&1 | tee /tmp/fdo200_sysconfig.log
+	run_cmd go run ./cmd client -fdo-version 200 2>&1 | tee $EPHEMERAL_DIR/fdo200_sysconfig.log
 	log_success "TO1/TO2 completed with FDO 2.0 and sysconfig parameters"
 
 	# Check if sysconfig parameters were received
-	if grep -q "\[fdo.sysconfig\]" /tmp/fdo200_sysconfig.log; then
+	if grep -q "\[fdo.sysconfig\]" $EPHEMERAL_DIR/fdo200_sysconfig.log; then
 		echo "✓ FDO 2.0 SUCCESS: Found sysconfig parameters:"
-		grep "\[fdo.sysconfig\]" /tmp/fdo200_sysconfig.log
+		grep "\[fdo.sysconfig\]" $EPHEMERAL_DIR/fdo200_sysconfig.log
 		FDO200_SUCCESS=true
 	else
 		echo "✗ FDO 2.0 FAILURE: No sysconfig parameters found in FDO 2.0 client output"
@@ -748,13 +748,13 @@ test_sysconfig_fdo200() {
 
 	log_step "Running TO1/TO2 with FDO 1.01 and sysconfig parameters"
 	echo ">>> COMPARISON: Capturing FDO 1.01 client output to show sysconfig parameters:"
-	run_cmd go run ./cmd client 2>&1 | tee /tmp/fdo101_sysconfig.log
+	run_cmd go run ./cmd client 2>&1 | tee $EPHEMERAL_DIR/fdo101_sysconfig.log
 	log_success "TO1/TO2 completed with FDO 1.01 and sysconfig parameters"
 
 	# Check if sysconfig parameters were received
-	if grep -q "\[fdo.sysconfig\]" /tmp/fdo101_sysconfig.log; then
+	if grep -q "\[fdo.sysconfig\]" $EPHEMERAL_DIR/fdo101_sysconfig.log; then
 		echo "✓ FDO 1.01 SUCCESS: Found sysconfig parameters:"
-		grep "\[fdo.sysconfig\]" /tmp/fdo101_sysconfig.log
+		grep "\[fdo.sysconfig\]" $EPHEMERAL_DIR/fdo101_sysconfig.log
 		FDO101_SUCCESS=true
 	else
 		echo "✗ FDO 1.01 FAILURE: No sysconfig parameters found"
@@ -1778,7 +1778,7 @@ open('$TAMPERED_FILE', 'wb').write(data)
 			return 1
 		fi
 		# TO2 might succeed at protocol level but BMO should fail — check logs
-		if grep -q "signature.*invalid\|signature.*failed\|BMOError" /tmp/fdo_server.log 2>/dev/null; then
+		if grep -q "signature.*invalid\|signature.*failed\|BMOError" $EPHEMERAL_DIR/fdo_server.log 2>/dev/null; then
 			log_success "TO2 completed but BMO correctly rejected tampered signature"
 		else
 			log_error "TO2 succeeded unexpectedly with tampered signature"
@@ -1969,7 +1969,7 @@ test_credentials() {
 
 	# Show server log to verify public key was received
 	echo ">>> Server received public key:"
-	grep -A5 "Received public key" /tmp/fdo_server.log 2>/dev/null || echo "  (check /tmp/fdo_server.log for details)"
+	grep -A5 "Received public key" $EPHEMERAL_DIR/fdo_server.log 2>/dev/null || echo "  (check $EPHEMERAL_DIR/fdo_server.log for details)"
 
 	stop_server
 	log_success "Registered Credentials test PASSED"
@@ -1998,12 +1998,12 @@ test_credentials() {
 
 	# Show server received CSR
 	echo ">>> SERVER received CSR from CLIENT:"
-	grep -A4 "SERVER received CSR" /tmp/fdo_server.log 2>/dev/null || echo "  (check /tmp/fdo_server.log for details)"
+	grep -A4 "SERVER received CSR" $EPHEMERAL_DIR/fdo_server.log 2>/dev/null || echo "  (check $EPHEMERAL_DIR/fdo_server.log for details)"
 
 	# Show server sent cert + CA
 	echo ""
 	echo ">>> SERVER sent signed cert + CA to CLIENT:"
-	grep -A3 "SERVER sending signed cert" /tmp/fdo_server.log 2>/dev/null || echo "  (check /tmp/fdo_server.log for details)"
+	grep -A3 "SERVER sending signed cert" $EPHEMERAL_DIR/fdo_server.log 2>/dev/null || echo "  (check $EPHEMERAL_DIR/fdo_server.log for details)"
 
 	stop_server
 	log_success "Enrolled Credentials test PASSED"
@@ -2081,13 +2081,13 @@ test_auth() {
 	sleep 1
 
 	log_step "Starting FDOKeyAuth test server"
-	(cd examples && go run ./authtest -addr "$AUTH_ADDR" >/tmp/fdo_authtest.log 2>&1) &
+	(cd examples && go run ./authtest -addr "$AUTH_ADDR" >../$EPHEMERAL_DIR/fdo_authtest.log 2>&1) &
 	AUTH_PID=$!
 
 	# Wait for server to start
 	local retries=15
 	while [ $retries -gt 0 ]; do
-		if grep -q "Listening" /tmp/fdo_authtest.log 2>/dev/null; then
+		if grep -q "Listening" $EPHEMERAL_DIR/fdo_authtest.log 2>/dev/null; then
 			sleep 0.5
 			if nc -z 127.0.0.1 9998 2>/dev/null || (echo >/dev/tcp/127.0.0.1/9998) 2>/dev/null; then
 				log_success "FDOKeyAuth server started (PID: $AUTH_PID)"
@@ -2096,7 +2096,7 @@ test_auth() {
 		fi
 		if ! kill -0 "$AUTH_PID" 2>/dev/null; then
 			log_error "FDOKeyAuth server process died"
-			cat /tmp/fdo_authtest.log 2>/dev/null || true
+			cat $EPHEMERAL_DIR/fdo_authtest.log 2>/dev/null || true
 			return 1
 		fi
 		sleep 1
@@ -2104,7 +2104,7 @@ test_auth() {
 	done
 	if [ $retries -eq 0 ]; then
 		log_error "FDOKeyAuth server failed to start (timeout)"
-		cat /tmp/fdo_authtest.log 2>/dev/null || true
+		cat $EPHEMERAL_DIR/fdo_authtest.log 2>/dev/null || true
 		kill "$AUTH_PID" 2>/dev/null || true
 		return 1
 	fi
@@ -2112,11 +2112,11 @@ test_auth() {
 	# Test 1: Basic auth from PEM file
 	log_step "Running: fdo auth -url $AUTH_URL -key $CALLER_KEY"
 	local TOKEN
-	TOKEN=$(cd examples && go run ./cmd auth -url "$AUTH_URL" -key "../$CALLER_KEY" 2>/tmp/fdo_auth_stderr.log)
+	TOKEN=$(cd examples && go run ./cmd auth -url "$AUTH_URL" -key "../$CALLER_KEY" 2>../$EPHEMERAL_DIR/fdo_auth_stderr.log)
 	local EXIT_CODE=$?
 	if [ $EXIT_CODE -ne 0 ]; then
 		log_error "fdo auth failed (exit $EXIT_CODE)"
-		cat /tmp/fdo_auth_stderr.log 2>/dev/null || true
+		cat $EPHEMERAL_DIR/fdo_auth_stderr.log 2>/dev/null || true
 		kill "$AUTH_PID" 2>/dev/null || true
 		return 1
 	fi
@@ -2138,22 +2138,22 @@ test_auth() {
 
 	# Test 2: Auth with -verbose flag
 	log_step "Running: fdo auth -url $AUTH_URL -key $CALLER_KEY -verbose"
-	TOKEN=$(cd examples && go run ./cmd auth -url "$AUTH_URL" -key "../$CALLER_KEY" -verbose 2>/tmp/fdo_auth_verbose.log)
+	TOKEN=$(cd examples && go run ./cmd auth -url "$AUTH_URL" -key "../$CALLER_KEY" -verbose 2>../$EPHEMERAL_DIR/fdo_auth_verbose.log)
 	EXIT_CODE=$?
 	if [ $EXIT_CODE -ne 0 ]; then
 		log_error "fdo auth -verbose failed (exit $EXIT_CODE)"
-		cat /tmp/fdo_auth_verbose.log 2>/dev/null || true
+		cat $EPHEMERAL_DIR/fdo_auth_verbose.log 2>/dev/null || true
 		kill "$AUTH_PID" 2>/dev/null || true
 		return 1
 	fi
 	# Verify verbose output on stderr
-	if grep -q "authenticated" /tmp/fdo_auth_verbose.log; then
+	if grep -q "authenticated" $EPHEMERAL_DIR/fdo_auth_verbose.log; then
 		log_success "Verbose output includes authentication status"
 	else
 		log_error "Verbose output missing authentication status"
-		cat /tmp/fdo_auth_verbose.log 2>/dev/null || true
+		cat $EPHEMERAL_DIR/fdo_auth_verbose.log 2>/dev/null || true
 	fi
-	if grep -q "Key fingerprint" /tmp/fdo_auth_verbose.log; then
+	if grep -q "Key fingerprint" $EPHEMERAL_DIR/fdo_auth_verbose.log; then
 		log_success "Verbose output includes key fingerprint"
 	else
 		log_error "Verbose output missing key fingerprint"
