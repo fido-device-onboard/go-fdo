@@ -123,6 +123,9 @@ func tpmShowCredentials() error {
 					if dir.Delay > 0 {
 						fmt.Printf("      Delay           %s\n", dir.Delay)
 					}
+					if len(dir.URLs) == 0 && !dir.Bypass && dir.Delay == 0 {
+						fmt.Println("      (delay=0, no URL)")
+					}
 				}
 			}
 		}
