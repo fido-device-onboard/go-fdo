@@ -57,8 +57,10 @@ make setup    # Initialize Go workspace (run once after clone)
 ### Building and Testing
 
 ```bash
-make build    # Build the project
-make test     # Run all tests (unit + integration)
+make build        # Build default binary (no TPM, no CGO, static)
+make build-tpm    # Build with hardware TPM support (no CGO)
+make build-tpmsim # Build with TPM simulator (requires CGO + OpenSSL)
+make test         # Run all tests (unit + integration)
 make test-tpm     # Run TPM hardware integration tests (requires /dev/tpmrm0)
 make test-tpm-sim # Run TPM simulator integration tests (no hardware needed)
 make lint     # Run all linters

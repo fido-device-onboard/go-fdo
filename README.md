@@ -85,11 +85,18 @@ The example client and server application can be built with `go build` directly,
 Build tags select the credential storage backend at compile time. Application
 code is identical regardless of backend — only the build command changes.
 
-| Build command | Credential backend | CGO | Use case |
-|---------------|--------------------|-----|----------|
-| `go build ./examples/cmd` | Software blob (file) | No | Default — keys and HMAC in CBOR file |
-| `go build -tags=tpm ./examples/cmd` | Hardware TPM | No | Production hardware on Linux |
-| `CGO_ENABLED=1 go build -tags=tpmsim ./examples/cmd` | TPM simulator | Yes | Development and CI |
+| Build command | Credential backend | CGO | Dynamic libs | Use case |
+|---------------|--------------------|-----|--------------|----------|
+| `go build ./examples/cmd` | Software blob (file) | **No** | None (static binary) | Default — keys and HMAC in CBOR file |
+| `go build -tags=tpm ./examples/cmd` | Hardware TPM | **No** | libc only | Production hardware on Linux |
+| `CGO_ENABLED=1 go build -tags=tpmsim ./examples/cmd` | TPM simulator | **Yes** | libc + libcrypto (OpenSSL) | Development and CI |
+
+> **Note:** The default build (no tags) produces a fully static binary with
+> zero CGO and no OpenSSL dependency. The `-tags=tpm` hardware TPM build also
+> avoids CGO/OpenSSL — only the `-tags=tpmsim` simulator build requires CGO
+> because it embeds the Microsoft reference TPM implementation (C code linked
+> against OpenSSL's libcrypto). Use `make build`, `make build-tpm`, or
+> `make build-tpmsim` as shortcuts.
 
 The `cred` module (`go-fdo/cred`) provides the `cred.Store` interface that
 abstracts credential storage. Existing apps that import `go-fdo/blob` or
@@ -515,6 +522,9 @@ A `Makefile` is provided for convenience during development:
 
 ```bash
 make setup         # Initialize Go workspace (run once after clone)
+make build         # Build default binary (no TPM, no CGO, static)
+make build-tpm     # Build with hardware TPM support (no CGO)
+make build-tpmsim  # Build with TPM simulator (requires CGO + OpenSSL)
 make lint          # Run golangci-lint and shellcheck
 make test          # Run unit and integration tests
 make test-tpm      # Run TPM integration tests (hardware TPM)
