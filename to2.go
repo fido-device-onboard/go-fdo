@@ -1535,8 +1535,40 @@ func (s *TO2Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*owner
 	// first Device ServiceInfo" but IsMoreServiceInfo may allow it to be sent
 	// over multiple network roundtrips.
 	if devmod, ok := module.(*devmodOwnerModule); ok {
-		if err := s.Session.SetDevmod(ctx, devmod.Devmod, devmod.Modules, false); err != nil {
+		// Mark devmod as complete when this is the final message
+		if err := s.Session.SetDevmod(ctx, devmod.Devmod, devmod.Modules, !deviceInfo.IsMoreServiceInfo); err != nil {
 			return nil, fmt.Errorf("error storing devmod state: %w", err)
+		}
+
+		// When this is the final devmod message, check if the module is complete
+		if !deviceInfo.IsMoreServiceInfo {
+			// Check what the module's ProduceInfo says about completion
+			_, moduleComplete, err := module.ProduceInfo(ctx, serviceinfo.NewProducer("debug", 1300))
+			if err == nil && moduleComplete {
+				// Module says it's complete, progress to the next module
+				if _, err := s.Modules.NextModule(ctx); err != nil {
+					// No more modules, return empty service info
+					return &ownerServiceInfo{
+						IsMoreServiceInfo: false,
+						IsDone:            true,
+						ServiceInfo:       []*serviceinfo.KV{},
+					}, nil
+				}
+
+				// Get the next module
+				nextModuleName, nextModule, err := s.Modules.Module(ctx)
+				if err != nil || nextModule == nil {
+					// No more modules or module not properly initialized
+					return &ownerServiceInfo{
+						IsMoreServiceInfo: false,
+						IsDone:            true,
+						ServiceInfo:       []*serviceinfo.KV{},
+					}, nil
+				}
+
+				// Produce service info from the next module
+				return s.produceOwnerServiceInfo(ctx, nextModuleName, nextModule)
+			}
 		}
 	}
 
@@ -1546,11 +1578,6 @@ func (s *TO2Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*owner
 	}
 
 	// Store the current module state
-	if devmod, ok := module.(*devmodOwnerModule); ok {
-		if err := s.Session.SetDevmod(ctx, devmod.Devmod, devmod.Modules, false); err != nil {
-			return nil, fmt.Errorf("error storing devmod state: %w", err)
-		}
-	}
 	if modules, ok := s.Modules.(serviceinfo.ModulePersister); ok {
 		if err := modules.PersistModule(ctx, moduleName, module); err != nil {
 			return nil, fmt.Errorf("error persisting service info module %q state: %w", moduleName, err)
