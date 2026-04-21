@@ -316,3 +316,169 @@ func TestCorruptedVoucherEntryRejected(t *testing.T) {
 		t.Logf("Correctly rejected corrupted voucher entry: %v", err)
 	}
 }
+
+// TestVoucherDigest verifies that the voucher digest is computed correctly
+// and is stable across multiple calls.
+func TestVoucherDigest(t *testing.T) {
+	var ov fdo.Voucher
+	if err := cbor.Unmarshal(voucherBytes(t, "ov.pem"), &ov); err != nil {
+		t.Fatalf("error parsing voucher test data: %v", err)
+	}
+
+	// Compute digest twice and verify they match
+	digest1, err := ov.Digest()
+	if err != nil {
+		t.Fatalf("error computing voucher digest: %v", err)
+	}
+
+	digest2, err := ov.Digest()
+	if err != nil {
+		t.Fatalf("error computing voucher digest second time: %v", err)
+	}
+
+	if digest1 != digest2 {
+		t.Error("voucher digest is not deterministic")
+	}
+
+	// Verify digest is 32 bytes (SHA-256)
+	if len(digest1) != 32 {
+		t.Errorf("expected 32-byte digest, got %d bytes", len(digest1))
+	}
+
+	// Verify DigestHex returns correct format
+	hexDigest, err := ov.DigestHex()
+	if err != nil {
+		t.Fatalf("error computing voucher digest hex: %v", err)
+	}
+	if len(hexDigest) != 64 {
+		t.Errorf("expected 64-character hex digest, got %d characters", len(hexDigest))
+	}
+
+	t.Logf("Voucher digest: %s", hexDigest)
+}
+
+// TestVoucherFingerprint verifies that the voucher fingerprint is computed
+// correctly and has the expected format.
+func TestVoucherFingerprint(t *testing.T) {
+	var ov fdo.Voucher
+	if err := cbor.Unmarshal(voucherBytes(t, "ov.pem"), &ov); err != nil {
+		t.Fatalf("error parsing voucher test data: %v", err)
+	}
+
+	fingerprint, err := ov.Fingerprint()
+	if err != nil {
+		t.Fatalf("error computing voucher fingerprint: %v", err)
+	}
+
+	// Verify fingerprint format: 16 bytes as colon-separated hex = 47 characters
+	// Format: "xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx"
+	expectedLen := 16*2 + 15 // 16 hex pairs + 15 colons
+	if len(fingerprint) != expectedLen {
+		t.Errorf("expected %d-character fingerprint, got %d characters: %s", expectedLen, len(fingerprint), fingerprint)
+	}
+
+	// Verify fingerprint is deterministic
+	fingerprint2, err := ov.Fingerprint()
+	if err != nil {
+		t.Fatalf("error computing voucher fingerprint second time: %v", err)
+	}
+	if fingerprint != fingerprint2 {
+		t.Error("voucher fingerprint is not deterministic")
+	}
+
+	t.Logf("Voucher fingerprint: %s", fingerprint)
+}
+
+// TestVoucherDigestStableAcrossExtension verifies that the voucher digest
+// remains the same when the voucher is extended with new entries.
+func TestVoucherDigestStableAcrossExtension(t *testing.T) {
+	var ov fdo.Voucher
+	if err := cbor.Unmarshal(voucherBytes(t, "ov.pem"), &ov); err != nil {
+		t.Fatalf("error parsing voucher test data: %v", err)
+	}
+
+	// Compute digest of original voucher
+	originalDigest, err := ov.Digest()
+	if err != nil {
+		t.Fatalf("error computing original voucher digest: %v", err)
+	}
+
+	// Get the manufacturer key to extend
+	var key crypto.Signer
+	if data, err := os.ReadFile("testdata/mfg_key.pem"); err != nil {
+		t.Fatalf("error reading manufacturer key: %v", err)
+	} else if blk, _ := pem.Decode(data); blk == nil {
+		t.Fatal("unable to parse manufacturer key PEM")
+	} else if key, err = x509.ParseECPrivateKey(blk.Bytes); err != nil {
+		t.Fatalf("error parsing manufacturer key: %v", err)
+	}
+
+	// Generate a next owner key
+	nextKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("error generating next owner key: %v", err)
+	}
+
+	// Extend the voucher
+	extendedOV, err := fdo.ExtendVoucher(&ov, key, nextKey.Public().(*ecdsa.PublicKey), nil)
+	if err != nil {
+		t.Fatalf("error extending voucher: %v", err)
+	}
+
+	// Compute digest of extended voucher
+	extendedDigest, err := extendedOV.Digest()
+	if err != nil {
+		t.Fatalf("error computing extended voucher digest: %v", err)
+	}
+
+	// Digests should be the same (stable across extension)
+	if originalDigest != extendedDigest {
+		t.Errorf("voucher digest changed after extension:\n  original: %x\n  extended: %x", originalDigest, extendedDigest)
+	}
+
+	t.Logf("Voucher digest stable across extension: %x", originalDigest)
+}
+
+// TestFormatFingerprint verifies the FormatFingerprint helper function.
+func TestFormatFingerprint(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    []byte
+		expected string
+	}{
+		{
+			name:     "empty",
+			input:    []byte{},
+			expected: "",
+		},
+		{
+			name:     "single byte",
+			input:    []byte{0xab},
+			expected: "ab",
+		},
+		{
+			name:     "two bytes",
+			input:    []byte{0xab, 0xcd},
+			expected: "ab:cd",
+		},
+		{
+			name:     "four bytes",
+			input:    []byte{0x01, 0x23, 0x45, 0x67},
+			expected: "01:23:45:67",
+		},
+		{
+			name:     "leading zeros preserved",
+			input:    []byte{0x00, 0x01, 0x02},
+			expected: "00:01:02",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := fdo.FormatFingerprint(tt.input)
+			if result != tt.expected {
+				t.Errorf("FormatFingerprint(%x) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}

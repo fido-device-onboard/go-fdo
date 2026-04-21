@@ -15,7 +15,7 @@ echo "Compatible with Rust FDO client"
 echo ""
 
 # Create a minimal Go program inline
-cat > /tmp/simple_di_server_main.go << 'EOF'
+cat >/tmp/simple_di_server_main.go <<'EOF'
 package main
 
 import (

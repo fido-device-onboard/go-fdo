@@ -910,7 +910,8 @@ func listVouchersFromDB(db *sql.DB) error {
 		SELECT 
 			guid,
 			device_info,
-			created_at
+			created_at,
+			cbor
 		FROM vouchers 
 		ORDER BY created_at DESC
 	`)
@@ -928,8 +929,9 @@ func listVouchersFromDB(db *sql.DB) error {
 		var guidBytes []byte
 		var deviceInfo string
 		var createdAt int64
+		var voucherCBOR []byte
 
-		if err := rows.Scan(&guidBytes, &deviceInfo, &createdAt); err != nil {
+		if err := rows.Scan(&guidBytes, &deviceInfo, &createdAt, &voucherCBOR); err != nil {
 			return fmt.Errorf("failed to scan voucher row: %w", err)
 		}
 
@@ -943,6 +945,17 @@ func listVouchersFromDB(db *sql.DB) error {
 		createdTime := time.Unix(createdAt/1000000, (createdAt%1000000)*1000)
 
 		fmt.Printf("GUID: %x\n", guid)
+
+		// Compute and display fingerprint if voucher CBOR is available
+		if len(voucherCBOR) > 0 {
+			var ov fdo.Voucher
+			if err := cbor.Unmarshal(voucherCBOR, &ov); err == nil {
+				if fingerprint, err := ov.Fingerprint(); err == nil {
+					fmt.Printf("  Fingerprint: %s\n", fingerprint)
+				}
+			}
+		}
+
 		fmt.Printf("  Device Info: %s\n", deviceInfo)
 		fmt.Printf("  Created: %s\n", createdTime.Format(time.RFC3339))
 		fmt.Println()

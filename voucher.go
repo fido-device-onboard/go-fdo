@@ -193,6 +193,84 @@ func (v *Voucher) OwnerPublicKey() (crypto.PublicKey, error) {
 	return v.Entries[len(v.Entries)-1].Payload.Val.PublicKey.Public()
 }
 
+// Digest computes a SHA-256 hash of the voucher's header and HMAC, providing
+// a canonical identifier for the voucher that is stable across ownership
+// transfers (voucher extensions).
+//
+// The digest is computed over the CBOR-encoded header concatenated with the
+// CBOR-encoded HMAC. This ensures:
+//   - The digest uniquely identifies the device (via GUID and device info)
+//   - The digest includes the device secret binding (via HMAC)
+//   - The digest is stable when the voucher is extended with new entries
+//   - The digest is independent of serialization format (PEM, raw CBOR, etc.)
+//
+// Returns a 32-byte SHA-256 hash.
+func (v *Voucher) Digest() ([32]byte, error) {
+	// Encode header to canonical CBOR
+	headerBytes, err := cbor.Marshal(&v.Header.Val)
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("encoding voucher header: %w", err)
+	}
+
+	// Encode HMAC to canonical CBOR
+	hmacBytes, err := cbor.Marshal(v.Hmac)
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("encoding voucher HMAC: %w", err)
+	}
+
+	// Compute SHA-256 of header || HMAC
+	h := sha256.New()
+	h.Write(headerBytes)
+	h.Write(hmacBytes)
+
+	var digest [32]byte
+	copy(digest[:], h.Sum(nil))
+	return digest, nil
+}
+
+// DigestHex returns the voucher digest as a lowercase hexadecimal string.
+// This is the canonical string representation of the voucher digest.
+func (v *Voucher) DigestHex() (string, error) {
+	digest, err := v.Digest()
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", digest), nil
+}
+
+// Fingerprint returns a human-readable fingerprint of the voucher, suitable
+// for visual verification or display in logs. The fingerprint is the first
+// 16 bytes (128 bits) of the SHA-256 digest, formatted as colon-separated
+// hexadecimal pairs (similar to SSH MD5 fingerprints).
+//
+// Example: "a3:b5:c7:d9:e1:f3:05:17:29:3b:4d:5f:61:73:85:97"
+//
+// For cryptographic operations or storage, use Digest() or DigestHex() instead.
+func (v *Voucher) Fingerprint() (string, error) {
+	digest, err := v.Digest()
+	if err != nil {
+		return "", err
+	}
+	return FormatFingerprint(digest[:16]), nil
+}
+
+// FormatFingerprint formats a byte slice as a colon-separated hexadecimal
+// string, suitable for human-readable display.
+func FormatFingerprint(data []byte) string {
+	if len(data) == 0 {
+		return ""
+	}
+	parts := make([]string, len(data))
+	for i, b := range data {
+		parts[i] = fmt.Sprintf("%02x", b)
+	}
+	result := parts[0]
+	for i := 1; i < len(parts); i++ {
+		result += ":" + parts[i]
+	}
+	return result
+}
+
 // VerifyCrypto checks that a voucher is valid cryptographically in its header
 // and extensions.
 //

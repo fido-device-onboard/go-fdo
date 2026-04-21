@@ -39,6 +39,30 @@ It implements [FIDO Device Onboard Specification 1.1][fdo11] and [FIDO Device On
 | [TPM.md](TPM.md) | **TPM Integration** — Build tags, credential provisioning, NV inspection, DAK proof, and library API for downstream apps |
 | [TPM Compliance Testing](tpm/TPM_COMPLIANCE_TESTING.md) | TPM spec compliance testing guide (opt-in tests requiring sudo or env config) |
 
+## Voucher Fingerprints
+
+The library provides methods to compute stable fingerprints for vouchers, useful for tracking vouchers across the supply chain without exposing full voucher contents.
+
+```go
+// Compute a short fingerprint (first 16 bytes of SHA-256, colon-separated hex)
+fingerprint, err := voucher.Fingerprint()
+// Example: "5b:05:27:b7:15:8d:ce:7c:a6:dd:6a:96:ae:c6:0e:1d"
+
+// Compute the full SHA-256 digest as hex string
+digestHex, err := voucher.DigestHex()
+// Example: "5b0527b7158dce7ca6dd6a96aec60e1df1cfcfd2229eb45bb5c734990d944d8b"
+
+// Get raw 32-byte digest
+digest, err := voucher.Digest()
+```
+
+**Key properties:**
+- **Stable across extensions**: The fingerprint is computed from the voucher header and HMAC, which remain constant when the voucher is extended with new ownership entries
+- **Device-bound**: Includes the HMAC which binds the voucher to the device's secret
+- **Deterministic**: Same voucher always produces the same fingerprint
+
+The CLI `inspectVoucher` command displays both fingerprint and full digest when examining vouchers.
+
 ## Quick Start
 
 A comprehensive test script is provided that demonstrates all major features of the FDO implementation. It serves as both a test suite and a self-documenting guide.

@@ -276,6 +276,15 @@ func InspectVoucherFull(state *sqlite.DB, voucherData []byte) (*InspectVoucherRe
 	}
 	//fmt.Printf("RAW BYES: %s\n",hex.EncodeToString(blk.Bytes))
 	fmt.Printf("Version         :    %d\n", ov.Version)
+
+	// Print voucher fingerprint for easy identification
+	if fingerprint, err := ov.Fingerprint(); err == nil {
+		fmt.Printf("Fingerprint     :    %s\n", fingerprint)
+	}
+	if digestHex, err := ov.DigestHex(); err == nil {
+		fmt.Printf("Digest (SHA256) :    %s\n", digestHex)
+	}
+
 	//fmt.Printf("Header          :    %+v\n",ov.Header)
 	header := ov.Header
 	fmt.Printf("Header :    %+v\n", header)

@@ -7,7 +7,15 @@ package main
 
 import "fmt"
 
-func tpmClearCredentials() error { return fmt.Errorf("TPM support not compiled (build with -tags=tpm or -tags=tpmsim)") }
-func tpmShowCredentials() error  { return fmt.Errorf("TPM support not compiled (build with -tags=tpm or -tags=tpmsim)") }
-func tpmExportDAK() error        { return fmt.Errorf("TPM support not compiled (build with -tags=tpm or -tags=tpmsim)") }
-func tpmProveDAK() error         { return fmt.Errorf("TPM support not compiled (build with -tags=tpm or -tags=tpmsim)") }
+func tpmClearCredentials() error {
+	return fmt.Errorf("TPM support not compiled (build with -tags=tpm or -tags=tpmsim)")
+}
+func tpmShowCredentials() error {
+	return fmt.Errorf("TPM support not compiled (build with -tags=tpm or -tags=tpmsim)")
+}
+func tpmExportDAK() error {
+	return fmt.Errorf("TPM support not compiled (build with -tags=tpm or -tags=tpmsim)")
+}
+func tpmProveDAK() error {
+	return fmt.Errorf("TPM support not compiled (build with -tags=tpm or -tags=tpmsim)")
+}
