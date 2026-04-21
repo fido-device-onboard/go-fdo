@@ -5,23 +5,23 @@ package main
 
 import (
 	"context"
-	"crypto"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/rsa"
-	"crypto/sha256"
-	"crypto/sha512"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"math"
 	"math/big"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -30,7 +30,6 @@ import (
 	"time"
 
 	"github.com/fido-device-onboard/go-fdo"
-	"github.com/fido-device-onboard/go-fdo/blob"
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
 	"github.com/fido-device-onboard/go-fdo/custom"
@@ -38,26 +37,50 @@ import (
 	"github.com/fido-device-onboard/go-fdo/kex"
 	"github.com/fido-device-onboard/go-fdo/protocol"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
-	"github.com/fido-device-onboard/go-fdo/tpm"
 )
 
 var clientFlags = flag.NewFlagSet("client", flag.ContinueOnError)
 
 var (
-	blobPath    string
-	diURL       string
-	diKey       string
-	diKeyEnc    string
-	kexSuite    string
-	cipherSuite string
-	tpmPath     string
-	printDevice bool
-	rvOnly      bool
-	dlDir       string
-	echoCmds    bool
-	uploads     = make(fsVar)
-	wgetDir     string
+	blobPath              string
+	diURL                 string
+	diKey                 string
+	diKeyEnc              string
+	kexSuite              string
+	cipherSuite           string
+	tpmPath               string
+	printDevice           bool
+	rvOnly                bool
+	dlDir                 string
+	echoCmds              bool
+	uploads               = make(fsVar)
+	wgetDir               string
+	fdoVersion            int
+	registerSSHKey        string // SSH public key to register with owner
+	enrollCSR             string // CSR enrollment request (format: id:csrdata)
+	bmoSupportedTypes     string // Comma-separated list of supported BMO MIME types (empty = accept all)
+	payloadSupportedTypes string // Comma-separated list of supported Payload MIME types (empty = accept all)
+	allowSingleSided      bool   // Allow single-sided attestation (WiFi-only mode)
+	clientDBPath          string // SQLite database file path (matches server -db flag)
+
+	// Voucher management flags
+	listVouchers  bool   // List vouchers in database
+	voucherGUID   string // GUID for voucher operations
+	voucherSerial string // Serial number for voucher operations
+	voucherExport string // Export voucher to file
+	voucherFormat string // Export format (pem, json, cbor)
+
+	// TPM credential inspection flags
+	tpmShow      bool   // Show all FDO credentials stored in TPM NV indices
+	tpmExportDak bool   // Export DAK public key as PEM
+	tpmProveDak  bool   // Prove DAK possession by signing a challenge
+	tpmChallenge string // Optional challenge for -tpm-prove (hashed with SHA-256)
+	tpmClear     bool   // Clear all FDO credentials from TPM
 )
+
+func sanitizeLogValue(s string) string {
+	return strings.NewReplacer("\n", "\\n", "\r", "\\r").Replace(s)
+}
 
 type fsVar map[string]string
 
@@ -150,6 +173,27 @@ func init() {
 	clientFlags.Var(&uploads, "upload", "List of dirs and `files` to upload files from, "+
 		"comma-separated and/or flag provided multiple times (FSIM disabled if empty)")
 	clientFlags.StringVar(&wgetDir, "wget-dir", "", "A `dir` to wget files into (FSIM disabled if empty)")
+	clientFlags.IntVar(&fdoVersion, "fdo-version", 101, "FDO protocol version (101 or 200)")
+	clientFlags.StringVar(&registerSSHKey, "register-ssh-key", "", "SSH public `key` to register with owner (format: id:keydata)")
+	clientFlags.StringVar(&enrollCSR, "enroll-csr", "", "CSR enrollment `request` (format: id:csrdata)")
+	clientFlags.StringVar(&bmoSupportedTypes, "bmo-supported-types", "", "Comma-separated list of supported BMO MIME `types` (empty = accept all)")
+	clientFlags.StringVar(&payloadSupportedTypes, "payload-supported-types", "", "Comma-separated list of supported Payload MIME `types` (empty = accept all)")
+	clientFlags.BoolVar(&allowSingleSided, "allow-single-sided", false, "Allow single-sided attestation (WiFi-only mode, owner not verified)")
+	clientFlags.StringVar(&clientDBPath, "db", "", "SQLite database file path")
+
+	// Voucher management flags
+	clientFlags.BoolVar(&listVouchers, "list-vouchers", false, "List vouchers in database")
+	clientFlags.StringVar(&voucherGUID, "voucher-guid", "", "GUID for voucher operations (hex string)")
+	clientFlags.StringVar(&voucherSerial, "voucher-serial", "", "Serial number for voucher operations")
+	clientFlags.StringVar(&voucherExport, "voucher-export", "", "Export voucher to file")
+	clientFlags.StringVar(&voucherFormat, "voucher-format", "pem", "Export format (pem, json, cbor)")
+
+	// TPM credential inspection flags
+	clientFlags.BoolVar(&tpmShow, "tpm-show", false, "Show all FDO credentials stored in TPM NV indices")
+	clientFlags.BoolVar(&tpmExportDak, "tpm-export-dak", false, "Export DAK public key as PEM")
+	clientFlags.BoolVar(&tpmProveDak, "tpm-prove", false, "Prove DAK possession by signing a challenge")
+	clientFlags.StringVar(&tpmChallenge, "tpm-challenge", "", "Optional challenge `string` for -tpm-prove (hashed with SHA-256; random if empty)")
+	clientFlags.BoolVar(&tpmClear, "tpm-clear", false, "Clear all FDO credentials from TPM (NV indices + persistent keys)")
 }
 
 func client(ctx context.Context) error {
@@ -157,16 +201,39 @@ func client(ctx context.Context) error {
 		level.Set(slog.LevelDebug)
 	}
 
+	// Handle TPM credential inspection operations (no -tpm flag needed;
+	// tpmOpen falls back to tpm.DefaultOpen which is build-tag-selected).
+	if tpmShow || tpmExportDak || tpmProveDak || tpmClear {
+		switch {
+		case tpmClear:
+			return tpmClearCredentials()
+		case tpmShow:
+			return tpmShowCredentials()
+		case tpmExportDak:
+			return tpmExportDAK()
+		case tpmProveDak:
+			return tpmProveDAK()
+		}
+	}
+
+	// Handle voucher management operations
+	if listVouchers || voucherExport != "" {
+		return handleVoucherOperations()
+	}
+
+	// Open the build-tag-selected credential store (blob, tpm, or tpmsim)
+	if err := openCredStore(); err != nil {
+		return err
+	}
+	defer func() { _ = closeCredStore() }()
+
 	// Perform DI if given a URL
 	if diURL != "" {
 		return di(ctx)
 	}
 
-	// Read device credential blob to configure client for TO1/TO2
-	dc, hmacSha256, hmacSha384, privateKey, cleanup, err := readCred()
-	if err == nil && cleanup != nil {
-		defer func() { _ = cleanup() }()
-	}
+	// Read device credential to configure client for TO1/TO2
+	dc, hmacSha256, hmacSha384, privateKey, err := readCred()
 	if err != nil || printDevice {
 		return err
 	}
@@ -176,7 +243,7 @@ func client(ctx context.Context) error {
 	if !ok {
 		return fmt.Errorf("invalid key exchange cipher suite: %s", cipherSuite)
 	}
-	newDC := transferOwnership(ctx, dc.RvInfo, fdo.TO2Config{
+	newDC, err := transferOwnership(ctx, dc.RvInfo, fdo.TO2Config{
 		Cred:       *dc,
 		HmacSha256: hmacSha256,
 		HmacSha384: hmacSha384,
@@ -192,60 +259,47 @@ func client(ctx context.Context) error {
 		KeyExchange:          kex.Suite(kexSuite),
 		CipherSuite:          kexCipherSuiteID,
 		AllowCredentialReuse: true,
+		AllowSingleSided:     allowSingleSided,
 	})
 	if rvOnly {
 		return nil
 	}
+	if err != nil {
+		return fmt.Errorf("transfer ownership failed: %w", err)
+	}
 	if newDC == nil {
-		fmt.Println("Credential not updated (either due to failure of TO2 or the Credential Reuse Protocol")
+		// Credential reuse - this is a success case
+		fmt.Println("Credential reuse - credential not updated")
 		return nil
 	}
 
 	// Store new credential
 	fmt.Println("Success")
-	return updateCred(*newDC)
+	return saveCred(*newDC)
 }
 
-func di(ctx context.Context) (err error) { //nolint:gocyclo
-	// Generate new key and secret
-	secret := make([]byte, 32)
-	if _, err := rand.Read(secret); err != nil {
-		return fmt.Errorf("error generating device secret: %w", err)
-	}
-	hmacSha256, hmacSha384 := hmac.New(sha256.New, secret), hmac.New(sha512.New384, secret)
-
+func di(ctx context.Context) (err error) {
+	// Determine key type and CSR signature algorithm from CLI flag
 	var sigAlg x509.SignatureAlgorithm
 	var keyType protocol.KeyType
-	var key crypto.Signer
 	switch diKey {
 	case "ec256":
 		keyType = protocol.Secp256r1KeyType
-		key, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	case "ec384":
 		keyType = protocol.Secp384r1KeyType
-		key, err = ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	case "rsa2048":
 		keyType = protocol.Rsa2048RestrKeyType
-		key, err = rsa.GenerateKey(rand.Reader, 2048)
 	case "rsa3072":
 		sigAlg = x509.SHA384WithRSA
 		keyType = protocol.RsaPkcsKeyType
-		key, err = rsa.GenerateKey(rand.Reader, 3072)
 	default:
 		return fmt.Errorf("unknown key type: %s", diKey)
 	}
-	if err != nil {
-		return fmt.Errorf("error generating device key: %w", err)
-	}
 
-	// If using a TPM, swap key/hmac for that
-	if tpmPath != "" {
-		var cleanup func() error
-		hmacSha256, hmacSha384, key, cleanup, err = tpmCred()
-		if err != nil {
-			return err
-		}
-		defer func() { _ = cleanup() }()
+	// Generate HMAC + device key via the build-tag-selected credential store
+	hmacSha256, hmacSha384, key, err := newDICred(keyType)
+	if err != nil {
+		return err
 	}
 
 	// Generate Java implementation-compatible mfg string
@@ -277,7 +331,8 @@ func di(ctx context.Context) (err error) { //nolint:gocyclo
 	default:
 		return fmt.Errorf("unsupported key encoding: %s", diKeyEnc)
 	}
-	cred, err := fdo.DI(ctx, tlsTransport(diURL, nil), custom.DeviceMfgInfo{
+	version := protocol.Version(fdoVersion) //#nosec G115 -- fdoVersion is validated in flag parsing
+	dc, err := fdo.DI(ctx, tlsTransportWithVersion(diURL, nil, version), custom.DeviceMfgInfo{
 		KeyType:      keyType,
 		KeyEncoding:  keyEncoding,
 		SerialNumber: strconv.FormatInt(sn.Int64(), 10),
@@ -292,23 +347,36 @@ func di(ctx context.Context) (err error) { //nolint:gocyclo
 		return err
 	}
 
-	if tpmPath != "" {
-		return saveCred(tpm.DeviceCredential{
-			DeviceCredential: *cred,
-			DeviceKey:        tpm.FdoDeviceKey,
-		})
-	}
-	return saveCred(blob.DeviceCredential{
-		Active:           true,
-		DeviceCredential: *cred,
-		HmacSecret:       secret,
-		PrivateKey:       blob.Pkcs8Key{Signer: key},
-	})
+	return saveCred(*dc)
 }
 
-func transferOwnership(ctx context.Context, rvInfo [][]protocol.RvInstruction, conf fdo.TO2Config) *fdo.DeviceCredential { //nolint:gocyclo
+func transferOwnership(ctx context.Context, rvInfo [][]protocol.RvInstruction, conf fdo.TO2Config) (*fdo.DeviceCredential, error) { //nolint:gocyclo
 	var to2URLs []string
 	directives := protocol.ParseDeviceRvInfo(rvInfo)
+
+	// FDO 2.0: rvserver.local is an implied fallback directive even if omitted
+	// from DCRVInfo. Append it only if no directive already references it.
+	hasRVServerLocal := false
+	for _, dir := range directives {
+		for _, u := range dir.URLs {
+			if u.Hostname() == "rvserver.local" {
+				hasRVServerLocal = true
+				break
+			}
+		}
+		if hasRVServerLocal {
+			break
+		}
+	}
+	if !hasRVServerLocal {
+		localDirective := protocol.RvDirective{
+			URLs: []*url.URL{
+				{Scheme: "http", Host: net.JoinHostPort("rvserver.local", "8080")},
+			},
+		}
+		directives = append(directives, localDirective)
+	}
+
 	for _, directive := range directives {
 		if !directive.Bypass {
 			continue
@@ -328,9 +396,11 @@ TO1:
 
 		for _, url := range directive.URLs {
 			var err error
-			to1d, err = fdo.TO1(ctx, tlsTransport(url.String(), nil), conf.Cred, conf.Key, nil)
+			version := protocol.Version(fdoVersion) //#nosec G115 -- fdoVersion is validated in flag parsing
+			to1d, err = fdo.TO1(ctx, tlsTransportWithVersion(url.String(), nil, version), conf.Cred, conf.Key, nil)
 			if err != nil {
-				slog.Error("TO1 failed", "base URL", url.String(), "error", err)
+				// #nosec G706 -- sanitizeLogValue strips control characters from logged URL
+				slog.Error("TO1 failed", "base URL", sanitizeLogValue(url.String()), "error", err)
 				continue
 			}
 			break TO1
@@ -340,7 +410,7 @@ TO1:
 			// A 25% plus or minus jitter is allowed by spec
 			select {
 			case <-ctx.Done():
-				return nil
+				return nil, ctx.Err()
 			case <-time.After(directive.Delay):
 			}
 		}
@@ -380,21 +450,256 @@ TO1:
 		if to1d != nil {
 			fmt.Printf("TO1 Blob: %+v\n", to1d.Payload.Val)
 		}
-		return nil
+		return nil, nil
 	}
 
 	// Try TO2 on each address only once
 	for _, baseURL := range to2URLs {
-		newDC := transferOwnership2(ctx, tlsTransport(baseURL, nil), to1d, conf)
+		// Use version-aware transport for TO2
+		if fdoVersion < 0 || fdoVersion > 65535 {
+			slog.Error("invalid FDO version", "version", fdoVersion)
+			return nil, fmt.Errorf("invalid FDO version: %d", fdoVersion)
+		}
+		version := protocol.Version(fdoVersion) //#nosec G115 -- bounds checked above
+		transport := tlsTransportWithVersion(baseURL, nil, version)
+		newDC, err := transferOwnership2(ctx, transport, to1d, conf)
+		if err != nil {
+			// TO2 failed - continue to next URL, but remember the error
+			continue
+		}
 		if newDC != nil {
-			return newDC
+			return newDC, nil
+		}
+		// newDC == nil && err == nil means credential reuse
+		return nil, nil
+	}
+
+	return nil, fmt.Errorf("TO2 failed on all addresses")
+}
+
+// payloadHandler implements fsim.UnifiedPayloadHandler to save received payloads.
+// The framework handles all chunking transparently - we just receive the complete payload.
+type payloadHandler struct{}
+
+func (h *payloadHandler) HandlePayload(ctx context.Context, mimeType, name string, size uint64, metadata map[string]any, payload []byte) (statusCode int, message string, err error) {
+	fmt.Printf("[fdo.payload] HandlePayload called: name=%s, mime=%s, size=%d, received=%d bytes\n", name, mimeType, size, len(payload))
+
+	// Save payload to file
+	filename := name
+	if filename == "" {
+		filename = "received_payload.bin"
+	}
+	if err := os.WriteFile(filename, payload, 0644); err != nil {
+		fmt.Printf("[fdo.payload] ERROR: failed to save file: %v\n", err)
+		return 2, fmt.Sprintf("failed to save payload: %v", err), err
+	}
+	fmt.Printf("[fdo.payload] Saved payload to: %s (%d bytes)\n", filename, len(payload))
+	return 0, fmt.Sprintf("saved to %s", filename), nil
+}
+
+// bmoHandler implements fsim.UnifiedImageHandler to receive boot images.
+// The framework handles all chunking transparently - we just receive the complete image.
+type bmoHandler struct{}
+
+func (h *bmoHandler) HandleImage(ctx context.Context, imageType, name string, size uint64, metadata map[string]any, image []byte) (statusCode int, message string, err error) {
+	fmt.Printf("[fdo.bmo] HandleImage called: name=%s, type=%s, size=%d, received=%d bytes\n", name, imageType, size, len(image))
+
+	// Save image to file
+	// Save to current directory with bmo- prefix to avoid clutter
+	filename := "bmo-" + name
+	if filename == "" || filename == "bmo-" {
+		filename = "bmo-received_image.bin"
+	}
+	if err := os.WriteFile(filename, image, 0600); err != nil {
+		fmt.Printf("[fdo.bmo] ERROR: failed to save file: %v\n", err)
+		return 2, fmt.Sprintf("failed to save image: %v", err), err
+	}
+	fmt.Printf("[fdo.bmo] Saved image to: %s (%d bytes)\n", filename, len(image))
+	return 0, fmt.Sprintf("saved to %s", filename), nil
+}
+
+// bmoAckHandler implements fsim.ImageAckHandler to accept/reject images based on MIME type.
+type bmoAckHandler struct {
+	supportedTypes []string
+}
+
+func (h *bmoAckHandler) AcceptImage(imageType, name string, size uint64, metadata map[string]any) (accepted bool, reasonCode int, message string) {
+	fmt.Printf("[fdo.bmo] AcceptImage called: type=%s, name=%s, size=%d\n", imageType, name, size)
+
+	// Check if this image type is in our supported list
+	for _, supported := range h.supportedTypes {
+		if imageType == supported {
+			fmt.Printf("[fdo.bmo] Image type %s is supported, accepting\n", imageType)
+			return true, 0, ""
 		}
 	}
+
+	fmt.Printf("[fdo.bmo] Image type %s is NOT supported (supported: %v), rejecting\n", imageType, h.supportedTypes)
+	return false, 1, fmt.Sprintf("unsupported image type: %s", imageType)
+}
+
+// defaultURLFetcher implements fsim.URLFetcher for HTTP/HTTPS URL fetching.
+type defaultURLFetcher struct {
+	timeout time.Duration
+}
+
+func (f *defaultURLFetcher) Fetch(url string, tlsCA []byte) ([]byte, error) {
+	fmt.Printf("[fdo.bmo] Fetching URL: %s\n", url)
+
+	// Create HTTP client with optional custom CA
+	client := &http.Client{
+		Timeout: f.timeout,
+	}
+
+	if len(tlsCA) > 0 {
+		// Parse the CA certificate
+		cert, err := x509.ParseCertificate(tlsCA)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse CA certificate: %w", err)
+		}
+
+		// Create a certificate pool with the custom CA
+		pool := x509.NewCertPool()
+		pool.AddCert(cert)
+
+		// Create TLS config with custom CA
+		tlsConfig := &tls.Config{
+			RootCAs:    pool,
+			MinVersion: tls.VersionTLS12,
+		}
+
+		client.Transport = &http.Transport{
+			TLSClientConfig: tlsConfig,
+		}
+	}
+
+	// Make the request
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP request returned status %d", resp.StatusCode)
+	}
+
+	// Read the response body
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	fmt.Printf("[fdo.bmo] Downloaded %d bytes from URL\n", len(data))
+	return data, nil
+}
+
+// payloadAckHandler implements fsim.PayloadAckHandler to accept/reject payloads based on MIME type.
+type payloadAckHandler struct {
+	supportedTypes []string
+}
+
+func (h *payloadAckHandler) AcceptPayload(mimeType, name string, size uint64, metadata map[string]any) (accepted bool, reasonCode int, message string) {
+	fmt.Printf("[fdo.payload] AcceptPayload called: type=%s, name=%s, size=%d\n", mimeType, name, size)
+
+	// Check if this MIME type is in our supported list
+	for _, supported := range h.supportedTypes {
+		if mimeType == supported {
+			fmt.Printf("[fdo.payload] MIME type %s is supported, accepting\n", mimeType)
+			return true, 0, ""
+		}
+	}
+
+	fmt.Printf("[fdo.payload] MIME type %s is NOT supported (supported: %v), rejecting\n", mimeType, h.supportedTypes)
+	return false, 1, fmt.Sprintf("unsupported MIME type: %s", mimeType)
+}
+
+// wifiHandler implements fsim.WiFiHandler to display WiFi network configuration.
+// For this simple test, we just display the networks received from the server.
+type wifiHandler struct {
+	lastNetworkID string
+	lastSSID      string
+}
+
+func (h *wifiHandler) AddNetwork(network *fsim.WiFiNetwork) error {
+	fmt.Printf("[fdo.wifi] Received network configuration:\n")
+	fmt.Printf("  Version:     %s\n", network.Version)
+	fmt.Printf("  NetworkID:   %s\n", network.NetworkID)
+	fmt.Printf("  SSID:        %s\n", network.SSID)
+	fmt.Printf("  AuthType:    %d", network.AuthType)
+	switch network.AuthType {
+	case 0:
+		fmt.Printf(" (open)")
+	case 1:
+		fmt.Printf(" (wpa2-psk)")
+	case 2:
+		fmt.Printf(" (wpa3-psk)")
+	case 3:
+		fmt.Printf(" (wpa3-enterprise)")
+		fmt.Printf("\n[fdo.wifi] Enterprise network detected - will generate CSR")
+	}
+	fmt.Printf("\n")
+	if len(network.Password) > 0 {
+		fmt.Printf("  Password:    %s\n", string(network.Password))
+	}
+	fmt.Printf("  TrustLevel:  %d", network.TrustLevel)
+	switch network.TrustLevel {
+	case 0:
+		fmt.Printf(" (onboard-only)")
+	case 1:
+		fmt.Printf(" (full-access)")
+	}
+	fmt.Printf("\n")
+
+	// Store network info for CSR generation
+	h.lastNetworkID = network.NetworkID
+	h.lastSSID = network.SSID
 
 	return nil
 }
 
-func transferOwnership2(ctx context.Context, transport fdo.Transport, to1d *cose.Sign1[protocol.To1d, []byte], conf fdo.TO2Config) *fdo.DeviceCredential {
+func (h *wifiHandler) GenerateCSR(networkID, ssid string) (csrData []byte, metadata map[string]any, err error) {
+	// Generate fake CSR data for testing
+	fmt.Printf("[fdo.wifi] Generating fake CSR for network %s (%s)\n", networkID, ssid)
+
+	// Create fake CSR data (just some bytes that look like a CSR)
+	fakeCSR := []byte("-----BEGIN CERTIFICATE REQUEST-----\n" +
+		"MIICvDCCAaQCAQAwdzELMAkGA1UEBhMCVVMxEzARBgNVBAgMCkNhbGlmb3JuaWEx\n" +
+		"FjAUBgNVBAcMDVNhbiBGcmFuY2lzY28xDTALBgNVBAoMBFRlc3QxDTALBgNVBAsM\n" +
+		"BFRlc3QxHTAbBgNVBAMMFHRlc3QtZGV2aWNlLmxvY2FsLmNvbTCCASIwDQYJKoZI\n" +
+		"-----END CERTIFICATE REQUEST-----\n")
+
+	meta := map[string]any{
+		"csr_type": "pkcs10",
+		"key_type": "rsa2048",
+	}
+
+	fmt.Printf("[fdo.wifi] Generated fake CSR (%d bytes)\n", len(fakeCSR))
+	return fakeCSR, meta, nil
+}
+
+func (h *wifiHandler) InstallCertificate(networkID, ssid string, certData []byte, metadata map[string]any) (statusCode int, message string, err error) {
+	fmt.Printf("[fdo.wifi] Received certificate for network %s (%s)\n", networkID, ssid)
+	fmt.Printf("[fdo.wifi] Certificate size: %d bytes\n", len(certData))
+	if metadata != nil {
+		fmt.Printf("[fdo.wifi] Certificate metadata: %v\n", metadata)
+	}
+	fmt.Printf("[fdo.wifi] Certificate installed successfully (fake)\n")
+	return 0, "Certificate installed", nil
+}
+
+func (h *wifiHandler) InstallCACerts(networkID, bundleID string, caData []byte, metadata map[string]any) (statusCode int, message string, err error) {
+	fmt.Printf("[fdo.wifi] Received CA bundle for network %s\n", networkID)
+	fmt.Printf("[fdo.wifi] Bundle ID: %s\n", bundleID)
+	fmt.Printf("[fdo.wifi] CA bundle size: %d bytes\n", len(caData))
+	if metadata != nil {
+		fmt.Printf("[fdo.wifi] CA bundle metadata: %+v\n", metadata)
+	}
+	fmt.Printf("[fdo.wifi] CA bundle installed successfully (fake)\n")
+	return 0, "CA bundle installed successfully", nil
+}
+
+func transferOwnership2(ctx context.Context, transport fdo.Transport, to1d *cose.Sign1[protocol.To1d, []byte], conf fdo.TO2Config) (*fdo.DeviceCredential, error) {
 	fsims := map[string]serviceinfo.DeviceModule{
 		"fido_alliance": &fsim.Interop{},
 	}
@@ -441,12 +746,378 @@ func transferOwnership2(ctx context.Context, transport fdo.Transport, to1d *cose
 			Timeout: 10 * time.Second,
 		}
 	}
+	fsims["fdo.sysconfig"] = &fsim.SysConfig{
+		SetParameter: func(parameter, value string) error {
+			fmt.Printf("[fdo.sysconfig] Received parameter: %s = %s\n", parameter, value)
+			return nil
+		},
+	}
+
+	// Add payload handler to receive and save payloads
+	// Using UnifiedHandler - the framework handles chunking transparently
+	payloadFSIM := &fsim.Payload{
+		UnifiedHandler: &payloadHandler{},
+	}
+	// Add AckHandler if supported types are specified (for NAK testing)
+	if payloadSupportedTypes != "" {
+		types := strings.Split(payloadSupportedTypes, ",")
+		payloadFSIM.AckHandler = &payloadAckHandler{supportedTypes: types}
+		fmt.Printf("[fdo.payload] NAK mode enabled, supported types: %v\n", types)
+	}
+	fsims["fdo.payload"] = payloadFSIM
+
+	// Add BMO handler to receive boot images
+	// Using UnifiedHandler - the framework handles chunking transparently
+	bmoFSIM := &fsim.BMO{
+		UnifiedHandler: &bmoHandler{},
+		URLFetcher:     &defaultURLFetcher{timeout: 30 * time.Second},
+		URLTimeout:     30,
+	}
+	// Add AckHandler if supported types are specified (for NAK testing)
+	if bmoSupportedTypes != "" {
+		types := strings.Split(bmoSupportedTypes, ",")
+		bmoFSIM.AckHandler = &bmoAckHandler{supportedTypes: types}
+		fmt.Printf("[fdo.bmo] NAK mode enabled, supported types: %v\n", types)
+	}
+	fsims["fdo.bmo"] = bmoFSIM
+
+	// Add WiFi handler to display network configuration
+	fsims["fdo.wifi"] = &fsim.WiFi{
+		Handler: &wifiHandler{},
+	}
+
+	// Add credentials handler to receive and display credentials (using chunked protocol)
+	credDevice := fsim.NewCredentialsDevice(func(credentialID string, credentialType int, data []byte, metadata map[string]any) error {
+		fmt.Printf("[fdo.credentials] Received credential:\n")
+		fmt.Printf("  ID:   %s\n", credentialID)
+		fmt.Printf("  Type: %d\n", credentialType)
+		if metadata != nil {
+			fmt.Printf("  Metadata: %v\n", metadata)
+		}
+		fmt.Printf("  Data: %s (length: %d bytes)\n", string(data), len(data))
+		return nil
+	})
+
+	// Add callback for public key requests (owner-driven Registered Credentials flow)
+	if registerSSHKey != "" {
+		// Format: id:keydata (e.g., device-config-key:ssh-ed25519 AAAA...)
+		parts := strings.SplitN(registerSSHKey, ":", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid -register-ssh-key format: expected id:keydata")
+		}
+		credID, keyData := parts[0], parts[1]
+		// Store the key data for the callback
+		sshKeyData := []byte(keyData)
+		credDevice.OnPublicKeyRequested = func(credentialID string, credentialType int, metadata map[string]any) ([]byte, error) {
+			fmt.Printf("[fdo.credentials] Owner requested public key: %s (type: %d)\n", credentialID, credentialType)
+			// Return the configured SSH key if IDs match, or for any request
+			if credentialID == credID || credID == "*" {
+				fmt.Printf("[fdo.credentials] Returning SSH key: %s\n", credID)
+				return sshKeyData, nil
+			}
+			return nil, fmt.Errorf("no public key available for credential_id: %s", credentialID)
+		}
+		fmt.Printf("[fdo.credentials] Configured SSH key: %s\n", credID)
+	}
+
+	// Add enrollment requests (device-initiated Enrolled Credentials flow)
+	if enrollCSR != "" {
+		// Format: id:csrdata (e.g., device-mtls-cert:-----BEGIN CERTIFICATE REQUEST-----)
+		parts := strings.SplitN(enrollCSR, ":", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid -enroll-csr format: expected id:csrdata")
+		}
+		credID, csrData := parts[0], parts[1]
+		credDevice.EnrollmentRequests = append(credDevice.EnrollmentRequests, fsim.EnrollmentRequest{
+			CredentialID:   credID,
+			CredentialType: fsim.CredentialTypeX509Cert,
+			RequestData:    []byte(csrData),
+		})
+		credDevice.OnEnrolledCredentialReceived = func(credentialID string, credentialType int, data []byte, metadata map[string]any) error {
+			fmt.Printf("[fdo.credentials] CLIENT received signed cert + CA:\n")
+			fmt.Printf("  ID:       %s\n", credentialID)
+			fmt.Printf("  Type:     %d\n", credentialType)
+			if metadata != nil {
+				if caIncluded, ok := metadata["ca_bundle_included"].(bool); ok && caIncluded {
+					fmt.Printf("  CA included: yes\n")
+				}
+			}
+			fmt.Printf("  Response:\n%s\n", string(data))
+			return nil
+		}
+		fmt.Printf("[fdo.credentials] Configured CSR enrollment: %s\n", credID)
+	}
+	fsims["fdo.credentials"] = credDevice
+
 	conf.DeviceModules = fsims
 
-	cred, err := fdo.TO2(ctx, transport, to1d, conf)
+	// Call version-specific TO2 function
+	var cred *fdo.DeviceCredential
+	var err error
+	if fdoVersion == 200 {
+		cred, err = fdo.TO2v200(ctx, transport, to1d, &conf)
+	} else {
+		cred, err = fdo.TO2(ctx, transport, to1d, conf)
+	}
 	if err != nil {
 		slog.Error("TO2 failed", "error", err)
-		return nil
+		return nil, err
 	}
-	return cred
+	return cred, nil
+}
+
+// handleVoucherOperations handles voucher listing and export operations
+func handleVoucherOperations() error {
+	// Check if database exists
+	if clientDBPath == "" {
+		return fmt.Errorf("database file not specified: use -db flag")
+	}
+
+	if _, err := os.Stat(clientDBPath); os.IsNotExist(err) {
+		return fmt.Errorf("database file not found: %s", clientDBPath)
+	}
+
+	// Open database
+	db, err := sql.Open("sqlite3", clientDBPath)
+	if err != nil {
+		return fmt.Errorf("failed to open database: %w", err)
+	}
+	defer func() {
+		if closeErr := db.Close(); closeErr != nil {
+			slog.Error("failed to close database", "error", closeErr)
+		}
+	}()
+
+	// List vouchers
+	if listVouchers {
+		return listVouchersFromDB(db)
+	}
+
+	// Export voucher
+	if voucherExport != "" {
+		return exportVoucherFromDB(db)
+	}
+
+	return fmt.Errorf("no voucher operation specified")
+}
+
+// listVouchersFromDB lists all vouchers in the database
+func listVouchersFromDB(db *sql.DB) error {
+	fmt.Printf("Vouchers in database %s:\n", clientDBPath)
+	fmt.Println(strings.Repeat("=", 50))
+
+	rows, err := db.Query(`
+		SELECT 
+			guid,
+			device_info,
+			created_at,
+			cbor
+		FROM vouchers 
+		ORDER BY created_at DESC
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to query vouchers: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			slog.Error("failed to close rows", "error", closeErr)
+		}
+	}()
+
+	count := 0
+	for rows.Next() {
+		var guidBytes []byte
+		var deviceInfo string
+		var createdAt int64
+		var voucherCBOR []byte
+
+		if err := rows.Scan(&guidBytes, &deviceInfo, &createdAt, &voucherCBOR); err != nil {
+			return fmt.Errorf("failed to scan voucher row: %w", err)
+		}
+
+		// Parse GUID
+		var guid protocol.GUID
+		if len(guidBytes) == 16 {
+			copy(guid[:], guidBytes)
+		}
+
+		// Convert Unix timestamp to time
+		createdTime := time.Unix(createdAt/1000000, (createdAt%1000000)*1000)
+
+		fmt.Printf("GUID: %x\n", guid)
+
+		// Compute and display fingerprint if voucher CBOR is available
+		if len(voucherCBOR) > 0 {
+			var ov fdo.Voucher
+			if err := cbor.Unmarshal(voucherCBOR, &ov); err == nil {
+				if fingerprint, err := ov.Fingerprint(); err == nil {
+					fmt.Printf("  Fingerprint: %s\n", fingerprint)
+				}
+			}
+		}
+
+		fmt.Printf("  Device Info: %s\n", deviceInfo)
+		fmt.Printf("  Created: %s\n", createdTime.Format(time.RFC3339))
+		fmt.Println()
+		count++
+	}
+
+	if count == 0 {
+		fmt.Println("No vouchers found in database")
+	} else {
+		fmt.Printf("Total: %d voucher(s)\n", count)
+	}
+
+	return nil
+}
+
+// exportVoucherFromDB exports a specific voucher from the database
+func exportVoucherFromDB(db *sql.DB) error {
+	var query string
+	var args []interface{}
+
+	// Build query based on filter criteria
+	if voucherGUID != "" {
+		// Convert GUID hex string to bytes for comparison
+		guidBytes, err := hex.DecodeString(voucherGUID)
+		if err != nil {
+			return fmt.Errorf("invalid GUID format: %w", err)
+		}
+		query = `SELECT cbor FROM vouchers WHERE guid = ?`
+		args = append(args, guidBytes)
+	} else if voucherSerial != "" {
+		// Search device_info for serial number
+		query = `SELECT cbor FROM vouchers WHERE device_info LIKE ?`
+		args = append(args, "%"+voucherSerial+"%")
+	} else {
+		// Export the most recent voucher
+		query = `SELECT cbor FROM vouchers ORDER BY created_at DESC LIMIT 1`
+	}
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return fmt.Errorf("failed to query voucher: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			slog.Error("failed to close rows", "error", closeErr)
+		}
+	}()
+
+	if !rows.Next() {
+		return fmt.Errorf("no voucher found matching criteria")
+	}
+
+	var cborBytes []byte
+	if err := rows.Scan(&cborBytes); err != nil {
+		return fmt.Errorf("failed to scan voucher: %w", err)
+	}
+
+	// Export in requested format
+	switch voucherFormat {
+	case "pem":
+		return exportVoucherPEM(cborBytes)
+	case "json":
+		return exportVoucherJSON(cborBytes)
+	case "cbor":
+		return exportVoucherCBOR(cborBytes)
+	default:
+		return fmt.Errorf("unsupported export format: %s", voucherFormat)
+	}
+}
+
+// exportVoucherPEM exports voucher in PEM format
+func exportVoucherPEM(cborBytes []byte) error {
+	pemBytes := fdo.FormatVoucherCBORToPEM(cborBytes)
+
+	if voucherExport == "-" {
+		_, err := os.Stdout.Write(pemBytes)
+		return err
+	}
+
+	if err := os.WriteFile(voucherExport, pemBytes, 0o644); err != nil {
+		return fmt.Errorf("failed to write PEM file: %w", err)
+	}
+	fmt.Printf("Voucher exported to: %s\n", voucherExport)
+	return nil
+}
+
+// exportVoucherJSON exports voucher in JSON format
+func exportVoucherJSON(cborBytes []byte) error {
+	// Parse the voucher to extract structured information
+	var voucher fdo.Voucher
+	if err := cbor.Unmarshal(cborBytes, &voucher); err != nil {
+		return fmt.Errorf("failed to unmarshal voucher: %w", err)
+	}
+
+	// Create JSON representation
+	voucherJSON := map[string]interface{}{
+		"guid":        fmt.Sprintf("%x", voucher.Header.Val.GUID),
+		"device_info": voucher.Header.Val.DeviceInfo,
+		"rv_info":     voucher.Header.Val.RvInfo,
+		"manufacturer_key": map[string]interface{}{
+			"type": voucher.Header.Val.ManufacturerKey.Type,
+		},
+		"entries_count": len(voucher.Entries),
+	}
+
+	jsonBytes, err := json.MarshalIndent(voucherJSON, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal JSON: %w", err)
+	}
+
+	var outputFile *os.File
+	if voucherExport == "-" {
+		outputFile = os.Stdout
+	} else {
+		outputFile, err = os.Create(voucherExport)
+		if err != nil {
+			return fmt.Errorf("failed to create output file: %w", err)
+		}
+		defer func() {
+			if closeErr := outputFile.Close(); closeErr != nil {
+				slog.Error("failed to close output file", "error", closeErr)
+			}
+		}()
+	}
+
+	if _, err := fmt.Fprintf(outputFile, "%s\n", jsonBytes); err != nil {
+		return fmt.Errorf("failed to write JSON: %w", err)
+	}
+
+	if voucherExport != "-" {
+		fmt.Printf("Voucher exported to: %s\n", voucherExport)
+	}
+
+	return nil
+}
+
+// exportVoucherCBOR exports voucher in raw CBOR format
+func exportVoucherCBOR(cborBytes []byte) error {
+	var outputFile *os.File
+	var err error
+
+	if voucherExport == "-" {
+		outputFile = os.Stdout
+	} else {
+		outputFile, err = os.Create(voucherExport)
+		if err != nil {
+			return fmt.Errorf("failed to create output file: %w", err)
+		}
+		defer func() {
+			if closeErr := outputFile.Close(); closeErr != nil {
+				slog.Error("failed to close output file", "error", closeErr)
+			}
+		}()
+	}
+
+	if _, err := outputFile.Write(cborBytes); err != nil {
+		return fmt.Errorf("failed to write CBOR: %w", err)
+	}
+
+	if voucherExport != "-" {
+		fmt.Printf("Voucher exported to: %s\n", voucherExport)
+	}
+
+	return nil
 }

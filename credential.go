@@ -7,20 +7,13 @@ import (
 	"github.com/fido-device-onboard/go-fdo/protocol"
 )
 
-// DeviceCredential is non-normative, but the [TPM Draft Spec] proposes a CBOR
-// encoding, so that will be used, excluding the key type/handle.
+// DeviceCredential holds the FDO protocol credential fields (FDO spec
+// Section 3.4.1). This is the protocol-level view used by DI, TO1, and TO2.
 //
-//	DCTPM = [
-//	    DCProtVer: protver,
-//	    DCDeviceInfo: tstr,
-//	    DCGuid: bstr
-//	    DCRVInfo: RendezvousInfo,
-//	    DCPubKeyHash: Hash
-//	    DeviceKeyType: uint
-//	    DeviceKeyHandle: uint
-//	]
-//
-// [TPM Draft Spec]: https://fidoalliance.org/specs/FDO/securing-fdo-in-tpm-v1.0-rd-20231010/securing-fdo-in-tpm-v1.0-rd-20231010.html
+// Storage is handled separately: the blob backend (blob package) serializes
+// this plus key material to a file; the TPM backend (cred/tpm_store.go)
+// stores these fields inside the DCTPM NV index alongside TPM-specific
+// metadata (magic, active flag, key handles).
 type DeviceCredential struct {
 	Version       uint16
 	DeviceInfo    string

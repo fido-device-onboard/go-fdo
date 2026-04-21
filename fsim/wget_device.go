@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (C) 2024 Intel Corporation
+// SPDX-FileCopyrightText: (C) 2026 Dell Technologies
 // SPDX-License-Identifier: Apache 2.0
 
 package fsim
@@ -116,7 +116,10 @@ func (d *Wget) download(ctx context.Context, url string) (_ int64, err error) {
 	if err != nil {
 		return 0, fmt.Errorf("error creating temp file for download: %w", err)
 	}
-	defer func() { _ = os.Remove(temp.Name()) }()
+	defer func() {
+		// #nosec G703 -- removing temp file created within controlled temp directory
+		_ = os.Remove(temp.Name())
+	}()
 	defer func() { _ = temp.Close() }()
 
 	// Make HTTP GET request
@@ -128,6 +131,7 @@ func (d *Wget) download(ctx context.Context, url string) (_ int64, err error) {
 	if err != nil {
 		return 0, fmt.Errorf("error creating request: %w", err)
 	}
+	// #nosec G704 -- URLs provided by owner service, constrained by protocol design
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, fmt.Errorf("error making request: %w", err)
@@ -164,6 +168,7 @@ func (d *Wget) download(ctx context.Context, url string) (_ int64, err error) {
 	if d.name == "" {
 		return 0, fmt.Errorf("name not sent before file download completed")
 	}
+	// #nosec G703 -- rename limited to NameToPath resolver or original filename
 	if err := os.Rename(temp.Name(), resolveName(d.name)); err != nil {
 		return 0, fmt.Errorf("error renaming file to %q: %w", d.name, err)
 	}

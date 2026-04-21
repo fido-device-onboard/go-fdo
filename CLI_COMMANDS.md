@@ -1,0 +1,1024 @@
+# FDO CLI Commands Reference
+
+This document provides comprehensive documentation for all FDO (FIDO Device Onboard) command-line tools and their usage.
+
+## Overview
+
+The FDO CLI provides six main commands:
+
+- `client` - Device-side operations (DI, TO1, TO2, voucher management)
+- `server` - Owner-side operations (DI server, TO2 server, rendezvous)
+- `delegate` - Delegate certificate management
+- `attestpayload` - Attested payload creation and verification
+- `auth` - FDOKeyAuth authentication (obtain bearer token for voucher transfer APIs)
+- `meta` - BMO meta-payload creation, signing, and verification
+
+## Client Commands
+
+### Basic Usage
+
+```bash
+go run ./cmd client [flags]
+```
+
+### Device Initialization (DI)
+
+**Purpose:** Establishes trust between device and manufacturer by creating an ownership voucher. This is the first step in the FDO protocol where the device gets its unique identity and credentials. DI runs against a manufacturing server and creates a `creds.blob` file containing device information that must be secured in the device's Root of Trust (RoE) - this file is required for all subsequent onboarding operations.
+
+```bash
+# Perform DI against manufacturing server
+go run ./cmd client -di http://manufacturer.example.com:9999
+
+# DI with specific key type (used in manufacturing for different device capabilities)
+go run ./cmd client -di http://manufacturer.example.com:9999 -di-key rsa2048
+
+# DI with custom device info encoding (x509, x5chain, cose)
+go run ./cmd client -di http://manufacturer.example.com:9999 -di-key-enc x509
+```
+
+**Real-world context:** Used in manufacturing environments where devices are first initialized. The test suite shows this as the foundational step before any onboarding can occur. The resulting `creds.blob` contains the device's ownership voucher and cryptographic material that must be protected.
+
+### Transfer of Ownership (TO1/TO2)
+
+**Purpose:** Transfers device ownership from manufacturer to the actual owner. TO1 finds the owner via rendezvous service, TO2 establishes secure channel and configures the device. **Requires device has undergone DI first.**
+
+```bash
+# Complete TO1/TO2 process (standard onboarding)
+go run ./cmd client
+
+# TO1 only (rendezvous lookup, used in distributed deployments)
+go run ./cmd client -rv-only
+
+# TO2 with specific FDO version (for protocol compatibility)
+go run ./cmd client -fdo-version 200
+
+# TO2 with single-sided attestation (WiFi-only mode, no owner verification)
+go run ./cmd client -allow-single-sided
+```
+
+**Single-sided attestation:** Used for WiFi-only onboarding by untrusted manufacturing services. In this mode, the device doesn't verify the owner's identity, allowing onboarding in scenarios where the owner cannot be fully authenticated (e.g., public WiFi hotspots, untrusted manufacturing environments). This should only be used when full owner verification is not possible.
+
+**Real-world context:** The test suite demonstrates different scenarios:
+
+- Basic TO1/TO2 for standard onboarding
+- FDO 2.0 protocol for newer devices
+- Credential reuse for multiple onboarding cycles
+- Single-sided mode for WiFi-only setups
+
+### Voucher Management
+
+#### List Vouchers
+
+```bash
+# List all vouchers in database
+go run ./cmd client -list-vouchers -db fdo.db
+
+# Output:
+Vouchers in database fdo.db:
+==================================================
+GUID: 3737643032663038366133306164636332346233613539386638643738366166
+  Device Info: gotest
+  Created: 1970-01-01T00:29:30Z
+
+Total: 1 voucher(s)
+```
+
+#### Export Vouchers
+
+```bash
+# Export most recent voucher to stdout (PEM format)
+go run ./cmd client -voucher-export - -db fdo.db
+
+# Export to file
+go run ./cmd client -voucher-export voucher.pem -db fdo.db
+
+# Export specific voucher by GUID
+go run ./cmd client -voucher-export - -db fdo.db -voucher-guid 3737643032663038366133306164636332346233613539386638643738366166
+
+# Export by serial number (searches device_info)
+go run ./cmd client -voucher-export - -db fdo.db -voucher-serial gotest
+
+# Export in JSON format
+go run ./cmd client -voucher-export - -db fdo.db -voucher-format json
+
+# Export in raw CBOR format
+go run ./cmd client -voucher-export - -db fdo.db -voucher-format cbor
+```
+
+#### Export Formats
+
+**PEM Format (Default):**
+
+```
+-----BEGIN OWNERSHIP VOUCHER-----
+hRhlWPKGGGVQd9AvCGowrcwks6WY+NeGr4KBgg1BAIOCDEEBggJRUAAAAAAAAAAAAAD//38AAAGC
+
+...
+-----END OWNERSHIP VOUCHER-----
+```
+
+**JSON Format:**
+
+```json
+{
+  "guid": "3737643032663038366133306164636332346233613539386638643738366166",
+  "device_info": "gotest",
+  "manufacturer_key": {
+    "type": 11
+  },
+  "rv_info": [...],
+  "entries_count": 1
+}
+```
+
+### Device Configuration
+
+**Purpose:** Configure device-specific settings and access methods.
+
+```bash
+# Print device credential blob (for debugging and verification)
+go run ./cmd client -print
+
+# Use TPM for hardware-backed device secrets (enhanced security)
+go run ./cmd client -tpm /dev/tpm0
+
+# Specify custom credential blob file (for testing or manual credential management)
+# Default: uses creds.blob created during DI
+go run ./cmd client -blob custom-cred.bin
+```
+
+### Service Info Modules (FSIM) - Device Configuration
+
+**Purpose:** Specify system configuration data that will be sent via applicable FSIMs upon device onboarding. These are generic device provisioning data that devices receive at onboarding time.
+
+#### Device Configuration FSIMs
+
+**Purpose:** Configure device-specific settings and services during onboarding.
+
+```bash
+# Configure supported BMO (Boot Management Overlay) MIME types for firmware updates
+go run ./cmd client -bmo-supported-types application/x-iso9660-image,application/octet-stream
+
+# Configure supported payload MIME types for data transfer
+go run ./cmd client -payload-supported-types application/json,text/plain
+```
+
+#### Data Transfer FSIMs
+
+**Purpose:** Manage file transfers and command execution between device and owner.
+
+```bash
+# Upload files to owner (for device data collection or backup)
+go run ./cmd client -upload /path/to/file1,/path/to/file2
+
+# Download files from owner (for configuration updates or software distribution)
+go run ./cmd client -download /path/to/download
+
+# Execute commands on device (for remote management)
+go run ./cmd client -echo-commands
+
+# wget files from URLs (for software updates or data retrieval)
+go run ./cmd client -wget-dir /downloads
+```
+
+**Real-world context:** The test suite demonstrates various FSIM scenarios:
+
+- **Payload FSIM:** File transfer for firmware and configuration
+- **BMO FSIM:** Boot image management for device updates
+- **Sysconfig FSIM:** System configuration (hostname, timezone, NTP)
+- **WiFi FSIM:** Network configuration for wireless devices
+- **Credentials FSIM:** SSH key registration and CSR enrollment
+
+### Credential Management (FSIM)
+
+**Purpose:** Manage device credentials during onboarding, including SSH keys and certificate enrollment for secure device access. This is part of device configuration via the Credentials FSIM.
+
+```bash
+# Register SSH public key with owner (for secure remote access)
+go run ./cmd client -register-ssh-key device-ssh-key:ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDevicePublicKeyExample
+
+# Enroll CSR for certificate-based authentication (used in PKI environments)
+go run ./cmd client -enroll-csr device-mtls-cert:-----BEGIN CERTIFICATE REQUEST-----...-----END CERTIFICATE REQUEST-----
+```
+
+**Real-world context:** The test suite shows these being used for:
+
+- SSH key registration for device remote access
+- CSR enrollment for certificate-based authentication
+- Integration with enterprise PKI systems
+
+### Cryptographic Configuration
+
+**Purpose:** Configure cryptographic algorithms and security parameters for the FDO protocol.
+
+```bash
+# Specify cipher suite for encryption (data protection)
+go run ./cmd client -cipher A256GCM
+
+# Specify key exchange suite (secure channel establishment)
+go run ./cmd client -kex ASYMKEX2048
+
+# Skip TLS certificate verification (testing environments only)
+go run ./cmd client -insecure-tls
+```
+
+**Real-world context:** The test suite shows:
+
+- RSA2048 keys for encryption scenarios
+- ASYMKEX2048 for key exchange testing
+- Different cipher suites for compatibility testing
+
+## Server Commands
+
+### Basic Usage
+
+```bash
+go run ./cmd server [flags]
+```
+
+### Server Configuration
+
+**Purpose:** Configure and start the FDO owner server that handles device initialization and onboarding requests.
+
+```bash
+# Basic server setup (development/testing)
+go run ./cmd server -http "127.0.0.1:9999" -db fdo.db
+
+# Production server with owner certificates (for manufacturing environments)
+go run ./cmd server -http "0.0.0.0:9999" -db fdo.db -owner-certs
+
+# Server with TLS for secure communication
+go run ./cmd server -http "127.0.0.1:9999" -db fdo.db -insecure-tls
+
+# Server with external address (for cloud deployments)
+go run ./cmd server -http "0.0.0.0:9999" -db fdo.db -ext-http "fdo.example.com:9999"
+```
+
+**Real-world context:** The test suite uses various server configurations:
+
+- Basic servers for simple testing
+- Owner certificates for manufacturing environments
+- TLS for secure communication testing
+- External addresses for distributed deployments
+
+### Database Configuration
+
+**Purpose:** Manage the FDO database that stores vouchers, keys, and device information.
+
+```bash
+# Server with encrypted database (production security)
+go run ./cmd server -db fdo.db -db-pass "strong-password"
+
+# Initialize database only (setup phase)
+go run ./cmd server -initOnly -db fdo.db
+```
+
+**Real-world context:** Used for:
+
+- Database setup during initial deployment
+- Security configuration for production environments
+- Database maintenance and backup procedures
+
+### Service Info Modules (FSIM) - Server Configuration
+
+**Purpose:** Configure server-side services that devices can access during onboarding. These specify the system configuration data that will be sent to devices.
+
+#### Device Configuration FSIMs
+
+**Purpose:** Configure device-specific settings during onboarding.
+
+```bash
+# Payload FSIM - Distribute files to devices (firmware, configuration)
+go run ./cmd server -payload application/json:config.json -payload application/octet-stream:firmware.bin
+
+# BMO FSIM - Boot image management for device updates
+go run ./cmd server -bmo application/x-iso9660-image:boot.iso
+
+# BMO FSIM with Meta-URL delivery (unsigned meta-payload served via HTTP)
+go run ./cmd server -bmo-meta-url http://cdn.example.com/meta.cbor
+
+# BMO FSIM with Meta-URL delivery (signed meta-payload, PEM signer key)
+go run ./cmd server -bmo-meta-url "http://cdn.example.com/meta-signed.cbor:signer-key.pem"
+
+# BMO FSIM with Meta-URL delivery (signed meta-payload, raw COSE_Key file)
+go run ./cmd server -bmo-meta-url "http://cdn.example.com/meta-signed.cbor:signer.cbor"
+
+# WiFi Configuration FSIM - Configure wireless network settings
+go run ./cmd server -wifi-config wifi-config.json
+
+# System Configuration FSIM - Set device system parameters
+go run ./cmd server -sysconfig hostname=test-device -sysconfig timezone=UTC -sysconfig ntp-server=pool.ntp.org
+```
+
+#### Credential Management FSIM
+
+**Purpose:** Manage device credentials and authentication during onboarding.
+
+```bash
+# Provision credentials to devices (passwords, API keys, OAuth tokens)
+go run ./cmd server -credential password:admin-creds:admin:SecurePass123:https://mgmt.example.com/api \
+  -credential api_key:prod-api:sk_live_abc123xyz:https://api.example.com/v1 \
+  -credential oauth2_client_secret:oauth-app:client_secret_xyz789:https://oauth.example.com/token
+
+# Request SSH public key from devices (for secure access)
+go run ./cmd server -request-pubkey ssh_public_key:device-ssh-key:ssh://admin.example.com:22
+```
+
+**Real-world context:** Used in enterprise environments for:
+
+- Automated device provisioning with various credential types
+- SSH key management for secure remote access
+
+- Integration with enterprise authentication systems
+
+#### Data Transfer FSIMs
+
+**Purpose:** Manage file transfers and command execution.
+
+```bash
+# Command FSIM - Execute commands on devices for remote management
+go run ./cmd server -command-date
+
+# Download FSIM - Collect files from devices
+go run ./cmd server -download /path/to/file1 -download /path/to/file2
+
+# Upload FSIM - Receive files from devices (logs, diagnostics)
+go run ./cmd server -upload-dir /uploads
+```
+
+**Real-world context:** The test suite demonstrates comprehensive FSIM usage:
+
+- **Payload transfer** for firmware and configuration distribution
+- **BMO** for boot image management and OTA updates
+- **Sysconfig** for device initialization parameters
+- **WiFi** for network configuration
+- **Credentials** for secure device access
+
+### Rendezvous Configuration
+
+**Purpose:** Configure rendezvous service for device-to-owner discovery in distributed deployments.
+
+```bash
+# Use external rendezvous server (distributed manufacturing)
+go run ./cmd server -to0 http://rendezvous.example.com:9999
+
+# Register specific device GUID immediately (bypass normal discovery)
+go run ./cmd server -to0 http://rendezvous.example.com:9999 -to0-guid 3737643032663038366133306164636332346233613539386638643738366166
+
+# Skip TO1 (direct TO2 for known devices)
+go run ./cmd server -rv-bypass
+
+# Delay TO1 (staggered device registration)
+go run ./cmd server -rv-delay 30
+
+# Configure RV voucher replacement policy (security controls)
+go run ./cmd server -rv-replacement-policy manufacturer-key-consistency
+```
+
+**Real-world context:** Used in large-scale deployments for:
+
+- Distributed manufacturing with separate rendezvous infrastructure
+- Load balancing and device registration management
+- Security policy enforcement for voucher replacement
+
+### Delegate Configuration
+
+**Purpose:** Configure delegate certificates for supply chain operations and multi-owner scenarios. See [delegate.md](delegate.md) for comprehensive delegate documentation.
+
+```bash
+# Use delegate for TO2 operations (supply chain handoffs)
+go run ./cmd server -onboardDelegate myDelegate
+
+# Use delegate for RV blob signing (delegated manufacturing)
+go run ./cmd server -rvDelegate myDelegate
+```
+
+**Real-world context:** The test suite demonstrates delegate usage for:
+
+- Multi-owner device handoffs in manufacturing
+- Delegated manufacturing scenarios
+- Complex ownership transfer workflows
+
+### Voucher Management
+
+**Purpose:** Import and extend ownership vouchers for various operational scenarios.
+
+```bash
+# Import voucher from PEM file (manual voucher management)
+go run ./cmd server -import-voucher voucher.pem
+
+# Extend voucher for resale (device resale scenarios)
+go run ./cmd server -resale-guid 3737643032663038366133306164636332346233613539386638643738366166 \
+  -resale-key next-owner.pub
+
+# Print owner certificate chain (for verification and debugging)
+go run ./cmd server -print-owner-chain ec384
+
+# Print owner private key (for testing and development only)
+go run ./cmd server -print-owner-private ec384
+
+# Print owner public key (for certificate validation)
+go run ./cmd server -print-owner-public ec384
+```
+
+**Real-world context:** Used for:
+
+- Manual voucher management in edge cases
+- Device resale and second-owner scenarios
+- Supply chain voucher operations
+- Certificate chain verification
+- Debugging cryptographic operations
+- Key rotation and management procedures
+
+## Delegate Commands
+
+### Basic Usage
+
+```bash
+go run ./cmd delegate [flags]
+```
+
+### Delegate Operations
+
+**Purpose:** Create and manage delegate certificates for supply chain operations and multi-owner scenarios. See [delegate.md](delegate.md) for comprehensive delegate documentation.
+
+```bash
+# Create delegate chain for TO2 operations (supply chain handoff)
+go run ./cmd delegate -db fdo.db create myDelegate onboard,redirect SECP384R1 ec384
+
+# Create delegate for credential provisioning
+go run ./cmd delegate -db fdo.db create provisionDelegate provision SECP384R1 ec384
+
+# Print delegate chain for verification
+go run ./cmd delegate -db fdo.db -print-delegate-chain ec384
+
+# Print delegate private key (for testing only)
+go run ./cmd delegate -db fdo.db -print-delegate-private ec384
+```
+
+**Real-world context:** The test suite shows delegate usage for:
+
+- Multi-owner device handoffs in manufacturing
+- Delegated credential provisioning
+- Complex supply chain operations with multiple stakeholders
+
+### CSR Workflow (Multi-Party Delegate Issuance)
+
+For production multi-party scenarios where one entity holds the owner key and another needs a delegate certificate. See [delegate.md](delegate.md#csr-workflow-multi-party-delegate-issuance) for detailed scenarios.
+
+```bash
+# Step 1: Requester generates keypair + CSR (no database needed)
+go run ./cmd delegate generate-csr myService ec384 -key-out myService.key.pem > myService.csr.pem
+
+# Step 2: Owner-key holder signs the CSR with scoped permissions
+go run ./cmd delegate -db owner.db sign-csr myService.csr.pem myDelegate voucher-claim SECP384R1 > signed.pem
+
+# Step 3: Requester imports signed cert + their private key
+go run ./cmd delegate -db requester.db import-cert myDelegate signed.pem myService.key.pem
+```
+
+**Who runs which command:**
+
+- **`generate-csr`** — The entity requesting delegation (no DB needed)
+- **`sign-csr`** — The owner-key holder (needs DB with owner keys)
+- **`import-cert`** — The requester again (needs DB to store the chain)
+
+### Delegate Types
+
+- `onboard,redirect` - For TO2 operations (device to first owner)
+- `voucher-claim` - For Pull API voucher retrieval via delegate authentication
+- `provision` - For credential provisioning services
+
+### Key Types
+
+- `ec256` - ECDSA P-256 (smaller key size, faster operations)
+- `ec384` - ECDSA P-384 (recommended for production)
+- `rsa2048` - RSA 2048-bit (legacy compatibility)
+- `rsa3072` - RSA 3072-bit (higher security)
+
+## Attested Payload Commands
+
+### Basic Usage
+
+```bash
+go run ./cmd attespayload [flags]
+```
+
+### Create Attested Payload
+
+**Purpose:** Create and verify cryptographically signed data packages that can be verified to have been created by a specific device with a valid voucher. See [attestedpayload.md](attestedpayload.md) for comprehensive attested payload documentation.
+
+```bash
+# Create with text payload (simple secure data transfer)
+go run ./cmd attestpayload -db fdo.db -voucher voucher.pem -payload "Hello World" -output payload.fdo
+
+# Create with file payload (firmware, configuration, logs)
+go run ./cmd attestpayload -db fdo.db -voucher voucher.pem -file data.bin -output payload.fdo
+
+# Create with MIME type (for structured data)
+go run ./cmd attestpayload -db fdo.db -voucher voucher.pem -payload "config.json" -type "application/json" -output payload.fdo
+
+# Create with delegate signing (supply chain verification)
+go run ./cmd attestpayload -db fdo.db -voucher voucher.pem -delegate myDelegate -payload "Secure Data" -output payload.fdo
+
+# Create encrypted payload (RSA device keys required)
+go run ./cmd attestpayload -db fdo.db -voucher voucher.pem -payload "Secret Data" -encrypt -output encrypted.fdo
+
+# Create with expiration (time-limited data)
+go run ./cmd attestpayload -db fdo.db -voucher voucher.pem -payload "Time-limited Data" -expires "2025-12-31T23:59:59Z" -output payload.fdo
+
+# Create with generation number (versioning and supersession)
+go run ./cmd attestpayload -db fdo.db -voucher voucher.pem -payload "Config v2" -id "network-config" -gen 2 -output payload.fdo
+```
+
+**Real-world context:** The test suite shows attested payload usage for:
+
+- Secure data transfer between device and owner
+- Firmware and configuration distribution with cryptographic verification
+- Delegate-signed payloads for supply chain verification
+- Encrypted payloads for sensitive data protection
+- Time-limited data for temporary configurations
+
+### Database Configuration
+
+```bash
+# Use encrypted database (production security)
+go run ./cmd attestpayload -db fdo.db -db-pass "password" -voucher voucher.pem -payload "Data"
+```
+
+## Auth Command (FDOKeyAuth)
+
+### Overview
+
+The `auth` command performs an [FDOKeyAuth] challenge-response handshake against
+a Voucher Transfer service and prints the resulting bearer token to stdout.
+This token is then used as `Authorization: Bearer <token>` in subsequent
+pull/push API calls.
+
+The handshake is three messages over two HTTP round-trips:
+
+```
+Caller                         Server
+  |  ── Hello (CallerKey) ──>    |
+  |  <── Challenge (Nonce) ──    |
+  |  ── Prove  (Sign1)    ──>   |
+  |  <── Result (Token)   ──    |
+```
+
+[FDOKeyAuth]: transfer/README.md
+
+### Basic Usage
+
+```bash
+go run ./cmd auth [flags]
+```
+
+### Flags
+
+| Flag | Required | Default | Description |
+|------|----------|---------|-------------|
+| `-url` | Yes | — | Base URL of the FDOKeyAuth service |
+| `-key` | Yes | — | Path to PEM-encoded private key (use `-` for stdin) |
+| `-hash` | No | `sha256` | Hash algorithm: `sha256` or `sha384` |
+| `-path-prefix` | No | `/api/v1/pull/vouchers` | Service Root path prefix |
+| `-verbose` | No | `false` | Print expiry, fingerprint, and voucher count to stderr |
+| `-insecure-tls` | No | `false` | Skip TLS certificate verification |
+| `-debug` | No | `false` | Enable debug logging |
+
+### Key Format
+
+The `-key` flag accepts any PEM-encoded private key:
+
+- `EC PRIVATE KEY` (SEC 1 / OpenSSL format)
+- `PRIVATE KEY` (PKCS#8 — EC or RSA)
+- `RSA PRIVATE KEY` (PKCS#1)
+
+### Examples
+
+#### Authenticate and capture the token
+
+```bash
+TOKEN=$(go run ./cmd auth -url https://mfg.example.com -key owner.pem)
+echo "$TOKEN"
+```
+
+#### Pipe the key from stdin
+
+```bash
+cat owner.pem | go run ./cmd auth -url https://mfg.example.com -key -
+```
+
+This is useful when the key is stored in a secrets manager or vault:
+
+```bash
+vault kv get -field=key secret/fdo/owner | \
+  go run ./cmd auth -url https://mfg.example.com -key -
+```
+
+#### Verbose output (stderr)
+
+```bash
+go run ./cmd auth -url https://mfg.example.com -key owner.pem -verbose
+# stdout: integration-test-token-12345
+# stderr:
+#   Status:          authenticated
+#   Token expires:   2025-06-15T14:30:00Z
+#   Key fingerprint: a1b2c3d4...
+#   Voucher count:   42
+```
+
+#### Use SHA-384 hash
+
+```bash
+go run ./cmd auth -url https://mfg.example.com -key owner.pem -hash sha384
+```
+
+#### Use with a pull-model voucher download
+
+```bash
+# 1. Authenticate
+TOKEN=$(go run ./cmd auth -url https://mfg.example.com -key owner.pem)
+
+# 2. List available vouchers
+curl -H "Authorization: Bearer $TOKEN" \
+     https://mfg.example.com/api/v1/pull/vouchers
+
+# 3. Download a specific voucher
+curl -H "Authorization: Bearer $TOKEN" \
+     https://mfg.example.com/api/v1/pull/vouchers/<guid> \
+     -o voucher.cbor
+```
+
+#### Self-signed / development TLS
+
+```bash
+go run ./cmd auth -url https://localhost:9998 -key owner.pem -insecure-tls
+```
+
+### Output Convention
+
+| Stream | Content |
+|--------|---------|
+| stdout | Bearer token only (one line, no trailing whitespace) |
+| stderr | Warnings, verbose details, debug logs |
+
+This makes `fdo auth` composable in shell pipelines — stdout is always safe to
+capture with `$()` or pipe into another command.
+
+### Error Cases
+
+| Scenario | Exit code | Message |
+|----------|-----------|---------|
+| Missing `-url` | 2 | `auth: -url is required` |
+| Missing `-key` | 2 | `auth: -key is required` |
+| Unreadable key file | 2 | `auth: failed to read key file "...": ...` |
+| Server rejects signature | 2 | `auth: authentication failed: HTTP 401 ...` |
+| Server unreachable | 2 | `auth: authentication failed: ...` |
+
+## Meta Commands (BMO Meta-Payload Tooling)
+
+### Overview
+
+The `meta` command provides tools for creating, signing, and verifying BMO (Bare Metal Onboarding) meta-payloads. Meta-payloads enable **meta-URL delivery mode** (mode 2) where the device fetches a CBOR descriptor from a URL, which then points to the actual boot image. This decouples image versioning from fleet management — an OS vendor can update the meta-payload to point to a new image version without requiring owner reconfiguration.
+
+See [fdo.bmo.md](fdo.bmo.md#mode-2-meta-payload-indirection) for the full specification of meta-URL delivery.
+
+### Basic Usage
+
+```bash
+go run ./cmd meta <subcommand> [flags]
+go run ./cmd meta help
+```
+
+### Subcommands
+
+| Subcommand | Purpose |
+|------------|---------|
+| `create` | Create an unsigned meta-payload CBOR file |
+| `sign` | Sign an existing meta-payload with a private key |
+| `verify` | Verify a signed meta-payload and optionally print contents |
+| `create-signed` | Create and sign a meta-payload in one step |
+| `export-pubkey` | Export a private key's public key as COSE_Key CBOR |
+
+### Create Unsigned Meta-Payload
+
+**Purpose:** Build a CBOR meta-payload file that describes where to fetch a boot image, its MIME type, hash, and optional metadata. The resulting file can be served over HTTP for devices using meta-URL delivery mode.
+
+```bash
+# Minimal: MIME type + URL + output
+go run ./cmd meta create \
+  -mime "application/x-raw-disk-image" \
+  -url "http://cdn.example.com/rhel9.dd" \
+  -out meta.cbor
+
+# With hash verification (recommended for production)
+go run ./cmd meta create \
+  -mime "application/x-raw-disk-image" \
+  -url "http://cdn.example.com/rhel9.dd" \
+  -hash-file /path/to/rhel9.dd \
+  -name "rhel9-boot" \
+  -version "9.3" \
+  -description "RHEL 9.3 bare-metal installer" \
+  -boot-args "inst.ks=http://ks.example.com/ks.cfg quiet" \
+  -out meta.cbor
+```
+
+**Flags:**
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `-mime` | Yes | MIME type of the actual boot image |
+| `-url` | Yes | URL where the actual image can be fetched |
+| `-out` | Yes | Output file path for the CBOR meta-payload |
+| `-hash-file` | No | Path to the actual image file (computes SHA-256 hash automatically) |
+| `-name` | No | Descriptive name for the image |
+| `-version` | No | Version string |
+| `-description` | No | Human-readable description |
+| `-boot-args` | No | Kernel/boot arguments to pass when booting |
+
+**Output:** Writes a CBOR-encoded `MetaPayload` struct to the output file. Prints the computed SHA-256 hash to stderr if `-hash-file` is provided.
+
+### Sign Meta-Payload
+
+**Purpose:** Wrap an existing meta-payload CBOR file in a COSE Sign1 envelope using an ECDSA private key. The signed meta-payload can be verified by devices that have the corresponding public key.
+
+```bash
+go run ./cmd meta sign \
+  -in meta.cbor \
+  -key signer-key.pem \
+  -out meta-signed.cbor
+```
+
+**Flags:**
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `-in` | Yes | Input meta-payload CBOR file (unsigned) |
+| `-key` | Yes | PEM private key file for signing (ECDSA P-256 or P-384) |
+| `-out` | Yes | Output file path for the signed meta-payload |
+
+**Key format:** The private key must be PEM-encoded ECDSA. Supported PEM block types:
+
+- `EC PRIVATE KEY` (SEC 1 / OpenSSL format)
+- `PRIVATE KEY` (PKCS#8 format)
+
+### Verify Signed Meta-Payload
+
+**Purpose:** Verify the COSE Sign1 signature on a signed meta-payload using a public key. Optionally print the inner meta-payload contents.
+
+```bash
+# Verify only
+go run ./cmd meta verify \
+  -in meta-signed.cbor \
+  -key signer-pub.pem
+
+# Verify and print contents
+go run ./cmd meta verify \
+  -in meta-signed.cbor \
+  -key signer-pub.pem \
+  -print
+```
+
+**Flags:**
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `-in` | Yes | Signed meta-payload file to verify |
+| `-key` | Yes | PEM public key file for verification |
+| `-print` | No | Print meta-payload contents after successful verification |
+
+**Key format:** The public key can be provided as:
+
+- `PUBLIC KEY` PEM (PKIX format)
+- `EC PRIVATE KEY` or `PRIVATE KEY` PEM (public key is extracted automatically)
+
+**Output with `-print`:**
+
+```text
+Signature verified OK
+  MIME Type:  application/x-raw-disk-image
+  URL:        http://cdn.example.com/rhel9.dd
+  Name:       rhel9-boot
+  Hash Alg:   sha256
+  Hash:       a1b2c3d4e5f6...
+  Boot Args:  inst.ks=http://ks.example.com/ks.cfg quiet
+  Version:    9.3
+  Desc:       RHEL 9.3 bare-metal installer
+```
+
+### Create and Sign in One Step
+
+**Purpose:** Convenience command that creates a meta-payload and signs it in a single operation. Equivalent to running `create` followed by `sign`.
+
+```bash
+go run ./cmd meta create-signed \
+  -mime "application/x-raw-disk-image" \
+  -url "http://cdn.example.com/rhel9.dd" \
+  -hash-file /path/to/rhel9.dd \
+  -name "rhel9-boot" \
+  -key signer-key.pem \
+  -out meta-signed.cbor
+```
+
+**Flags:** Combines all flags from `create` plus `-key` from `sign`.
+
+### Export Public Key as COSE_Key
+
+**Purpose:** Extract the public key from a PEM private key file and export it as a COSE_Key CBOR file. This file is used by the server's `-bmo-meta-url` flag to tell devices which key to use for signature verification.
+
+```bash
+go run ./cmd meta export-pubkey \
+  -key signer-key.pem \
+  -out signer-pubkey.cbor
+```
+
+**Flags:**
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `-key` | Yes | PEM private key file |
+| `-out` | Yes | Output COSE_Key CBOR file |
+
+**Output:** Prints the COSE_Key file path, size, and first 8 bytes of its SHA-256 fingerprint to stderr.
+
+### End-to-End Example: Signed Meta-URL Workflow
+
+This example shows the complete workflow for setting up signed meta-URL delivery:
+
+```bash
+# 1. Generate an ECDSA signing key
+openssl ecparam -name prime256v1 -genkey -noout -out signer-key.pem
+
+# 2. Create and sign the meta-payload
+go run ./cmd meta create-signed \
+  -mime "application/x-raw-disk-image" \
+  -url "http://images.example.com/rhel9.dd" \
+  -hash-file ./rhel9.dd \
+  -name "rhel9-boot" \
+  -key signer-key.pem \
+  -out meta-signed.cbor
+
+# 3. Export public key for the server
+go run ./cmd meta export-pubkey \
+  -key signer-key.pem \
+  -out signer-pubkey.cbor
+
+# 4. Host the signed meta-payload on a web server
+cp meta-signed.cbor /var/www/html/
+
+# 5. Start the FDO server with signed meta-URL
+go run ./cmd server \
+  -http "127.0.0.1:9999" \
+  -db fdo.db \
+  -bmo-meta-url "http://images.example.com/meta-signed.cbor:signer-pubkey.cbor"
+
+# 6. Alternatively, use the PEM key directly (auto-converts to COSE_Key)
+go run ./cmd server \
+  -http "127.0.0.1:9999" \
+  -db fdo.db \
+  -bmo-meta-url "http://images.example.com/meta-signed.cbor:signer-key.pem"
+```
+
+**What happens at onboarding:**
+
+1. Server sends `image-begin` with `delivery_mode=2` (meta-url), the meta-payload URL, and the signer's COSE_Key
+2. Device fetches the meta-payload from the URL
+3. Device verifies the COSE Sign1 signature using the provided public key
+4. Device extracts the inner `MetaPayload` (image URL, MIME type, hash, etc.)
+5. Device fetches the actual boot image from the URL in the meta-payload
+6. Device verifies the image hash and boots
+
+### Server Flag: `-bmo-meta-url`
+
+The `-bmo-meta-url` flag configures the server to use meta-URL delivery mode (mode 2) for BMO. It accepts two formats:
+
+| Format | Description |
+|--------|-------------|
+| `URL` | Unsigned meta-payload. Device fetches and parses raw CBOR. |
+| `URL:KEY_FILE` | Signed meta-payload. Device verifies COSE Sign1 signature using the key. |
+
+**Key file formats for signed mode:**
+
+- **PEM file** (`.pem` extension): Automatically parsed and converted to COSE_Key CBOR at server startup. Supports `PUBLIC KEY`, `EC PRIVATE KEY`, or `PRIVATE KEY` PEM blocks.
+- **COSE_Key CBOR file** (any other extension): Used directly as the raw COSE_Key bytes sent to the device.
+
+**Real-world context:** The `-bmo-meta-url` flag enables delegation of image management to a third party (e.g., OS vendor). The vendor publishes a signed meta-payload at a stable URL, and the owner configures devices to fetch from it. When the vendor releases a new image, they update the meta-payload — all devices automatically get the new version without owner intervention.
+
+## Global Options
+
+### Debug Mode
+
+**Purpose:** Enable verbose logging and debugging information for troubleshooting.
+
+```bash
+# Enable debug output for any command
+go run ./cmd client -debug -di http://manufacturer.example.com:9999
+go run ./cmd server -debug -http "127.0.0.1:9999" -db fdo.db
+```
+
+### Help
+
+**Purpose:** Get help information for commands and options.
+
+```bash
+# Get help for main command
+go run ./cmd --help
+
+# Get help for specific subcommand
+go run ./cmd client --help
+go run ./cmd server --help
+go run ./cmd delegate --help
+go run ./cmd attestpayload --help
+go run ./cmd meta help
+```
+
+## Troubleshooting
+
+### Common Errors and Solutions
+
+**Database not found:**
+
+```bash
+Error: database file not found: fdo.db
+Solution: Ensure database file exists or create it with -initOnly
+```
+
+**Invalid GUID format:**
+
+```bash
+Error: invalid GUID format
+Solution: Use 32-character hex string (e.g., 3737643032663038366133306164636332346233613539386638643738366166)
+```
+
+**No voucher found:**
+
+```bash
+Error: no voucher found matching criteria
+Solution: Check GUID/serial number or use -list-vouchers to see available vouchers
+```
+
+**Connection refused:**
+
+```bash
+Error: connection refused
+Solution: Ensure server is running and accessible on specified port
+```
+
+## Tips and Best Practices
+
+### Database Management
+
+- Always specify database path with `-db` flag
+- Use `-initOnly` to create new databases
+- Back up databases before major operations
+- Use encrypted databases in production with `-db-pass`
+
+### Voucher Management
+
+- Use `-list-vouchers` to see available vouchers before export
+- Export vouchers in PEM format for long-term storage
+- Use JSON format for programmatic processing
+- Search by serial number when GUID is unknown
+
+### Security
+
+- Use TLS in production environments
+- Protect database files with appropriate permissions
+- Use certificate validation (`-insecure-tls` only for testing)
+- Rotate delegate certificates regularly
+
+### Performance
+
+- Use appropriate key sizes (EC384 recommended)
+- Limit concurrent connections to prevent overload
+- Monitor database size and perform maintenance
+- Use debug mode sparingly in production
+
+## Integration Examples
+
+### Shell Scripts
+
+```bash
+#!/bin/bash
+# Automated device onboarding script
+
+DB_FILE="production.db"
+SERVER_URL="https://fdo.manufacturer.com:9999"
+
+# 1. Check existing vouchers
+echo "Checking existing vouchers..."
+go run ./cmd client -list-vouchers -db "$DB_FILE"
+
+# 2. Perform DI
+echo "Performing device initialization..."
+go run ./cmd client -di "$SERVER_URL"
+
+# 3. Export voucher for records
+echo "Exporting voucher..."
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+go run ./cmd client -voucher-export "voucher_${TIMESTAMP}.pem" -db "$DB_FILE"
+
+echo "Device onboarding completed successfully!"
+```
+
+This documentation provides a comprehensive reference for all FDO CLI commands, making it easy for users to find the right commands and options for their specific use cases, with real-world examples from the test suite.

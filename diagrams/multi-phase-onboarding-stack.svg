@@ -1,0 +1,143 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg width="1000" height="800" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+  <defs>
+    <style>
+      .title { font-family: Arial, sans-serif; font-size: 24px; font-weight: bold; fill: #333; }
+      .subtitle { font-family: Arial, sans-serif; font-size: 16px; fill: #666; }
+      .layer-title { font-family: Arial, sans-serif; font-size: 18px; font-weight: bold; fill: #fff; }
+      .layer-text { font-family: Arial, sans-serif; font-size: 14px; fill: #fff; }
+      .vendor-label { font-family: Arial, sans-serif; font-size: 12px; font-style: italic; fill: #999; }
+      .fsim-label { font-family: Arial, sans-serif; font-size: 13px; font-weight: bold; fill: #333; }
+      .config-label { font-family: Arial, sans-serif; font-size: 12px; fill: #333; }
+      .arrow { stroke: #666; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .arrow-label { font-family: Arial, sans-serif; font-size: 11px; fill: #666; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#666" />
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="500" y="30" class="title" text-anchor="middle">Multi-Phase Onboarding Architecture</text>
+  <text x="500" y="55" class="subtitle" text-anchor="middle">Different Vendors, Different Phases, Common FSIMs</text>
+
+  <!-- Central Management Plane -->
+  <rect x="350" y="90" width="300" height="120" rx="10" fill="#2c3e50" stroke="#34495e" stroke-width="2"/>
+  <text x="500" y="120" class="layer-title" text-anchor="middle">Unified Management Plane</text>
+  <text x="500" y="145" class="layer-text" text-anchor="middle">Single Configuration Source</text>
+  
+  <!-- Configuration Data in Management Plane -->
+  <rect x="370" y="160" width="250" height="35" rx="5" fill="#34495e"/>
+  <text x="380" y="180" class="config-label">• WiFi: SSID="Corp-WiFi", password="..."</text>
+  <rect x="370" y="160" width="250" height="35" rx="5" fill="none" stroke="#7f8c8d" stroke-width="1"/>
+  
+  <rect x="630" y="160" width="250" height="35" rx="5" fill="#34495e"/>
+  <text x="640" y="180" class="config-label">• OS: hostname="device-001", timezone="UTC"</text>
+  <rect x="630" y="160" width="250" height="35" rx="5" fill="none" stroke="#7f8c8d" stroke-width="1"/>
+  
+  <rect x="890" y="160" width="250" height="35" rx="5" fill="#34495e"/>
+  <text x="900" y="180" class="config-label">• App: oauth_token="...", api_url="..."</text>
+  <rect x="890" y="160" width="250" height="35" rx="5" fill="none" stroke="#7f8c8d" stroke-width="1"/>
+
+  <!-- Arrows from Management to Phases -->
+  <path d="M 420 210 L 180 280" class="arrow"/>
+  <text x="280" y="240" class="arrow-label">fdo.wifi FSIM</text>
+  
+  <path d="M 500 210 L 500 280" class="arrow"/>
+  <text x="510" y="250" class="arrow-label">fdo.sysconfig FSIM</text>
+  
+  <path d="M 580 210 L 820 280" class="arrow"/>
+  <text x="680" y="240" class="arrow-label">fdo.credentials FSIM</text>
+
+  <!-- Phase 1: Network/BMO Layer -->
+  <g id="phase1">
+    <rect x="50" y="300" width="280" height="140" rx="8" fill="#3498db" stroke="#2980b9" stroke-width="3"/>
+    <text x="190" y="330" class="layer-title" text-anchor="middle">Phase 1: Network/BMO</text>
+    <text x="190" y="355" class="layer-text" text-anchor="middle">Firmware FDO Client</text>
+    
+    <rect x="70" y="370" width="240" height="55" rx="5" fill="#2980b9"/>
+    <text x="80" y="390" class="layer-text">• Handles: fdo.wifi FSIM</text>
+    <text x="80" y="410" class="layer-text">• Establishes network connectivity</text>
+    
+    <text x="190" y="445" class="vendor-label" text-anchor="middle">Built by: Firmware Vendor A</text>
+  </g>
+
+  <!-- Phase 2: OS Installation Layer -->
+  <g id="phase2">
+    <rect x="360" y="300" width="280" height="140" rx="8" fill="#e67e22" stroke="#d35400" stroke-width="3"/>
+    <text x="500" y="330" class="layer-title" text-anchor="middle">Phase 2: OS Installation</text>
+    <text x="500" y="355" class="layer-text" text-anchor="middle">OS Installer FDO Client</text>
+    
+    <rect x="380" y="370" width="240" height="55" rx="5" fill="#d35400"/>
+    <text x="390" y="390" class="layer-text">• Handles: fdo.sysconfig FSIM</text>
+    <text x="390" y="410" class="layer-text">• Configures and installs OS</text>
+    
+    <text x="500" y="445" class="vendor-label" text-anchor="middle">Built by: OS Vendor B</text>
+  </g>
+
+  <!-- Phase 3: Application Layer -->
+  <g id="phase3">
+    <rect x="670" y="300" width="280" height="140" rx="8" fill="#27ae60" stroke="#229954" stroke-width="3"/>
+    <text x="810" y="330" class="layer-title" text-anchor="middle">Phase 3: Application</text>
+    <text x="810" y="355" class="layer-text" text-anchor="middle">Application FDO Client</text>
+    
+    <rect x="690" y="370" width="240" height="55" rx="5" fill="#229954"/>
+    <text x="700" y="390" class="layer-text">• Handles: fdo.credentials FSIM</text>
+    <text x="700" y="410" class="layer-text">• Authenticates to mgmt service</text>
+    
+    <text x="810" y="445" class="vendor-label" text-anchor="middle">Built by: Application Vendor C</text>
+  </g>
+
+  <!-- Device Execution Flow -->
+  <g id="device-flow">
+    <text x="500" y="490" class="subtitle" text-anchor="middle">Device Execution Flow</text>
+    
+    <!-- Device representation -->
+    <rect x="50" y="510" width="900" height="100" rx="8" fill="#ecf0f1" stroke="#95a5a6" stroke-width="2"/>
+    <text x="500" y="535" class="fsim-label" text-anchor="middle">Single Device - Sequential Execution</text>
+    
+    <!-- Phase 1 execution -->
+    <rect x="70" y="550" width="250" height="45" rx="5" fill="#3498db" stroke="#2980b9" stroke-width="2"/>
+    <text x="195" y="570" class="layer-text" text-anchor="middle">1. Firmware runs</text>
+    <text x="195" y="588" class="layer-text" text-anchor="middle">Receives WiFi config</text>
+    
+    <!-- Arrow -->
+    <path d="M 325 572 L 355 572" class="arrow"/>
+    
+    <!-- Phase 2 execution -->
+    <rect x="360" y="550" width="250" height="45" rx="5" fill="#e67e22" stroke="#d35400" stroke-width="2"/>
+    <text x="485" y="570" class="layer-text" text-anchor="middle">2. OS Installer runs</text>
+    <text x="485" y="588" class="layer-text" text-anchor="middle">Receives OS config</text>
+    
+    <!-- Arrow -->
+    <path d="M 615 572 L 645 572" class="arrow"/>
+    
+    <!-- Phase 3 execution -->
+    <rect x="650" y="550" width="250" height="45" rx="5" fill="#27ae60" stroke="#229954" stroke-width="2"/>
+    <text x="775" y="570" class="layer-text" text-anchor="middle">3. Application runs</text>
+    <text x="775" y="588" class="layer-text" text-anchor="middle">Receives credentials</text>
+  </g>
+
+  <!-- Key Benefits -->
+  <g id="benefits">
+    <text x="500" y="650" class="subtitle" text-anchor="middle">Key Benefits</text>
+    
+    <rect x="50" y="670" width="280" height="100" rx="5" fill="#f8f9fa" stroke="#dee2e6" stroke-width="1"/>
+    <text x="190" y="695" class="fsim-label" text-anchor="middle">Vendor Independence</text>
+    <text x="60" y="720" class="config-label">• Any firmware works with</text>
+    <text x="60" y="738" class="config-label">  any BMO image</text>
+    <text x="60" y="756" class="config-label">• Mix and match vendors</text>
+    
+    <rect x="360" y="670" width="280" height="100" rx="5" fill="#f8f9fa" stroke="#dee2e6" stroke-width="1"/>
+    <text x="500" y="695" class="fsim-label" text-anchor="middle">Standardized FSIMs</text>
+    <text x="370" y="720" class="config-label">• Common protocol for all</text>
+    <text x="370" y="738" class="config-label">• Each layer gets its data</text>
+    <text x="370" y="756" class="config-label">• No vendor lock-in</text>
+    
+    <rect x="670" y="670" width="280" height="100" rx="5" fill="#f8f9fa" stroke="#dee2e6" stroke-width="1"/>
+    <text x="810" y="695" class="fsim-label" text-anchor="middle">Single Control Plane</text>
+    <text x="680" y="720" class="config-label">• One place to configure all</text>
+    <text x="680" y="738" class="config-label">• Consistent management</text>
+    <text x="680" y="756" class="config-label">• Unified policy</text>
+  </g>
+</svg>

@@ -151,7 +151,7 @@ func (aio AllInOne) RegisterOwnerAddr(ctx context.Context, ov Voucher) error {
 			},
 		}),
 	}
-	if err := sign1.Sign(nextOwner, nil, nil, opts); err != nil {
+	if err := sign1.Sign(nextOwner, nil, cose.AADOwnerSign, opts); err != nil {
 		return fmt.Errorf("auto-to0: error signing to1d: %w", err)
 	}
 
