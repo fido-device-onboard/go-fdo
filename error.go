@@ -5,6 +5,7 @@ package fdo
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/fido-device-onboard/go-fdo/protocol"
@@ -76,8 +77,10 @@ func errorMsg(ctx context.Context, transport Transport, err error) {
 
 	// Send error, but ignore the response, only making sure to close the
 	// reader if one is returned
-	_, rc, err := transport.Send(ctx, protocol.ErrorMsgType, errMsg, nil)
-	if err == nil && rc != nil {
+	_, rc, sendErr := transport.Send(ctx, protocol.ErrorMsgType, *errMsg, nil)
+	if sendErr != nil {
+		slog.Error("failed to send error message", "error", sendErr, "msg", *errMsg)
+	} else if rc != nil {
 		_ = rc.Close()
 	}
 }
