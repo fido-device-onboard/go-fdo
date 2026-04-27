@@ -19,8 +19,9 @@ const mockModuleName = "fdotest.mock"
 
 func TestOwnerModuleContextValues(t *testing.T) {
 	var (
-		expectedDevmod    *serviceinfo.Devmod
-		expectedCertChain []*x509.Certificate
+		expectedDevmod        *serviceinfo.Devmod
+		expectedSupportedMods []string
+		expectedCertChain     []*x509.Certificate
 	)
 
 	deviceModule := &fdotest.MockDeviceModule{}
@@ -30,6 +31,12 @@ func TestOwnerModuleContextValues(t *testing.T) {
 				t.Error("devmod from context is empty")
 			} else if !reflect.DeepEqual(expectedDevmod, gotDevmod) {
 				t.Errorf("expected devmod %+v, got %+v", *expectedDevmod, *gotDevmod)
+			}
+
+			if gotSupportedMods, ok := serviceinfo.DeviceSupportedModulesFromContext(ctx); !ok {
+				t.Error("device supported mods from context is empty")
+			} else if !reflect.DeepEqual(expectedSupportedMods, gotSupportedMods) {
+				t.Errorf("expected device supported mods %+v, got %+v", expectedSupportedMods, gotSupportedMods)
 			}
 
 			if gotCertChain, ok := serviceinfo.DeviceCertificateFromContext(ctx); !ok {
@@ -48,6 +55,7 @@ func TestOwnerModuleContextValues(t *testing.T) {
 		},
 		OwnerModules: func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 			expectedDevmod = &devmod
+			expectedSupportedMods = supportedMods
 			expectedCertChain = chain
 			return func(yield func(string, serviceinfo.OwnerModule) bool) { yield(mockModuleName, ownerModule) }
 		},
