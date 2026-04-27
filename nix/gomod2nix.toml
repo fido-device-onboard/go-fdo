@@ -92,5 +92,5 @@ schema = 3
     version = "v0.6.0"
     hash = "sha256-vWecKv3H3LOqjbJFxb10M9V5jB4KHwdtT/6X8gdmIBw="
   [mod."tinygo.org/x/drivers"]
-    version = "v0.34.0"
-    hash = "sha256-UQQN5z4JvCIjSh/IPkh7upM+TP9HBj+2X0YP1bTP1qk="
+    version = "v0.35.0"
+    hash = "sha256-2R0btuUu4ubGk7pRUXiGFY1yLjzUFKtEKAJYc6p1YZI="
