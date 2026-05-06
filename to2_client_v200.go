@@ -465,6 +465,7 @@ func verifyOwner20(ctx context.Context, transport Transport, to1d *cose.Sign1[pr
 		MfgPubKeyHash:      c.Cred.PublicKeyHash,
 		OwnerPubToValidate: ownerKeyForValidation,
 		To1d:               to1d,
+		Version:            protocol.VersionFromContext(ctx),
 	}); err != nil {
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
 		return err

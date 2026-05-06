@@ -449,6 +449,7 @@ func verifyVoucher(ctx context.Context, transport Transport, to1d *cose.Sign1[pr
 		MfgPubKeyHash:      c.Cred.PublicKeyHash,
 		OwnerPubToValidate: info.PublicKeyToValidate,
 		To1d:               to1d,
+		Version:            protocol.VersionFromContext(ctx),
 	}); err != nil {
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
 		return err

@@ -339,7 +339,12 @@ func (v *Voucher) VerifyCrypto(o VerifyOptions) error {
 		verifyKey = delegateKey
 	}
 
-	if ok, err := o.To1d.Verify(verifyKey, nil, cose.AADOwnerSign); err != nil {
+	// FDO 2.0 uses domain-specific AAD; FDO 1.01 uses empty AAD
+	var aad []byte
+	if o.Version == protocol.Version200 {
+		aad = cose.AADOwnerSign
+	}
+	if ok, err := o.To1d.Verify(verifyKey, nil, aad); err != nil {
 		return fmt.Errorf("error verifying to1d signature: %w", err)
 	} else if !ok {
 		return fmt.Errorf("%w: to1d signature verification failed", ErrCryptoVerifyFailed)
@@ -365,6 +370,9 @@ type VerifyOptions struct {
 
 	// May be nil in the case of RV bypass
 	To1d *cose.Sign1[protocol.To1d, []byte]
+
+	// FDO protocol version; FDO 2.0 uses domain-specific AAD, FDO 1.01 uses empty AAD
+	Version protocol.Version
 }
 
 // VerifyHeader checks that the OVHeader was not modified by comparing the HMAC
