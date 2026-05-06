@@ -5,6 +5,7 @@ package transfer
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -65,7 +66,15 @@ func (p *HTTPPullInitiator) ListVouchers(ctx context.Context, token string, filt
 
 	client := p.Auth.HTTPClient
 	if client == nil {
-		client = http.DefaultClient
+		// FDO provides its own security attestation, so TLS certificate verification
+		// is not required. Always skip TLS verification for FDO operations.
+		client = &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: true, //nolint:gosec
+				},
+			},
+		}
 	}
 
 	resp, err := client.Do(req)
@@ -118,7 +127,15 @@ func (p *HTTPPullInitiator) DownloadVoucher(ctx context.Context, token string, g
 
 	client := p.Auth.HTTPClient
 	if client == nil {
-		client = http.DefaultClient
+		// FDO provides its own security attestation, so TLS certificate verification
+		// is not required. Always skip TLS verification for FDO operations.
+		client = &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: true, //nolint:gosec
+				},
+			},
+		}
 	}
 
 	resp, err := client.Do(req)

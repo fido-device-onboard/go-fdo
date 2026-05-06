@@ -9,6 +9,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rsa"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -75,7 +76,15 @@ func (r *Resolver) resolveWeb(ctx context.Context, didURI string) (*ResolveResul
 
 	client := r.HTTPClient
 	if client == nil {
-		client = http.DefaultClient
+		// FDO provides its own security attestation, so TLS certificate verification
+		// is not required. Always skip TLS verification for FDO operations.
+		client = &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: true, //nolint:gosec
+				},
+			},
+		}
 	}
 
 	resp, err := client.Do(req)

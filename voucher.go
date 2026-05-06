@@ -466,7 +466,7 @@ func (v *Voucher) VerifyManufacturerCertChain(roots *x509.CertPool) error {
 // VerifyEntries checks the chain of signatures on each voucher entry payload.
 func (v *Voucher) VerifyEntries() error {
 	// Parse the public key from the voucher header
-	mfgPubKey, err := v.Header.Val.ManufacturerKey.Public()
+	prevOwnerKey, err := v.Header.Val.ManufacturerKey.Public()
 	if err != nil {
 		return fmt.Errorf("error parsing manufacturer public key: %w", err)
 	}
@@ -507,15 +507,20 @@ func (v *Voucher) VerifyEntries() error {
 	}
 
 	// Validate all entries
-	return validateNextEntry(mfgPubKey, alg, initialHash, headerInfoHash, 0, v.Entries)
+	return validateNextEntry(prevOwnerKey, alg, initialHash, headerInfoHash, 0, v.Entries, v.Header.Val.Version)
 }
 
 // Validate each entry recursively
-func validateNextEntry(prevOwnerKey crypto.PublicKey, alg protocol.HashAlg, prevHash hash.Hash, headerInfoHash []byte, i int, entries []cose.Sign1Tag[VoucherEntryPayload, []byte]) error {
+func validateNextEntry(prevOwnerKey crypto.PublicKey, alg protocol.HashAlg, prevHash hash.Hash, headerInfoHash []byte, i int, entries []cose.Sign1Tag[VoucherEntryPayload, []byte], version uint16) error {
 	entry := entries[0].Untag()
 
+	// Use domain separation AAD only for FDO 2.0+; FDO 1.01 does not use external_aad.
+	var aad []byte
+	if version >= uint16(protocol.Version200) {
+		aad = cose.AADOVEntry
+	}
 	// Check payload has a valid COSE signature from the previous owner key
-	if ok, err := entry.Verify(prevOwnerKey, nil, cose.AADOVEntry); err != nil {
+	if ok, err := entry.Verify(prevOwnerKey, nil, aad); err != nil {
 		return fmt.Errorf("COSE signature for entry %d could not be verified: %w", i, err)
 	} else if !ok {
 		return fmt.Errorf("%w: COSE signature for entry %d did not match previous owner key", ErrCryptoVerifyFailed, i)
@@ -554,7 +559,7 @@ func validateNextEntry(prevOwnerKey crypto.PublicKey, alg protocol.HashAlg, prev
 	}
 
 	// Validate the next entry recursively
-	return validateNextEntry(ownerKey, alg, prevHash, headerInfoHash, i+1, entries[1:])
+	return validateNextEntry(ownerKey, alg, prevHash, headerInfoHash, i+1, entries[1:], version)
 }
 
 // VerifyOwnerCertChain validates the certificate chain of the owner public key

@@ -61,9 +61,10 @@ func Open(path string) (Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening TPM: %w", err)
 	}
-	// Default to Platform hierarchy; set FDO_TPM_OWNER_HIERARCHY=1 to
-	// use Owner hierarchy (not fully spec-compliant but works in userspace).
-	usePlatform := os.Getenv("FDO_TPM_OWNER_HIERARCHY") != "1"
+	// Default to Owner hierarchy (Platform is locked post-boot on Linux).
+	// Set FDO_TPM_PLATFORM_HIERARCHY=1 to use Platform hierarchy instead
+	// (only works during manufacturing or early boot when Platform is unlocked).
+	usePlatform := os.Getenv("FDO_TPM_PLATFORM_HIERARCHY") == "1"
 	// Default to child-of-SRK method; set FDO_TPM_KEY_METHOD=primary to
 	// use primary key with unique string (rollback-resistant but WinPE-incompatible).
 	useChildMethod := os.Getenv("FDO_TPM_KEY_METHOD") != "primary"

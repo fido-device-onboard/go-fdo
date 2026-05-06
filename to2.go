@@ -160,6 +160,14 @@ type TO2Config struct {
 	// attempted by the owner service.
 	AllowCredentialReuse bool
 
+	// IgnoreCredentialReplacement causes the client to complete the TO2
+	// protocol normally when the server sends replacement credentials, but
+	// discard them instead of returning them to the caller. The caller sees
+	// nil (as if credential reuse occurred), so no credential update is saved.
+	// This is useful when the server is configured for credential replacement
+	// but re-onboarding must remain possible with the same voucher.
+	IgnoreCredentialReplacement bool
+
 	// AllowSingleSided permits the device to accept single-sided attestation
 	// (algorithm=0, empty signature in ProveOVHdr). When single-sided mode is
 	// detected and allowed:
@@ -291,6 +299,12 @@ func TO2(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1
 
 	// If using the Credential Reuse protocol the device credential is not updated
 	if replacementOVH == nil {
+		return nil, nil
+	}
+
+	// If IgnoreCredentialReplacement is set, discard the replacement credentials
+	// and behave as if credential reuse occurred (return nil).
+	if c.IgnoreCredentialReplacement {
 		return nil, nil
 	}
 
@@ -583,7 +597,12 @@ func sendHelloDevice(ctx context.Context, transport Transport, c *TO2Config) (pr
 
 	// Skip signature verification in single-sided mode (algorithm=0 means no signature)
 	if attestationMode == ModeFullOwner {
-		if ok, err := proveOVHdr.Verify(key, nil, cose.AADProveOVHdr); err != nil {
+		// Use domain separation AAD only for FDO 2.0+; FDO 1.01 does not use external_aad.
+		var aad []byte
+		if protocol.VersionFromContext(ctx) >= protocol.Version200 {
+			aad = cose.AADProveOVHdr
+		}
+		if ok, err := proveOVHdr.Verify(key, nil, aad); err != nil {
 			captureErr(ctx, protocol.InvalidMessageErrCode, "")
 			return protocol.Nonce{}, nil, nil, fmt.Errorf("error verifying TO2.ProveOVHdr payload signature: %w", err)
 		} else if !ok {
@@ -846,7 +865,12 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 		s1.Protected = cose.HeaderMap{}
 		s1.Signature = []byte{}
 	} else {
-		if err := s1.Sign(ownerKey, nil, cose.AADProveOVHdr, opts); err != nil {
+		// Use domain separation AAD only for FDO 2.0+; FDO 1.01 does not use external_aad.
+		var serverProveAAD []byte
+		if protocol.VersionFromContext(ctx) >= protocol.Version200 {
+			serverProveAAD = cose.AADProveOVHdr
+		}
+		if err := s1.Sign(ownerKey, nil, serverProveAAD, opts); err != nil {
 			clear(xA)
 			return nil, fmt.Errorf("error signing TO2.ProveOVHdr payload: %w", err)
 		}
@@ -1009,7 +1033,12 @@ func proveDevice(ctx context.Context, transport Transport, proveDeviceNonce prot
 	if err != nil {
 		return protocol.Nonce{}, nil, fmt.Errorf("error determining signing options for TO2.ProveDevice: %w", err)
 	}
-	if err := token.Sign(c.Key, nil, cose.AADProveDevice, opts); err != nil {
+	// Use domain separation AAD only for FDO 2.0+; FDO 1.01 does not use external_aad.
+	var proveDeviceAAD []byte
+	if protocol.VersionFromContext(ctx) >= protocol.Version200 {
+		proveDeviceAAD = cose.AADProveDevice
+	}
+	if err := token.Sign(c.Key, nil, proveDeviceAAD, opts); err != nil {
 		return protocol.Nonce{}, nil, fmt.Errorf("error signing EAT payload for TO2.ProveDevice: %w", err)
 	}
 	msg := token.Tag()
@@ -1128,7 +1157,12 @@ func (s *TO2Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1
 	if err != nil {
 		return nil, fmt.Errorf("error parsing device public key from ownership voucher: %w", err)
 	}
-	if ok, err := proof.Verify(devicePublicKey, nil, cose.AADProveDevice); err != nil {
+	// Use domain separation AAD only for FDO 2.0+; FDO 1.01 does not use external_aad.
+	var verifyDeviceAAD []byte
+	if protocol.VersionFromContext(ctx) >= protocol.Version200 {
+		verifyDeviceAAD = cose.AADProveDevice
+	}
+	if ok, err := proof.Verify(devicePublicKey, nil, verifyDeviceAAD); err != nil {
 		return nil, fmt.Errorf("error verifying signature of device EAT: %w", err)
 	} else if !ok {
 		return nil, fmt.Errorf("device EAT verification failed")
@@ -1209,7 +1243,12 @@ func (s *TO2Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1
 	if err != nil {
 		return nil, fmt.Errorf("error determining signing options for TO2.SetupDevice message: %w", err)
 	}
-	if err := s1.Sign(ownerKey, nil, cose.AADSetupDevice, opts); err != nil {
+	// Use domain separation AAD only for FDO 2.0+; FDO 1.01 does not use external_aad.
+	var setupDeviceAAD []byte
+	if protocol.VersionFromContext(ctx) >= protocol.Version200 {
+		setupDeviceAAD = cose.AADSetupDevice
+	}
+	if err := s1.Sign(ownerKey, nil, setupDeviceAAD, opts); err != nil {
 		return nil, fmt.Errorf("error signing TO2.SetupDevice payload: %w", err)
 	}
 	return s1.Tag(), nil

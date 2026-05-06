@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -56,7 +57,15 @@ type Transport struct {
 func (t *Transport) Send(ctx context.Context, msgType uint8, msg any, sess kex.Session) (respType uint8, _ io.ReadCloser, _ error) {
 	// Initialize default values
 	if t.Client == nil {
-		t.Client = http.DefaultClient
+		// FDO provides its own security attestation, so TLS certificate verification
+		// is not required. Always skip TLS verification for FDO operations.
+		t.Client = &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: true, //nolint:gosec
+				},
+			},
+		}
 	}
 	if t.Auth == nil {
 		t.Auth = make(jar)

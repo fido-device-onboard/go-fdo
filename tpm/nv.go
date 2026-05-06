@@ -281,7 +281,24 @@ func DefineNVSpace(t TPM, index uint32, size uint16, profile NVProfile, usePlatf
 		}),
 	}
 	if _, err := def.Execute(t); err != nil {
-		return tpm2.TPM2BName{}, fmt.Errorf("NVDefineSpace 0x%08X: %w", index, err)
+		// If Platform hierarchy was requested but failed (locked post-boot),
+		// fall back to Owner hierarchy without PlatformCreate.
+		if authHandle == tpm2.TPMRHPlatform {
+			authHandle = tpm2.TPMRHOwner
+			attrs.PlatformCreate = false
+			def.AuthHandle = authHandle
+			def.PublicInfo = tpm2.New2B(tpm2.TPMSNVPublic{
+				NVIndex:    tpm2.TPMHandle(index),
+				NameAlg:    tpm2.TPMAlgSHA256,
+				Attributes: attrs,
+				DataSize:   size,
+			})
+			if _, err2 := def.Execute(t); err2 != nil {
+				return tpm2.TPM2BName{}, fmt.Errorf("NVDefineSpace 0x%08X: %w", index, err2)
+			}
+		} else {
+			return tpm2.TPM2BName{}, fmt.Errorf("NVDefineSpace 0x%08X: %w", index, err)
+		}
 	}
 	pub, err := def.PublicInfo.Contents()
 	if err != nil {

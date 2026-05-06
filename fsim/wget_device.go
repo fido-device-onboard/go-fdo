@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha512"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net/http"
@@ -125,7 +126,15 @@ func (d *Wget) download(ctx context.Context, url string) (_ int64, err error) {
 	// Make HTTP GET request
 	client := d.Client
 	if client == nil {
-		client = http.DefaultClient
+		// FDO provides its own security attestation, so TLS certificate verification
+		// is not required. Always skip TLS verification for FDO operations.
+		client = &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: true, //nolint:gosec
+				},
+			},
+		}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

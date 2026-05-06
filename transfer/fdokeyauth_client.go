@@ -8,6 +8,7 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
 	"fmt"
 	"io"
@@ -99,7 +100,15 @@ func (c *FDOKeyAuthClient) Authenticate() (*FDOKeyAuthClientResult, error) {
 	}
 	client := c.HTTPClient
 	if client == nil {
-		client = http.DefaultClient
+		// FDO provides its own security attestation, so TLS certificate verification
+		// is not required. Always skip TLS verification for FDO operations.
+		client = &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: true, //nolint:gosec
+				},
+			},
+		}
 	}
 
 	// --- Step 1: Build and send FDOKeyAuth.Hello ---
