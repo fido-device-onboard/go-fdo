@@ -5,6 +5,8 @@ on:
     paths:
       - "**/go.sum"
 
+permissions: read-all
+
 jobs:
   update-nix:
     runs-on: ubuntu-latest
