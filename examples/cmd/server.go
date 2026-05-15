@@ -47,49 +47,52 @@ import (
 var serverFlags = flag.NewFlagSet("server", flag.ContinueOnError)
 
 var (
-	useTLS               bool
-	addr                 string
-	dbPath               string
-	dbPass               string
-	extAddr              string
-	to0Addr              string
-	to0GUID              string
-	rvDelegate           string
-	onboardDelegate      string
-	resaleGUID           string
-	resaleKey            string
-	reuseCred            bool
-	rvBypass             bool
-	rvDelay              int
-	rvReplacementPolicy  string
-	printOwnerPubKey     string
-	printOwnerPrivKey    string
-	printOwnerChain      string
-	printDelegateChain   string
-	printDelegatePrivKey string
-	ownerCert            bool
-	importVoucher        string
-	cmdDate              bool
-	downloads            stringList
-	uploadDir            string
-	uploadReqs           stringList
-	wgets                stringList
-	sysconfig            stringList
-	payloadFile          string
-	payloadMimeType      string
-	bmoFile              string
-	bmoImageType         string
-	bmoFiles             stringList // Multiple BMO files with types (format: type:file)
-	bmoURLs              stringList // BMO URL delivery (format: type:url[:hash_hex][:ca_file])
-	bmoMetaURLs          stringList // BMO meta-URL delivery (format: meta_url[:signer_key_file][:ca_file])
-	bmoSetParams         stringList // BIOS parameters to set (format: key=value)
-	bmoSetFile           string     // BIOS parameters from file
-	payloadFiles         stringList // Multiple payload files with types (format: type:file)
-	wifiConfigFile       string
-	credentials          stringList
-	pubkeyRequests       stringList
-	initOnly             bool
-	singleSidedWiFi      bool
+	useTLS                bool
+	addr                  string
+	dbPath                string
+	dbPass                string
+	extAddr               string
+	to0Addr               string
+	to0GUID               string
+	rvDelegate            string
+	onboardDelegate       string
+	resaleGUID            string
+	resaleKey             string
+	reuseCred             bool
+	rvBypass              bool
+	rvDelay               int
+	rvReplacementPolicy   string
+	printOwnerPubKey      string
+	printOwnerPrivKey     string
+	printOwnerChain       string
+	printDelegateChain    string
+	printDelegatePrivKey  string
+	ownerCert             bool
+	importVoucher         string
+	cmdDate               bool
+	downloads             stringList
+	uploadDir             string
+	uploadReqs            stringList
+	wgets                 stringList
+	sysconfig             stringList
+	payloadFile           string
+	payloadMimeType       string
+	bmoFile               string
+	bmoImageType          string
+	bmoFiles              stringList              // Multiple BMO files with types (format: type:file)
+	bmoURLs               stringList              // BMO URL delivery (format: type:url[:hash_hex][:ca_file])
+	bmoMetaURLs           stringList              // BMO meta-URL delivery (format: meta_url[:signer_key_file][:ca_file])
+	bmoSetParams          stringList              // BIOS parameters to set (format: key=value)
+	bmoSetFile            string                  // BIOS parameters from file
+	bmoSign               bool                    // Sign BMO provisioning messages with owner key
+	bmoDelegateProvision  string                  // Sign BMO provisioning messages with delegate cert:key
+	bmoProvisioningSigner fsim.ProvisioningSigner // Populated at serve-time when bmoSign or bmoDelegateProvision is set
+	payloadFiles          stringList              // Multiple payload files with types (format: type:file)
+	wifiConfigFile        string
+	credentials           stringList
+	pubkeyRequests        stringList
+	initOnly              bool
+	singleSidedWiFi       bool
 )
 
 type stringList []string
@@ -140,6 +143,8 @@ func init() {
 	serverFlags.Var(&bmoMetaURLs, "bmo-meta-url", "Use fdo.bmo FSIM meta-URL mode with `meta_url[:signer_key_file][:ca_file]` format (flag may be used multiple times)")
 	serverFlags.Var(&bmoSetParams, "bmo-set", "Use fdo.bmo FSIM to set BIOS parameters with `key=value` pairs (flag may be used multiple times)")
 	serverFlags.StringVar(&bmoSetFile, "bmo-set-file", "", "Use fdo.bmo FSIM to set BIOS parameters from `file` (one key=value per line)")
+	serverFlags.BoolVar(&bmoSign, "bmo-sign", false, "Sign fdo.bmo provisioning messages (image-begin, set) with the EC-P256 owner key per fdo.bmo.md Authenticated Provisioning")
+	serverFlags.StringVar(&bmoDelegateProvision, "bmo-delegate-provision", "", "Sign fdo.bmo provisioning messages with a delegate. Format: `cert.pem:key.pem` where cert leaf MUST carry OIDPermitProvision and chain to the EC-P256 owner key")
 	serverFlags.Var(&payloadFiles, "payload", "Use fdo.payload FSIM with `type:file` format with RequireAck (flag may be used multiple times for NAK testing)")
 	serverFlags.StringVar(&wifiConfigFile, "wifi-config", "", "Use fdo.wifi FSIM with network config from JSON `file`")
 	serverFlags.Var(&credentials, "credential", "Use fdo.credentials FSIM with `type:id:data[:endpoint_url]` format (flag may be used multiple times)")
@@ -282,7 +287,94 @@ func server(ctx context.Context) error { //nolint:gocyclo
 		return resell(ctx, state)
 	}
 
+	// Initialize BMO provisioning signer if requested. Must happen after
+	// generateKeys (so state.OwnerKey is populated) and before serveHTTP
+	// (so ownerModules can reference bmoProvisioningSigner).
+	if err := initBMOProvisioningSigner(ctx, state); err != nil {
+		return err
+	}
+
 	return serveHTTP(ctx, rvInfo, state, replacementPolicy)
+}
+
+// initBMOProvisioningSigner populates bmoProvisioningSigner from -bmo-sign or
+// -bmo-delegate-provision flags. The signer is applied to every per-session
+// BMOOwner in ownerModules. See fdo.bmo.md "Authenticated Provisioning".
+func initBMOProvisioningSigner(ctx context.Context, state *sqlite.DB) error {
+	if !bmoSign && bmoDelegateProvision == "" {
+		return nil
+	}
+	if bmoSign && bmoDelegateProvision != "" {
+		return fmt.Errorf("-bmo-sign and -bmo-delegate-provision are mutually exclusive")
+	}
+
+	// Owner key is EC-P256 by convention for the example server.
+	ownerKey, _, err := state.OwnerKey(ctx, protocol.Secp256r1KeyType, 0)
+	if err != nil {
+		return fmt.Errorf("bmo provisioning: loading EC-P256 owner key: %w", err)
+	}
+
+	if bmoSign {
+		bmoProvisioningSigner = &fsim.OwnerSigner{Key: ownerKey}
+		log.Printf("BMO: provisioning messages will be signed with EC-P256 owner key")
+		return nil
+	}
+
+	// -bmo-delegate-provision <cert.pem:key.pem>
+	parts := strings.SplitN(bmoDelegateProvision, ":", 2)
+	if len(parts) != 2 {
+		return fmt.Errorf("-bmo-delegate-provision: expected cert.pem:key.pem, got %q", bmoDelegateProvision)
+	}
+	certPEM, err := os.ReadFile(parts[0])
+	if err != nil {
+		return fmt.Errorf("-bmo-delegate-provision: read cert: %w", err)
+	}
+	keyPEM, err := os.ReadFile(parts[1])
+	if err != nil {
+		return fmt.Errorf("-bmo-delegate-provision: read key: %w", err)
+	}
+	chain, err := parseCertChainPEM(certPEM)
+	if err != nil {
+		return fmt.Errorf("-bmo-delegate-provision: parse cert chain: %w", err)
+	}
+	signer, err := parsePrivateKeyPEM(keyPEM)
+	if err != nil {
+		return fmt.Errorf("-bmo-delegate-provision: parse key: %w", err)
+	}
+	// Sanity-check the chain roots back to the owner key.
+	ownerPub := ownerKey.Public()
+	if err := fdo.VerifyDelegateChain(chain, &ownerPub, &fdo.OIDPermitProvision); err != nil {
+		return fmt.Errorf("-bmo-delegate-provision: chain does not validate against owner key with OIDPermitProvision: %w", err)
+	}
+	bmoProvisioningSigner = &fsim.DelegateSigner{Key: signer, Chain: chain}
+	log.Printf("BMO: provisioning messages will be signed with delegate (leaf CN=%s, %d-cert chain)", chain[0].Subject.CommonName, len(chain))
+	return nil
+}
+
+// parseCertChainPEM decodes a concatenation of PEM CERTIFICATE blocks,
+// leaf first.
+func parseCertChainPEM(pemBytes []byte) ([]*x509.Certificate, error) {
+	var chain []*x509.Certificate
+	rest := pemBytes
+	for {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		c, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("parse certificate: %w", err)
+		}
+		chain = append(chain, c)
+	}
+	if len(chain) == 0 {
+		return nil, fmt.Errorf("no CERTIFICATE blocks in PEM")
+	}
+	return chain, nil
 }
 
 func generateKeys(state *sqlite.DB) error { //nolint:gocyclo
@@ -1030,7 +1122,7 @@ func ownerModules(modules []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 		}
 
 		if slices.Contains(modules, "fdo.bmo") && (bmoFile != "" || len(bmoFiles) > 0 || len(bmoURLs) > 0 || len(bmoMetaURLs) > 0) {
-			bmoOwner := &fsim.BMOOwner{}
+			bmoOwner := &fsim.BMOOwner{ProvisioningSigner: bmoProvisioningSigner}
 
 			// Handle multi-file NAK testing mode (with RequireAck)
 			if len(bmoFiles) > 0 {

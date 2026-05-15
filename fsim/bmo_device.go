@@ -6,6 +6,7 @@ package fsim
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"crypto/sha256"
 	"crypto/sha512"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"log/slog"
 	"strings"
 
+	fdo "github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/fsim/chunking"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
@@ -136,6 +138,17 @@ type BMO struct {
 	// URLTimeout is the timeout for URL fetches in seconds. Default: 30.
 	URLTimeout int
 
+	// OwnerPublicKey is the TO2-proven Owner public key used as the trust
+	// anchor for authenticated BMO provisioning messages (image-begin-signed,
+	// set-signed). When non-nil, the device verifies every signed BMO
+	// provisioning message per fdo.bmo.md "Authenticated Provisioning":
+	// the Owner key verifies directly, or (when x5chain is present) chains
+	// to a delegate cert carrying OIDPermitProvision.
+	//
+	// When nil, signed BMO messages (image-begin-signed / set-signed) are
+	// rejected with error BMOErrorProvisionNotAuthorized (15).
+	OwnerPublicKey crypto.PublicKey
+
 	// Active indicates if the module is active
 	Active bool
 
@@ -173,28 +186,103 @@ func (b *BMO) Transition(active bool) error {
 	return nil
 }
 
+// coseSign1Tag18FirstByte is the CBOR head byte for tag 18 (major type 6,
+// value 18 = 0xD2). A tagged COSE_Sign1 is encoded with 0xD2 as its first
+// byte; a raw CBOR map/array starts with a different head byte (0xA* for
+// maps, 0x8* for arrays), so this single byte cleanly distinguishes a
+// spec-compliant signed provisioning message from a legacy unsigned one.
+const coseSign1Tag18FirstByte byte = 0xD2
+
 // Receive implements serviceinfo.DeviceModule.
 func (b *BMO) Receive(ctx context.Context, messageName string, messageBody io.Reader, respond func(string) io.Writer, yield func()) error {
 	fmt.Printf("[BMODevice] Receive called: messageName=%s\n", messageName)
 
-	// Handle chunked image messages
-	if strings.HasPrefix(messageName, "image-") {
-		fmt.Printf("[BMODevice] Handling chunked message: %s\n", messageName)
-		return b.handleChunkedMessage(ctx, messageName, messageBody, respond)
-	}
-
-	// Handle BIOS parameter messages
 	switch messageName {
+	case "image-begin":
+		// Per fdo.bmo.md §"Authorization of Provisioning Messages", image-begin
+		// MUST be a tagged COSE_Sign1. Unwrap-and-verify, then fall through to
+		// the ordinary chunked handler with the inner payload. A raw CBOR map
+		// is accepted only in non-conforming legacy mode (OwnerPublicKey unset
+		// AND no owner key in ctx), for back-compat with test scaffolding.
+		inner, provisioned, err := b.unwrapProvisioning(ctx, messageBody, BMOContentTypeImageBegin)
+		if err != nil {
+			slog.Error("fdo.bmo: image-begin rejected", "error", err)
+			return b.sendError(respond, BMOErrorProvisionNotAuthorized, "Provisioning not authorized", err.Error())
+		}
+		_ = provisioned
+		return b.handleChunkedMessage(ctx, "image-begin", bytes.NewReader(inner), respond)
+
 	case "set":
-		fmt.Printf("[BMODevice] Handling BIOS set message\n")
-		return b.handleBiosSet(messageBody, respond)
+		inner, _, err := b.unwrapProvisioning(ctx, messageBody, BMOContentTypeSet)
+		if err != nil {
+			slog.Error("fdo.bmo: set rejected", "error", err)
+			return b.sendError(respond, BMOErrorProvisionNotAuthorized, "Provisioning not authorized", err.Error())
+		}
+		return b.handleBiosSet(bytes.NewReader(inner), respond)
+
 	case "response":
 		fmt.Printf("[BMODevice] Handling BIOS response message\n")
 		return b.handleBiosResponse(messageBody, respond)
 	}
 
+	// Other image-* messages (image-ack, image-data-<n>, image-end) are
+	// unsigned per spec; pass them straight to the chunked handler.
+	if strings.HasPrefix(messageName, "image-") {
+		fmt.Printf("[BMODevice] Handling chunked message: %s\n", messageName)
+		return b.handleChunkedMessage(ctx, messageName, messageBody, respond)
+	}
+
 	fmt.Printf("[BMODevice] Ignoring unknown message: %s\n", messageName)
 	return nil
+}
+
+// unwrapProvisioning reads the body of a provisioning message (image-begin or
+// set) and returns the inner payload bytes.
+//
+// If the body is a tagged COSE_Sign1 (CBOR tag 18), it is verified per
+// fdo.bmo.md §"Authorization of Provisioning Messages": trust anchor is the
+// TO2-proven Owner public key (from BMO.OwnerPublicKey or ctx via
+// fdo.OwnerPublicKeyFromContext), an optional x5chain carries a delegate
+// certificate whose leaf MUST bear OIDPermitProvision, and the signature is
+// verified with external AAD FdoBmoProvisionAAD.
+//
+// If the body is a raw CBOR map/array (no tag 18), the message is legacy
+// unsigned. This is out-of-spec and is accepted ONLY when no Owner public
+// key is available (a test / debug configuration); conforming deployments
+// MUST set OwnerPublicKey either directly or via ctx and therefore reject
+// unsigned messages with error 15.
+//
+// The second return is true if the message was verified as a COSE_Sign1
+// (i.e. spec-compliant), false if it was a legacy unsigned map/array.
+func (b *BMO) unwrapProvisioning(ctx context.Context, messageBody io.Reader, expectedContentType string) (inner []byte, signed bool, err error) {
+	raw, err := io.ReadAll(messageBody)
+	if err != nil {
+		return nil, false, fmt.Errorf("read provisioning message: %w", err)
+	}
+
+	ownerKey := b.OwnerPublicKey
+	if ownerKey == nil {
+		ownerKey = fdo.OwnerPublicKeyFromContext(ctx)
+	}
+
+	// Tagged COSE_Sign1 (tag 18) begins with 0xD2.
+	isTagged := len(raw) > 0 && raw[0] == coseSign1Tag18FirstByte
+	if isTagged {
+		if ownerKey == nil {
+			return nil, true, fmt.Errorf("signed provisioning message received but no Owner public key is available (set BMO.OwnerPublicKey or fdo.WithOwnerPublicKey on ctx)")
+		}
+		payload, err := VerifyBmoSigned(raw, ownerKey, expectedContentType)
+		if err != nil {
+			return nil, true, err
+		}
+		return payload, true, nil
+	}
+
+	// Unsigned (legacy) — only permitted in non-conforming configurations.
+	if ownerKey != nil {
+		return nil, false, fmt.Errorf("unsigned %s received but Owner public key is configured; a spec-compliant deployment MUST sign provisioning messages (see fdo.bmo.md §Authorization of Provisioning Messages)", expectedContentType)
+	}
+	return raw, false, nil
 }
 
 // Yield implements serviceinfo.DeviceModule.

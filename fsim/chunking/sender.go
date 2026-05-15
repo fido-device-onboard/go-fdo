@@ -98,6 +98,29 @@ func (s *ChunkSender) SendBegin(producer ProducerWriter) error {
 	return nil
 }
 
+// SendBeginAs sends a *-begin message using the supplied wire-level message
+// key and raw body bytes, bypassing the default CBOR encoding of
+// s.BeginFields. This is used by callers that need to wrap the begin message
+// in an outer envelope (for example, a tagged COSE_Sign1 per
+// fdo.bmo.md "Authenticated Provisioning"). State tracking (beginSent,
+// waitingForAck) is updated identically to SendBegin.
+func (s *ChunkSender) SendBeginAs(producer ProducerWriter, messageKey string, body []byte) error {
+	if s.beginSent {
+		return fmt.Errorf("begin already sent")
+	}
+	if s.bytesSent > 0 {
+		return fmt.Errorf("transfer already started")
+	}
+	if err := producer.WriteChunk(messageKey, body); err != nil {
+		return fmt.Errorf("failed to send begin message (%s): %w", messageKey, err)
+	}
+	s.beginSent = true
+	if s.BeginFields.RequireAck {
+		s.waitingForAck = true
+	}
+	return nil
+}
+
 // SendNextChunk sends the next data chunk. Returns true when all chunks have been sent.
 // Returns an error if waiting for ack or if transfer was rejected.
 func (s *ChunkSender) SendNextChunk(producer ProducerWriter) (done bool, err error) {

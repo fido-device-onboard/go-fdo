@@ -1,0 +1,1428 @@
+<!-- -*- mode: Text; eval: (auto-fill-mode 1); -*- -->
+<pre class='metadata'>
+Title: FDO Attested Payload Specification
+Shortname: FDO-AP
+Prepare for TR: true
+Level: 1
+Status: RD
+Group: fido
+URL: https://fidoalliance.org/specs/FDO/FDO-Attested-Payload-RD-v1.0
+Editor: Brad Goodman, Dell, bradley.goodman@dell.com
+Abstract: A companion specification to FIDO Device Onboard (FDO) 2.0 that defines the format and validation procedures for Attested Payloads. Attested Payloads enable offline authorization and secure data delivery to FDO devices without network connectivity.
+Issue Tracking: GitHub https://github.com/fido-device-onboard/go-fdo
+Text Macro: FDOAP FDO Attested Payload
+Text Macro: FDOAPLABEL FDO-AP
+Text Macro: FDO FIDO Device Onboard
+Text Macro: FDOVER 2.0
+Boilerplate: omit conformance, omit feedback-header, omit abstract-header
+Markup Shorthands: css off, markdown on
+</pre>
+
+<pre class="link-defaults">
+spec:infra; type:dfn; text:list
+</pre>
+
+<style>
+    div.informative {
+        background: #ededed;
+        color: black;
+        overflow: auto;
+      @media (prefers-color-scheme: dark) {
+         background:darkgrey;
+      }
+    }
+.informative::before {
+   font-weight: bold;
+   content: 'Start of informative comment \A \A';
+   white-space: pre;
+}
+.informative::after {
+   font-weight: bold;
+   content: '\A End of informative comment';
+   white-space: pre;
+}
+</style>
+
+# Introduction # {#introduction}
+
+## Overview ## {#overview}
+
+The [FDOAP] specification defines a mechanism for creating cryptographically
+signed (and optionally encrypted) payloads that can be verified by an FDO
+device without requiring network connectivity. This is sometimes referred to
+as "Offline FDO."
+
+### Online vs Offline Payload Delivery ### {#online-vs-offline}
+
+In a normal "online" FDO scenario, payloads and configuration are delivered
+to a device through the TO2 protocol and FIDO ServiceInfo Modules (FSIMs).
+This approach requires:
+
+1. Network connectivity between the device and an Owner Onboarding Service
+2. The device to trust the Onboarding Service as an authorized agent
+
+However, in many real-world scenarios, such connectivity may be unavailable:
+
+- The device may be in an air-gapped or "dark" network
+- The device's network configuration may be broken
+- The Onboarding Service may be unreachable
+- Emergency maintenance may be required before network access is restored
+
+Attested Payload provides an alternative mechanism to deliver payloads and
+prove owner authorization when no such network connectivity exists.
+
+### Trust the Message, Not the Messenger ### {#trust-model}
+
+The fundamental security principle of Attested Payload is:
+
+**Trust the message, not the messenger.**
+
+In normal online FDO (TO2), the device establishes a trusted connection to
+the Owner Onboarding Service. The device trusts this service as an authorized
+agent, and therefore trusts the payloads (FSIMs) it delivers. The security
+model relies on trusting the messenger.
+
+In Attested Payload, no such trust relationship with a messenger is assumed
+or required. Instead, the payload itself carries cryptographic proof of its
+origin and authorization. The device validates:
+
+1. The payload originated from its legitimate owner (or authorized delegate)
+2. The payload was specifically intended for this device
+3. The payload has not been tampered with
+
+This means the payload can be delivered through **any channel**—including
+untrusted channels—and the device can still verify its authenticity.
+
+### Conveyance Mechanisms ### {#conveyance}
+
+Because Attested Payload does not rely on a trusted network connection, it
+can be conveyed to the device through various mechanisms:
+
+- **USB or removable media**: A local technician inserts a USB drive
+  containing the Attested Payload
+- **Untrusted network**: A local agent with a laptop uploads the payload
+  via a local network connection, but the device has no reason to trust
+  this agent or network
+- **Out-of-band channels**: Email, physical delivery, or any other mechanism
+  that can transport the payload document
+- **Local storage**: The Attested Payload can be stored on the device's
+  local filesystem—placed there via initial system imaging, copied from
+  removable media, or even delivered during TO2 onboarding for later use
+
+The conveyance mechanism is outside the scope of this specification. What
+matters is that the device can validate the payload regardless of how it
+was delivered or when it was received.
+
+### Continued Attestation and Provenance ### {#provenance}
+
+A significant advantage of Attested Payload over online delivery is
+**continued attestation**.
+
+When a payload is delivered via TO2/FSIM from a trusted Onboarding Service,
+the device applies the configuration or executes the command. However, the
+provenance of that action is ephemeral—if someone later questions why a
+configuration was applied, the cryptographic proof is lost.
+
+With Attested Payload, the signed payload document can be **stored and
+retained**, and its validity can be **re-attested at any time**. This
+provides:
+
+- **Audit trail**: Proof of what was authorized and by whom
+- **Non-repudiation**: The owner cannot deny having authorized the payload
+- **Forensic evidence**: In case of security incidents, the original
+  authorization can be verified
+- **Compliance**: Demonstrable proof of authorized changes for regulatory
+  requirements
+- **Re-attestation**: The payload's authenticity can be verified again at
+  any future point
+
+Implementations MAY store Attested Payloads after validation for these
+purposes.
+
+#### Continued Attestation in Online Scenarios #### {#online-attestation}
+
+While Attested Payload is designed primarily for offline scenarios, continued
+attestation is equally valuable in **online** deployments.
+
+Consider a device that completes standard FDO onboarding (TO2) and receives
+payloads from its trusted Onboarding Service via FSIM. The device can USE
+and TRUST these payloads—the TO2 protocol has proven the service's authority.
+However, if the device STORES these payloads (e.g., a long-standing system
+configuration), questions may arise later:
+
+- Was this configuration received from our trusted orchestrator?
+- Has it been modified since delivery?
+- Can we prove its provenance months or years later?
+
+Traditional TO2/FSIM delivery cannot answer these questions after the fact.
+The cryptographic proof existed only during the protocol exchange.
+
+By delivering configurations as Attested Payloads—even during online TO2—the
+device gains the ability to **re-validate** stored configurations at any time.
+This hybrid approach combines the convenience of online delivery with the
+long-term auditability of signed payloads.
+
+### Established Owner Trust ### {#established-owner}
+
+After a device completes FDO Transfer of Ownership (TO2), it typically
+**rotates credentials** within its Restricted Operating Environment (ROE)
+or otherwise stores credentials indicating its new owner. This creates an
+**established owner trust anchor** within the device itself.
+
+When a device has an established owner trust anchor:
+
+1. The device has a high-confidence record of who its owner is
+2. This record was established through the cryptographically-verified TO2 protocol
+3. The device does not need to re-derive owner identity from each payload
+
+In this scenario, the implementation MAY simplify Attested Payload validation:
+
+- The device already knows its owner's public key (from credential rotation)
+- Attested Payloads need only prove they are signed by this established owner
+  (directly or via delegate chain)
+- The Ownership Voucher within individual payloads becomes **redundant** for
+  trust establishment—though it may still be included for portability or
+  audit purposes
+
+<div class="note">
+This optimization is valid because all payload signatures MUST be rooted in
+the established owner's key. A payload signed by a different owner—even with
+a valid Ownership Voucher—would fail verification because the signing key
+does not match the device's established owner trust anchor.
+</div>
+
+Implementations MAY choose to:
+
+- **Store only the owner's public key** after TO2, and verify payload signatures
+  against this key without re-validating the full Ownership Voucher
+- **Accept payloads without embedded Ownership Vouchers** when the device has
+  an established owner trust anchor
+- **Use the embedded Ownership Voucher** for additional validation or audit,
+  even when not strictly required
+
+This flexibility allows implementations to optimize for their specific
+deployment model while maintaining security guarantees.
+
+### Purpose Summary ### {#purpose-summary}
+
+The fundamental purpose of an Attested Payload is to provide cryptographic
+proof that a specific payload was created by the legitimate owner (or an
+authorized delegate) of a specific device, and was intended for that device.
+A device that has completed FDO Device Initialization (DI) possesses
+credentials—typically stored in a Restricted Operating Environment (ROE)—that
+cryptographically bind it to a specific Ownership Voucher. By validating an
+Attested Payload against these credentials, the device can verify the
+payload's authenticity regardless of how it was delivered.
+
+<div class="informative">
+Attested Payload addresses scenarios where devices are offline or not
+responding to the network. Common use cases include:
+
+- A physical person installing, diagnosing, or recovering a node that is
+  offline or disconnected from the network
+- Proving that a local user is authorized to perform specific operations
+  on a device
+- Delivering owner-authorized work (diagnostics, reinstallation, configuration)
+  when network-based security mechanisms are unavailable
+- Emergency maintenance or recovery operations in air-gapped environments
+- Field service operations without network access
+
+The Attested Payload proves either that the local user is authorized by the
+device owner, or that the work contained in the payload has been authorized
+by the owner—in cases where network-based authorization is not possible.
+</div>
+
+## Payload Contents ## {#payload-contents}
+
+This specification defines the format and validation of Attested Payloads,
+but does not prescribe the contents of the payload itself. The payload
+contents are left to the implementation and use case. Examples of payload
+contents include:
+
+- **Commands**: A shell command or script to execute on the device
+- **Disk Images**: An operating system or firmware image to install
+- **Credentials**: Authentication credentials granting a user access to the device
+- **Configuration**: Network or system configuration to apply (e.g., to recover
+  a device with broken network settings)
+- **Diagnostic Requests**: Instructions for the device to collect and return
+  diagnostic information
+
+The interpretation and execution of payload contents is outside the scope of
+this specification.
+
+## Scope ## {#scope}
+
+This specification defines:
+
+1. The format of an Attested Payload document
+2. The cryptographic mechanisms for signing and optional encryption
+3. The validation procedures for verifying an Attested Payload
+4. Integration with FDO Ownership Vouchers and Delegate Certificates
+
+This specification does NOT redefine FDO core concepts. It references the
+[FDO] [FDOVER] specification for:
+
+- Ownership Voucher format and semantics
+- Delegate Certificate format and validation
+- Cryptographic key types and algorithms
+
+## Key Words ## {#keywords}
+
+The keywords "MUST," "MUST NOT," "REQUIRED," "SHALL," "SHALL NOT,"
+"SHOULD," "SHOULD NOT," "RECOMMENDED," "MAY," and "OPTIONAL" in this
+document are to be interpreted as described in BCP 14, RFC2119, RFC8174
+when, and only when, they appear in all capitals.
+
+# Terms and Definitions # {#terms}
+
+: <dfn>Attested Payload</dfn>
+:: A cryptographically signed document containing data intended for an FDO
+   device, along with proof of authorization from the device's owner.
+
+: <dfn>Payload</dfn>
+:: The data content being delivered to the device. This may be cleartext
+   or encrypted.
+
+: <dfn>Payload Signature</dfn>
+:: A digital signature over the payload (or ciphertext if encrypted),
+   created by the Owner or an authorized Delegate.
+
+: <dfn>Owner Key</dfn>
+:: The final owner's key pair, as defined in the FDO Ownership Voucher.
+   See [FDO] specification.
+
+: <dfn>Delegate Certificate</dfn>
+:: An X.509 certificate chain authorizing a delegate to act on behalf of
+   the owner. See [FDO] specification section on Delegation.
+
+: <dfn>Device Attestation Key (DAK)</dfn>
+:: The device's private key, corresponding to the public key in the
+   Device Certificate within the Ownership Voucher.
+
+: <dfn>Wrapped Encryption Key (WEK)</dfn>
+:: A symmetric encryption key that has been encrypted (wrapped) using the
+   device's RSA public key via RSA-OAEP.
+
+# Attested Payload Format # {#format}
+
+## Document Structure ## {#document-structure}
+
+An Attested Payload document is a text file consisting of multiple
+PEM-encoded blocks. Each block is delimited by BEGIN and END markers
+following the format:
+
+```
+-----BEGIN <BLOCK_TYPE>-----
+<base64-encoded-data>
+-----END <BLOCK_TYPE>-----
+```
+
+## Required and Optional Blocks ## {#blocks}
+
+The following table defines the blocks that comprise an Attested Payload:
+
+<table class="data">
+  <thead>
+    <tr>
+      <th>Block Type</th>
+      <th>Description</th>
+      <th>Required</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>OWNERSHIP VOUCHER</td>
+      <td>CBOR-encoded FDO Ownership Voucher, base64-encoded</td>
+      <td>REQUIRED</td>
+    </tr>
+    <tr>
+      <td>PAYLOAD</td>
+      <td>Cleartext payload data, base64-encoded</td>
+      <td>See note 1</td>
+    </tr>
+    <tr>
+      <td>SIGNATURE</td>
+      <td>Digital signature over payload or ciphertext</td>
+      <td>REQUIRED</td>
+    </tr>
+    <tr>
+      <td>DELEGATE CHAIN</td>
+      <td>PEM-encoded X.509 certificate chain for delegate authorization</td>
+      <td>OPTIONAL</td>
+    </tr>
+    <tr>
+      <td>PAYLOAD TYPE</td>
+      <td>MIME type string indicating payload content type</td>
+      <td>OPTIONAL</td>
+    </tr>
+    <tr>
+      <td>VALIDITY</td>
+      <td>JSON object with expiration, identifier, and/or generation</td>
+      <td>OPTIONAL</td>
+    </tr>
+    <tr>
+      <td>IV</td>
+      <td>Initialization Vector for AES-CTR decryption (hex-encoded)</td>
+      <td>See note 2</td>
+    </tr>
+    <tr>
+      <td>WRAPPED ENCRYPTION KEY</td>
+      <td>RSA-OAEP wrapped AES-256 symmetric key, base64-encoded</td>
+      <td>See note 2</td>
+    </tr>
+    <tr>
+      <td>CIPHERTEXT</td>
+      <td>AES-256-CTR encrypted payload, base64-encoded</td>
+      <td>See note 2</td>
+    </tr>
+  </tbody>
+</table>
+
+**Note 1 - Payload vs Encrypted Payload**: An Attested Payload document MUST
+contain either a cleartext PAYLOAD block OR the set of encryption blocks
+(IV, WRAPPED ENCRYPTION KEY, CIPHERTEXT), but MUST NOT contain both.
+Encryption is OPTIONAL; cleartext payloads are valid.
+
+**Note 2 - Encryption Blocks**: If encryption is used, all three encryption
+blocks (IV, WRAPPED ENCRYPTION KEY, CIPHERTEXT) MUST be present together.
+If encryption is not used, none of these blocks SHALL be present, and a
+cleartext PAYLOAD block MUST be present instead.
+
+## Block Ordering ## {#block-ordering}
+
+Blocks MAY appear in any order within the document. Implementations MUST
+parse all blocks before processing to ensure all required components are
+present.
+
+The RECOMMENDED ordering for readability is:
+
+1. OWNERSHIP VOUCHER
+2. DELEGATE CHAIN (if present)
+3. PAYLOAD TYPE (if present)
+4. VALIDITY (if present)
+5. IV (if encrypted)
+6. WRAPPED ENCRYPTION KEY (if encrypted)
+7. PAYLOAD or CIPHERTEXT
+8. SIGNATURE
+
+# Document Composition and Packaging # {#composition}
+
+This section describes how Attested Payload components can be organized
+and packaged for different use cases.
+
+## Logical Components ## {#logical-components}
+
+An Attested Payload system consists of two logical component groups:
+
+### Signatory Components ### {#signatory-components}
+
+These components identify who signed the payload and establish their
+authority to do so:
+
+- **Ownership Voucher**: Binds the device to its owner and establishes
+  the owner's public key as the ultimate root of trust
+- **Delegate Chain** (optional): Extends signing authority from the owner
+  to a delegate
+
+The **signatory** is the entity that actually signs the payload—either the
+owner directly, or a delegate authorized by the owner. The Ownership Voucher
+is always the root of trust, but the signatory may vary.
+
+Signatory components are device-specific but payload-independent. A single
+set of signatory components can authorize multiple payloads for the same
+device, as long as all payloads are signed by the same signatory.
+
+### Signed Payload Components ### {#signed-payload-components}
+
+These components represent a specific authorized action:
+
+- **Payload** or **Ciphertext**: The actual data being delivered
+- **Payload Type** (optional): MIME type indicating content interpretation
+- **Signature**: Cryptographic proof of authorization by the signatory
+- **Encryption components** (optional): IV, Wrapped Key for encrypted payloads
+
+Each signed payload is independently verifiable against its signatory.
+
+## Packaging Models ## {#packaging-models}
+
+This specification does not mandate a single packaging approach.
+Implementations MAY use any of the following models:
+
+### Self-Contained Document ### {#self-contained}
+
+All components are combined into a single document as described in
+[[#document-structure]]. This is the simplest approach and is RECOMMENDED
+for most use cases.
+
+Advantages:
+- Portable: single file contains everything needed for verification
+- Simple: no external dependencies or references
+- Atomic: document is valid or invalid as a unit
+
+### Corpus Model ### {#corpus-model}
+
+Signatory components and signed payload components are stored separately,
+with multiple payloads sharing a common signatory.
+
+In this model:
+- One document (or resource) contains the Ownership Voucher and optional
+  Delegate Chain (identifying the signatory)
+- Multiple documents each contain a Payload, Signature, optional Payload
+  Type, and optional encryption components
+- The verifier associates payloads with their signatory through
+  application-specific means (e.g., directory structure, database,
+  manifest file)
+
+Advantages:
+- Reduced redundancy when delivering multiple payloads to the same device
+- Signatory components can be pre-provisioned or cached
+- Payloads can be updated independently
+
+#### Signatory Bundles #### {#signatory-bundles}
+
+Payloads within a corpus are organized into **signatory bundles**—groups
+of payloads that share a common signatory. In the example below, a
+directory serves as the grouping mechanism, but implementations MAY use
+other grouping mechanisms (database tables, manifest files, etc.).
+
+Example directory structure with single signatory:
+```
+device-12345/
+  signatory.pem         # OV + Delegate Chain (common signatory)
+  payload-config.pem    # Payload + Type + Signature
+  payload-script.pem    # Payload + Type + Signature  
+  payload-image.pem     # Ciphertext + IV + Key + Signature
+```
+
+All payloads in this bundle MUST be signed by the same signatory (in this
+case, the delegate identified by the Delegate Chain in `signatory.pem`).
+
+#### Multiple Signatories #### {#multiple-signatories}
+
+If payloads are signed by different signatories, they MUST be organized
+into separate bundles. Different signatories include:
+
+1. **Owner-signed**: Signed directly by the owner (OV only, no Delegate Chain)
+2. **Delegate A signed**: Signed by one delegate (OV + Delegate Chain A)
+3. **Delegate B signed**: Signed by a different delegate (OV + Delegate Chain B)
+
+Example with multiple signatories:
+```
+device-12345/
+  owner-signed/
+    signatory.pem       # OV only (owner is signatory)
+    payload-a.pem       # Signed by owner
+  delegate-ops/
+    signatory.pem       # OV + Delegate Chain for ops team
+    payload-b.pem       # Signed by ops delegate
+  delegate-security/
+    signatory.pem       # OV + Delegate Chain for security team
+    payload-c.pem       # Signed by security delegate
+```
+
+Note: The Ownership Voucher is the same in all bundles (it identifies the
+device and owner), but the Delegate Chain differs, resulting in different
+signatories.
+
+### Component Resources ### {#component-resources}
+
+Individual components are stored or transmitted as separate resources,
+each with its own MIME type. This enables:
+
+- HTTP content negotiation
+- Individual component caching
+- Streaming or partial delivery
+
+See [[#mime-types]] for registered MIME types.
+
+## Multiple Payloads and Signatures ## {#multiple-payloads}
+
+When using the corpus model with multiple payloads:
+
+1. Each payload MUST have its own signature
+2. Each payload MAY have its own Payload Type
+3. Each payload MAY use different encryption (or no encryption)
+4. Payloads within a signatory bundle MUST all be signed by the same
+   signatory
+5. Payloads signed by different signatories MUST be in separate bundles
+
+The verifier MUST:
+- Verify each payload's signature independently
+- Ensure the signing key matches the signatory identified in the bundle
+  (owner key if no Delegate Chain, or delegate leaf key if Delegate Chain
+  is present)
+- Verify the Ownership Voucher is intended for this device (see
+  [[#device-validation]])
+
+## MIME Types ## {#mime-types}
+
+The following MIME types are defined for Attested Payload components:
+
+<table class="data">
+  <thead>
+    <tr>
+      <th>MIME Type</th>
+      <th>Description</th>
+      <th>Content</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>application/vnd.fido.attested-payload</td>
+      <td>Complete Attested Payload document</td>
+      <td>PEM-encoded blocks as defined in [[#document-structure]]</td>
+    </tr>
+    <tr>
+      <td>application/vnd.fido.ownership-voucher</td>
+      <td>FDO Ownership Voucher</td>
+      <td>CBOR-encoded Ownership Voucher (raw or PEM-wrapped)</td>
+    </tr>
+    <tr>
+      <td>application/vnd.fido.attested-payload.trust-anchor</td>
+      <td>Trust anchor bundle</td>
+      <td>OV and optional Delegate Chain (PEM-encoded)</td>
+    </tr>
+    <tr>
+      <td>application/vnd.fido.attested-payload.signed-payload</td>
+      <td>Signed payload without trust anchor</td>
+      <td>Payload, Signature, optional Type and encryption (PEM-encoded)</td>
+    </tr>
+  </tbody>
+</table>
+
+These MIME types enable:
+- HTTP `Content-Type` headers for web delivery
+- Email attachments with proper typing
+- Content negotiation in REST APIs
+- File type associations in operating systems
+
+## File Extensions ## {#file-extensions}
+
+The following file extensions are RECOMMENDED:
+
+<table class="data">
+  <thead>
+    <tr>
+      <th>Extension</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>.fdoap</td>
+      <td>Complete Attested Payload document</td>
+    </tr>
+    <tr>
+      <td>.fdoov</td>
+      <td>Ownership Voucher (PEM-wrapped)</td>
+    </tr>
+    <tr>
+      <td>.fdota</td>
+      <td>Trust anchor bundle</td>
+    </tr>
+    <tr>
+      <td>.fdosp</td>
+      <td>Signed payload (without trust anchor)</td>
+    </tr>
+  </tbody>
+</table>
+
+# Cryptographic Specifications # {#crypto}
+
+## Signature Algorithms ## {#signature-algorithms}
+
+The signature MUST be computed using one of the following algorithms,
+based on the signing key type:
+
+<table class="data">
+  <thead>
+    <tr>
+      <th>Key Type</th>
+      <th>Signature Algorithm</th>
+      <th>Hash Algorithm</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>RSA-2048, RSA-3072</td>
+      <td>RSASSA-PKCS1-v1_5</td>
+      <td>SHA-384</td>
+    </tr>
+    <tr>
+      <td>ECDSA P-256</td>
+      <td>ECDSA</td>
+      <td>SHA-384</td>
+    </tr>
+    <tr>
+      <td>ECDSA P-384</td>
+      <td>ECDSA</td>
+      <td>SHA-384</td>
+    </tr>
+  </tbody>
+</table>
+
+### Signature Input ### {#signature-input}
+
+The signature MUST be computed over a length-prefixed concatenation of the
+signed components. Length prefixes prevent type confusion attacks where an
+attacker might shift bytes between fields to alter interpretation.
+
+The signed data is constructed as follows:
+
+`len(PayloadType) || PayloadType || len(Validity) || Validity || PayloadData`
+
+Where:
+- `len(X)` is the length of X encoded as a 4-byte big-endian unsigned integer
+- `PayloadType` is the raw PAYLOAD TYPE string bytes (UTF-8 encoded, not base64)
+- `Validity` is the raw VALIDITY JSON string bytes (UTF-8 encoded, not base64)
+- `PayloadData` is the raw (pre-base64) PAYLOAD bytes for cleartext, or the
+  raw (pre-base64) CIPHERTEXT bytes for encrypted payloads
+- `||` denotes byte concatenation
+
+If PAYLOAD TYPE is not present, `len(PayloadType)` is 0x00000000 (4 zero bytes)
+and PayloadType contributes no additional bytes.
+
+If VALIDITY is not present, `len(Validity)` is 0x00000000 (4 zero bytes)
+and Validity contributes no additional bytes.
+
+Examples (showing length prefix bytes in hex):
+- No optional blocks: `00000000 || 00000000 || PayloadData`
+- PAYLOAD TYPE "text/plain" (10 bytes): `0000000A || "text/plain" || 00000000 || PayloadData`
+- VALIDITY `{"gen":1}` (9 bytes): `00000000 || 00000009 || {"gen":1} || PayloadData`
+- Both present: `0000000A || "text/plain" || 00000009 || {"gen":1} || PayloadData`
+
+<div class="note">
+The length-prefix format ensures unambiguous field boundaries. Without length
+prefixes, an attacker could potentially craft a PAYLOAD TYPE value that
+"absorbs" part of the VALIDITY block (or vice versa), producing the same hash
+with different semantic meaning. The 4-byte big-endian length prefix for each
+optional field eliminates this class of attack.
+</div>
+
+This ensures that all metadata blocks are cryptographically bound to the
+payload and cannot be modified, removed, or reinterpreted without invalidating
+the signature.
+
+### ECDSA Signature Format ### {#ecdsa-format}
+
+ECDSA signatures MUST be ASN.1 DER-encoded as per RFC 3279:
+
+```asn1
+ECDSA-Sig-Value ::= SEQUENCE {
+    r INTEGER,
+    s INTEGER
+}
+```
+
+## Encryption Specifications ## {#encryption}
+
+Payload encryption is OPTIONAL. When encryption is used, the following
+specifications apply:
+
+### Symmetric Encryption ### {#symmetric-encryption}
+
+: Algorithm
+:: AES-256-CTR (Counter Mode)
+
+: Key Size
+:: 256 bits (32 bytes)
+
+: IV Size
+:: 128 bits (16 bytes)
+
+The IV MUST be randomly generated for each encrypted payload.
+
+### Key Wrapping ### {#key-wrapping}
+
+The symmetric key MUST be wrapped using RSA-OAEP:
+
+: Algorithm
+:: RSA-OAEP (Optimal Asymmetric Encryption Padding)
+
+: Hash Function
+:: SHA-256
+
+: MGF
+:: MGF1-SHA-256
+
+: Label
+:: Empty (no label)
+
+The wrapped key is encrypted to the device's RSA public key from the
+Device Certificate in the Ownership Voucher.
+
+<div class="informative">
+Encryption is only available when the device has an RSA key. Devices with
+ECDSA keys cannot decrypt encrypted payloads because ECDSA does not support
+encryption operations.
+</div>
+
+# Ownership Voucher Block # {#ov-block}
+
+## Format ## {#ov-format}
+
+The OWNERSHIP VOUCHER block contains a complete FDO Ownership Voucher as
+defined in the [FDO] specification, CBOR-encoded and then base64-encoded.
+
+```
+-----BEGIN OWNERSHIP VOUCHER-----
+<base64-encoded CBOR Ownership Voucher>
+-----END OWNERSHIP VOUCHER-----
+```
+
+## Purpose ## {#ov-purpose}
+
+The Ownership Voucher serves two critical functions:
+
+1. **Owner Identification**: The final entry in the OVEntries contains the
+   Owner's public key, which is used to verify the payload signature (or
+   to verify the Delegate Chain root).
+
+2. **Device Identification**: The Ownership Voucher header contains the
+   Device Certificate, which includes the device's public key needed for
+   payload decryption (if encrypted).
+
+## Validation ## {#ov-validation}
+
+The device validating an Attested Payload MUST verify that the Ownership
+Voucher contained in the payload corresponds to THIS device. This is the
+fundamental security property of Attested Payload: proving that the payload
+was intended for this specific device by its legitimate owner.
+
+A device that has completed FDO Device Initialization (DI) possesses
+credentials stored in its Restricted Operating Environment (ROE) that
+cryptographically bind it to a specific Ownership Voucher. These credentials
+typically include:
+
+- The device's private key (Device Attestation Key)
+- The HMAC secret used to verify the Ownership Voucher
+- The device GUID
+
+### Device-Specific Validation Requirements ### {#device-validation}
+
+The device MUST perform the following validations to confirm the Ownership
+Voucher is intended for this device:
+
+1. **GUID Verification**: The device MUST verify that the GUID in the
+   Ownership Voucher header matches the device's own GUID stored during DI.
+
+2. **HMAC Verification**: The device MUST verify the OVHeaderHMAC using the
+   HMAC secret established during DI. This proves the Ownership Voucher has
+   not been tampered with and was created for this device.
+
+3. **Device Certificate Verification**: The device SHOULD verify that the
+   Device Certificate in the Ownership Voucher header contains the public
+   key corresponding to the device's private key.
+
+### Ownership Chain Validation ### {#ownership-chain-validation}
+
+In addition to device-specific validation, implementations MUST validate the
+Ownership Voucher according to the [FDO] specification, including:
+
+1. Verification of the OVEntry chain signatures
+2. Extraction of the final Owner public key for signature verification
+
+If any validation step fails, the device MUST reject the Attested Payload.
+
+# Payload Type Block # {#payload-type-block}
+
+## Format ## {#payload-type-format}
+
+The PAYLOAD TYPE block contains a single MIME type string indicating the
+type of content in the payload:
+
+```
+-----BEGIN PAYLOAD TYPE-----
+<mime-type-string>
+-----END PAYLOAD TYPE-----
+```
+
+The content is a single line containing a valid MIME type string, NOT
+base64-encoded. For example:
+
+```
+-----BEGIN PAYLOAD TYPE-----
+text/x-shellscript
+-----END PAYLOAD TYPE-----
+```
+
+## Purpose ## {#payload-type-purpose}
+
+The PAYLOAD TYPE block allows the payload creator to specify how the payload
+contents should be interpreted and handled by the device. This is particularly
+useful for:
+
+- Indicating executable content (scripts, commands)
+- Specifying configuration formats
+- Enabling automated processing based on content type
+
+## Common MIME Types ## {#payload-type-examples}
+
+The following MIME types are examples that MAY be used. Implementations MAY
+define additional types as needed.
+
+<table class="data">
+  <thead>
+    <tr>
+      <th>MIME Type</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>text/x-shellscript</td>
+      <td>Shell script to execute (cloud-init compatible)</td>
+    </tr>
+    <tr>
+      <td>text/cloud-config</td>
+      <td>Cloud-init cloud-config YAML format</td>
+    </tr>
+    <tr>
+      <td>text/cloud-boothook</td>
+      <td>Cloud-init boot hook script</td>
+    </tr>
+    <tr>
+      <td>application/json</td>
+      <td>JSON configuration data</td>
+    </tr>
+    <tr>
+      <td>application/x-yaml</td>
+      <td>YAML configuration data</td>
+    </tr>
+    <tr>
+      <td>application/octet-stream</td>
+      <td>Binary data (e.g., disk image, firmware)</td>
+    </tr>
+    <tr>
+      <td>text/plain</td>
+      <td>Plain text content</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="informative">
+The cloud-init MIME types (text/x-shellscript, text/cloud-config,
+text/cloud-boothook) are particularly useful for device configuration and
+command execution, as they leverage well-established conventions from cloud
+infrastructure tooling.
+</div>
+
+## Security Considerations ## {#payload-type-security}
+
+When a PAYLOAD TYPE is present, it is included in the signature computation
+(see [[#signature-input]]). This cryptographically binds the type to the
+payload, preventing an attacker from changing how the payload is interpreted
+without invalidating the signature.
+
+Implementations SHOULD validate that the PAYLOAD TYPE is a well-formed MIME
+type string before processing.
+
+# Validity Block # {#validity-block}
+
+## Format ## {#validity-format}
+
+The VALIDITY block contains a JSON object with optional fields for controlling
+payload lifecycle and ordering:
+
+```
+-----BEGIN VALIDITY-----
+{"expires":"2025-12-31T23:59:59Z","id":"config-network-001","gen":3}
+-----END VALIDITY-----
+```
+
+The content is a single-line JSON object (NOT base64-encoded) with the
+following optional fields:
+
+<table class="data">
+  <thead>
+    <tr>
+      <th>Field</th>
+      <th>Type</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>expires</td>
+      <td>string</td>
+      <td>ISO 8601 datetime after which the payload is no longer valid</td>
+    </tr>
+    <tr>
+      <td>id</td>
+      <td>string</td>
+      <td>Identifier for grouping related payloads</td>
+    </tr>
+    <tr>
+      <td>gen</td>
+      <td>integer</td>
+      <td>Generation number for supersession (higher supersedes lower)</td>
+    </tr>
+  </tbody>
+</table>
+
+All fields are OPTIONAL. An empty JSON object `{}` is valid but serves no
+purpose.
+
+## Purpose ## {#validity-purpose}
+
+The VALIDITY block provides lifecycle and ordering controls primarily for
+**imperative payloads** (see [[#payload-semantics]]):
+
+### Expiration ### {#validity-expiration}
+
+The `expires` field specifies when the payload becomes invalid:
+
+```
+-----BEGIN VALIDITY-----
+{"expires":"2025-06-15T12:00:00Z"}
+-----END VALIDITY-----
+```
+
+Devices MUST reject payloads where the current time exceeds the expiration.
+This is useful for:
+
+- Time-limited commands that should not execute after a maintenance window
+- Emergency operations that must be acted upon promptly or not at all
+- Preventing stale imperative payloads from executing unexpectedly
+
+### Identifier and Generation ### {#validity-id-gen}
+
+The `id` and `gen` fields work together to enable **supersession**:
+
+```
+-----BEGIN VALIDITY-----
+{"id":"network-config","gen":1}
+-----END VALIDITY-----
+```
+
+A payload with a higher `gen` value supersedes payloads with the same `id`
+and lower `gen` values. This enables:
+
+- **Configuration updates**: A new configuration (gen:2) replaces an older
+  one (gen:1) with the same identifier
+- **Payload invalidation**: An empty payload with a higher generation can
+  effectively "erase" or invalidate an older payload
+- **Ordered execution**: For imperative payloads, the `id` field can encode
+  ordering information (e.g., "step-001", "step-002") to ensure deterministic
+  execution sequence
+
+<div class="informative">
+Example supersession scenario:
+
+1. Device receives `{"id":"wifi-config","gen":1}` with WiFi credentials
+2. Later, device receives `{"id":"wifi-config","gen":2}` with updated credentials
+3. Device applies gen:2 and marks gen:1 as superseded
+4. If gen:1 is received again (replay), device ignores it (lower generation)
+</div>
+
+### Identifier Ordering ### {#validity-ordering}
+
+For imperative payloads that must execute in sequence, the `id` field can
+encode ordering:
+
+```
+-----BEGIN VALIDITY-----
+{"id":"deploy-phase-01-prepare"}
+-----END VALIDITY-----
+
+-----BEGIN VALIDITY-----
+{"id":"deploy-phase-02-migrate"}
+-----END VALIDITY-----
+
+-----BEGIN VALIDITY-----
+{"id":"deploy-phase-03-verify"}
+-----END VALIDITY-----
+```
+
+Implementations MAY use lexicographic ordering of identifiers to determine
+execution sequence. This is application-specific and not mandated by this
+specification.
+
+## Security Considerations ## {#validity-security}
+
+When a VALIDITY block is present, it MUST be included in the signature
+computation (see [[#signature-input]]). This cryptographically binds the
+validity constraints to the payload, preventing:
+
+- Modification of expiration times
+- Alteration of identifiers or generation numbers
+- Removal of validity constraints
+
+Implementations MUST validate the JSON structure before processing.
+
+# Delegate Chain Block # {#delegate-block}
+
+## Format ## {#delegate-format}
+
+When present, the DELEGATE CHAIN block contains one or more PEM-encoded
+X.509 certificates:
+
+```
+-----BEGIN DELEGATE CHAIN-----
+-----BEGIN CERTIFICATE-----
+<base64-encoded leaf certificate>
+-----END CERTIFICATE-----
+-----BEGIN CERTIFICATE-----
+<base64-encoded intermediate certificate>
+-----END CERTIFICATE-----
+...
+-----END DELEGATE CHAIN-----
+```
+
+The certificates MUST be ordered from leaf (delegate) to root (closest to
+owner key).
+
+## Purpose ## {#delegate-purpose}
+
+The Delegate Chain authorizes a third party to sign payloads on behalf of
+the owner. This enables scenarios where:
+
+- The owner's private key is held in a secure facility and not available
+  for direct signing
+- Operational teams need signing authority without access to the owner key
+- Different delegates are authorized for different operations
+
+## Required Permissions ## {#delegate-permissions}
+
+For Attested Payload signing, the delegate certificate MUST contain the
+following Extended Key Usage OID:
+
+: OID
+:: 1.3.6.1.4.1.45724.3.1.5
+
+: Name
+:: id-fdo-delegate-provision
+
+This OID authorizes the delegate to create Attested Payloads.
+
+## Validation ## {#delegate-validation}
+
+The Delegate Chain MUST be validated according to the [FDO] specification
+section on Delegate Certificate validation, including:
+
+1. Signature verification of each certificate in the chain
+2. Chain root verification against the Owner Key from the Ownership Voucher
+3. Permission OID verification (id-fdo-delegate-provision)
+4. Certificate validity period checks
+5. Basic constraints verification
+
+# Signature Block # {#signature-block}
+
+## Format ## {#signature-format}
+
+```
+-----BEGIN SIGNATURE-----
+<base64-encoded signature bytes>
+-----END SIGNATURE-----
+```
+
+## Signing Key ## {#signing-key}
+
+The signature MUST be created using one of:
+
+1. **Owner Key**: The private key corresponding to the Owner's public key
+   in the final OVEntry of the Ownership Voucher.
+
+2. **Delegate Key**: The private key corresponding to the public key in
+   the leaf certificate of the Delegate Chain (when delegation is used).
+
+# Encrypted Payload Blocks # {#encrypted-blocks}
+
+## IV Block ## {#iv-block}
+
+```
+-----BEGIN IV-----
+<hex-encoded 16-byte initialization vector>
+-----END IV-----
+```
+
+The IV MUST be exactly 32 hexadecimal characters (16 bytes).
+
+## Wrapped Encryption Key Block ## {#wek-block}
+
+```
+-----BEGIN WRAPPED ENCRYPTION KEY-----
+<base64-encoded RSA-OAEP wrapped key>
+-----END WRAPPED ENCRYPTION KEY-----
+```
+
+## Ciphertext Block ## {#ciphertext-block}
+
+```
+-----BEGIN CIPHERTEXT-----
+<base64-encoded AES-256-CTR encrypted payload>
+-----END CIPHERTEXT-----
+```
+
+# Verification Procedure # {#verification}
+
+## Overview ## {#verification-overview}
+
+Verification of an Attested Payload MUST proceed in the following order:
+
+1. Parse all blocks from the document
+2. Validate the Ownership Voucher
+3. Extract the Owner Key from the Ownership Voucher
+4. If Delegate Chain is present, validate it and extract the signing key
+5. Verify the signature
+6. If encrypted, decrypt the payload
+
+## Detailed Steps ## {#verification-steps}
+
+### Step 1: Parse Document ### {#step-parse}
+
+The implementation MUST:
+
+1. Parse all PEM blocks from the document
+2. Verify that all REQUIRED blocks are present
+3. Verify that encryption blocks are either all present or all absent
+4. Decode base64 content of each block
+
+### Step 2: Validate Ownership Voucher ### {#step-validate-ov}
+
+The implementation MUST validate the Ownership Voucher according to the
+[FDO] specification. This includes:
+
+1. CBOR structure validation
+2. HMAC verification (if device HMAC secret is available)
+3. OVEntry chain verification
+
+### Step 3: Extract Owner Key ### {#step-extract-owner}
+
+Extract the Owner's public key from the final OVEntry in the Ownership
+Voucher. This key will be used either:
+
+- Directly for signature verification (if no Delegate Chain), or
+- As the trust anchor for Delegate Chain validation
+
+### Step 4: Validate Delegate Chain (if present) ### {#step-validate-delegate}
+
+If a Delegate Chain is present:
+
+1. Parse all certificates from the DELEGATE CHAIN block
+2. Verify the chain is rooted by the Owner Key
+3. Verify each certificate's signature
+4. Verify the id-fdo-delegate-provision OID is present
+5. Verify certificate validity periods
+6. Extract the leaf certificate's public key as the signing key
+
+If no Delegate Chain is present, the Owner Key is the signing key.
+
+### Step 5: Verify Signature ### {#step-verify-signature}
+
+1. Construct the signed data using length-prefixed concatenation:
+   a. Write 4-byte big-endian length of PAYLOAD TYPE (0 if not present)
+   b. Write PAYLOAD TYPE bytes (UTF-8 encoded, NOT base64)
+   c. Write 4-byte big-endian length of VALIDITY (0 if not present)
+   d. Write VALIDITY bytes (raw JSON string, NOT base64)
+   e. Write payload data: decoded PAYLOAD bytes (cleartext) or decoded
+      CIPHERTEXT bytes (encrypted)
+
+   The format MUST be: `len(PayloadType) || PayloadType || len(Validity) || Validity || PayloadData`
+
+   <div class="note">
+   The length-prefix format is CRITICAL for security. It ensures:
+   
+   - Unambiguous field boundaries prevent type confusion attacks
+   - A payload cannot be reinterpreted as a different type (e.g., treating
+     a configuration file as an executable script)
+   - Validity constraints (expiration, identifier, generation) cannot be
+     modified or removed without invalidating the signature
+   - An attacker cannot shift bytes between fields or strip metadata blocks
+   </div>
+
+2. Compute SHA-384 hash of the length-prefixed signed data
+
+3. Verify the signature using the signing key (Owner or Delegate)
+
+If signature verification fails, the implementation MUST reject the
+Attested Payload.
+
+### Step 5a: Validate Validity Constraints (if present) ### {#step-validate-validity}
+
+If a VALIDITY block is present, after signature verification succeeds:
+
+1. Parse the JSON content of the VALIDITY block
+2. If `expires` field is present:
+   - Parse as ISO 8601 datetime
+   - If current time exceeds expiration, REJECT the payload
+3. Application-specific handling of `id` and `gen` fields (see [[#validity-block]])
+
+### Step 6: Decrypt Payload (if encrypted) ### {#step-decrypt}
+
+If the payload is encrypted:
+
+1. Decode the IV from hexadecimal
+2. Unwrap the symmetric key using RSA-OAEP with the device's private key
+3. Decrypt the ciphertext using AES-256-CTR with the unwrapped key and IV
+4. Return the decrypted plaintext
+
+If the payload is not encrypted, return the decoded PAYLOAD bytes.
+
+# Security Considerations # {#security}
+
+## Certificate Revocation ## {#revocation}
+
+<div class="informative">
+Attested Payload is designed for offline scenarios where traditional
+certificate revocation mechanisms (CRL, OCSP) may not be available.
+Implementations SHOULD consider:
+
+- Using short-lived certificates to limit exposure
+- Implementing local revocation list caching
+- Using device-local revocation status updated during maintenance windows
+</div>
+
+## Payload Semantics: Declarative vs Imperative ## {#payload-semantics}
+
+Attested Payloads can represent two fundamentally different types of content:
+
+### Declarative Payloads ### {#declarative-payloads}
+
+Declarative payloads represent **desired state** or **configuration**:
+
+- System configurations
+- Credential assignments
+- Policy definitions
+- Disk images
+
+Declarative payloads are typically **idempotent**—applying the same payload
+multiple times produces the same result. Replay protection is generally
+not required; the payload represents a standing declaration that remains
+valid until superseded.
+
+This is the **primary use case** for Attested Payloads.
+
+### Imperative Payloads ### {#imperative-payloads}
+
+Imperative payloads represent **commands to execute**:
+
+- Shell scripts
+- Diagnostic commands
+- One-time operations
+
+Imperative payloads are **not idempotent**—executing the same command
+multiple times may have different effects. For these narrow use cases,
+additional controls may be needed:
+
+- **Expiration**: Limit the time window during which the command is valid
+- **Sequencing**: Ensure commands execute in the correct order
+- **Supersession**: Allow newer commands to invalidate older ones
+
+The optional VALIDITY block (see [[#validity-block]]) provides these
+controls for imperative payloads.
+
+## Replay and Supersession ## {#replay}
+
+For **declarative payloads**, replay protection is typically unnecessary.
+A configuration payload represents a valid state declaration regardless
+of when or how many times it is processed.
+
+For **imperative payloads**, the VALIDITY block provides mechanisms to
+control execution:
+
+- **Expiration** prevents stale commands from executing
+- **Identifier + Generation** allows newer payloads to supersede older ones
+- **Identifier ordering** enables deterministic execution sequencing
+
+See [[#validity-block]] for details.
+
+## Key Protection ## {#key-protection}
+
+- Owner private keys SHOULD be stored in Hardware Security Modules (HSMs)
+- Delegate private keys SHOULD be protected appropriately for their
+  authorization scope
+- Device private keys SHOULD be stored in secure hardware (TPM, secure
+  enclave) where available
+
+## Encryption Limitations ## {#encryption-limitations}
+
+Payload encryption is only available for devices with RSA keys. ECDSA
+keys do not support encryption operations. For devices with ECDSA keys,
+payload confidentiality must be achieved through other means (e.g.,
+physical security of the transport medium).
+
+# Examples # {#examples}
+
+## Cleartext Attested Payload ## {#example-cleartext}
+
+```
+-----BEGIN OWNERSHIP VOUCHER-----
+hkQBAgMEhQECAwQFgYJYggECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8g
+ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0BBQkNERUZHSElKS0xNTk9Q
+...
+-----END OWNERSHIP VOUCHER-----
+
+-----BEGIN PAYLOAD-----
+VGhpcyBpcyBhIHRlc3QgcGF5bG9hZCBmb3IgdGhlIGRldmljZQ==
+-----END PAYLOAD-----
+
+-----BEGIN SIGNATURE-----
+MEUCIQDKZokqnCjrRtw5EXi0F7ABkAUGKLEpWgUVyVXRhRAiPgIgZKpTunvSxaSg
+R5DANfajLPMta6rVxzFZFvvU4HN0SDo=
+-----END SIGNATURE-----
+```
+
+## Encrypted Attested Payload with Delegate ## {#example-encrypted-delegate}
+
+```
+-----BEGIN OWNERSHIP VOUCHER-----
+hkQBAgMEhQECAwQFgYJYggECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8g
+...
+-----END OWNERSHIP VOUCHER-----
+
+-----BEGIN DELEGATE CHAIN-----
+-----BEGIN CERTIFICATE-----
+MIICpDCCAYygAwIBAgIBATANBgkqhkiG9w0BAQsFADAWMRQwEgYDVQQDDAtGRE8g
+...
+-----END CERTIFICATE-----
+-----END DELEGATE CHAIN-----
+
+-----BEGIN IV-----
+0123456789abcdef0123456789abcdef
+-----END IV-----
+
+-----BEGIN WRAPPED ENCRYPTION KEY-----
+kJQw7os7sXYiPvl4egrKwLGN8OCLxCaGqlKpLLlPgR8K3WBUP5kP7qYJu9Qb+TZy
+...
+-----END WRAPPED ENCRYPTION KEY-----
+
+-----BEGIN CIPHERTEXT-----
+U2VjcmV0IGNvbmZpZ3VyYXRpb24gZGF0YSBlbmNyeXB0ZWQgZm9yIHRoZSBkZXZp
+Y2U=
+-----END CIPHERTEXT-----
+
+-----BEGIN SIGNATURE-----
+MEUCIQDKZokqnCjrRtw5EXi0F7ABkAUGKLEpWgUVyVXRhRAiPgIgZKpTunvSxaSg
+R5DANfajLPMta6rVxzFZFvvU4HN0SDo=
+-----END SIGNATURE-----
+```
+
+# References # {#references}
+
+## Normative References ## {#normative-references}
+
+: [FDO]
+:: FIDO Device Onboard Specification 2.0, FIDO Alliance
+
+: [RFC2119]
+:: Key words for use in RFCs to Indicate Requirement Levels
+
+: [RFC8174]
+:: Ambiguity of Uppercase vs Lowercase in RFC 2119 Key Words
+
+: [RFC3279]
+:: Algorithms and Identifiers for the Internet X.509 Public Key
+   Infrastructure Certificate and Certificate Revocation List (CRL) Profile
+
+: [RFC8017]
+:: PKCS #1: RSA Cryptography Specifications Version 2.2
+
+## Informative References ## {#informative-references}
+
+: [CBOR]
+:: RFC 8949 - Concise Binary Object Representation (CBOR)
+
+: [X.509]
+:: ITU-T X.509 - Information technology - Open Systems Interconnection -
+   The Directory: Public-key and attribute certificate frameworks

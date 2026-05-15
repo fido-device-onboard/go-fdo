@@ -283,7 +283,7 @@ Device → Owner: image-result [0, "Image received, booting"]
 
 This approach maximizes efficiency for the common case while gracefully handling edge cases.
 
-## Key-Value Pairs
+## ServiceInfo Module Key-Value Pairs
 
 ### Module Activation
 
@@ -293,20 +293,176 @@ This approach maximizes efficiency for the common case while gracefully handling
 
 ### Image Transfer (Boot Images, Certificates)
 
-| Key | Direction | Type | Description |
-| --- | --------- | ---- | ----------- |
-| `fdo.bmo:image-begin` | Owner → Device | Map | Announces image/certificate transfer |
-| `fdo.bmo:image-ack` | Device → Owner | Array | Accept/reject before transfer (when `require_ack` is set) |
-| `fdo.bmo:image-data-<n>` | Owner → Device | Byte string | Data chunk `n` (0-based) |
-| `fdo.bmo:image-end` | Owner → Device | Map | Signals completion of transfer |
-| `fdo.bmo:image-result` | Device → Owner | Array | Final result `[status, ?message]` |
+| Key | Direction | Body on the wire | Purpose |
+| --- | --------- | ---------------- | ------- |
+| `fdo.bmo:image-begin` | Owner → Device | Signed envelope (see below) | Announces an image or certificate transfer. Because accepting this message causes the device to install a bootable image or enrol a UEFI DB/DBX entry, the body is carried inside a COSE_Sign1 signature envelope. |
+| `fdo.bmo:image-ack` | Device → Owner | CBOR array, unsigned | Accept or reject the transfer (only sent when `require_ack` was set in `image-begin`). |
+| `fdo.bmo:image-data-<n>` | Owner → Device | CBOR byte string, unsigned | Data chunk number `n` (0-based). Integrity of the reassembled image is bound back to the signed `image-begin` through its `expected_hash` field (key `-9`). |
+| `fdo.bmo:image-end` | Owner → Device | CBOR map, unsigned | Signals that all chunks have been sent (inline delivery) or that the device should now fetch from the URL (URL / meta-URL delivery). |
+| `fdo.bmo:image-result` | Device → Owner | CBOR array `[status, ?message]`, unsigned | Final outcome reported by the device. |
+
+#### Wire body of `fdo.bmo:image-begin` — CDDL
+
+On the wire, the body of `fdo.bmo:image-begin` is **a single CBOR item**: a `COSE_Sign1` (RFC 9052, §4) wrapped in CBOR tag 18. The CBOR-tagged form — not the untagged array — is mandatory: the device uses the tag as an unambiguous marker that this is a signed provisioning envelope, versus a pre-spec unsigned `ImageBegin` map.
+
+```cddl
+; === Wire body (full CBOR item) ===
+fdo.bmo.image-begin-body = #6.18(COSE_Sign1_ImageBegin)
+
+; === COSE_Sign1 envelope ===
+COSE_Sign1_ImageBegin = [
+    protected   : bstr .cbor ImageBeginProtectedHeader,  ; header map, serialised
+    unprotected : ImageBeginUnprotectedHeader,           ; header map, inline
+    payload     : bstr .cbor ImageBegin,                 ; the INNER payload
+    signature   : bstr                                   ; alg-defined sig bytes
+]
+
+; === Protected header (serialised as a bstr in position 0 above) ===
+ImageBeginProtectedHeader = {
+    1 => int,                                           ; alg  (ES256=-7, ES384=-35, RS256=-257, ...)
+    3 => "application/cbor+fdo.bmo.image-begin"         ; content_type (MUST be this exact string)
+}
+
+; === Unprotected header ===
+ImageBeginUnprotectedHeader = {
+    ? 33 => [+ bstr]     ; x5chain (RFC 9360):
+                         ;   ABSENT  => signer is the Owner (Owner-direct).
+                         ;   PRESENT => signer is a Delegate; bstr values are
+                         ;              DER X.509 certs, leaf first, chaining
+                         ;              up to (but not including) the Owner key.
+}
+
+; === Inner payload — what the signature actually covers ===
+; This is the SAME ImageBegin map defined in §ImageBegin — see there for the
+; full key table. Excerpted here for clarity:
+ImageBegin = {
+    ? 0  => uint,                    ; total_size (bytes)
+    ? 1  => tstr,                    ; hash alg   (e.g. "sha256")
+      -1 => tstr,                    ; image_type (REQUIRED, MIME type)
+    ? -2 => tstr,                    ; boot_args
+    ? -3 => tstr,                    ; name
+    ? -4 => tstr,                    ; version
+    ? -5 => tstr,                    ; description
+    ? -6 => uint,                    ; delivery_mode (0=inline,1=url,2=meta-url)
+    ? -7 => tstr,                    ; url
+    ? -8 => bstr,                    ; tls_ca (single DER cert)
+    ? -9 => bstr,                    ; expected_hash
+    ? -10 => bstr                    ; meta_signer (COSE_Key)
+}
+
+; === External AAD (NOT on the wire; MUST be fed into sign/verify) ===
+; Per §External AAD, the Sig_structure's `external_aad` field is the CBOR
+; encoding of the following array. Verifiers that use a different value MUST
+; reject the signature.
+FdoBmoProvisionAAD = ["FDO-FSIM-BmoProvision-v1"]
+```
+
+**Worked example — Owner-direct signature over a minimal `image-begin`.**
+
+Inner payload (`ImageBegin`) as a diagnostic notation:
+
+```cbor-diag
+{ -1: "application/efi", 3: true }
+```
+
+The full wire body would be laid out as (annotated):
+
+```text
+D2                                  # CBOR tag 18  (== COSE_Sign1)
+   84                               # array(4) -- COSE_Sign1 has 4 elements
+      43                            # bstr, length 3  (protected header bytes)
+         A2                         #   map(2)
+            01 26                   #     1 => -7          ; alg = ES256
+            03 78 26 "application/cbor+fdo.bmo.image-begin"
+                                    #     3 => content_type
+      A0                            # map(0)              ; unprotected header
+                                    #   (empty => Owner-direct; no x5chain)
+      58 19                         # bstr, length 25     ; payload bytes
+         A2                         #   map(2)            ; ImageBegin inner
+            20 70 "application/efi" #     -1 => image_type
+            03 F5                   #      3 => true      ; require_ack
+      58 40 <64 bytes>              # bstr, length 64     ; ES256 signature
+```
+
+For a Delegate signature, the unprotected header would be `A1 18 21 82 <leaf-der> <intermediate-der>` (`{33: [leaf, intermediate]}`) instead of `A0`, and the signature would be computed with the Delegate's private key. Everything else is identical.
+
+**Signing / verification input.** The `COSE_Sign1` signature is computed and verified over the CBOR encoding of `Sig_structure` per RFC 9052 §4.4:
+
+```cddl
+Sig_structure = [
+    context       : "Signature1",
+    body_protected: bstr,                               ; == protected header bstr above
+    external_aad  : bstr .cbor FdoBmoProvisionAAD,      ; see §External AAD
+    payload       : bstr                                ; == payload bstr above
+]
+```
+
+The device MUST use `FdoBmoProvisionAAD` (not an empty bstr, not some other tag) when computing the `Sig_structure`; a mismatch causes verification to fail and the device returns error 15. See [§Authorization of Provisioning Messages](#authorization-of-provisioning-messages) for the complete verification algorithm.
+
+**Rejection rules (short form):**
+
+- First byte not `0xD2` (not a tag-18 item) ⇒ error 15.
+- `content_type` in protected header ≠ `"application/cbor+fdo.bmo.image-begin"` ⇒ error 15.
+- `x5chain` present but chain does not root at the TO2-proven Owner key, or leaf lacks `fdo-ekt-permit-provision` ⇒ error 15.
+- Signature verification fails ⇒ error 15.
+- `payload` bstr does not decode as an `ImageBegin` map ⇒ error 15.
 
 ### BIOS/Firmware Configuration
 
-| Key | Direction | Type | Description |
-| --- | --------- | ---- | ----------- |
-| `fdo.bmo:set` | Owner → Device | Array | Set one or more BIOS parameters |
-| `fdo.bmo:response` | Device → Owner | Array | Result `[status, ?message]` per parameter |
+| Key | Direction | Body on the wire | Purpose |
+| --- | --------- | ---------------- | ------- |
+| `fdo.bmo:set` | Owner → Device | Signed envelope (see below) | Instructs the device to apply one or more BIOS / firmware parameter changes (e.g. enable Secure Boot, set a BIOS password). Because accepting this message mutates firmware state, the body is carried inside a COSE_Sign1 signature envelope. |
+| `fdo.bmo:response` | Device → Owner | CBOR array `[status, ?message]` (one per parameter), unsigned | Result of applying each parameter from the preceding `set`. |
+
+#### Wire body of `fdo.bmo:set` — CDDL
+
+On the wire, the body of `fdo.bmo:set` is a single CBOR item: a `COSE_Sign1` wrapped in CBOR tag 18, exactly as defined for `image-begin` above, differing only in the `content_type` and the inner payload schema.
+
+```cddl
+; === Wire body (full CBOR item) ===
+fdo.bmo.set-body = #6.18(COSE_Sign1_Set)
+
+; === COSE_Sign1 envelope ===
+COSE_Sign1_Set = [
+    protected   : bstr .cbor SetProtectedHeader,
+    unprotected : SetUnprotectedHeader,
+    payload     : bstr .cbor BiosParam,                 ; the INNER payload
+    signature   : bstr
+]
+
+SetProtectedHeader = {
+    1 => int,                                           ; alg (as for image-begin)
+    3 => "application/cbor+fdo.bmo.set"                 ; content_type
+}
+
+SetUnprotectedHeader = {
+    ? 33 => [+ bstr]       ; x5chain: absent for Owner-direct; present for Delegate
+}
+
+; === Inner payload ===
+BiosParam = [ + [ name: tstr, value: any ] ]
+```
+
+**Worked example — Owner-direct signature over `[["secure-boot", true]]`.**
+
+```text
+D2                                  # CBOR tag 18 (COSE_Sign1)
+   84                               # array(4)
+      4A                            # bstr, length 10    ; protected header
+         A2                         #   map(2)
+            01 26                   #     1 => -7 (ES256)
+            03 78 1E "application/cbor+fdo.bmo.set"
+                                    #     3 => content_type
+      A0                            # map(0)              ; unprotected: Owner-direct
+      52                            # bstr, length 18     ; payload
+         81                         #   array(1)          ; one param pair
+            82                      #     array(2)
+               6B "secure-boot"     #       name
+               F5                   #       value = true
+      58 40 <64 bytes>              # bstr, length 64     ; ES256 signature
+```
+
+**Signing / verification input** uses the same `Sig_structure` construction as `image-begin`, with `external_aad = FdoBmoProvisionAAD` and `content_type = "application/cbor+fdo.bmo.set"`. A `set` whose body is not a tagged `COSE_Sign1`, whose `content_type` is wrong, whose `x5chain` does not validate, or whose signature does not verify, MUST be rejected with error 15 **and the device MUST NOT apply any parameter** from the rejected message (not even those that parse successfully). See [§Authorization of Provisioning Messages](#authorization-of-provisioning-messages).
 
 ### Error Handling
 
@@ -318,7 +474,11 @@ This approach maximizes efficiency for the common case while gracefully handling
 
 ### ImageBegin
 
-Boot image transfers use the generic chunking strategy. `fdo.bmo` reserves the following negative keys:
+Boot image transfers use the generic chunking strategy. The inner payload is a CBOR map using the keys defined in the schema below; `fdo.bmo` reserves the listed negative keys.
+
+The wire-level `fdo.bmo:image-begin` message body is a tagged `COSE_Sign1` (CBOR tag 18) whose payload is the CBOR-encoded `ImageBegin` map. Signing and verification are normative and are defined in [Authorization of Provisioning Messages](#authorization-of-provisioning-messages). A device that receives an `image-begin` whose body is **not** a tagged `COSE_Sign1`, or whose signature does not validate, MUST respond with `error` code 15 (Provisioning Not Authorized) and abort the transfer.
+
+**Inner payload (pre-signing, before COSE wrapping):**
 
 ```
 {
@@ -381,7 +541,9 @@ ImageAck = [
 
 ### BiosParam (set message)
 
-The `set` message carries a CBOR array of parameter name/value pairs for BIOS configuration:
+The wire-level `fdo.bmo:set` message body is a tagged `COSE_Sign1` (CBOR tag 18) whose payload is a CBOR array of parameter name/value pairs for BIOS configuration. Signing and verification rules are normative and are defined in [Authorization of Provisioning Messages](#authorization-of-provisioning-messages); the inner (pre-signing) payload is shown here.
+
+**Inner payload (pre-signing, before COSE wrapping):**
 
 ```cbor
 [
@@ -390,7 +552,7 @@ The `set` message carries a CBOR array of parameter name/value pairs for BIOS co
 ]
 ```
 
-Each pair is exactly two CBOR elements: parameter name (tstr) and parameter value (type depends on parameter).
+Each pair is exactly two CBOR elements: parameter name (tstr) and parameter value (type depends on parameter). A device that receives a `set` whose body is **not** a tagged `COSE_Sign1`, or whose signature does not validate, MUST respond with `error` code 15 (Provisioning Not Authorized) and MUST NOT apply any parameter from the rejected message.
 
 ### BiosResponse (response message)
 
@@ -427,6 +589,117 @@ fdo.bmo:response = [0, "Password set"]
 ```
 
 Rather than combining them in a single message.
+
+## Authorization of Provisioning Messages
+
+### Rationale
+
+`fdo.bmo` conveys **security-sensitive** operations: installation of bootable images, enrollment of UEFI Secure Boot DB/DBX certificates, and mutation of BIOS configuration. Granting these operations on the authority of "whoever happens to be the TO2 peer" is insufficient for deployments in which the TO2 responder is:
+
+- a narrowly-scoped FDO 2.0 **Delegate** (see `delegate.md`) that may legitimately onboard a device but not mint its boot image, or
+- an orchestrator / front-door service running with Owner keying material whose compromise must not automatically translate into boot-chain compromise, or
+- any third party to whom the Owner has temporarily outsourced device onboarding.
+
+This specification therefore requires the authority to provision bootable content and BIOS state to travel **with the message, not with the transport**. Every message whose acceptance causes the device to install an image, enroll a certificate, or mutate firmware settings MUST be a tagged `COSE_Sign1` whose signer is cryptographically tied, via the ownership voucher established in TO2, to the Owner of the device.
+
+### Messages Requiring Authorization
+
+The following messages MUST be transmitted as tagged `COSE_Sign1` (CBOR tag 18) per this section:
+
+| Message | Inner Payload | Rationale |
+| ------- | ------------- | --------- |
+| `fdo.bmo:image-begin` | `ImageBegin` map (§ImageBegin) | Authorizes installation of a bootable image or UEFI DB/DBX entry and binds the image identity (`image_type`, `expected_hash`, `url`, `meta_signer`) to an Owner-authorised decision. |
+| `fdo.bmo:set` | `BiosParam` array (§BiosParam) | Authorizes mutation of firmware configuration (`secure-boot`, `bios-password`, boot order, …). |
+
+All other `fdo.bmo:*` messages (`active`, `image-ack`, `image-data-<n>`, `image-end`, `image-result`, `response`, `error`) carry only bookkeeping; they grant no new authority to the device and are transmitted unsigned. Bulk image bytes (`image-data-<n>`) are not signed individually — their integrity is bound to the authorizing `image-begin` via `expected_hash` (key `-9`, REQUIRED unless the Owner explicitly chooses to delegate chunk integrity to the transport).
+
+### Trust Anchor
+
+The trust anchor for every `fdo.bmo` provisioning signature is the **Owner public key proven to the device during TO2** — specifically, the public key present in the final entry of the Ownership Voucher, which the device cryptographically verifies as part of `TO2.ProveOVHdr` processing. This key is already established as the ultimate authority over the device in the FDO protocol; BMO reuses it rather than introducing a separate trust root.
+
+An implementation MUST NOT use the TO2 transport peer's public key, the TO2 session key, or any other channel-bound material as the trust anchor for BMO provisioning signatures. Doing so would defeat the purpose of this section (the TO2 peer may be a narrowly-scoped Delegate that does **not** possess the Owner key).
+
+### Signer
+
+A provisioning message MUST be signed by **exactly one** of the following:
+
+1. **Owner-direct** — the Owner private key itself. In this case the `COSE_Sign1` carries **no** `x5chain` header; the device verifies the signature directly against the TO2-proven Owner public key.
+
+2. **Delegated** — a Delegate private key distinct from the Owner key. In this case the `COSE_Sign1` MUST carry an `x5chain` unprotected header (COSE header label `33`, RFC 9360) listing a DER-encoded X.509 certificate chain, **leaf first**, whose root certificate is issued by (or is) the Owner key. The leaf certificate MUST carry the permission OID
+
+    ```
+    fdo-ekt-permit-provision    OID 1.3.6.1.4.1.45724.3.1.7    (PERM.7)
+    ```
+
+    A Delegate certificate that is valid for other FDO purposes (e.g. `fdo-ekt-permit-onboard-new-cred`, `fdo-ekt-permit-redirect`) but lacks `fdo-ekt-permit-provision` MUST NOT be accepted as a BMO provisioning signer. This is how Owners grant narrow "may provision BMO" authority without granting full Owner authority.
+
+Allowing Owner-direct signatures unconditionally is intentional: a deployment whose TO2 frontend happens to be the Owner itself should not be forced to mint a self-signed delegate certificate. Allowing Delegate signatures via `x5chain` is also intentional: an Owner whose TO2 frontend is an orchestrator or third party can issue one or more short-lived `fdo-ekt-permit-provision` certificates without giving out its Owner key.
+
+### `COSE_Sign1` Structure
+
+```cddl
+BmoProvisioningEnvelope<InnerPayload> = #6.18(COSE_Sign1)
+
+protected_header = {
+    1: alg,                   ; Signature alg (ES256, ES384, ES512, RS256, PS256, …)
+    3: content_type           ; MUST match the inner payload semantic
+}
+
+unprotected_header = {
+    ? 33: [+ bstr]            ; x5chain (RFC 9360): DER certs, leaf first.
+                              ;   Present IFF signer is a Delegate.
+                              ;   Owner-direct signatures MUST NOT include x5chain.
+}
+
+payload   = bstr .cbor InnerPayload
+signature = bstr
+```
+
+The protected `content_type` MUST be one of the values registered below. The `content_type` carried in the protected header MUST match the wire-level message key (per the §Content-Type Registry); a device that observes a mismatch MUST reject the message with error 15.
+
+#### Content-Type Registry
+
+| Content-Type                           | Inner Payload Type | Wire-Level Message |
+| -------------------------------------- | ------------------ | ------------------ |
+| `application/cbor+fdo.bmo.image-begin` | `ImageBegin` map   | `fdo.bmo:image-begin` |
+| `application/cbor+fdo.bmo.set`         | `BiosParam` array  | `fdo.bmo:set` |
+
+### External AAD (Domain Separation)
+
+All `fdo.bmo` provisioning signatures MUST be computed with the `COSE_Sign1` `external_aad` set to the CBOR encoding of:
+
+```cddl
+FdoBmoProvisionAAD = ["FDO-FSIM-BmoProvision-v1"]
+```
+
+This domain-separation tag ensures that a signature minted for BMO provisioning cannot be replayed against any other FDO structure that uses `COSE_Sign1` (e.g. `TO0.OwnerSign`, `TO2.ProveOVHdr`, BMO meta-payloads). Devices MUST use the identical tag when verifying; any other value MUST cause verification to fail.
+
+### Device Verification Algorithm
+
+On receipt of `fdo.bmo:image-begin` or `fdo.bmo:set`, the device MUST execute the following algorithm before acting on the inner payload:
+
+1. Decode the message body as CBOR. If the outer item is not CBOR tag 18 (`COSE_Sign1`), return error 15.
+2. Parse the `COSE_Sign1`. Extract the protected header's `content_type` (label 3). If absent, or if it does not equal the content-type registered for the incoming message key (see §Content-Type Registry), return error 15.
+3. Inspect the unprotected header's `x5chain` (label 33).
+    1. **Absent** — the signer is claiming to be the Owner. Set the verification key to the TO2-proven Owner public key. Skip to step 5.
+    2. **Present** — the signer is a Delegate. Parse each DER certificate in `x5chain` (leaf first). Validate the chain such that the topmost certificate is signed by the TO2-proven Owner public key (equivalently: treat the Owner key as an implicit self-signed root). If chain construction or signature validation fails, return error 15.
+4. Verify that the leaf certificate of the delegate chain carries `fdo-ekt-permit-provision` (OID `1.3.6.1.4.1.45724.3.1.7`) as an extended key usage. If missing, return error 15. Set the verification key to the leaf's public key.
+5. Verify the `COSE_Sign1` signature using the verification key chosen above and the external AAD `FdoBmoProvisionAAD`. On failure, return error 15.
+6. Decode the verified `payload` bstr as the inner payload type registered for the message (`ImageBegin` map or `BiosParam` array). If decoding fails, return error 15.
+7. Proceed with normal BMO processing of the inner payload (e.g., NAK with `image-ack`, begin chunked transfer, apply BIOS parameters, …).
+
+Devices MUST NOT process the inner payload until step 7 is reached. A device that "reads ahead" into the payload (e.g., to pre-allocate buffers) MUST discard any such state if verification fails.
+
+### Owner / Delegate Requirements
+
+An Owner (or a Delegate acting on its behalf) that produces `fdo.bmo:image-begin` or `fdo.bmo:set`:
+
+- MUST wrap the inner payload in a tagged `COSE_Sign1` per the structure above.
+- MUST populate the protected `content_type` to match the wire-level message.
+- MUST compute the signature with `external_aad = FdoBmoProvisionAAD`.
+- MUST, when signing as a Delegate, include the leaf certificate (and any intermediates chaining up to the Owner key) in the unprotected `x5chain` header, leaf first.
+- MUST NOT, when signing as the Owner directly, include an `x5chain` header.
+- MUST NOT include a certificate for the Owner key itself in `x5chain`; the Owner key is the implicit trust root and is transported out-of-band via the Ownership Voucher.
 
 ## BIOS/Firmware Configuration
 
@@ -811,6 +1084,7 @@ Device → Owner: fdo.bmo:image-ack [false, 7, "DB modification not supported"]
 | 12 | Meta Signature Invalid | COSE Sign1 signature verification failed for meta-payload |
 | 13 | Meta Parse Error | Meta-payload CBOR is malformed or missing required fields |
 | 14 | Delivery Mode Not Supported | Firmware does not support the requested delivery mode (url or meta-url) |
+| 15 | Provisioning Not Authorized | `image-begin` or `set` failed the verification algorithm in [Authorization of Provisioning Messages](#authorization-of-provisioning-messages). Concretely: body is not tagged `COSE_Sign1`, `content_type` mismatch, `x5chain` does not chain to the TO2-proven Owner key, delegate leaf lacks `fdo-ekt-permit-provision`, signature invalid, external AAD mismatch, or inner payload malformed. |
 
 ### BIOS Parameter Error Codes
 
@@ -826,6 +1100,8 @@ Device → Owner: fdo.bmo:image-ack [false, 7, "DB modification not supported"]
 **Note**: BIOS parameter error codes are mapped to the basic BMO response status codes (0=success, 1=warning, 2=error) in the protocol. Specific error details should be provided in the optional message field.
 
 ## Protocol Flow
+
+> **Note on signatures in the diagrams below.** For readability, the ASCII flow diagrams that follow show the *logical* exchange and elide the `COSE_Sign1` envelope. In all diagrams, every arrow labelled `fdo.bmo:image-begin` or `fdo.bmo:set` carries on the wire a tagged `COSE_Sign1` (CBOR tag 18) whose `payload` is the CBOR shown in the diagram, signed and verified per [Authorization of Provisioning Messages](#authorization-of-provisioning-messages). No other `fdo.bmo:*` arrow is signed.
 
 ### Successful Boot Image Delivery (with acknowledgment)
 
@@ -974,6 +1250,9 @@ Owner                           Device (Firmware)
 **MUST**:
 
 - Advertise `fdo.bmo:active = true` only if capable of booting received images
+- **Verify `image-begin` and `set` as tagged `COSE_Sign1` per [Authorization of Provisioning Messages](#authorization-of-provisioning-messages), rooted in the TO2-proven Owner public key**
+- **Reject unsigned `image-begin` / `set` with error 15 (Provisioning Not Authorized); MUST NOT install an image or mutate BIOS state on an unsigned message**
+- **When a delegate `x5chain` is present, verify that the leaf carries `fdo-ekt-permit-provision` (OID 1.3.6.1.4.1.45724.3.1.7); reject with error 15 otherwise**
 - Validate image type before accepting data
 - Verify hash when provided in `image-end` or `expected_hash` (`-9`)
 - Report errors with appropriate codes
@@ -1004,7 +1283,9 @@ Owner                           Device (Firmware)
 **MUST**:
 
 - Only send boot images to clients advertising `fdo.bmo`
-- Specify valid image type in `image-begin`
+- **Wrap every `image-begin` and `set` in a tagged `COSE_Sign1` envelope with `external_aad = ["FDO-FSIM-BmoProvision-v1"]`, per [Authorization of Provisioning Messages](#authorization-of-provisioning-messages)**
+- **Sign either with the Owner key directly (no `x5chain`) or with a Delegate key whose certificate chain roots in the Owner key and whose leaf carries `fdo-ekt-permit-provision`**
+- Specify valid image type in the inner `ImageBegin` payload
 - Send data in appropriate chunk sizes for firmware memory constraints (inline mode)
 - Set `require_ack: true` for all image-begin messages to enable NAK fallback
 - Handle BIOS response codes appropriately (especially errors)
@@ -1036,6 +1317,10 @@ When offering multiple boot assets, servers SHOULD:
 This ensures firmware receives the **best boot method it supports** while maintaining broad compatibility across diverse firmware implementations. The same image MAY be offered via different delivery modes (e.g., inline first, then URL fallback) to accommodate varying device capabilities.
 
 ## Security Considerations
+
+### Provisioning Authority
+
+The normative rules for authorizing `image-begin` and `set` are defined in [Authorization of Provisioning Messages](#authorization-of-provisioning-messages). The central property that section establishes is **trust-the-message, not the-messenger**: the device's decision to install an image or mutate BIOS state is gated on a `COSE_Sign1` signature whose trust anchor is the same Ownership-Voucher-proven Owner key used by TO2, **not** on the identity of the TO2 transport peer. Compromise of a narrowly-scoped Delegate (or of a short-lived `fdo-ekt-permit-provision` certificate) therefore does not confer blanket provisioning authority on the attacker; it bounds the damage to the lifetime and scope of the issued certificate. Deployments MUST NOT accept unsigned `image-begin` / `set` outside of an explicitly-marked debug configuration.
 
 ### Secure Boot Integration
 

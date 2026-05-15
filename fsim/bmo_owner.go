@@ -26,6 +26,13 @@ type BMOOwner struct {
 	// BIOS parameters to send to the device
 	biosParams []BiosParam
 
+	// ProvisioningSigner, if set, wraps each image-begin and BIOS set message
+	// in a tagged COSE_Sign1 per fdo.bmo.md "Authenticated Provisioning",
+	// and emits them as "image-begin-signed" / "set-signed" wire messages.
+	// When nil, the legacy unsigned "image-begin" / "set" keys are used
+	// (for backward compatibility with pre-v1.0 devices).
+	ProvisioningSigner ProvisioningSigner
+
 	// Internal state
 	currentSender   *chunking.ChunkSender
 	currentIndex    int
@@ -265,7 +272,23 @@ func (b *BMOOwner) produceInfo(ctx context.Context, producer *serviceinfo.Produc
 	switch b.sendState {
 	case bmoStateSendingBegin:
 		fmt.Printf("[BMOOwner] Sending image-begin message\n")
-		if err := b.currentSender.SendBegin(producer); err != nil {
+		if b.ProvisioningSigner != nil {
+			// Wrap the encoded BeginFields in a tagged COSE_Sign1 per
+			// fdo.bmo.md §"Authorization of Provisioning Messages". The
+			// wire-level message key remains "image-begin"; only the body
+			// changes (raw map → tagged COSE_Sign1 CBOR tag 18).
+			beginCBOR, err := b.currentSender.BeginFields.MarshalCBOR()
+			if err != nil {
+				return false, false, fmt.Errorf("failed to encode begin for signing: %w", err)
+			}
+			signed, err := b.ProvisioningSigner.Sign(beginCBOR, BMOContentTypeImageBegin)
+			if err != nil {
+				return false, false, fmt.Errorf("failed to sign image-begin: %w", err)
+			}
+			if err := b.currentSender.SendBeginAs(producer, "image-begin", signed); err != nil {
+				return false, false, fmt.Errorf("failed to send signed image-begin: %w", err)
+			}
+		} else if err := b.currentSender.SendBegin(producer); err != nil {
 			return false, false, fmt.Errorf("failed to send begin: %w", err)
 		}
 		slog.Debug("fdo.bmo sent begin",
@@ -374,7 +397,17 @@ func (b *BMOOwner) produceInfo(ctx context.Context, producer *serviceinfo.Produc
 					return false, false, fmt.Errorf("failed to encode BIOS parameters: %w", err)
 				}
 
-				if err := producer.WriteChunk("set", paramsData); err != nil {
+				setBody := paramsData
+				if b.ProvisioningSigner != nil {
+					// Wrap in tagged COSE_Sign1 per fdo.bmo.md §"Authorization
+					// of Provisioning Messages". Wire key stays "set".
+					signed, err := b.ProvisioningSigner.Sign(paramsData, BMOContentTypeSet)
+					if err != nil {
+						return false, false, fmt.Errorf("failed to sign BIOS set: %w", err)
+					}
+					setBody = signed
+				}
+				if err := producer.WriteChunk("set", setBody); err != nil {
 					return false, false, fmt.Errorf("failed to send BIOS set: %w", err)
 				}
 

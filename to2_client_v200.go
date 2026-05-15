@@ -130,6 +130,15 @@ func TO2v200(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol
 	serviceInfoReader, serviceInfoWriter := serviceinfo.NewChunkOutPipe(0)
 	defer func() { _ = serviceInfoWriter.Close() }()
 
+	// Expose the TO2-proven Owner public key to FSIMs (e.g. fdo.bmo for
+	// authenticated-provisioning verification) via ctx. When a delegate
+	// chain was used, the trust anchor is still the original Owner key.
+	ownerKeyForFSIM := ownerInfo.OriginalOwnerKey
+	if ownerKeyForFSIM == nil {
+		ownerKeyForFSIM = ownerInfo.OwnerPublicKey
+	}
+	ctx = WithOwnerPublicKey(ctx, ownerKeyForFSIM)
+
 	go c.Devmod.Write(ctx, c.DeviceModules, sendMTU, serviceInfoWriter)
 
 	if err := exchangeServiceInfo20(ctx, transport, proveOVNonce, setupDeviceNonce, sendMTU, serviceInfoReader, replacementHMAC, sess, c); err != nil {

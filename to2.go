@@ -276,6 +276,10 @@ func TO2(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1
 			return moduleName == "devmod" || moduleName == "fdo.wifi"
 		}
 	}
+	// Expose the TO2-proven Owner public key to FSIMs (e.g. fdo.bmo for
+	// authenticated-provisioning verification) via ctx.
+	ctx = WithOwnerPublicKey(ctx, ownerPublicKey)
+
 	go c.Devmod.WriteFiltered(ctx, c.DeviceModules, sendMTU, serviceInfoWriter, moduleFilter)
 
 	// Loop, sending and receiving service info until done

@@ -57,6 +57,15 @@ var OIDPermitVoucherClaim = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 45724, 3, 1,
 // service via the FDOKeyAuth protocol.
 var OIDPermitVoucherUpload = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 45724, 3, 1, 6}
 
+// OIDPermitProvision is the fdo-ekt-permit-provision permission OID (PERM.7).
+// This permission authorizes a Delegate to sign security-sensitive BMO
+// (Bare Metal Onboarding) payloads: boot images, UEFI Secure Boot DB/DBX
+// enrollments, and BIOS configuration. See fdo.bmo.md "Authenticated
+// Provisioning (COSE_Sign1)". Devices accept signed BMO messages from a
+// delegate ONLY if its leaf certificate carries this OID and the chain
+// validates back to the TO2-proven Owner key.
+var OIDPermitProvision = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 45724, 3, 1, 7}
+
 // OIDDelegateClaim is a legacy delegate OID (kept for backwards compatibility).
 var OIDDelegateClaim = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 45724, 3, 4}
 
@@ -122,6 +131,9 @@ func DelegateOIDtoString(oid asn1.ObjectIdentifier) string {
 	if oid.Equal(OIDPermitVoucherUpload) {
 		return "permit-voucher-upload"
 	}
+	if oid.Equal(OIDPermitProvision) {
+		return "permit-provision"
+	}
 	// Legacy OIDs
 	if oid.Equal(OIDDelegateClaim) {
 		return "claim"
@@ -151,10 +163,12 @@ func DelegateStringToOID(str string) (asn1.ObjectIdentifier, error) {
 		return OIDPermitVoucherClaim, nil
 	case "voucher-upload", "permit-voucher-upload":
 		return OIDPermitVoucherUpload, nil
+	case "provision", "permit-provision":
+		return OIDPermitProvision, nil
 	// Legacy OIDs
 	case "claim":
 		return OIDDelegateClaim, nil
-	case "provision":
+	case "legacy-provision":
 		return OIDDelegateProvision, nil
 	default:
 		return OIDDelegateBase, fmt.Errorf("invalid delegate OID string: %s", str)

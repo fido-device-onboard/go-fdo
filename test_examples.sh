@@ -1248,6 +1248,56 @@ test_bmo() {
 	log_success "BMO FSIM test PASSED"
 }
 
+# Test: BMO FSIM with authenticated provisioning (COSE_Sign1 via -bmo-sign).
+# Verifies that the owner-signed image-begin is accepted by the device and the
+# payload arrives intact.
+test_bmo_signed() {
+	log_section "TEST: BMO FSIM Authenticated Provisioning (owner-signed)"
+
+	mkdir -p "$EPHEMERAL_DIR"
+	rm -f "$DB_FILE" "$CRED_FILE"
+
+	BMO_FILE="$EPHEMERAL_DIR/test_bmo_signed_image.bin"
+	RECEIVED_FILE="examples/bmo-test_bmo_signed_image.bin"
+	log_step "Creating random test boot image (10KB) for signed delivery"
+	dd if=/dev/urandom of="$BMO_FILE" bs=1024 count=10 2>/dev/null
+	ORIGINAL_HASH=$(sha256sum "$BMO_FILE" | awk '{print $1}')
+
+	start_server "-bmo application/x-iso9660-image:../$BMO_FILE -bmo-sign"
+
+	log_step "Running DI"
+	run_cmd go run ./cmd client -di "$SERVER_URL"
+	log_success "DI completed"
+
+	log_step "Running TO1/TO2 with SIGNED BMO image-begin"
+	run_cmd go run ./cmd client
+	log_success "TO1/TO2 completed with signed BMO provisioning"
+
+	# Per fdo.bmo.md §"Authorization of Provisioning Messages", the wire key
+	# for a signed image-begin is still "image-begin" (COSE_Sign1 in the body).
+	# Successful transfer below implies the device verified the signature;
+	# a signature failure would surface as BMO error code 15.
+	stop_server
+
+	if [ ! -f "$RECEIVED_FILE" ]; then
+		log_error "Received file not found: $RECEIVED_FILE (signed provisioning may have been rejected)"
+		rm -f "$BMO_FILE"
+		return 1
+	fi
+
+	RECEIVED_HASH=$(sha256sum "$RECEIVED_FILE" | awk '{print $1}')
+	if [ "$ORIGINAL_HASH" = "$RECEIVED_HASH" ]; then
+		log_success "Signed BMO transfer integrity verified"
+	else
+		log_error "Hash mismatch after signed BMO transfer"
+		rm -f "$BMO_FILE" "$RECEIVED_FILE"
+		return 1
+	fi
+
+	rm -f "$BMO_FILE" "$RECEIVED_FILE" bmo-*
+	log_success "BMO FSIM signed-provisioning test PASSED"
+}
+
 # Test: BMO FSIM with EFI application type
 # This test verifies BMO can handle EFI application transfers
 test_bmo_efi() {
@@ -2241,6 +2291,7 @@ test_all() {
 	test_wifi_fdo200 || failed=1
 	test_wifi_single_sided || failed=1
 	test_bmo || failed=1
+	test_bmo_signed || failed=1
 	test_bmo_efi || failed=1
 	test_bmo_nak || failed=1
 	test_bmo_multi_asset || failed=1
@@ -2354,6 +2405,9 @@ main() {
 		;;
 	bmo)
 		test_bmo
+		;;
+	bmo-signed)
+		test_bmo_signed
 		;;
 	bmo-efi)
 		test_bmo_efi
