@@ -156,6 +156,12 @@ func TO2v200(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol
 		return nil, nil
 	}
 
+	// If IgnoreCredentialReplacement is set, discard the replacement credentials
+	// and behave as if credential reuse occurred (return nil).
+	if c.IgnoreCredentialReplacement {
+		return nil, nil
+	}
+
 	// Hash new owner public key and return replacement credential
 	replacementKeyDigest := alg.HashFunc().New()
 	if err := cbor.NewEncoder(replacementKeyDigest).Encode(replacementOVH.ManufacturerKey); err != nil {
@@ -468,6 +474,7 @@ func verifyOwner20(ctx context.Context, transport Transport, to1d *cose.Sign1[pr
 		MfgPubKeyHash:      c.Cred.PublicKeyHash,
 		OwnerPubToValidate: ownerKeyForValidation,
 		To1d:               to1d,
+		Version:            protocol.VersionFromContext(ctx),
 	}); err != nil {
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
 		return err

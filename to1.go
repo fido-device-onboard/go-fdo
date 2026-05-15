@@ -55,12 +55,6 @@ func TO1(ctx context.Context, transport Transport, cred DeviceCredential, key cr
 	return blob, nil
 }
 
-type helloRV struct {
-	GUID     protocol.GUID
-	ASigInfo sigInfo
-	CapabilityFlags
-}
-
 // HelloRV(30) -> HelloRVAck(31)
 func helloRv(ctx context.Context, transport Transport, cred DeviceCredential, key crypto.Signer, opts crypto.SignerOpts) (protocol.Nonce, error) {
 	var usePSS bool
@@ -72,15 +66,31 @@ func helloRv(ctx context.Context, transport Transport, cred DeviceCredential, ke
 		return protocol.Nonce{}, fmt.Errorf("error determining eASigInfo for TO1.HelloRV: %w", err)
 	}
 
-	// Define request structure
-	msg := helloRV{
-		GUID:            cred.GUID,
-		ASigInfo:        *eASigInfo,
-		CapabilityFlags: GlobalCapabilityFlags,
-	}
+	// FDO 2.0 includes CapabilityFlags, FDO 1.1 does not
+	version := protocol.VersionFromContext(ctx)
 
-	// Make request
-	typ, resp, err := transport.Send(ctx, protocol.TO1HelloRVMsgType, msg, nil)
+	var typ uint8
+	var resp io.ReadCloser
+
+	if version == protocol.Version200 {
+		var msg struct {
+			GUID     protocol.GUID
+			ASigInfo sigInfo
+			CapabilityFlags
+		}
+		msg.GUID = cred.GUID
+		msg.ASigInfo = *eASigInfo
+		msg.CapabilityFlags = GlobalCapabilityFlags
+		typ, resp, err = transport.Send(ctx, protocol.TO1HelloRVMsgType, msg, nil)
+	} else {
+		var msg struct {
+			GUID     protocol.GUID
+			ASigInfo sigInfo
+		}
+		msg.GUID = cred.GUID
+		msg.ASigInfo = *eASigInfo
+		typ, resp, err = transport.Send(ctx, protocol.TO1HelloRVMsgType, msg, nil)
+	}
 	if err != nil {
 		return protocol.Nonce{}, fmt.Errorf("TO1.HelloRV: %w", err)
 	}
@@ -90,7 +100,7 @@ func helloRv(ctx context.Context, transport Transport, cred DeviceCredential, ke
 	switch typ {
 	case protocol.TO1HelloRVAckMsgType:
 		captureMsgType(ctx, typ)
-		var ack rvAck
+		var ack rvAckBase
 		if err := cbor.NewDecoder(resp).Decode(&ack); err != nil {
 			captureErr(ctx, protocol.MessageBodyErrCode, "")
 			return protocol.Nonce{}, fmt.Errorf("error parsing TO1.HelloRVAck contents: %w", err)
@@ -110,15 +120,22 @@ func helloRv(ctx context.Context, transport Transport, cred DeviceCredential, ke
 	}
 }
 
-type rvAck struct {
+// helloRVBase contains the fields common to all FDO versions for TO1.HelloRV
+type helloRVBase struct {
+	GUID     protocol.GUID
+	ASigInfo sigInfo
+}
+
+// rvAckBase contains the fields common to all FDO versions for TO1.HelloRVAck
+type rvAckBase struct {
 	NonceTO1Proof protocol.Nonce
 	BSigInfo      sigInfo
-	CapabilityFlags
 }
 
 // HelloRV(30) -> HelloRVAck(31)
-func (s *TO1Server) helloRVAck(ctx context.Context, msg io.Reader) (*rvAck, error) {
-	var hello helloRV
+func (s *TO1Server) helloRVAck(ctx context.Context, msg io.Reader) (any, error) {
+	// Decode only the base fields (GUID + ASigInfo) which are common to all versions
+	var hello helloRVBase
 	if err := cbor.NewDecoder(msg).Decode(&hello); err != nil {
 		return nil, fmt.Errorf("error decoding TO1.HelloRV request: %w", err)
 	}
@@ -140,10 +157,23 @@ func (s *TO1Server) helloRVAck(ctx context.Context, msg io.Reader) (*rvAck, erro
 		return nil, fmt.Errorf("error storing nonce for TO1.ProveToRV: %w", err)
 	}
 
-	return &rvAck{
-		NonceTO1Proof:   nonce,
-		BSigInfo:        hello.ASigInfo,
-		CapabilityFlags: GlobalCapabilityFlags,
+	// FDO 2.0 includes CapabilityFlags, FDO 1.1 does not
+	version := protocol.VersionFromContext(ctx)
+	if version == protocol.Version200 {
+		return &struct {
+			NonceTO1Proof protocol.Nonce
+			BSigInfo      sigInfo
+			CapabilityFlags
+		}{
+			NonceTO1Proof:   nonce,
+			BSigInfo:        hello.ASigInfo,
+			CapabilityFlags: GlobalCapabilityFlags,
+		}, nil
+	}
+
+	return &rvAckBase{
+		NonceTO1Proof: nonce,
+		BSigInfo:      hello.ASigInfo,
 	}, nil
 }
 
@@ -153,7 +183,12 @@ func proveToRv(ctx context.Context, transport Transport, cred DeviceCredential, 
 	token := cose.Sign1[eatoken, []byte]{
 		Payload: cbor.NewByteWrap(newEAT(cred.GUID, nonce, nil, nil)),
 	}
-	if err := token.Sign(key, nil, cose.AADProveToRV, opts); err != nil {
+	// FDO 2.0 uses domain-specific AAD; FDO 1.01 uses empty AAD
+	var aad []byte
+	if protocol.VersionFromContext(ctx) == protocol.Version200 {
+		aad = cose.AADProveToRV
+	}
+	if err := token.Sign(key, nil, aad, opts); err != nil {
 		return nil, fmt.Errorf("error signing EAT payload for TO1.ProveToRV: %w", err)
 	}
 	msg := token.Tag()
