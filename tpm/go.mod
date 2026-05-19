@@ -1,6 +1,6 @@
 module github.com/fido-device-onboard/go-fdo/tpm
 
-go 1.25.0
+go 1.26
 
 replace github.com/fido-device-onboard/go-fdo => ../
 

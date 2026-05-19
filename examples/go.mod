@@ -1,6 +1,6 @@
 module github.com/fido-device-onboard/go-fdo/examples
 
-go 1.25.0
+go 1.26
 
 replace github.com/fido-device-onboard/go-fdo/sqlite => ../sqlite
 
@@ -24,11 +24,11 @@ require (
 )
 
 require (
-	github.com/ncruces/go-sqlite3 v0.30.4 // indirect
+	github.com/ncruces/go-sqlite3 v0.30.5 // indirect
 	github.com/ncruces/julianday v1.0.0 // indirect
 	github.com/neilotoole/jsoncolor v0.7.1 // indirect
 	github.com/tetratelabs/wazero v1.11.0 // indirect
-	golang.org/x/crypto v0.46.0 // indirect
-	golang.org/x/sys v0.39.0 // indirect
-	golang.org/x/term v0.38.0 // indirect
+	golang.org/x/crypto v0.47.0 // indirect
+	golang.org/x/sys v0.40.0 // indirect
+	golang.org/x/term v0.39.0 // indirect
 )
