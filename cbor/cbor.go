@@ -405,22 +405,22 @@ func (d *Decoder) decodeVal(rv reflect.Value) error {
 	// Dispatch decoding by major type
 	switch highThreeBits {
 	case unsignedIntMajorType:
-		allocateInterface(rv, reflect.TypeOf(int64(0)))
+		allocateInterface(rv, reflect.TypeFor[int64]())
 		return d.decodePositive(rv, additional)
 	case negativeIntMajorType:
-		allocateInterface(rv, reflect.TypeOf(int64(0)))
+		allocateInterface(rv, reflect.TypeFor[int64]())
 		return d.decodeNegative(rv, additional)
 	case byteStringMajorType:
-		allocateInterface(rv, reflect.TypeOf([]byte(nil)))
+		allocateInterface(rv, reflect.TypeFor[[]byte]())
 		return d.decodeByteSlice(rv, additional)
 	case textStringMajorType:
-		allocateInterface(rv, reflect.TypeOf(""))
+		allocateInterface(rv, reflect.TypeFor[string]())
 		return d.decodeByteSlice(rv, additional)
 	case arrayMajorType:
-		allocateInterface(rv, reflect.TypeOf([]any(nil)))
+		allocateInterface(rv, reflect.TypeFor[[]any]())
 		return d.decodeArray(rv, additional)
 	case mapMajorType:
-		allocateInterface(rv, reflect.TypeOf(map[any]any(nil)))
+		allocateInterface(rv, reflect.TypeFor[map[any]any]())
 		return d.decodeMap(rv, additional)
 	case tagMajorType:
 		if rv.Kind() == reflect.Interface && rv.IsNil() {
@@ -438,7 +438,7 @@ func (d *Decoder) decodeVal(rv reflect.Value) error {
 			ErrUnsupportedType{typeName: rv.Type().String()})
 	case simpleMajorType:
 		if lowFiveBits == falseVal || lowFiveBits == trueVal {
-			allocateInterface(rv, reflect.TypeOf(false))
+			allocateInterface(rv, reflect.TypeFor[bool]())
 		}
 		return d.decodeSimple(rv, lowFiveBits, additional)
 	}
@@ -680,7 +680,7 @@ func (d *Decoder) decodeArrayToStruct(rv reflect.Value, additional []byte) error
 
 func flatN(sf reflect.StructField) (int, bool) {
 	_, options, _ := strings.Cut(sf.Tag.Get("cbor"), ",")
-	for _, option := range strings.Split(options, ",") {
+	for option := range strings.SplitSeq(options, ",") {
 		if strings.HasPrefix(option, "flat") {
 			if option == "flat" {
 				return 1, true
@@ -874,7 +874,7 @@ func (d *Decoder) decodeSimple(rv reflect.Value, lowFiveBits byte, additional []
 		return ErrUnsupportedType{typeName: "decoding float"}
 	default:
 		if lowFiveBits <= oneByteAdditional {
-			allocateInterface(rv, reflect.TypeOf(int64(0)))
+			allocateInterface(rv, reflect.TypeFor[int64]())
 			return d.decodePositive(rv, additional)
 		}
 		return ErrUnsupportedType{typeName: "decoding reserved simple value"}
@@ -1017,7 +1017,7 @@ func (e *Encoder) Encode(v any) error {
 
 func holdsNilPtr(v any) bool {
 	switch rv := reflect.ValueOf(v); rv.Kind() {
-	case reflect.Ptr, reflect.Map, reflect.Array, reflect.Chan, reflect.Slice:
+	case reflect.Pointer, reflect.Map, reflect.Array, reflect.Chan, reflect.Slice:
 		return rv.IsNil()
 	default:
 		return false
@@ -1350,7 +1350,7 @@ func collectFieldWeights(parents []int, i, upper int, field func(int) reflect.St
 
 	// Check if omittable
 	omittable := false
-	for _, option := range strings.Split(options, ",") {
+	for option := range strings.SplitSeq(options, ",") {
 		switch option {
 		case "omitempty":
 			omittable = true

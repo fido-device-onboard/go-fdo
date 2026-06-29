@@ -128,7 +128,7 @@ func (c *Command) execute(ctx context.Context) error {
 	}
 
 	// Start command
-	ctx, _ = context.WithTimeout(ctx, timeout)     //nolint:govet // This context is only used for the command
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	c.cmd = exec.CommandContext(ctx, name, arg...) //nolint:gosec // This is dangerous by intentional design as the owner service is meant to be privileged
 	if c.stdout {
 		var buf safeBuffer
@@ -144,10 +144,12 @@ func (c *Command) execute(ctx context.Context) error {
 		slog.Debug("fdo.command", "args", c.cmd.Args)
 	}
 	if err := c.cmd.Start(); err != nil {
+		cancel()
 		return fmt.Errorf("error starting command %v: %w", c.cmd.Args, err)
 	}
 	c.errc = make(chan error, 1)
 	go func() {
+		defer cancel()
 		defer close(c.errc)
 		if err := c.cmd.Wait(); err != nil {
 			c.errc <- err

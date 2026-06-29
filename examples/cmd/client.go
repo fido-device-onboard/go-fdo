@@ -65,11 +65,18 @@ func (files fsVar) String() string {
 	if len(files) == 0 {
 		return "[]"
 	}
-	paths := "["
+	var paths strings.Builder
+	paths.WriteString("[")
+	first := true
 	for path := range files {
-		paths += path + ","
+		if !first {
+			paths.WriteString(",")
+		}
+		paths.WriteString(path)
+		first = false
 	}
-	return paths[:len(paths)-1] + "]"
+	paths.WriteString("]")
+	return paths.String()
 }
 
 func (files fsVar) Set(paths string) error {

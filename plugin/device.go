@@ -39,7 +39,7 @@ func (m *DeviceModule) Receive(ctx context.Context, messageName string, messageB
 	name := m.name + ":" + messageName
 
 	// Decode CBOR and encode to plugin protocol
-	var val interface{}
+	var val any
 	if err := cbor.NewDecoder(messageBody).Decode(&val); err != nil {
 		return fmt.Errorf("error decoding message %q body: %w", name, err)
 	}

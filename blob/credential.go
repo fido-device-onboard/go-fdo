@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"strings"
 
 	"github.com/fido-device-onboard/go-fdo"
 )
@@ -33,7 +34,8 @@ func (dc DeviceCredential) String() string {
 	if dc.PrivateKey.IsValid() {
 		key = dc.PrivateKey.Signer
 	}
-	s := fmt.Sprintf(`blobcred[
+	var s strings.Builder
+	fmt.Fprintf(&s, `blobcred[
   Active        %t
   Version       %d
   DeviceInfo   %q
@@ -47,12 +49,12 @@ func (dc DeviceCredential) String() string {
   RvInfo
 `, dc.Active, dc.Version, dc.DeviceInfo, dc.GUID, dc.PublicKeyHash.Algorithm, dc.PublicKeyHash.Value, dc.HmacSecret, key, key)
 	for _, directive := range dc.RvInfo {
-		s += "    >\n"
+		s.WriteString("    >\n")
 		for _, instruction := range directive {
-			s += fmt.Sprintf("      %d = %x\n", instruction.Variable, instruction.Value)
+			fmt.Fprintf(&s, "      %d = %x\n", instruction.Variable, instruction.Value)
 		}
 	}
-	return s + "]"
+	return s.String() + "]"
 }
 
 // HMACs returns hmac hashes for SHA256 and SHA384.
