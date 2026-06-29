@@ -81,7 +81,7 @@ func (c command) Valid() bool {
 	}
 }
 
-func (c command) ValidParamType(param interface{}) bool {
+func (c command) ValidParamType(param any) bool {
 	switch c {
 	case cModuleName, cModuleVersion:
 		_, isString := param.(string)
@@ -106,7 +106,7 @@ func (c command) ValidParamType(param interface{}) bool {
 	panic("programming error - invalid pluginCommand")
 }
 
-func (c command) ParseParam(b []byte) (interface{}, error) { //nolint:gocyclo
+func (c command) ParseParam(b []byte) (any, error) { //nolint:gocyclo
 	switch c {
 	case cModuleName, cModuleVersion:
 		if len(b) == 0 {
@@ -159,7 +159,7 @@ type protocol struct {
 	peeked bool
 }
 
-func (p *protocol) Send(c command, param interface{}) error {
+func (p *protocol) Send(c command, param any) error {
 	// Validate and write command character
 	if !c.Valid() {
 		return fmt.Errorf("invalid command: %q", c)
@@ -233,7 +233,7 @@ func (p *protocol) Peek() (command, []byte, error) {
 	return c, rest, nil
 }
 
-func (p *protocol) Recv() (command, interface{}, error) {
+func (p *protocol) Recv() (command, any, error) {
 	c, line, err := p.Peek()
 	if err != nil {
 		return invalidPluginCommand, nil, err
@@ -250,7 +250,7 @@ func (p *protocol) Recv() (command, interface{}, error) {
 
 var errEndCollection = errors.New("unexpected end of collection command")
 
-func (p *protocol) DecodeValue() (interface{}, error) {
+func (p *protocol) DecodeValue() (any, error) {
 	c, param, err := p.Recv()
 	if err != nil {
 		return nil, err
@@ -271,7 +271,7 @@ func (p *protocol) DecodeValue() (interface{}, error) {
 		}, nil
 
 	case dArray:
-		arr := []interface{}{}
+		arr := []any{}
 		for {
 			next, err := p.DecodeValue()
 			if errors.Is(err, errEndCollection) {
@@ -284,7 +284,7 @@ func (p *protocol) DecodeValue() (interface{}, error) {
 		}
 
 	case dMap:
-		m := map[interface{}]interface{}{}
+		m := map[any]any{}
 		for {
 			key, err := p.DecodeValue()
 			if errors.Is(err, errEndCollection) {
@@ -309,7 +309,7 @@ func (p *protocol) DecodeValue() (interface{}, error) {
 	}
 }
 
-func (p *protocol) EncodeValue(v interface{}) error {
+func (p *protocol) EncodeValue(v any) error {
 	if v == nil {
 		return p.Send(dNull, nil)
 	}
@@ -346,7 +346,7 @@ func (p *protocol) EncodeValue(v interface{}) error {
 	panic(fmt.Sprintf("invalid type for encoding to plugin protocol value: %T", v))
 }
 
-func (p *protocol) encodeArray(v interface{}) error {
+func (p *protocol) encodeArray(v any) error {
 	if err := p.Send(dArray, nil); err != nil {
 		return fmt.Errorf("error sending start of array to plugin: %w", err)
 	}
@@ -365,7 +365,7 @@ func (p *protocol) encodeArray(v interface{}) error {
 	return nil
 }
 
-func (p *protocol) encodeMap(v interface{}) error {
+func (p *protocol) encodeMap(v any) error {
 	if err := p.Send(dMap, nil); err != nil {
 		return fmt.Errorf("error sending start of map to plugin: %w", err)
 	}

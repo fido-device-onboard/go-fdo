@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
@@ -90,15 +91,19 @@ type To1d struct {
 }
 
 func (to1d To1d) String() string {
-	s := "to1d[\n"
-	s += "  RV:\n"
+	var s strings.Builder
+	s.WriteString("to1d[\n  RV:\n")
 	for _, addr := range to1d.RV {
-		s += "    - " + addr.String() + "\n"
+		s.WriteString("    - ")
+		s.WriteString(addr.String())
+		s.WriteString("\n")
 	}
-	s += "  To0dHash:\n"
-	s += "    Algorithm: " + to1d.To0dHash.Algorithm.String() + "\n"
-	s += "    Value: " + hex.EncodeToString(to1d.To0dHash.Value) + "\n"
-	return s + "]"
+	s.WriteString("  To0dHash:\n    Algorithm: ")
+	s.WriteString(to1d.To0dHash.Algorithm.String())
+	s.WriteString("\n    Value: ")
+	s.WriteString(hex.EncodeToString(to1d.To0dHash.Value))
+	s.WriteString("\n]")
+	return s.String()
 }
 
 // RvDirective is a fully parsed group of instructions.
