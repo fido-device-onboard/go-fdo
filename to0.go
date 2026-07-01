@@ -209,7 +209,12 @@ func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid pro
 		}
 		header.Unprotected[to2DelegateClaim] = chain
 
-		if err := to1d.Sign(delegateKey, nil, cose.AADOwnerSign, delegateOpts); err != nil {
+		// FDO 2.0 uses domain-specific AAD; FDO 1.01 uses empty AAD
+		var aad []byte
+		if ov.Version >= uint16(protocol.Version200) {
+			aad = cose.AADOwnerSign
+		}
+		if err := to1d.Sign(delegateKey, nil, aad, delegateOpts); err != nil {
 			return 0, fmt.Errorf("error signing To1d payload for w/ Delegate TO0.OwnerSign: %w", err)
 		}
 
@@ -222,7 +227,7 @@ func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid pro
 		if err != nil {
 			return 0, fmt.Errorf("Error getting public key from delegate chain: %v", err)
 		}
-		ok, err := to1d.Verify(p, nil, cose.AADOwnerSign)
+		ok, err := to1d.Verify(p, nil, aad)
 		if err != nil {
 			return 0, fmt.Errorf("To1d verify failed: %w", err)
 		}
@@ -230,7 +235,12 @@ func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid pro
 			return 0, fmt.Errorf("To1d verify failed")
 		}
 	} else {
-		if err := to1d.Sign(ownerKey, nil, cose.AADOwnerSign, opts); err != nil {
+		// FDO 2.0 uses domain-specific AAD; FDO 1.01 uses empty AAD
+		var aad []byte
+		if ov.Version >= uint16(protocol.Version200) {
+			aad = cose.AADOwnerSign
+		}
+		if err := to1d.Sign(ownerKey, nil, aad, opts); err != nil {
 			return 0, fmt.Errorf("error signing To1d payload for TO0.OwnerSign: %w", err)
 		}
 	}

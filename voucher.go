@@ -733,7 +733,7 @@ func ExtendVoucher[T protocol.PublicKeyOrChain](v *Voucher, owner crypto.Signer,
 		HeaderHash:   headerHash,
 		Extra:        cbor.NewBstr(extra),
 		PublicKey:    *nextOwnerPublicKey,
-	})
+	}, v.Version)
 	if err != nil {
 		return nil, err
 	}
@@ -785,7 +785,7 @@ func hashSizeForPubKey(pubKey crypto.PublicKey) (int, error) {
 	}
 }
 
-func newSignedEntry(owner crypto.Signer, usePSS bool, payload VoucherEntryPayload) (*cose.Sign1Tag[VoucherEntryPayload, []byte], error) {
+func newSignedEntry(owner crypto.Signer, usePSS bool, payload VoucherEntryPayload, version uint16) (*cose.Sign1Tag[VoucherEntryPayload, []byte], error) {
 	var entry cose.Sign1Tag[VoucherEntryPayload, []byte]
 	entry.Payload = cbor.NewByteWrap(payload)
 
@@ -794,7 +794,12 @@ func newSignedEntry(owner crypto.Signer, usePSS bool, payload VoucherEntryPayloa
 		return nil, err
 	}
 
-	if err := entry.Sign(owner, nil, cose.AADOVEntry, signOpts); err != nil {
+	// FDO 2.0 uses domain-specific AAD; FDO 1.01 uses empty AAD
+	var aad []byte
+	if version >= uint16(protocol.Version200) {
+		aad = cose.AADOVEntry
+	}
+	if err := entry.Sign(owner, nil, aad, signOpts); err != nil {
 		return nil, fmt.Errorf("error signing voucher entry payload: %w", err)
 	}
 

@@ -119,7 +119,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if token != "" {
 		token = strings.TrimPrefix(token, bearerPrefix)
-		ctx = h.Tokens.TokenContext(r.Context(), token)
+		ctx = h.Tokens.TokenContext(ctx, token)
 	}
 
 	// Immediately respond to an error

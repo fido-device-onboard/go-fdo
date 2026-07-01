@@ -194,11 +194,11 @@ test_basic() {
 	start_server ""
 
 	log_step "Running DI (Device Initialization)"
-	run_cmd go run ./cmd client -di "$SERVER_URL"
+	run_cmd go run ./cmd client -di "$SERVER_URL" || return 1
 	log_success "DI completed"
 
 	log_step "Running TO1/TO2 (Transfer Ownership)"
-	run_cmd go run ./cmd client
+	run_cmd go run ./cmd client || return 1
 	log_success "TO1/TO2 completed"
 
 	stop_server
@@ -214,15 +214,15 @@ test_basic_reuse() {
 	start_server "-reuse-cred"
 
 	log_step "Running DI"
-	run_cmd go run ./cmd client -di "$SERVER_URL"
+	run_cmd go run ./cmd client -di "$SERVER_URL" || return 1
 	log_success "DI completed"
 
 	log_step "Running TO1/TO2 (first time)"
-	run_cmd go run ./cmd client
+	run_cmd go run ./cmd client || return 1
 	log_success "TO1/TO2 completed (first)"
 
 	log_step "Running TO1/TO2 (second time - credential reuse)"
-	run_cmd go run ./cmd client
+	run_cmd go run ./cmd client || return 1
 	log_success "TO1/TO2 completed (second - reuse)"
 
 	stop_server
@@ -248,11 +248,11 @@ test_kex() {
 	start_server ""
 
 	log_step "Running DI with RSA2048 key"
-	run_cmd go run ./cmd client -di "$SERVER_URL" -di-key rsa2048
+	run_cmd go run ./cmd client -di "$SERVER_URL" -di-key rsa2048 || return 1
 	log_success "DI completed with RSA2048"
 
 	log_step "Running TO1/TO2 with ASYMKEX2048"
-	run_cmd go run ./cmd client -kex ASYMKEX2048
+	run_cmd go run ./cmd client -kex ASYMKEX2048 || return 1
 	log_success "TO1/TO2 completed with ASYMKEX2048"
 
 	stop_server
@@ -268,15 +268,15 @@ test_fdo200() {
 	start_server "-reuse-cred"
 
 	log_step "Running DI"
-	run_cmd go run ./cmd client -di "$SERVER_URL"
+	run_cmd go run ./cmd client -di "$SERVER_URL" || return 1
 	log_success "DI completed"
 
 	log_step "Running TO1/TO2 with FDO 2.0"
-	run_cmd go run ./cmd client -fdo-version 200
+	run_cmd go run ./cmd client -fdo-version 200 || return 1
 	log_success "TO1/TO2 completed with FDO 2.0"
 
 	log_step "Running TO1/TO2 again with FDO 2.0 (credential reuse)"
-	run_cmd go run ./cmd client -fdo-version 200
+	run_cmd go run ./cmd client -fdo-version 200 || return 1
 	log_success "TO1/TO2 completed with FDO 2.0 (reuse)"
 
 	stop_server
@@ -295,24 +295,24 @@ test_delegate() {
 	stop_server
 
 	log_step "Creating delegate chain"
-	run_cmd go run ./cmd delegate -db "../$DB_FILE" create myDelegate onboard,redirect SECP384R1 ec384 ec384
+	run_cmd go run ./cmd delegate -db "../$DB_FILE" create myDelegate onboard,redirect SECP384R1 ec384 ec384 || return 1
 	log_success "Delegate chain created"
 
 	log_step "Listing delegate chains"
-	run_cmd go run ./cmd delegate -db "../$DB_FILE" list
+	run_cmd go run ./cmd delegate -db "../$DB_FILE" list || return 1
 
 	log_step "Printing delegate chain"
-	run_cmd go run ./cmd delegate -db "../$DB_FILE" print myDelegate
+	run_cmd go run ./cmd delegate -db "../$DB_FILE" print myDelegate || return 1
 
 	# Start server with delegate (self-registration handles RV blob)
 	start_server "-owner-certs -onboardDelegate myDelegate"
 
 	log_step "Running DI"
-	run_cmd go run ./cmd client -di "$SERVER_URL"
+	run_cmd go run ./cmd client -di "$SERVER_URL" || return 1
 	log_success "DI completed"
 
 	log_step "Running TO1/TO2 with delegate"
-	run_cmd go run ./cmd client
+	run_cmd go run ./cmd client || return 1
 	log_success "TO1/TO2 completed with delegate"
 
 	stop_server
@@ -330,18 +330,18 @@ test_delegate_fdo200() {
 	stop_server
 
 	log_step "Creating delegate chain"
-	run_cmd go run ./cmd delegate -db "../$DB_FILE" create myDelegate onboard,redirect SECP384R1 ec384 ec384
+	run_cmd go run ./cmd delegate -db "../$DB_FILE" create myDelegate onboard,redirect SECP384R1 ec384 ec384 || return 1
 	log_success "Delegate chain created"
 
 	# Start server with delegate (self-registration handles RV blob)
 	start_server "-owner-certs -onboardDelegate myDelegate"
 
 	log_step "Running DI"
-	run_cmd go run ./cmd client -di "$SERVER_URL"
+	run_cmd go run ./cmd client -di "$SERVER_URL" || return 1
 	log_success "DI completed"
 
 	log_step "Running TO1/TO2 with FDO 2.0 and delegate"
-	run_cmd go run ./cmd client -fdo-version 200
+	run_cmd go run ./cmd client -fdo-version 200 || return 1
 	log_success "TO1/TO2 completed with FDO 2.0 and delegate"
 
 	stop_server
@@ -361,7 +361,7 @@ test_delegate_csr() {
 
 	# Note: run_cmd does "cd examples" so file paths need "../" prefix for EPHEMERAL_DIR
 	log_step "Generating CSR (requester side, no DB needed)"
-	run_cmd go run ./cmd delegate generate-csr testService ec384 -key-out "../$EPHEMERAL_DIR/delegate-csr.key.pem" >"$EPHEMERAL_DIR/delegate-csr.csr.pem"
+	run_cmd go run ./cmd delegate generate-csr testService ec384 -key-out "../$EPHEMERAL_DIR/delegate-csr.key.pem" >"$EPHEMERAL_DIR/delegate-csr.csr.pem" || return 1
 	log_success "CSR generated"
 
 	# Verify CSR file exists and is non-empty
@@ -376,7 +376,7 @@ test_delegate_csr() {
 	log_success "CSR and key files verified"
 
 	log_step "Signing CSR with voucher-claim permission (owner side)"
-	run_cmd go run ./cmd delegate -db "../$DB_FILE" sign-csr "../$EPHEMERAL_DIR/delegate-csr.csr.pem" csrDelegate voucher-claim SECP384R1 >"$EPHEMERAL_DIR/delegate-csr.cert.pem"
+	run_cmd go run ./cmd delegate -db "../$DB_FILE" sign-csr "../$EPHEMERAL_DIR/delegate-csr.csr.pem" csrDelegate voucher-claim SECP384R1 >"$EPHEMERAL_DIR/delegate-csr.cert.pem" || return 1
 	log_success "CSR signed"
 
 	# Verify signed cert file exists and is non-empty
@@ -387,19 +387,19 @@ test_delegate_csr() {
 	log_success "Signed cert file verified"
 
 	log_step "Importing signed cert + private key (requester side)"
-	run_cmd go run ./cmd delegate -db "../$DB_FILE" import-cert importedDelegate "../$EPHEMERAL_DIR/delegate-csr.cert.pem" "../$EPHEMERAL_DIR/delegate-csr.key.pem"
+	run_cmd go run ./cmd delegate -db "../$DB_FILE" import-cert importedDelegate "../$EPHEMERAL_DIR/delegate-csr.cert.pem" "../$EPHEMERAL_DIR/delegate-csr.key.pem" || return 1
 	log_success "Cert imported"
 
 	log_step "Listing delegate chains (should show both csrDelegate and importedDelegate)"
-	run_cmd go run ./cmd delegate -db "../$DB_FILE" list
+	run_cmd go run ./cmd delegate -db "../$DB_FILE" list || return 1
 	log_success "Delegate chains listed"
 
 	log_step "Printing imported delegate chain"
-	run_cmd go run ./cmd delegate -db "../$DB_FILE" print importedDelegate
+	run_cmd go run ./cmd delegate -db "../$DB_FILE" print importedDelegate || return 1
 	log_success "Delegate chain printed"
 
 	log_step "Signing CSR with onboard permission (no voucher-claim)"
-	run_cmd go run ./cmd delegate -db "../$DB_FILE" sign-csr "../$EPHEMERAL_DIR/delegate-csr.csr.pem" onboardOnly onboard SECP384R1 >"$EPHEMERAL_DIR/delegate-csr.onboard.pem"
+	run_cmd go run ./cmd delegate -db "../$DB_FILE" sign-csr "../$EPHEMERAL_DIR/delegate-csr.csr.pem" onboardOnly onboard SECP384R1 >"$EPHEMERAL_DIR/delegate-csr.onboard.pem" || return 1
 	log_success "CSR signed with onboard-only permission"
 
 	log_success "Delegate CSR Workflow test PASSED"
@@ -415,7 +415,7 @@ test_attested_payload() {
 	start_server "-owner-certs"
 
 	log_step "Running DI"
-	run_cmd go run ./cmd client -di "$SERVER_URL"
+	run_cmd go run ./cmd client -di "$SERVER_URL" || return 1
 	log_success "DI completed"
 
 	stop_server
@@ -429,35 +429,35 @@ test_attested_payload() {
 	log_success "Voucher exported"
 
 	log_step "Creating plaintext attested payload"
-	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../$EPHEMERAL_DIR/voucher.pem -payload "Hello from attested payload test" -output ../$EPHEMERAL_DIR/payload.fdo
+	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../$EPHEMERAL_DIR/voucher.pem -payload "Hello from attested payload test" -output ../$EPHEMERAL_DIR/payload.fdo || return 1
 	log_success "Attested payload created"
 
 	log_step "Verifying attested payload"
-	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../$EPHEMERAL_DIR/payload.fdo
+	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../$EPHEMERAL_DIR/payload.fdo || return 1
 	log_success "Attested payload verified"
 
 	log_step "Creating attested payload with MIME type (text/x-shellscript)"
-	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../$EPHEMERAL_DIR/voucher.pem -payload '#!/bin/bash\necho "Hello from script"' -type "text/x-shellscript" -output ../$EPHEMERAL_DIR/payload-typed.fdo
+	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../$EPHEMERAL_DIR/voucher.pem -payload '#!/bin/bash\necho "Hello from script"' -type "text/x-shellscript" -output ../$EPHEMERAL_DIR/payload-typed.fdo || return 1
 	log_success "Typed attested payload created"
 
 	log_step "Verifying typed attested payload"
-	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../$EPHEMERAL_DIR/payload-typed.fdo
+	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../$EPHEMERAL_DIR/payload-typed.fdo || return 1
 	log_success "Typed attested payload verified"
 
 	log_step "Creating attested payload with validity (id and generation)"
-	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../$EPHEMERAL_DIR/voucher.pem -payload "Config v1" -id "network-config" -gen 1 -output ../$EPHEMERAL_DIR/payload-validity.fdo
+	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../$EPHEMERAL_DIR/voucher.pem -payload "Config v1" -id "network-config" -gen 1 -output ../$EPHEMERAL_DIR/payload-validity.fdo || return 1
 	log_success "Attested payload with validity created"
 
 	log_step "Verifying attested payload with validity"
-	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../$EPHEMERAL_DIR/payload-validity.fdo
+	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../$EPHEMERAL_DIR/payload-validity.fdo || return 1
 	log_success "Attested payload with validity verified"
 
 	log_step "Creating attested payload with expiration (future date)"
-	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../$EPHEMERAL_DIR/voucher.pem -payload "Time-limited command" -type "text/x-shellscript" -expires "2030-12-31T23:59:59Z" -output ../$EPHEMERAL_DIR/payload-expires.fdo
+	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../$EPHEMERAL_DIR/voucher.pem -payload "Time-limited command" -type "text/x-shellscript" -expires "2030-12-31T23:59:59Z" -output ../$EPHEMERAL_DIR/payload-expires.fdo || return 1
 	log_success "Attested payload with expiration created"
 
 	log_step "Verifying attested payload with expiration"
-	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../$EPHEMERAL_DIR/payload-expires.fdo
+	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../$EPHEMERAL_DIR/payload-expires.fdo || return 1
 	log_success "Attested payload with expiration verified"
 
 	rm -f $EPHEMERAL_DIR/voucher.pem $EPHEMERAL_DIR/payload.fdo $EPHEMERAL_DIR/payload-typed.fdo $EPHEMERAL_DIR/payload-validity.fdo $EPHEMERAL_DIR/payload-expires.fdo
@@ -474,7 +474,7 @@ test_attested_payload_encrypted() {
 	start_server "-owner-certs"
 
 	log_step "Running DI with RSA2048 key (required for encryption)"
-	run_cmd go run ./cmd client -di "$SERVER_URL" -di-key rsa2048
+	run_cmd go run ./cmd client -di "$SERVER_URL" -di-key rsa2048 || return 1
 	log_success "DI completed with RSA key"
 
 	stop_server
@@ -488,19 +488,19 @@ test_attested_payload_encrypted() {
 	log_success "Voucher exported"
 
 	log_step "Creating encrypted attested payload"
-	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../$EPHEMERAL_DIR/voucher.pem -payload "Secret encrypted message" -encrypt -output ../$EPHEMERAL_DIR/encrypted.fdo
+	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../$EPHEMERAL_DIR/voucher.pem -payload "Secret encrypted message" -encrypt -output ../$EPHEMERAL_DIR/encrypted.fdo || return 1
 	log_success "Encrypted attested payload created"
 
 	log_step "Verifying and decrypting attested payload"
-	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../$EPHEMERAL_DIR/encrypted.fdo
+	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../$EPHEMERAL_DIR/encrypted.fdo || return 1
 	log_success "Encrypted attested payload verified and decrypted"
 
 	log_step "Creating encrypted attested payload with MIME type (application/json)"
-	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../$EPHEMERAL_DIR/voucher.pem -payload '{"config": "secret"}' -type "application/json" -encrypt -output ../$EPHEMERAL_DIR/encrypted-typed.fdo
+	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../$EPHEMERAL_DIR/voucher.pem -payload '{"config": "secret"}' -type "application/json" -encrypt -output ../$EPHEMERAL_DIR/encrypted-typed.fdo || return 1
 	log_success "Encrypted typed attested payload created"
 
 	log_step "Verifying encrypted typed attested payload"
-	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../$EPHEMERAL_DIR/encrypted-typed.fdo
+	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../$EPHEMERAL_DIR/encrypted-typed.fdo || return 1
 	log_success "Encrypted typed attested payload verified"
 
 	rm -f $EPHEMERAL_DIR/voucher.pem $EPHEMERAL_DIR/encrypted.fdo $EPHEMERAL_DIR/encrypted-typed.fdo
@@ -517,13 +517,13 @@ test_attested_payload_delegate() {
 	start_server "-owner-certs"
 
 	log_step "Running DI"
-	run_cmd go run ./cmd client -di "$SERVER_URL"
+	run_cmd go run ./cmd client -di "$SERVER_URL" || return 1
 	log_success "DI completed"
 
 	stop_server
 
 	log_step "Creating delegate chain with provision permission"
-	run_cmd go run ./cmd delegate -db "../$DB_FILE" create provisionDelegate provision SECP384R1 ec384
+	run_cmd go run ./cmd delegate -db "../$DB_FILE" create provisionDelegate provision SECP384R1 ec384 || return 1
 	log_success "Delegate chain created"
 
 	log_step "Exporting voucher to PEM"
@@ -535,11 +535,11 @@ test_attested_payload_delegate() {
 	log_success "Voucher exported"
 
 	log_step "Creating delegate-signed attested payload"
-	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../$EPHEMERAL_DIR/voucher.pem -payload "Delegate signed payload" -delegate provisionDelegate -output ../$EPHEMERAL_DIR/delegated.fdo
+	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../$EPHEMERAL_DIR/voucher.pem -payload "Delegate signed payload" -delegate provisionDelegate -output ../$EPHEMERAL_DIR/delegated.fdo || return 1
 	log_success "Delegate-signed attested payload created"
 
 	log_step "Verifying delegate-signed attested payload"
-	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../$EPHEMERAL_DIR/delegated.fdo
+	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../$EPHEMERAL_DIR/delegated.fdo || return 1
 	log_success "Delegate-signed attested payload verified"
 
 	rm -f $EPHEMERAL_DIR/voucher.pem $EPHEMERAL_DIR/delegated.fdo
@@ -560,7 +560,7 @@ test_attested_payload_shell() {
 	start_server "-owner-certs"
 
 	log_step "Running DI"
-	run_cmd go run ./cmd client -di "$SERVER_URL"
+	run_cmd go run ./cmd client -di "$SERVER_URL" || return 1
 	log_success "DI completed"
 
 	stop_server
@@ -611,12 +611,12 @@ test_attested_payload_shell() {
 	log_success "Shell-created attested payload assembled"
 
 	log_step "Verifying shell-created payload with Go CLI"
-	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../$EPHEMERAL_DIR/payload_shell.fdo
+	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../$EPHEMERAL_DIR/payload_shell.fdo || return 1
 	log_success "Shell-created payload verified by Go CLI"
 
 	# Test 2: Create payload with Go CLI, verify with openssl
 	log_step "Creating attested payload with Go CLI"
-	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../$EPHEMERAL_DIR/voucher.pem -payload "Hello from Go CLI" -output ../$EPHEMERAL_DIR/payload_cli.fdo
+	run_cmd go run ./cmd attestpayload create -db "../$DB_FILE" -voucher ../$EPHEMERAL_DIR/voucher.pem -payload "Hello from Go CLI" -output ../$EPHEMERAL_DIR/payload_cli.fdo || return 1
 	log_success "Go CLI-created attested payload"
 
 	log_step "Extracting components from Go CLI payload"
@@ -670,7 +670,7 @@ echo "Hello from typed shell payload"'
 	log_success "Shell-created typed attested payload assembled"
 
 	log_step "Verifying shell-created typed payload with Go CLI"
-	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../$EPHEMERAL_DIR/payload_shell_typed.fdo
+	run_cmd go run ./cmd attestpayload verify -db "../$DB_FILE" ../$EPHEMERAL_DIR/payload_shell_typed.fdo || return 1
 	log_success "Shell-created typed payload verified by Go CLI"
 
 	rm -f $EPHEMERAL_DIR/voucher.pem $EPHEMERAL_DIR/owner_ec_pvt.key $EPHEMERAL_DIR/owner_ec_pub.key $EPHEMERAL_DIR/signed_data.bin $EPHEMERAL_DIR/sig.bin
@@ -688,11 +688,11 @@ test_sysconfig() {
 	start_server "-sysconfig hostname=test-device -sysconfig timezone=UTC -sysconfig ntp-server=pool.ntp.org"
 
 	log_step "Running DI"
-	run_cmd go run ./cmd client -di "$SERVER_URL"
+	run_cmd go run ./cmd client -di "$SERVER_URL" || return 1
 	log_success "DI completed"
 
 	log_step "Running TO1/TO2 with sysconfig parameters"
-	run_cmd go run ./cmd client
+	run_cmd go run ./cmd client || return 1
 	log_success "TO1/TO2 completed with sysconfig parameters"
 
 	stop_server
@@ -710,12 +710,12 @@ test_sysconfig_fdo200() {
 	start_server "-reuse-cred -sysconfig hostname=test-device-fdo200 -sysconfig timezone=America/New_York -sysconfig ntp-server=time.google.com -sysconfig locale=en_US.UTF-8"
 
 	log_step "Running DI"
-	run_cmd go run ./cmd client -di "$SERVER_URL"
+	run_cmd go run ./cmd client -di "$SERVER_URL" || return 1
 	log_success "DI completed"
 
 	log_step "Running TO1/TO2 with FDO 2.0 and sysconfig parameters"
 	echo ">>> PROOF TEST: Capturing FDO 2.0 client output to show sysconfig parameters:"
-	run_cmd go run ./cmd client -fdo-version 200 2>&1 | tee $EPHEMERAL_DIR/fdo200_sysconfig.log
+	run_cmd go run ./cmd client -fdo-version 200 2>&1 | tee $EPHEMERAL_DIR/fdo200_sysconfig.log || return 1
 	log_success "TO1/TO2 completed with FDO 2.0 and sysconfig parameters"
 
 	# Check if sysconfig parameters were received
@@ -730,7 +730,7 @@ test_sysconfig_fdo200() {
 	fi
 
 	log_step "Running TO1/TO2 again with FDO 2.0 (credential reuse with sysconfig)"
-	run_cmd go run ./cmd client -fdo-version 200
+	run_cmd go run ./cmd client -fdo-version 200 || return 1
 	log_success "TO1/TO2 completed with FDO 2.0 (reuse with sysconfig)"
 
 	stop_server
@@ -743,12 +743,12 @@ test_sysconfig_fdo200() {
 	start_server "-reuse-cred -sysconfig hostname=test-device-fdo101 -sysconfig timezone=America/New_York -sysconfig ntp-server=time.google.com -sysconfig locale=en_US.UTF-8"
 
 	log_step "Running DI (FDO 1.01)"
-	run_cmd go run ./cmd client -di "$SERVER_URL"
+	run_cmd go run ./cmd client -di "$SERVER_URL" || return 1
 	log_success "DI completed"
 
 	log_step "Running TO1/TO2 with FDO 1.01 and sysconfig parameters"
 	echo ">>> COMPARISON: Capturing FDO 1.01 client output to show sysconfig parameters:"
-	run_cmd go run ./cmd client 2>&1 | tee $EPHEMERAL_DIR/fdo101_sysconfig.log
+	run_cmd go run ./cmd client 2>&1 | tee $EPHEMERAL_DIR/fdo101_sysconfig.log || return 1
 	log_success "TO1/TO2 completed with FDO 1.01 and sysconfig parameters"
 
 	# Check if sysconfig parameters were received
@@ -799,15 +799,15 @@ test_payload_fdo200() {
 	start_server "-reuse-cred -payload-file ../$PAYLOAD_FILE -payload-mime application/octet-stream"
 
 	log_step "Running DI"
-	run_cmd go run ./cmd client -di "$SERVER_URL"
+	run_cmd go run ./cmd client -di "$SERVER_URL" || return 1
 	log_success "DI completed"
 
 	log_step "Running TO1/TO2 with FDO 2.0 and payload transfer"
-	run_cmd go run ./cmd client -fdo-version 200
+	run_cmd go run ./cmd client -fdo-version 200 || return 1
 	log_success "TO1/TO2 completed with FDO 2.0 and payload transfer"
 
 	log_step "Running TO1/TO2 again with FDO 2.0 (credential reuse)"
-	run_cmd go run ./cmd client -fdo-version 200
+	run_cmd go run ./cmd client -fdo-version 200 || return 1
 	log_success "TO1/TO2 completed with FDO 2.0 (reuse)"
 
 	stop_server
@@ -911,11 +911,11 @@ test_payload() {
 	start_server "-payload-file ../$PAYLOAD_FILE -payload-mime application/octet-stream"
 
 	log_step "Running DI"
-	run_cmd go run ./cmd client -di "$SERVER_URL"
+	run_cmd go run ./cmd client -di "$SERVER_URL" || return 1
 	log_success "DI completed"
 
 	log_step "Running TO1/TO2 with payload transfer"
-	run_cmd go run ./cmd client
+	run_cmd go run ./cmd client || return 1
 	log_success "TO1/TO2 completed with payload transfer"
 
 	stop_server
@@ -979,12 +979,12 @@ test_payload_multiple_types() {
 	start_server "-payload application/json:../$PAYLOAD_JSON -payload text/x-shellscript:../$PAYLOAD_SCRIPT -payload application/octet-stream:../$PAYLOAD_BIN"
 
 	log_step "Running DI"
-	run_cmd go run ./cmd client -di "$SERVER_URL"
+	run_cmd go run ./cmd client -di "$SERVER_URL" || return 1
 	log_success "DI completed"
 
 	# Client accepts all MIME types
 	log_step "Running TO1/TO2 with multiple payload types (all accepted)"
-	run_cmd go run ./cmd client
+	run_cmd go run ./cmd client || return 1
 	log_success "TO1/TO2 completed with multiple payloads"
 
 	stop_server
@@ -1076,14 +1076,14 @@ test_payload_selective_rejection() {
 	start_server "-payload application/xml:../$PAYLOAD_UNSUPPORTED_1 -payload application/json:../$PAYLOAD_SUPPORTED -payload application/x-yaml:../$PAYLOAD_UNSUPPORTED_2"
 
 	log_step "Running DI"
-	run_cmd go run ./cmd client -di "$SERVER_URL"
+	run_cmd go run ./cmd client -di "$SERVER_URL" || return 1
 	log_success "DI completed"
 
 	# Client only supports application/json, should reject XML and YAML, accept JSON
 	log_step "Running TO1/TO2 with selective MIME type rejection"
 	log_step "  Device supports: application/json only"
 	log_step "  Server sends: XML (reject), JSON (accept), YAML (reject)"
-	run_cmd go run ./cmd client -payload-supported-types "application/json"
+	run_cmd go run ./cmd client -payload-supported-types "application/json" || return 1
 	log_success "TO1/TO2 completed with selective rejection"
 
 	stop_server
@@ -1129,11 +1129,11 @@ test_wifi() {
 	start_server "-wifi-config ../examples/wifi_config.json"
 
 	log_step "Running DI"
-	run_cmd go run ./cmd client -di "$SERVER_URL"
+	run_cmd go run ./cmd client -di "$SERVER_URL" || return 1
 	log_success "DI completed"
 
 	log_step "Running TO1/TO2 with WiFi network configuration"
-	run_cmd timeout 30 go run ./cmd client
+	run_cmd timeout 30 go run ./cmd client || return 1
 	log_success "TO1/TO2 completed with WiFi network-add"
 	stop_server
 	log_success "WiFi FSIM test PASSED"
@@ -1214,11 +1214,11 @@ test_bmo() {
 	start_server "-bmo application/x-iso9660-image:../$BMO_FILE"
 
 	log_step "Running DI"
-	run_cmd go run ./cmd client -di "$SERVER_URL"
+	run_cmd go run ./cmd client -di "$SERVER_URL" || return 1
 	log_success "DI completed"
 
 	log_step "Running TO1/TO2 with BMO boot image transfer"
-	run_cmd go run ./cmd client
+	run_cmd go run ./cmd client || return 1
 	log_success "TO1/TO2 completed with BMO boot image transfer"
 
 	stop_server
@@ -1266,11 +1266,11 @@ test_bmo_signed() {
 	start_server "-bmo application/x-iso9660-image:../$BMO_FILE -bmo-sign"
 
 	log_step "Running DI"
-	run_cmd go run ./cmd client -di "$SERVER_URL"
+	run_cmd go run ./cmd client -di "$SERVER_URL" || return 1
 	log_success "DI completed"
 
 	log_step "Running TO1/TO2 with SIGNED BMO image-begin"
-	run_cmd go run ./cmd client
+	run_cmd go run ./cmd client || return 1
 	log_success "TO1/TO2 completed with signed BMO provisioning"
 
 	# Per fdo.bmo.md §"Authorization of Provisioning Messages", the wire key
@@ -1317,11 +1317,11 @@ test_bmo_efi() {
 	start_server "-bmo application/efi:../$BMO_FILE"
 
 	log_step "Running DI"
-	run_cmd go run ./cmd client -di "$SERVER_URL"
+	run_cmd go run ./cmd client -di "$SERVER_URL" || return 1
 	log_success "DI completed"
 
 	log_step "Running TO1/TO2 with EFI application transfer"
-	run_cmd go run ./cmd client
+	run_cmd go run ./cmd client || return 1
 	log_success "TO1/TO2 completed with EFI application"
 
 	stop_server
@@ -1936,12 +1936,12 @@ test_payload_nak() {
 	start_server "-payload application/x-unsupported:../$PAYLOAD_FILE_1 -payload application/json:../$PAYLOAD_FILE_2"
 
 	log_step "Running DI"
-	run_cmd go run ./cmd client -di "$SERVER_URL"
+	run_cmd go run ./cmd client -di "$SERVER_URL" || return 1
 	log_success "DI completed"
 
 	# Client only supports application/json, should reject first, accept second
 	log_step "Running TO1/TO2 with NAK for first payload, accept second"
-	run_cmd go run ./cmd client -payload-supported-types "application/json"
+	run_cmd go run ./cmd client -payload-supported-types "application/json" || return 1
 	log_success "TO1/TO2 completed with NAK/fallback"
 
 	stop_server
@@ -1977,7 +1977,7 @@ test_credentials() {
 	rm -f "$DB_FILE" "$CRED_FILE"
 
 	log_step "Creating database with owner certs"
-	run_cmd go run ./cmd server -initOnly -http "$SERVER_ADDR" -db "../$DB_FILE" -owner-certs
+	run_cmd go run ./cmd server -initOnly -http "$SERVER_ADDR" -db "../$DB_FILE" -owner-certs || return 1
 
 	log_step "Starting server with credential provisioning"
 	start_server "-credential password:admin-creds:admin:SecurePass123:https://mgmt.example.com/api -credential api_key:prod-api:sk_live_abc123xyz:https://api.example.com/v1 -credential oauth2_client_secret:oauth-app:client_secret_xyz789:https://oauth.example.com/token"
@@ -2076,20 +2076,20 @@ test_bad_delegate() {
 	stop_server
 
 	log_step "Creating legitimate delegate chain (SECP384R1 owner)"
-	run_cmd go run ./cmd delegate -db "../$DB_FILE" create goodDelegate onboard,redirect SECP384R1 ec384
+	run_cmd go run ./cmd delegate -db "../$DB_FILE" create goodDelegate onboard,redirect SECP384R1 ec384 || return 1
 
 	# Now try to create a delegate with a DIFFERENT owner key type
 	# This simulates an attacker trying to use their own key
 	log_step "Attempting to create delegate with wrong owner key (should fail or be rejected)"
 
 	# Create a delegate rooted to SECP256R1 owner (different from SECP384R1 used for voucher)
-	run_cmd go run ./cmd delegate -db "../$DB_FILE" create badDelegate onboard,redirect SECP256R1 ec256
+	run_cmd go run ./cmd delegate -db "../$DB_FILE" create badDelegate onboard,redirect SECP256R1 ec256 || return 1
 
 	# Start server with the GOOD delegate first to do DI
 	start_server "-owner-certs -onboardDelegate goodDelegate"
 
 	log_step "Running DI (creates voucher with SECP384R1 owner)"
-	run_cmd go run ./cmd client -di "$SERVER_URL"
+	run_cmd go run ./cmd client -di "$SERVER_URL" || return 1
 	log_success "DI completed"
 
 	stop_server
@@ -2336,111 +2336,112 @@ main() {
 	# Clean up ephemeral files from previous test runs
 	cleanup_ephemeral
 
+	local rc=0
 	case "$test_name" in
 	basic)
-		test_basic
+		test_basic || rc=$?
 		;;
 	basic-reuse)
-		test_basic_reuse
+		test_basic_reuse || rc=$?
 		;;
 	rv-blob)
-		test_rv_blob
+		test_rv_blob || rc=$?
 		;;
 	kex)
-		test_kex
+		test_kex || rc=$?
 		;;
 	fdo200)
-		test_fdo200
+		test_fdo200 || rc=$?
 		;;
 	delegate)
-		test_delegate
+		test_delegate || rc=$?
 		;;
 	delegate-fdo200)
-		test_delegate_fdo200
+		test_delegate_fdo200 || rc=$?
 		;;
 	delegate-csr)
-		test_delegate_csr
+		test_delegate_csr || rc=$?
 		;;
 	bad-delegate)
-		test_bad_delegate
+		test_bad_delegate || rc=$?
 		;;
 	attested-payload)
-		test_attested_payload
+		test_attested_payload || rc=$?
 		;;
 	attested-payload-encrypted)
-		test_attested_payload_encrypted
+		test_attested_payload_encrypted || rc=$?
 		;;
 	attested-payload-delegate)
-		test_attested_payload_delegate
+		test_attested_payload_delegate || rc=$?
 		;;
 	attested-payload-shell)
-		test_attested_payload_shell
+		test_attested_payload_shell || rc=$?
 		;;
 	sysconfig)
-		test_sysconfig
+		test_sysconfig || rc=$?
 		;;
 	sysconfig-fdo200)
-		test_sysconfig_fdo200
+		test_sysconfig_fdo200 || rc=$?
 		;;
 	payload)
-		test_payload
+		test_payload || rc=$?
 		;;
 	payload-fdo200)
-		test_payload_fdo200
+		test_payload_fdo200 || rc=$?
 		;;
 	payload-multiple-types)
-		test_payload_multiple_types
+		test_payload_multiple_types || rc=$?
 		;;
 	payload-selective-rejection)
-		test_payload_selective_rejection
+		test_payload_selective_rejection || rc=$?
 		;;
 	wifi)
-		test_wifi
+		test_wifi || rc=$?
 		;;
 	wifi-fdo200)
-		test_wifi_fdo200
+		test_wifi_fdo200 || rc=$?
 		;;
 	wifi-single-sided)
-		test_wifi_single_sided
+		test_wifi_single_sided || rc=$?
 		;;
 	bmo)
-		test_bmo
+		test_bmo || rc=$?
 		;;
 	bmo-signed)
-		test_bmo_signed
+		test_bmo_signed || rc=$?
 		;;
 	bmo-efi)
-		test_bmo_efi
+		test_bmo_efi || rc=$?
 		;;
 	bmo-nak)
-		test_bmo_nak
+		test_bmo_nak || rc=$?
 		;;
 	bmo-multi-asset)
-		test_bmo_multi_asset
+		test_bmo_multi_asset || rc=$?
 		;;
 	bmo-url)
-		test_bmo_url
+		test_bmo_url || rc=$?
 		;;
 	bmo-meta-url)
-		test_bmo_meta_url
+		test_bmo_meta_url || rc=$?
 		;;
 	bmo-meta-signed)
-		test_bmo_meta_signed
+		test_bmo_meta_signed || rc=$?
 		;;
 	bmo-url-fallback)
-		test_bmo_url_fallback
+		test_bmo_url_fallback || rc=$?
 		;;
 	payload-nak)
-		test_payload_nak
+		test_payload_nak || rc=$?
 		;;
 	credentials)
-		test_credentials
+		test_credentials || rc=$?
 		;;
 	auth)
-		test_auth
+		test_auth || rc=$?
 		;;
 	all)
-		test_all
+		test_all || rc=$?
 		;;
 	*)
 		echo "Unknown test: $test_name"
@@ -2448,6 +2449,7 @@ main() {
 		exit 1
 		;;
 	esac
+	exit $rc
 }
 
 main "$@"

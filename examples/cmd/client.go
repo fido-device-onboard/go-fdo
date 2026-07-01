@@ -397,7 +397,7 @@ TO1:
 		for _, url := range directive.URLs {
 			var err error
 			version := protocol.Version(fdoVersion) //#nosec G115 -- fdoVersion is validated in flag parsing
-			to1d, err = fdo.TO1(ctx, tlsTransportWithVersion(url.String(), nil, version), conf.Cred, conf.Key, nil)
+			to1d, err = fdo.TO1(ctx, tlsTransportWithVersion(url.String(), nil, version), conf.Cred, conf.Key, &fdo.TO1Options{Version: version})
 			if err != nil {
 				// #nosec G706 -- sanitizeLogValue strips control characters from logged URL
 				slog.Error("TO1 failed", "base URL", sanitizeLogValue(url.String()), "error", err)
