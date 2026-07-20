@@ -120,7 +120,7 @@ func TO2v200(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol
 	}
 
 	// Step 6: Exchange service info
-	sendMTU := uint16(1300) // Default MTU
+	sendMTU := uint16(serviceinfo.DefaultMTU)
 
 	// Subtract 5 bytes from MTU to account for a CBOR header indicating "array
 	// of 256-65535 items" and 2 more bytes for "array of two" plus the first

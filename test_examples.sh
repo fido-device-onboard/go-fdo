@@ -1211,14 +1211,19 @@ test_bmo() {
 	ORIGINAL_HASH=$(sha256sum "$BMO_FILE" | awk '{print $1}')
 	log_success "Created test boot image: $BMO_FILE (hash: $ORIGINAL_HASH)"
 
-	start_server "-bmo application/x-iso9660-image:../$BMO_FILE"
+	# -bmo-sign is required: commit be69942 enforces spec-compliant signed
+	# provisioning messages (image-begin MUST be COSE_Sign1 when device has
+	# owner public key from TO2).
+	start_server "-bmo application/x-iso9660-image:../$BMO_FILE -bmo-sign"
 
 	log_step "Running DI"
-	run_cmd go run ./cmd client -di "$SERVER_URL" || return 1
+	# Use EC-P256 key type to match the BMO signing key (server uses EC-P256 for BMO)
+	run_cmd go run ./cmd client -di "$SERVER_URL" -di-key ec256 || return 1
 	log_success "DI completed"
 
-	log_step "Running TO1/TO2 with BMO boot image transfer"
-	run_cmd go run ./cmd client || return 1
+	log_step "Running TO1/TO2 with BMO boot image transfer (signed)"
+	# Use ECDH256 key exchange to match the EC-P256 device key
+	run_cmd go run ./cmd client -kex ECDH256 || return 1
 	log_success "TO1/TO2 completed with BMO boot image transfer"
 
 	stop_server
@@ -1266,11 +1271,13 @@ test_bmo_signed() {
 	start_server "-bmo application/x-iso9660-image:../$BMO_FILE -bmo-sign"
 
 	log_step "Running DI"
-	run_cmd go run ./cmd client -di "$SERVER_URL" || return 1
+	# Use EC-P256 key type to match the BMO signing key (server uses EC-P256 for BMO)
+	run_cmd go run ./cmd client -di "$SERVER_URL" -di-key ec256 || return 1
 	log_success "DI completed"
 
 	log_step "Running TO1/TO2 with SIGNED BMO image-begin"
-	run_cmd go run ./cmd client || return 1
+	# Use ECDH256 key exchange to match the EC-P256 device key
+	run_cmd go run ./cmd client -kex ECDH256 || return 1
 	log_success "TO1/TO2 completed with signed BMO provisioning"
 
 	# Per fdo.bmo.md §"Authorization of Provisioning Messages", the wire key
@@ -1314,14 +1321,16 @@ test_bmo_efi() {
 	ORIGINAL_HASH=$(sha256sum "$BMO_FILE" | awk '{print $1}')
 	log_success "Created test EFI app: $BMO_FILE (hash: $ORIGINAL_HASH)"
 
-	start_server "-bmo application/efi:../$BMO_FILE"
+	start_server "-bmo application/efi:../$BMO_FILE -bmo-sign"
 
 	log_step "Running DI"
-	run_cmd go run ./cmd client -di "$SERVER_URL" || return 1
+	# Use EC-P256 key type to match the BMO signing key
+	run_cmd go run ./cmd client -di "$SERVER_URL" -di-key ec256 || return 1
 	log_success "DI completed"
 
 	log_step "Running TO1/TO2 with EFI application transfer"
-	run_cmd go run ./cmd client || return 1
+	# Use ECDH256 key exchange to match the EC-P256 device key
+	run_cmd go run ./cmd client -kex ECDH256 || return 1
 	log_success "TO1/TO2 completed with EFI application"
 
 	stop_server
@@ -1373,10 +1382,11 @@ test_bmo_nak() {
 	# Convert paths to be relative to examples directory
 	BMO_FILE_1_REL="../$BMO_FILE_1"
 	BMO_FILE_2_REL="../$BMO_FILE_2"
-	start_server "-bmo application/x-unsupported-format:$BMO_FILE_1_REL -bmo application/efi:$BMO_FILE_2_REL"
+	start_server "-bmo application/x-unsupported-format:$BMO_FILE_1_REL -bmo application/efi:$BMO_FILE_2_REL -bmo-sign"
 
 	log_step "Running DI"
-	if ! run_cmd go run ./cmd client -di "$SERVER_URL"; then
+	# Use EC-P256 key type to match the BMO signing key
+	if ! run_cmd go run ./cmd client -di "$SERVER_URL" -di-key ec256; then
 		log_error "DI failed"
 		rm -f "$BMO_FILE_1" "$BMO_FILE_2"
 		return 1
@@ -1385,7 +1395,8 @@ test_bmo_nak() {
 
 	# Client only supports application/efi, should reject first, accept second
 	log_step "Running TO1/TO2 with NAK for first image, accept second"
-	if ! run_cmd go run ./cmd client -bmo-supported-types "application/efi"; then
+	# Use ECDH256 key exchange to match the EC-P256 device key
+	if ! run_cmd go run ./cmd client -bmo-supported-types "application/efi" -kex ECDH256; then
 		log_error "TO1/TO2 failed with NAK/fallback"
 		rm -f "$BMO_FILE_1" "$BMO_FILE_2"
 		return 1
@@ -1442,10 +1453,11 @@ test_bmo_multi_asset() {
 
 	# Server presents multiple assets in preference order
 	# Device only supports EFI, so should accept first and NAK others won't be presented
-	start_server "-bmo application/efi:../$BMO_EFI -bmo application/x-iso9660-image:../$BMO_ISO -bmo application/x-raw-disk-image:../$BMO_RAW"
+	start_server "-bmo application/efi:../$BMO_EFI -bmo application/x-iso9660-image:../$BMO_ISO -bmo application/x-raw-disk-image:../$BMO_RAW -bmo-sign"
 
 	log_step "Running DI"
-	if ! run_cmd go run ./cmd client -di "$SERVER_URL"; then
+	# Use EC-P256 key type to match the BMO signing key
+	if ! run_cmd go run ./cmd client -di "$SERVER_URL" -di-key ec256; then
 		log_error "DI failed"
 		rm -f "$BMO_EFI" "$BMO_ISO" "$BMO_RAW"
 		return 1
@@ -1453,7 +1465,8 @@ test_bmo_multi_asset() {
 	log_success "DI completed"
 
 	log_step "Running TO1/TO2 with multi-asset preference order"
-	if ! run_cmd go run ./cmd client -bmo-supported-types "application/efi"; then
+	# Use ECDH256 key exchange to match the EC-P256 device key
+	if ! run_cmd go run ./cmd client -bmo-supported-types "application/efi" -kex ECDH256; then
 		log_error "TO1/TO2 failed with multi-asset"
 		rm -f "$BMO_EFI" "$BMO_ISO" "$BMO_RAW"
 		return 1
@@ -1522,10 +1535,11 @@ test_bmo_url() {
 
 	# Start FDO server with URL mode
 	IMAGE_URL="http://127.0.0.1:$HTTP_PORT/test_url_image.bin"
-	start_server "-bmo-url application/x-raw-disk-image:$IMAGE_URL:$ORIGINAL_HASH"
+	start_server "-bmo-url application/x-raw-disk-image:$IMAGE_URL:$ORIGINAL_HASH -bmo-sign"
 
 	log_step "Running DI"
-	if ! run_cmd go run ./cmd client -di "$SERVER_URL"; then
+	# Use EC-P256 key type to match the BMO signing key
+	if ! run_cmd go run ./cmd client -di "$SERVER_URL" -di-key ec256; then
 		log_error "DI failed"
 		kill $HTTP_PID 2>/dev/null
 		rm -f "$BMO_FILE"
@@ -1534,7 +1548,8 @@ test_bmo_url() {
 	log_success "DI completed"
 
 	log_step "Running TO1/TO2 with URL mode boot image"
-	if ! run_cmd go run ./cmd client; then
+	# Use ECDH256 key exchange to match the EC-P256 device key
+	if ! run_cmd go run ./cmd client -kex ECDH256; then
 		log_error "TO1/TO2 failed"
 		kill $HTTP_PID 2>/dev/null
 		rm -f "$BMO_FILE"
@@ -1622,10 +1637,11 @@ test_bmo_meta_url() {
 
 	# Start FDO server with meta-URL mode
 	META_URL="http://127.0.0.1:$HTTP_PORT/meta.cbor"
-	start_server "-bmo-meta-url $META_URL"
+	start_server "-bmo-meta-url $META_URL -bmo-sign"
 
 	log_step "Running DI"
-	if ! run_cmd go run ./cmd client -di "$SERVER_URL"; then
+	# Use EC-P256 key type to match the BMO signing key
+	if ! run_cmd go run ./cmd client -di "$SERVER_URL" -di-key ec256; then
 		log_error "DI failed"
 		kill $HTTP_PID 2>/dev/null
 		rm -f "$BMO_FILE" "$META_FILE"
@@ -1634,7 +1650,8 @@ test_bmo_meta_url() {
 	log_success "DI completed"
 
 	log_step "Running TO1/TO2 with meta-URL mode"
-	if ! run_cmd go run ./cmd client; then
+	# Use ECDH256 key exchange to match the EC-P256 device key
+	if ! run_cmd go run ./cmd client -kex ECDH256; then
 		log_error "TO1/TO2 failed"
 		kill $HTTP_PID 2>/dev/null
 		rm -f "$BMO_FILE" "$META_FILE"
@@ -1751,10 +1768,11 @@ test_bmo_meta_signed() {
 
 	# Start FDO server with signed meta-URL mode
 	META_URL="http://127.0.0.1:$HTTP_PORT/meta-signed.cbor"
-	start_server "-bmo-meta-url $META_URL:../$COSE_KEY_FILE"
+	start_server "-bmo-meta-url $META_URL:../$COSE_KEY_FILE -bmo-sign"
 
 	log_step "Running DI"
-	if ! run_cmd go run ./cmd client -di "$SERVER_URL"; then
+	# Use EC-P256 key type to match the BMO signing key
+	if ! run_cmd go run ./cmd client -di "$SERVER_URL" -di-key ec256; then
 		log_error "DI failed"
 		kill $HTTP_PID 2>/dev/null
 		return 1
@@ -1762,7 +1780,8 @@ test_bmo_meta_signed() {
 	log_success "DI completed"
 
 	log_step "Running TO1/TO2 with signed meta-URL mode"
-	if ! run_cmd go run ./cmd client; then
+	# Use ECDH256 key exchange to match the EC-P256 device key
+	if ! run_cmd go run ./cmd client -kex ECDH256; then
 		log_error "TO1/TO2 failed"
 		kill $HTTP_PID 2>/dev/null
 		return 1
@@ -1869,10 +1888,11 @@ test_bmo_url_fallback() {
 	# because it requires the device to NAK the URL mode, which only happens
 	# if the device doesn't support URL mode. For now, just test inline delivery.
 	# TODO: Implement proper URL fallback test with device that NAKs URL mode
-	start_server "-bmo application/x-raw-disk-image:../$BMO_FILE"
+	start_server "-bmo application/x-raw-disk-image:../$BMO_FILE -bmo-sign"
 
 	log_step "Running DI"
-	if ! run_cmd go run ./cmd client -di "$SERVER_URL"; then
+	# Use EC-P256 key type to match the BMO signing key
+	if ! run_cmd go run ./cmd client -di "$SERVER_URL" -di-key ec256; then
 		log_error "DI failed"
 		rm -f "$BMO_FILE"
 		return 1
@@ -1880,7 +1900,8 @@ test_bmo_url_fallback() {
 	log_success "DI completed"
 
 	log_step "Running TO1/TO2 with inline delivery"
-	if ! run_cmd go run ./cmd client; then
+	# Use ECDH256 key exchange to match the EC-P256 device key
+	if ! run_cmd go run ./cmd client -kex ECDH256; then
 		log_error "TO1/TO2 failed"
 		rm -f "$BMO_FILE"
 		return 1

@@ -274,8 +274,8 @@ func VerifyAttestedPayload(ap *AttestedPayload, ownerKey crypto.PublicKey, devic
 	// Determine the signing key (delegate leaf or owner)
 	signingKey := ownerKey
 	if len(ap.DelegateChain) > 0 {
-		// Verify delegate chain has provision permission
-		err := VerifyDelegateChain(ap.DelegateChain, &ownerKey, &OIDDelegateProvision)
+		// Verify delegate chain has provision permission (OIDPermitProvision per fdo-appnote-attested-payload.bs)
+		err := VerifyDelegateChain(ap.DelegateChain, &ownerKey, &OIDPermitProvision)
 		if err != nil {
 			return nil, fmt.Errorf("delegate chain verification failed: %w", err)
 		}

@@ -57,3 +57,12 @@ examples/cmd/client
 securing-fdo-in-tpm-v1.0-rd-20231010.html
 fdo-appnote-voucher-transfer.bs
 authtest
+!examples/authtest/
+
+# Build artifacts and debug binaries
+/cmd
+/fdo
+/server
+/server-*
+*.patch
+fdo

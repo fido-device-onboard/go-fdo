@@ -375,7 +375,7 @@ func (s *TO2Server) setupDevice20(ctx context.Context, msg io.Reader) (*SetupDev
 	}
 
 	// Determine max service info size
-	maxSvcInfoSz := uint16(1300) // Default MTU
+	maxSvcInfoSz := uint16(serviceinfo.DefaultMTU)
 	if s.MaxDeviceServiceInfoSize != nil {
 		maxSvcInfoSz, err = s.MaxDeviceServiceInfoSize(ctx, *ov)
 		if err != nil {

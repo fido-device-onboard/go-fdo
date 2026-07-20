@@ -218,6 +218,14 @@ func (b *BMOOwner) produceInfo(ctx context.Context, producer *serviceinfo.Produc
 		image := &b.images[b.currentIndex]
 		b.currentSender = chunking.NewChunkSender("image", image.Data)
 
+		// Adjust chunk size based on negotiated MTU if client requested smaller
+		// Default chunk size (1014) works well for most clients
+		// Only reduce if MTU is smaller than default + overhead
+		mtu := producer.MTU()
+		if mtu > 50 && mtu-50 < b.currentSender.ChunkSize {
+			b.currentSender.ChunkSize = mtu - 50
+		}
+
 		// Set hash algorithm if provided
 		if image.HashAlg != "" {
 			b.currentSender.BeginFields.HashAlg = image.HashAlg
@@ -339,32 +347,26 @@ func (b *BMOOwner) produceInfo(ctx context.Context, producer *serviceinfo.Produc
 		chunkIndex := b.currentSender.GetBytesSent() / int64(b.currentSender.ChunkSize)
 		chunkKey := fmt.Sprintf("image-data-%d", chunkIndex)
 
+		// Check if there's space for the chunk (size based on negotiated MTU)
 		estimatedSize := b.currentSender.ChunkSize + 50
 		if producer.Available(chunkKey) < estimatedSize {
-			fmt.Printf("[BMOOwner] Not enough MTU space for next chunk, blocking\n")
 			return true, false, nil
 		}
-
-		fmt.Printf("[BMOOwner] Sending chunk %d, totalSize=%d\n", chunkIndex, len(b.currentSender.Data))
 		done, err := b.currentSender.SendNextChunk(producer)
 		if err != nil {
 			return false, false, fmt.Errorf("failed to send chunk: %w", err)
 		}
 		if done {
-			fmt.Printf("[BMOOwner] All chunks sent, transitioning to send end\n")
 			b.sendState = bmoStateSendingEnd
 			return true, false, nil
 		}
-		fmt.Printf("[BMOOwner] Chunk sent, will continue in next round\n")
 		return true, false, nil
 
 	case bmoStateSendingEnd:
-		fmt.Printf("[BMOOwner] Sending image-end message\n")
 		if err := b.currentSender.SendEnd(producer); err != nil {
 			return false, false, fmt.Errorf("failed to send end: %w", err)
 		}
 		slog.Debug("fdo.bmo sent end")
-		fmt.Printf("[BMOOwner] Sent end, waiting for result\n")
 		b.sendState = bmoStateWaitingResult
 		return false, false, nil
 

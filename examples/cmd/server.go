@@ -1001,8 +1001,11 @@ func (s moduleStateMachines) NextModule(ctx context.Context) (bool, error) {
 		// Create a new module state machine
 		_, modules, _, err := s.DB.Devmod(ctx)
 		if err != nil {
+			log.Printf("[DEBUG NextModule] error getting devmod: %v", err)
 			return false, fmt.Errorf("error getting devmod: %w", err)
 		}
+		log.Printf("[DEBUG NextModule] Creating state machine with modules: %v", modules)
+		log.Printf("[DEBUG NextModule] bmoFile=%q, len(bmoFiles)=%d", bmoFile, len(bmoFiles))
 		next, stop := iter.Pull2(ownerModules(modules))
 		module = &moduleStateMachineState{
 			Next: next,
@@ -1013,6 +1016,7 @@ func (s moduleStateMachines) NextModule(ctx context.Context) (bool, error) {
 
 	var valid bool
 	module.Name, module.Impl, valid = module.Next()
+	log.Printf("[DEBUG NextModule] Next() returned: name=%q, valid=%v", module.Name, valid)
 	return valid, nil
 }
 
@@ -1029,8 +1033,11 @@ func (s moduleStateMachines) CleanupModules(ctx context.Context) {
 	delete(s.states, token)
 }
 
-func ownerModules(modules []string) iter.Seq2[string, serviceinfo.OwnerModule] { //nolint:gocyclo
+func ownerModules(modules []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 	return func(yield func(string, serviceinfo.OwnerModule) bool) {
+		log.Printf("[DEBUG ownerModules] Starting iterator with modules: %v", modules)
+		log.Printf("[DEBUG ownerModules] BMO check: contains fdo.bmo=%v, bmoFile=%q, len(bmoFiles)=%d, len(bmoURLs)=%d, len(bmoMetaURLs)=%d",
+			slices.Contains(modules, "fdo.bmo"), bmoFile, len(bmoFiles), len(bmoURLs), len(bmoMetaURLs))
 		if slices.Contains(modules, "fdo.download") {
 			for _, name := range downloads {
 				f, err := os.Open(filepath.Clean(name))
@@ -1122,6 +1129,7 @@ func ownerModules(modules []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 		}
 
 		if slices.Contains(modules, "fdo.bmo") && (bmoFile != "" || len(bmoFiles) > 0 || len(bmoURLs) > 0 || len(bmoMetaURLs) > 0) {
+			log.Printf("[DEBUG ownerModules] BMO condition met! Creating BMOOwner")
 			bmoOwner := &fsim.BMOOwner{ProvisioningSigner: bmoProvisioningSigner}
 
 			// Handle multi-file NAK testing mode (with RequireAck)

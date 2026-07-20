@@ -54,7 +54,7 @@ func NewChunkSender(payloadName string, data []byte) *ChunkSender {
 	return &ChunkSender{
 		PayloadName:     payloadName,
 		Data:            data,
-		ChunkSize:       1014, // Default per chunking-strategy.md
+		ChunkSize:       1014, // Keep small - UEFI HTTP has ~1KB response limit
 		AutoComputeHash: true,
 		BeginFields: BeginMessage{
 			TotalSize:  uint64(len(data)),

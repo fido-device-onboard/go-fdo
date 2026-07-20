@@ -89,7 +89,15 @@ func (p *ServiceInfoProcessor) ProcessServiceInfo(ctx context.Context, deviceInf
 		if !ok {
 			break
 		}
-		_, messageName, _ := strings.Cut(key, ":")
+		keyModule, messageName, _ := strings.Cut(key, ":")
+		// Only process keys that match the current module
+		if keyModule != moduleName {
+			// Skip keys for other modules - they'll be processed when that module is active
+			if _, err := io.Copy(io.Discard, messageBody); err != nil {
+				return nil, fmt.Errorf("error discarding service info for module %q: %w", keyModule, err)
+			}
+			continue
+		}
 		if err := module.HandleInfo(ctx, messageName, messageBody); err != nil {
 			return nil, fmt.Errorf("error handling device service info %q: %w", key, err)
 		}

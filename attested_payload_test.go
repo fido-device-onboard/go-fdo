@@ -975,14 +975,14 @@ func TestVerifyAttestedPayloadWithDelegate(t *testing.T) {
 		t.Fatalf("failed to generate delegate key: %v", err)
 	}
 
-	// Create delegate certificate with provision permission
+	// Create delegate certificate with provision permission (OIDPermitProvision per fdo-appnote-attested-payload.bs)
 	delegateCert, err := fdo.GenerateDelegate(
 		ownerKey,
 		fdo.DelegateFlagRoot,
 		delegateKey.Public(),
 		"ProvisionDelegate",
 		"Owner",
-		[]asn1.ObjectIdentifier{fdo.OIDDelegateProvision},
+		[]asn1.ObjectIdentifier{fdo.OIDPermitProvision},
 		x509.ECDSAWithSHA384,
 	)
 	if err != nil {
