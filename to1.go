@@ -58,6 +58,7 @@ func TO1(ctx context.Context, transport Transport, cred DeviceCredential, key cr
 type helloRV struct {
 	GUID     protocol.GUID
 	ASigInfo sigInfo
+	CapFlags CapabilityFlags `cbor:",omitempty"`
 }
 
 // HelloRV(30) -> HelloRVAck(31)
@@ -71,10 +72,11 @@ func helloRv(ctx context.Context, transport Transport, cred DeviceCredential, ke
 		return protocol.Nonce{}, fmt.Errorf("error determining eASigInfo for TO1.HelloRV: %w", err)
 	}
 
-	// Define request structure
+	// Define request structure with capability flags
 	msg := helloRV{
 		GUID:     cred.GUID,
 		ASigInfo: *eASigInfo,
+		CapFlags: GlobalCapabilityFlags,
 	}
 
 	// Make request
@@ -111,6 +113,7 @@ func helloRv(ctx context.Context, transport Transport, cred DeviceCredential, ke
 type rvAck struct {
 	NonceTO1Proof protocol.Nonce
 	BSigInfo      sigInfo
+	CapFlags      CapabilityFlags `cbor:",omitempty"`
 }
 
 // HelloRV(30) -> HelloRVAck(31)
@@ -140,6 +143,7 @@ func (s *TO1Server) helloRVAck(ctx context.Context, msg io.Reader) (*rvAck, erro
 	return &rvAck{
 		NonceTO1Proof: nonce,
 		BSigInfo:      hello.ASigInfo,
+		CapFlags:      GlobalCapabilityFlags,
 	}, nil
 }
 
