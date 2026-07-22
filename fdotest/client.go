@@ -404,7 +404,7 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 						Port:              8080,
 						TransportProtocol: protocol.HTTPTransport,
 					},
-				})
+				}, "")
 				if err != nil {
 					t.Fatal(err)
 				}

@@ -465,7 +465,7 @@ func registerRvBlob(ctx context.Context, state *sqlite.DB) error {
 	refresh, err := (&fdo.TO0Client{
 		Vouchers:  state,
 		OwnerKeys: state,
-	}).RegisterBlob(ctx, tlsTransport(to0Addr, nil), guid, to2Addrs)
+	}).RegisterBlob(ctx, tlsTransport(to0Addr, nil), guid, to2Addrs, "")
 	if err != nil {
 		return fmt.Errorf("error performing to0: %w", err)
 	}

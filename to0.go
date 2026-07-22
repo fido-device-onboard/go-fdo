@@ -6,6 +6,7 @@ package fdo
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"crypto/rand"
 	"errors"
 	"fmt"
@@ -31,6 +32,10 @@ type TO0Client struct {
 	// OwnerKeys are used for signing the rendezvous blob.
 	OwnerKeys OwnerKeyPersistentState
 
+	// DelegateKeys may be used for signing the rendezvous blob when delegation
+	// is used for TO0 operations.
+	DelegateKeys DelegateKeyPersistentState
+
 	// TTL is the amount of time to recommend that the Rendezvous Server allows
 	// the rendezvous blob mapping to remain active.
 	//
@@ -41,7 +46,10 @@ type TO0Client struct {
 // RegisterBlob tells a Rendezvous Server where to direct a given device to its
 // owner service for onboarding. The returned uint32 is the number of seconds
 // before the rendezvous blob must be refreshed by calling [RegisterBlob] again.
-func (c *TO0Client) RegisterBlob(ctx context.Context, transport Transport, guid protocol.GUID, addrs []protocol.RvTO2Addr) (uint32, error) {
+//
+// If delegateName is non-empty, the delegate key and certificate chain will be
+// used for signing instead of the owner key.
+func (c *TO0Client) RegisterBlob(ctx context.Context, transport Transport, guid protocol.GUID, addrs []protocol.RvTO2Addr, delegateName string) (uint32, error) {
 	ctx = contextWithErrMsg(ctx)
 
 	nonce, err := c.hello(ctx, transport)
@@ -54,13 +62,13 @@ func (c *TO0Client) RegisterBlob(ctx context.Context, transport Transport, guid 
 		ttl = DefaultRVBlobTTL
 	}
 
-	return c.ownerSign(ctx, transport, guid, ttl, nonce, addrs)
+	return c.ownerSign(ctx, transport, guid, ttl, nonce, addrs, delegateName)
 }
 
 // Hello(20) -> HelloAck(21)
 func (c *TO0Client) hello(ctx context.Context, transport Transport) (protocol.Nonce, error) {
-	// Define request structure
-	msg := struct{}{}
+	// Define request structure with capability flags
+	msg := GlobalCapabilityFlags
 
 	// Make request
 	typ, resp, err := transport.Send(ctx, protocol.TO0HelloMsgType, msg, nil)
@@ -99,10 +107,11 @@ type to0Ack struct {
 
 // Hello(20) -> HelloAck(21)
 func (s *TO0Server) helloAck(ctx context.Context, msg io.Reader) (*to0Ack, error) {
-	var hello struct{}
+	var hello CapabilityFlags
 	if err := cbor.NewDecoder(msg).Decode(&hello); err != nil {
 		return nil, fmt.Errorf("error decoding TO0.Hello request: %w", err)
 	}
+	// TODO: Capability negotiation can be added here if needed
 
 	// Generate and store nonce
 	var nonce protocol.Nonce
@@ -125,12 +134,15 @@ type to0d struct {
 }
 
 type ownerSign struct {
-	To0d cbor.Bstr[to0d]
-	To1d cose.Sign1Tag[protocol.To1d, []byte]
+	To0d          cbor.Bstr[to0d]
+	To1d          cose.Sign1Tag[protocol.To1d, []byte]
+	DelegateChain *[]*cbor.X509Certificate `cbor:",omitempty"`
 }
 
 // OwnerSign(22) -> AcceptOwner(23)
-func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid protocol.GUID, ttl uint32, nonce protocol.Nonce, addrs []protocol.RvTO2Addr) (negotiatedTTL uint32, _ error) {
+//
+//nolint:gocyclo // Protocol implementation with delegation support
+func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid protocol.GUID, ttl uint32, nonce protocol.Nonce, addrs []protocol.RvTO2Addr, delegateName string) (negotiatedTTL uint32, _ error) {
 	// Create and hash to0d
 	ov, err := c.Vouchers.Voucher(ctx, guid)
 	if err != nil {
@@ -150,16 +162,42 @@ func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid pro
 		return 0, fmt.Errorf("error hashing to0d structure: %w", err)
 	}
 
-	// Sign to1d rendezvous blob
+	// Sign to1d rendezvous blob with owner or delegate key
 	mfgKey := ov.Header.Val.ManufacturerKey
 	keyType := mfgKey.Type
-	ownerKey, _, err := c.OwnerKeys.OwnerKey(ctx, keyType, mfgKey.RsaBits())
-	if errors.Is(err, ErrNotFound) {
-		return 0, fmt.Errorf("no available owner key for TO0.OwnerSign [type=%s]", keyType)
-	} else if err != nil {
-		return 0, fmt.Errorf("error getting owner key [type=%s]: %w", keyType, err)
+
+	var ownerKey crypto.Signer
+	var delegateChain *[]*cbor.X509Certificate
+	var usePSS bool
+
+	if delegateName != "" && c.DelegateKeys != nil {
+		// Use delegate key for signing
+		delKey, delChain, err := c.DelegateKeys.DelegateKey(delegateName)
+		if err != nil {
+			return 0, fmt.Errorf("error getting delegate key %q: %w", delegateName, err)
+		}
+		ownerKey = delKey
+		// Convert []*x509.Certificate to []*cbor.X509Certificate
+		cbChain := make([]*cbor.X509Certificate, len(delChain))
+		for i, cert := range delChain {
+			cbCert := (*cbor.X509Certificate)(cert)
+			cbChain[i] = cbCert
+		}
+		delegateChain = &cbChain
+		usePSS = false // Delegates typically use ECDSA
+	} else {
+		// Use owner key for signing
+		owKey, _, err := c.OwnerKeys.OwnerKey(ctx, keyType, mfgKey.RsaBits())
+		if errors.Is(err, ErrNotFound) {
+			return 0, fmt.Errorf("no available owner key for TO0.OwnerSign [type=%s]", keyType)
+		} else if err != nil {
+			return 0, fmt.Errorf("error getting owner key [type=%s]: %w", keyType, err)
+		}
+		ownerKey = owKey
+		usePSS = keyType == protocol.RsaPssKeyType
 	}
-	opts, err := signOptsFor(ownerKey, keyType == protocol.RsaPssKeyType)
+
+	opts, err := signOptsFor(ownerKey, usePSS)
 	if err != nil {
 		return 0, fmt.Errorf("error determining signing options for TO0.OwnerSign: %w", err)
 	}
@@ -176,8 +214,9 @@ func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid pro
 
 	// Define request structure
 	msg := ownerSign{
-		To0d: *cbor.NewBstr(to0d),
-		To1d: *to1d.Tag(),
+		To0d:          *cbor.NewBstr(to0d),
+		To1d:          *to1d.Tag(),
+		DelegateChain: delegateChain,
 	}
 
 	// Make request
