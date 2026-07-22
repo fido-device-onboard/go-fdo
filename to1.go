@@ -58,7 +58,7 @@ func TO1(ctx context.Context, transport Transport, cred DeviceCredential, key cr
 type helloRV struct {
 	GUID     protocol.GUID
 	ASigInfo sigInfo
-	CapFlags CapabilityFlags `cbor:",omitempty"`
+	CapFlags CapabilityFlags
 }
 
 // HelloRV(30) -> HelloRVAck(31)
@@ -113,7 +113,7 @@ func helloRv(ctx context.Context, transport Transport, cred DeviceCredential, ke
 type rvAck struct {
 	NonceTO1Proof protocol.Nonce
 	BSigInfo      sigInfo
-	CapFlags      CapabilityFlags `cbor:",omitempty"`
+	CapFlags      CapabilityFlags
 }
 
 // HelloRV(30) -> HelloRVAck(31)
