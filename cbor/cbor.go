@@ -1157,7 +1157,7 @@ func isEmpty(v reflect.Value) bool {
 		(v.Kind() == reflect.Slice && v.Len() == 0) ||
 		(v.Kind() == reflect.Map && v.Len() == 0) ||
 		(v.Kind() == reflect.Array && v.Len() == 0) ||
-		(v.Kind() == reflect.Pointer && v.Elem().Kind() == reflect.Array && v.Len() == 0)
+		(v.Kind() == reflect.Pointer && v.Elem().Kind() == reflect.Array && v.Elem().Len() == 0)
 }
 
 func (e *Encoder) encodeStruct(size int, get func([]int) reflect.Value, field func([]int) reflect.StructField) error {
