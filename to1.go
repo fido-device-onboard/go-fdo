@@ -23,6 +23,10 @@ type TO1Options struct {
 	// When true and an RSA key is used as a crypto.Signer argument, RSA-SSAPSS
 	// will be used for signing.
 	PSS bool
+
+	// SendCapFlags controls whether capability flags are sent in TO1.HelloRV.
+	// Set to true for FDO 2.0, false for FDO 1.1 backward compatibility.
+	SendCapFlags bool
 }
 
 // TO1 runs the TO1 protocol and returns the owner service (TO2) addresses. It
@@ -32,15 +36,17 @@ func TO1(ctx context.Context, transport Transport, cred DeviceCredential, key cr
 	ctx = contextWithErrMsg(ctx)
 
 	var usePSS bool
+	var sendCapFlags bool
 	if opts != nil {
 		usePSS = opts.PSS
+		sendCapFlags = opts.SendCapFlags
 	}
 	signOpts, err := signOptsFor(key, usePSS)
 	if err != nil {
 		return nil, fmt.Errorf("error determining signing options: %w", err)
 	}
 
-	nonce, err := helloRv(ctx, transport, cred, key, signOpts)
+	nonce, err := helloRv(ctx, transport, cred, key, signOpts, sendCapFlags)
 	if err != nil {
 		errorMsg(ctx, transport, err)
 		return nil, err
@@ -58,11 +64,11 @@ func TO1(ctx context.Context, transport Transport, cred DeviceCredential, key cr
 type helloRV struct {
 	GUID     protocol.GUID
 	ASigInfo sigInfo
-	CapFlags CapabilityFlags
+	CapFlags CapabilityFlags `cbor:",omitempty"`
 }
 
 // HelloRV(30) -> HelloRVAck(31)
-func helloRv(ctx context.Context, transport Transport, cred DeviceCredential, key crypto.Signer, opts crypto.SignerOpts) (protocol.Nonce, error) {
+func helloRv(ctx context.Context, transport Transport, cred DeviceCredential, key crypto.Signer, opts crypto.SignerOpts, sendCapFlags bool) (protocol.Nonce, error) {
 	var usePSS bool
 	if _, ok := opts.(*rsa.PSSOptions); ok {
 		usePSS = true
@@ -72,11 +78,15 @@ func helloRv(ctx context.Context, transport Transport, cred DeviceCredential, ke
 		return protocol.Nonce{}, fmt.Errorf("error determining eASigInfo for TO1.HelloRV: %w", err)
 	}
 
-	// Define request structure with capability flags
+	// Define request structure
 	msg := helloRV{
 		GUID:     cred.GUID,
 		ASigInfo: *eASigInfo,
-		CapFlags: GlobalCapabilityFlags,
+	}
+
+	// Only send CapFlags for FDO 2.0
+	if sendCapFlags {
+		msg.CapFlags = GlobalCapabilityFlags
 	}
 
 	// Make request
@@ -113,7 +123,7 @@ func helloRv(ctx context.Context, transport Transport, cred DeviceCredential, ke
 type rvAck struct {
 	NonceTO1Proof protocol.Nonce
 	BSigInfo      sigInfo
-	CapFlags      CapabilityFlags
+	CapFlags      CapabilityFlags `cbor:",omitempty"`
 }
 
 // HelloRV(30) -> HelloRVAck(31)
