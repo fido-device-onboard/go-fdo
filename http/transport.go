@@ -25,7 +25,7 @@ import (
 // used for sending one message and receiving one response message.
 type Transport struct {
 	// The http/https URL, potentially including a path prefix, but without
-	// /fdo/101/msg.
+	// /fdo/101/msg or /fdo/200/msg (the protocol version path is added automatically).
 	BaseURL string
 
 	// Client to use for HTTP requests. Nil indicates that the default client
@@ -69,7 +69,12 @@ func (t *Transport) Send(ctx context.Context, msgType uint8, msg any, sess kex.S
 	}
 
 	// Create request with URL and body
-	uri, err := url.JoinPath(t.BaseURL, "fdo/101/msg", strconv.Itoa(int(msgType)))
+	// Use /fdo/200/msg for FDO 2.0 message types (80-91), /fdo/101/msg for FDO 1.1 (others)
+	protoVer := "101"
+	if protocol.VersionOf(msgType) == protocol.Version200 {
+		protoVer = "200"
+	}
+	uri, err := url.JoinPath(t.BaseURL, "fdo", protoVer, "msg", strconv.Itoa(int(msgType)))
 	if err != nil {
 		return 0, nil, fmt.Errorf("error parsing base URL: %w", err)
 	}

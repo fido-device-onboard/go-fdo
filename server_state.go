@@ -194,3 +194,14 @@ type VoucherReseller interface {
 	// deleting it or marking it as removed, and returns it for extension.
 	RemoveVoucher(context.Context, protocol.GUID) (*Voucher, error)
 }
+
+// DelegateKeyPersistentState maintains delegate keys and their associated
+// certificate chains. Delegate keys allow a third party (Delegate Owner) to
+// onboard devices on behalf of the actual FDO Owner.
+type DelegateKeyPersistentState interface {
+	// DelegateKey returns the private key and certificate chain for a named
+	// delegate. The certificate chain should be ordered leaf-first (index 0
+	// is the leaf delegate certificate). The chain must be rooted by the
+	// Owner Key from the ownership voucher.
+	DelegateKey(name string) (crypto.Signer, []*x509.Certificate, error)
+}

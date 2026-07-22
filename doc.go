@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: (C) 2024 Intel Corporation
 // SPDX-License-Identifier: Apache 2.0
 
-// Package fdo implements [FDO 1.1] protocol.
+// Package fdo implements [FDO 2.0] protocol.
 //
 // Many of the protocol types and values are located in the protocol
 // subpackage. This domain package includes the core "entrypoint" types.
@@ -35,5 +35,5 @@
 // the anchor of trust (combined with the associated private key - same as
 // device credential) on the opposite end of the device onboarding handshake.
 //
-// [FDO 1.1]: https://fidoalliance.org/specs/FDO/fido-device-onboard-v1.0-ps-20210323/fido-device-onboard-v1.0-ps-20210323.html
+// [FDO 2.0]: https://fidoalliance.org/specs/FDO/FIDO-Device-Onboard-RD02-v2.0-20260402/FIDO-Device-Onboard-RD02-v2.0-20260402.html
 package fdo

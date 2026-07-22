@@ -1017,7 +1017,7 @@ func (e *Encoder) Encode(v any) error {
 
 func holdsNilPtr(v any) bool {
 	switch rv := reflect.ValueOf(v); rv.Kind() {
-	case reflect.Ptr, reflect.Map, reflect.Array, reflect.Chan, reflect.Slice:
+	case reflect.Pointer, reflect.Map, reflect.Array, reflect.Chan, reflect.Slice:
 		return rv.IsNil()
 	default:
 		return false

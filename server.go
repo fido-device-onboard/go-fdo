@@ -13,6 +13,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/kex"
 	"github.com/fido-device-onboard/go-fdo/protocol"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
@@ -231,6 +232,21 @@ type TO2Server struct {
 	// is useful when it can help a well-behaved device communicate faster over
 	// a well understood network.
 	MaxDeviceServiceInfoSize func(context.Context, Voucher) (uint16, error)
+
+	// DelegateKeys provides access to delegate key material for FDO 2.0
+	// delegation. When OnboardDelegate is set, the server uses a delegate key
+	// instead of the owner key to sign TO2 messages and perform key exchange.
+	DelegateKeys DelegateKeyPersistentState
+
+	// OnboardDelegate, when non-empty, names the delegate whose key should
+	// be used for TO2 onboarding instead of the owner key. The named
+	// delegate must be retrievable via DelegateKeys.
+	OnboardDelegate string
+
+	// RvDelegate, when non-empty, names the delegate whose key should be
+	// used for rendezvous (TO1) operations instead of the owner key. The
+	// named delegate must be retrievable via DelegateKeys.
+	RvDelegate string
 }
 
 // Resell implements the FDO Resale Protocol by removing a voucher from
@@ -280,6 +296,76 @@ func (s *TO2Server) Resell(ctx context.Context, guid protocol.GUID, nextOwner cr
 	return extended, nil
 }
 
+// dispatchTO2v11 handles FDO 1.1 TO2 messages (60-71).
+func (s *TO2Server) dispatchTO2v11(ctx context.Context, msgType uint8, msg io.Reader) (uint8, any, error) {
+	switch msgType {
+	case protocol.TO2HelloDeviceMsgType:
+		resp, err := s.proveOVHdr(ctx, msg)
+		return protocol.TO2ProveOVHdrMsgType, resp, err
+	case protocol.TO2GetOVNextEntryMsgType:
+		resp, err := s.ovNextEntry(ctx, msg)
+		return protocol.TO2OVNextEntryMsgType, resp, err
+	case protocol.TO2ProveDeviceMsgType:
+		resp, err := s.setupDevice(ctx, msg)
+		return protocol.TO2SetupDeviceMsgType, resp, err
+	case protocol.TO2DeviceServiceInfoReadyMsgType:
+		resp, err := s.ownerServiceInfoReady(ctx, msg)
+		return protocol.TO2OwnerServiceInfoReadyMsgType, resp, err
+	case protocol.TO2DeviceServiceInfoMsgType:
+		resp, err := s.ownerServiceInfo(ctx, msg)
+		if err != nil {
+			s.Modules.CleanupModules(ctx)
+		}
+		return protocol.TO2OwnerServiceInfoMsgType, resp, err
+	case protocol.TO2DoneMsgType:
+		s.Modules.CleanupModules(ctx)
+		resp, err := s.to2Done2(ctx, msg)
+		return protocol.TO2Done2MsgType, resp, err
+	default:
+		return 0, nil, fmt.Errorf("unknown TO2 v1.1 message type: %d", msgType)
+	}
+}
+
+// dispatchTO2v20 handles FDO 2.0 TO2 messages (80-91).
+// Key difference: Device proves itself FIRST (anti-DoS).
+// FDO version context is injected by the HTTP handler from the URL path.
+func (s *TO2Server) dispatchTO2v20(ctx context.Context, msgType uint8, msg io.Reader) (uint8, any, error) {
+	switch msgType {
+	case protocol.TO2HelloDeviceProbeMsgType:
+		resp, err := s.helloDeviceAck20(ctx, msg)
+		return protocol.TO2HelloDeviceAck20MsgType, resp, err
+	case protocol.TO2ProveDevice20MsgType:
+		resp, err := s.proveOVHdr20(ctx, msg)
+		return protocol.TO2ProveOVHdr20MsgType, resp, err
+	case protocol.TO2GetOVNextEntry20MsgType:
+		resp, err := s.ovNextEntry20(ctx, msg)
+		return protocol.TO2OVNextEntry20MsgType, resp, err
+	case protocol.TO2DeviceSvcInfoRdy20MsgType:
+		resp, err := s.setupDevice20(ctx, msg)
+		return protocol.TO2SetupDevice20MsgType, resp, err
+	case protocol.TO2DeviceSvcInfo20MsgType:
+		var req DeviceSvcInfo20Msg
+		if decodeErr := cbor.NewDecoder(msg).Decode(&req); decodeErr != nil {
+			return protocol.ErrorMsgType, protocol.ErrorMessage{
+				Code:      protocol.MessageBodyErrCode,
+				ErrString: fmt.Sprintf("error decoding DeviceSvcInfo20: %v", decodeErr),
+				Timestamp: time.Now().Unix(),
+			}, nil
+		}
+		resp, err := s.ownerServiceInfo20(ctx, &req)
+		if err != nil {
+			s.Modules.CleanupModules(ctx)
+		}
+		return protocol.TO2OwnerSvcInfo20MsgType, resp, err
+	case protocol.TO2Done20MsgType:
+		s.Modules.CleanupModules(ctx)
+		resp, err := s.doneAck20(ctx, msg)
+		return protocol.TO2DoneAck20MsgType, resp, err
+	default:
+		return 0, nil, fmt.Errorf("unknown TO2 v2.0 message type: %d", msgType)
+	}
+}
+
 // Respond validates a request and returns the appropriate response message.
 func (s *TO2Server) Respond(ctx context.Context, msgType uint8, msg io.Reader) (respType uint8, resp any) {
 	// Inject a mutable error into the context for error info capturing without
@@ -287,34 +373,15 @@ func (s *TO2Server) Respond(ctx context.Context, msgType uint8, msg io.Reader) (
 	ctx = contextWithErrMsg(ctx)
 	captureMsgType(ctx, msgType)
 
-	// Handle each message type
+	// Dispatch to the appropriate version handler
 	var err error
-	switch msgType {
-	case protocol.TO2HelloDeviceMsgType:
-		respType = protocol.TO2ProveOVHdrMsgType
-		resp, err = s.proveOVHdr(ctx, msg)
-	case protocol.TO2GetOVNextEntryMsgType:
-		respType = protocol.TO2OVNextEntryMsgType
-		resp, err = s.ovNextEntry(ctx, msg)
-	case protocol.TO2ProveDeviceMsgType:
-		respType = protocol.TO2SetupDeviceMsgType
-		resp, err = s.setupDevice(ctx, msg)
-	case protocol.TO2DeviceServiceInfoReadyMsgType:
-		respType = protocol.TO2OwnerServiceInfoReadyMsgType
-		resp, err = s.ownerServiceInfoReady(ctx, msg)
-	case protocol.TO2DeviceServiceInfoMsgType:
-		respType = protocol.TO2OwnerServiceInfoMsgType
-		resp, err = s.ownerServiceInfo(ctx, msg)
-		if err != nil {
-			s.Modules.CleanupModules(ctx)
-		}
-	case protocol.TO2DoneMsgType:
-		s.Modules.CleanupModules(ctx)
-		respType = protocol.TO2Done2MsgType
-		resp, err = s.to2Done2(ctx, msg)
+	if protocol.VersionOf(msgType) == protocol.Version200 {
+		respType, resp, err = s.dispatchTO2v20(ctx, msgType, msg)
+	} else {
+		respType, resp, err = s.dispatchTO2v11(ctx, msgType, msg)
 	}
 
-	// Return response on success
+	// Return response on success or pre-built error response
 	if err == nil {
 		return respType, resp
 	}

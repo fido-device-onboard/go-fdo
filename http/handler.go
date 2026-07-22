@@ -39,22 +39,48 @@ type Handler struct {
 	MaxContentLength int64
 }
 
-func msgTypeFromPath(w http.ResponseWriter, r *http.Request) (uint8, bool) {
+func versionAndMsgFromPath(w http.ResponseWriter, r *http.Request) (protocol.Version, uint8, bool) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
-		return 0, false
+		return 0, 0, false
 	}
-	path := strings.TrimPrefix(r.URL.Path, "/fdo/101/msg/")
-	if strings.Contains(path, "/") {
+
+	// Parse path: /fdo/{ver}/msg/{type}
+	path := strings.TrimPrefix(r.URL.Path, "/fdo/")
+	parts := strings.Split(path, "/")
+	if len(parts) != 3 || parts[1] != "msg" {
 		w.WriteHeader(http.StatusNotFound)
-		return 0, false
+		return 0, 0, false
 	}
-	typ, err := strconv.ParseUint(path, 10, 8)
+
+	// Parse version
+	ver, err := strconv.ParseUint(parts[0], 10, 16)
+	if err != nil {
+		writeErr(w, 0, fmt.Errorf("invalid FDO version"))
+		return 0, 0, false
+	}
+	version := protocol.Version(ver)
+	if !version.IsValid() {
+		writeErr(w, 0, fmt.Errorf("unsupported FDO version: %d", ver))
+		return 0, 0, false
+	}
+
+	// Parse message type
+	typ, err := strconv.ParseUint(parts[2], 10, 8)
 	if err != nil {
 		writeErr(w, 0, fmt.Errorf("invalid message type"))
-		return 0, false
+		return 0, 0, false
 	}
-	return uint8(typ), true
+	msgType := uint8(typ)
+
+	// Validate that the URL version matches the message type's version
+	msgVersion := protocol.VersionOf(msgType)
+	if msgVersion != version {
+		writeErr(w, 0, fmt.Errorf("message type %d belongs to FDO version %s, not %s", msgType, msgVersion, version))
+		return 0, 0, false
+	}
+
+	return version, msgType, true
 }
 
 func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -64,12 +90,15 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// Parse message type from request URL
-	msgType, ok := msgTypeFromPath(w, r)
+	// Parse version and message type from request URL
+	version, msgType, ok := versionAndMsgFromPath(w, r)
 	if !ok {
 		return
 	}
 	proto := protocol.Of(msgType)
+
+	// Inject FDO version into context so downstream handlers can use it
+	ctx = protocol.ContextWithVersion(ctx, version)
 
 	// Parse request headers
 	token := r.Header.Get("Authorization")
@@ -90,21 +119,17 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Get responder for message
 	var resp protocol.Responder
-	var isProtocolStart bool
 	switch proto {
 	case protocol.DIProtocol:
 		resp = h.DIResponder
-		isProtocolStart = msgType == 10
 	case protocol.TO0Protocol:
 		resp = h.TO0Responder
-		isProtocolStart = msgType == 20
 	case protocol.TO1Protocol:
 		resp = h.TO1Responder
-		isProtocolStart = msgType == 30
 	case protocol.TO2Protocol:
 		resp = h.TO2Responder
-		isProtocolStart = msgType == 60
 	}
+	isProtocolStart := protocol.IsProtocolStart(msgType)
 	if resp == nil {
 		writeErr(w, msgType, fmt.Errorf("unsupported message type"))
 		return
@@ -189,8 +214,8 @@ func (h Handler) handleRequest(ctx context.Context, w http.ResponseWriter, r *ht
 		})
 	}
 
-	// Decrypt TO2 messages after 64
-	if protocol.TO2ProveDeviceMsgType < msgType && msgType < protocol.ErrorMsgType {
+	// Decrypt TO2 messages that require session encryption
+	if protocol.IsTO2Encrypted(msgType) {
 		sess, err := resp.(interface {
 			CryptSession(ctx context.Context) (kex.Session, error)
 		}).CryptSession(ctx)
@@ -229,8 +254,8 @@ func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, msgTy
 		}
 	}
 
-	// Encrypt TO2 messages beginning with 64
-	if protocol.TO2ProveDeviceMsgType < respType && respType < protocol.ErrorMsgType {
+	// Encrypt TO2 response messages that require session encryption
+	if protocol.IsTO2Encrypted(respType) {
 		sess, err := resp.(interface {
 			CryptSession(ctx context.Context) (kex.Session, error)
 		}).CryptSession(ctx)
@@ -255,8 +280,7 @@ func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, msgTy
 	}
 
 	// Invalidate token when finishing a protocol
-	switch respType {
-	case 13, 23, 33, 71:
+	if protocol.IsProtocolEnd(respType) {
 		h.invalidateToken(ctx)
 	}
 

@@ -35,8 +35,9 @@ import (
 
 // COSE claims for TO2ProveOVHdrUnprotectedHeaders
 var (
-	to2NonceClaim       = cose.Label{Int64: 256}
-	to2OwnerPubKeyClaim = cose.Label{Int64: 257}
+	to2NonceClaim         = cose.Label{Int64: 256}
+	to2OwnerPubKeyClaim   = cose.Label{Int64: 257}
+	to2DelegateChainClaim = cose.Label{Int64: 258}
 )
 
 // TO2Config contains the device credential, including secrets and keys,
@@ -339,13 +340,10 @@ func verifyVoucher(ctx context.Context, transport Transport, to1d *cose.Sign1[pr
 		return fmt.Errorf("bad ownership voucher entries from TO2.ProveOVHdr: %w", err)
 	}
 
-	// Ensure that the voucher entry chain ends with given owner key.
-	//
-	// Note that this check is REQUIRED in this case, because the the owner public
-	// key from the ProveOVHdr message's unprotected headers is used to
-	// validate its COSE signature. If the public key were not to match the
-	// last entry of the voucher, then it would not be known that ProveOVHdr
-	// was signed by the intended owner service.
+	// Ensure that the voucher entry chain ends with the expected owner key.
+	// The owner public key from the ProveOVHdr message's unprotected
+	// headers was used to validate its COSE signature, so it must match
+	// the last voucher entry.
 	ownerPub := ov.Header.Val.ManufacturerKey
 	if len(ov.Entries) > 0 {
 		ownerPub = ov.Entries[len(ov.Entries)-1].Payload.Val.PublicKey
@@ -359,7 +357,7 @@ func verifyVoucher(ctx context.Context, transport Transport, to1d *cose.Sign1[pr
 		return fmt.Errorf("owner public key did not match last entry in ownership voucher")
 	}
 
-	// If no to1d blob was given, then immmediately return. This will be the
+	// If no to1d blob was given, then immediately return. This will be the
 	// case when RV bypass was used.
 	if to1d == nil {
 		return nil
@@ -471,16 +469,16 @@ func sendHelloDevice(ctx context.Context, transport Transport, c *TO2Config) (pr
 		return protocol.Nonce{}, nil, nil, fmt.Errorf("owner pubkey unprotected header from TO2.ProveOVHdr could not be unmarshaled: %w", err)
 	}
 
-	// Validate response signature and nonce. While the payload signature
-	// verification is performed using the untrusted owner public key from the
-	// headers, this is acceptable, because the owner public key will be
-	// subsequently verified when the voucher entry chain is built and
-	// verified.
 	key, err := ownerPubKey.Public()
 	if err != nil {
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
 		return protocol.Nonce{}, nil, nil, fmt.Errorf("error parsing owner public key to verify TO2.ProveOVHdr payload signature: %w", err)
 	}
+
+	// Validate response signature and nonce. While the payload signature
+	// verification is performed using the untrusted owner public key from the
+	// headers, this is acceptable, because the key will be subsequently
+	// verified when the voucher entry chain is built and verified.
 	if ok, err := proveOVHdr.Verify(key, nil, nil); err != nil {
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
 		return protocol.Nonce{}, nil, nil, fmt.Errorf("error verifying TO2.ProveOVHdr payload signature: %w", err)
@@ -652,12 +650,16 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 		clear(xA)
 		return nil, fmt.Errorf("device sig info has key type %q, must be %q to match manufacturer key", keyType, mfgKeyType)
 	}
+
+	// Build the ProveOVHdr response signed with the owner key.
+	unprotectedHeaders := map[cose.Label]any{
+		to2NonceClaim:       proveDeviceNonce,
+		to2OwnerPubKeyClaim: ownerPublicKey,
+	}
+
 	s1 := cose.Sign1[ovhProof, []byte]{
 		Header: cose.Header{
-			Unprotected: map[cose.Label]any{
-				to2NonceClaim:       proveDeviceNonce,
-				to2OwnerPubKeyClaim: ownerPublicKey,
-			},
+			Unprotected: unprotectedHeaders,
 		},
 		Payload: cbor.NewByteWrap(ovhProof{
 			OVH:                 ov.Header,
@@ -993,6 +995,8 @@ func (s *TO2Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1
 	if err != nil {
 		return nil, err
 	}
+
+	// Complete key exchange with the owner key.
 	rsaOwnerPrivateKey, _ := ownerKey.(*rsa.PrivateKey)
 	if err := sess.SetParameter(xB, rsaOwnerPrivateKey); err != nil {
 		return nil, fmt.Errorf("error completing key exchange: %w", err)

@@ -36,6 +36,25 @@ type Transport struct {
 	prevMsg uint8
 }
 
+// responderForMessage returns the protocol responder and whether the message
+// starts a new protocol session. A nil responder signals AnyProtocol.
+func (t *Transport) responderForMessage(msgType uint8) (protocol.Responder, bool, error) {
+	switch protocol.Of(msgType) {
+	case protocol.DIProtocol:
+		return t.DIResponder, msgType == 10, nil
+	case protocol.TO0Protocol:
+		return t.TO0Responder, msgType == 20, nil
+	case protocol.TO1Protocol:
+		return t.TO1Responder, msgType == 30, nil
+	case protocol.TO2Protocol:
+		return t.TO2Responder, protocol.IsProtocolStart(msgType), nil
+	case protocol.AnyProtocol:
+		return nil, false, nil
+	default:
+		return nil, false, fmt.Errorf("unsupported msg type: %d", msgType)
+	}
+}
+
 // Send implements fdo.Transport.
 func (t *Transport) Send(ctx context.Context, msgType uint8, msg any, sess kex.Session) (uint8, io.ReadCloser, error) {
 	select {
@@ -54,35 +73,26 @@ func (t *Transport) Send(ctx context.Context, msgType uint8, msg any, sess kex.S
 	}
 
 	t.T.Logf("Request %d: %v", msgType, tryDebugNotation(msg))
-	var responder protocol.Responder
-	proto := protocol.Of(msgType)
-	var isProtocolStart bool
-	switch proto {
-	case protocol.DIProtocol:
-		responder = t.DIResponder
-		isProtocolStart = msgType == 10
-	case protocol.TO0Protocol:
-		responder = t.TO0Responder
-		isProtocolStart = msgType == 20
-	case protocol.TO1Protocol:
-		responder = t.TO1Responder
-		isProtocolStart = msgType == 30
-	case protocol.TO2Protocol:
-		responder = t.TO2Responder
-		isProtocolStart = msgType == 60
-	case protocol.AnyProtocol:
+	responder, isProtocolStart, err := t.responderForMessage(msgType)
+	if err != nil {
+		return 0, nil, err
+	}
+	if responder == nil {
 		return 0, nil, nil
-	default:
-		return 0, nil, fmt.Errorf("unsupported msg type: %d", msgType)
 	}
 	if isProtocolStart {
-		initToken, err := t.Tokens.NewToken(ctx, proto)
+		initToken, err := t.Tokens.NewToken(ctx, protocol.Of(msgType))
 		if err != nil {
-			return 0, nil, fmt.Errorf("error initializing token [protocol=%s]: %w", proto, err)
+			return 0, nil, fmt.Errorf("error initializing token [protocol=%s]: %w", protocol.Of(msgType), err)
 		}
 		t.token = initToken
 	}
 	ctx = t.Tokens.TokenContext(ctx, t.token)
+
+	// Inject FDO version into context based on the message type. In
+	// production the HTTP handler does this from the URL path, but the
+	// test transport bypasses the handler.
+	ctx = protocol.ContextWithVersion(ctx, protocol.VersionOf(msgType))
 
 	respType, resp := responder.Respond(ctx, msgType, &msgBody)
 	t.T.Logf("Response %d: %v", respType, tryDebugNotation(resp))
@@ -95,7 +105,7 @@ func (t *Transport) Send(ctx context.Context, msgType uint8, msg any, sess kex.S
 	}
 
 	switch respType {
-	case 13, 23, 33, 71, protocol.ErrorMsgType:
+	case 13, 23, 33, 71, 91, protocol.ErrorMsgType:
 		if err := t.Tokens.InvalidateToken(t.Tokens.TokenContext(context.Background(), t.token)); err != nil {
 			t.T.Logf("error invalidating token: %v", err)
 		}

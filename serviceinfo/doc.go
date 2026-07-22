@@ -6,7 +6,7 @@ Package serviceinfo contains interfaces and implementations for service info
 modules as well as types for handling CBOR-encoded service info.
 
 Service info modules are the handlers for service info sent between the device
-and owner service in message types 68 and 69. While the FDO 1.1 spec only
+and owner service in message types 68 and 69. While the FDO 2.0 spec only
 lightly describes "Management Service - Agent interactions" in section 3.8,
 examples of service info modules may be found in the FIDO Alliance
 [FSIM Repository]. The one defined service info module from the FDO spec is

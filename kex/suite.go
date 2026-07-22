@@ -112,7 +112,7 @@ func (s Suite) Valid(device, owner crypto.PublicKey) bool { //nolint:gocyclo
 		}
 	}
 	if deviceIsRSA {
-		// FDO version 1.1 says nothing about key exchanges allowed for devices
+		// FDO 2.0 says nothing about key exchanges allowed for devices
 		// using RSA keys
 		return true
 	}

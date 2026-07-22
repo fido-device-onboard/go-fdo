@@ -128,7 +128,7 @@ func (c *Command) execute(ctx context.Context) error {
 	}
 
 	// Start command
-	ctx, _ = context.WithTimeout(ctx, timeout)     //nolint:govet // This context is only used for the command
+	ctx, _ = context.WithTimeout(ctx, timeout)     //nolint:govet,gosec // Context is intentionally not canceled as it's tied to command lifecycle
 	c.cmd = exec.CommandContext(ctx, name, arg...) //nolint:gosec // This is dangerous by intentional design as the owner service is meant to be privileged
 	if c.stdout {
 		var buf safeBuffer
