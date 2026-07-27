@@ -6,12 +6,12 @@ replace github.com/fido-device-onboard/go-fdo => ../
 
 require (
 	github.com/fido-device-onboard/go-fdo v0.0.0-00010101000000-000000000000
-	github.com/ncruces/go-sqlite3 v0.30.5
+	github.com/ncruces/go-sqlite3 v0.35.2
 )
 
 require (
+	github.com/ncruces/go-sqlite3-wasm/v3 v3.2.35303 // indirect
 	github.com/ncruces/julianday v1.0.0 // indirect
-	github.com/tetratelabs/wazero v1.11.0 // indirect
-	golang.org/x/crypto v0.47.0 // indirect
-	golang.org/x/sys v0.40.0 // indirect
+	golang.org/x/crypto v0.54.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
 )
