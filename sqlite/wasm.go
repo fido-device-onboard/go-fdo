@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 
 	"github.com/ncruces/go-sqlite3/driver"    // Load database/sql driver
-	_ "github.com/ncruces/go-sqlite3/embed"   // Load sqlite WASM binary
 	_ "github.com/ncruces/go-sqlite3/vfs/xts" // Encryption VFS
 )
 
