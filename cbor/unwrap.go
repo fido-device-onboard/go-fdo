@@ -17,7 +17,13 @@ var ErrNullOrUndefined = fmt.Errorf("null or undefined")
 //
 // If the next value is the undefined or null simple value, err will wrap
 // ErrNullOrUndefined.
-func (d *Decoder) UnwrapArray() (uint64, error) { return d.unwrap(arrayMajorType) }
+func (d *Decoder) UnwrapArray() (uint64, error) {
+	n, err := d.unwrap(arrayMajorType)
+	if n > MaxArrayDecodeLength {
+		return 0, fmt.Errorf("length exceeds max size: %d", n)
+	}
+	return n, err
+}
 
 // UnwrapBytes ensures the next type to decode is either a text or byte string
 // and returns its length, progressing the underlying reader to the start of
@@ -26,7 +32,11 @@ func (d *Decoder) UnwrapArray() (uint64, error) { return d.unwrap(arrayMajorType
 // If the next value is the undefined or null simple value, err will wrap
 // ErrNullOrUndefined.
 func (d *Decoder) UnwrapBytes() (uint64, error) {
-	return d.unwrap(byteStringMajorType, textStringMajorType)
+	n, err := d.unwrap(byteStringMajorType, textStringMajorType)
+	if n > MaxArrayDecodeLength {
+		return 0, fmt.Errorf("length exceeds max size: %d", n)
+	}
+	return n, err
 }
 
 // Untag ensures the next type to decode is a tag and returns the tag number,
