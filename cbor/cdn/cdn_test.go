@@ -7,7 +7,7 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/fido-device-onboard/go-fdo/cbor/cdn"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor/cdn"
 )
 
 func TestEncodeHelloDevice(t *testing.T) {

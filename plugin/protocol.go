@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"unicode/utf8"
 
-	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor"
 )
 
 type command byte

@@ -15,7 +15,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/fido-device-onboard/go-fdo"
+	"github.com/fido-device-onboard/go-fdo/v2"
 )
 
 // DeviceCredential contains all device state, including both public and private

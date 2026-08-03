@@ -12,8 +12,8 @@ import (
 	"io"
 	"strings"
 
-	"github.com/fido-device-onboard/go-fdo/cbor"
-	"github.com/fido-device-onboard/go-fdo/internal/nistkdf"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor"
+	"github.com/fido-device-onboard/go-fdo/v2/internal/nistkdf"
 )
 
 func init() {

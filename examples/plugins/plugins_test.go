@@ -16,11 +16,11 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/fido-device-onboard/go-fdo/fdotest"
-	"github.com/fido-device-onboard/go-fdo/fsim"
-	"github.com/fido-device-onboard/go-fdo/plugin"
-	"github.com/fido-device-onboard/go-fdo/protocol"
-	"github.com/fido-device-onboard/go-fdo/serviceinfo"
+	"github.com/fido-device-onboard/go-fdo/v2/fdotest"
+	"github.com/fido-device-onboard/go-fdo/v2/fsim"
+	"github.com/fido-device-onboard/go-fdo/v2/plugin"
+	"github.com/fido-device-onboard/go-fdo/v2/protocol"
+	"github.com/fido-device-onboard/go-fdo/v2/serviceinfo"
 )
 
 func TestDownloadOwnerPlugin(t *testing.T) {

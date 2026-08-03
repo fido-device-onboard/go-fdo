@@ -12,8 +12,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/fido-device-onboard/go-fdo/cbor"
-	"github.com/fido-device-onboard/go-fdo/protocol"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor"
+	"github.com/fido-device-onboard/go-fdo/v2/protocol"
 )
 
 // DeviceMfgInfo is an example structure for use in DI.AppStart. The structure

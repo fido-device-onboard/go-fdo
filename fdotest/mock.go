@@ -13,8 +13,8 @@ import (
 	"io"
 	"sync"
 
-	"github.com/fido-device-onboard/go-fdo/plugin"
-	"github.com/fido-device-onboard/go-fdo/serviceinfo"
+	"github.com/fido-device-onboard/go-fdo/v2/plugin"
+	"github.com/fido-device-onboard/go-fdo/v2/serviceinfo"
 )
 
 // MockDeviceModule implements a trivial serviceinfo.DeviceModule.

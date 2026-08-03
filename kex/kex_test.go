@@ -11,8 +11,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/fido-device-onboard/go-fdo/cbor"
-	"github.com/fido-device-onboard/go-fdo/kex"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor"
+	"github.com/fido-device-onboard/go-fdo/v2/kex"
 )
 
 func testSuite(suite kex.Suite) func(t *testing.T) {

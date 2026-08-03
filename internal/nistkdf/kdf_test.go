@@ -9,8 +9,8 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/fido-device-onboard/go-fdo/internal/build"
-	"github.com/fido-device-onboard/go-fdo/internal/nistkdf"
+	"github.com/fido-device-onboard/go-fdo/v2/internal/build"
+	"github.com/fido-device-onboard/go-fdo/v2/internal/nistkdf"
 )
 
 func TestKnownResult(t *testing.T) {

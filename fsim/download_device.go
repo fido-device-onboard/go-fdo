@@ -14,8 +14,8 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/fido-device-onboard/go-fdo/cbor"
-	"github.com/fido-device-onboard/go-fdo/serviceinfo"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor"
+	"github.com/fido-device-onboard/go-fdo/v2/serviceinfo"
 )
 
 // Download implements https://github.com/fido-alliance/fdo-sim/blob/main/fsim-repository/fdo.download.md

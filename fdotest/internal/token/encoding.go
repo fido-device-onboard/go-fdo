@@ -10,8 +10,8 @@ import (
 	"crypto/sha512"
 	"encoding/base64"
 
-	"github.com/fido-device-onboard/go-fdo"
-	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/v2"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor"
 )
 
 // Unique provides randomness to a token before any state is set.

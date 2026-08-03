@@ -4,8 +4,8 @@
 package fdo
 
 import (
-	"github.com/fido-device-onboard/go-fdo/cose"
-	"github.com/fido-device-onboard/go-fdo/protocol"
+	"github.com/fido-device-onboard/go-fdo/v2/cose"
+	"github.com/fido-device-onboard/go-fdo/v2/protocol"
 )
 
 // Entity Attestation Tokens (EAT)

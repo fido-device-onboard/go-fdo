@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/fido-device-onboard/go-fdo/internal/build"
+	"github.com/fido-device-onboard/go-fdo/v2/internal/build"
 )
 
 func TestEncryptDecrypt(t *testing.T) {

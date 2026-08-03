@@ -15,11 +15,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/fido-device-onboard/go-fdo"
-	"github.com/fido-device-onboard/go-fdo/blob"
-	"github.com/fido-device-onboard/go-fdo/cbor"
-	"github.com/fido-device-onboard/go-fdo/cose"
-	"github.com/fido-device-onboard/go-fdo/protocol"
+	"github.com/fido-device-onboard/go-fdo/v2"
+	"github.com/fido-device-onboard/go-fdo/v2/blob"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor"
+	"github.com/fido-device-onboard/go-fdo/v2/cose"
+	"github.com/fido-device-onboard/go-fdo/v2/protocol"
 )
 
 /*
@@ -198,11 +198,30 @@ func TestExtendAndVerify(t *testing.T) {
 
 func TestVerifyExtendedVoucher(t *testing.T) {
 	var ov fdo.Voucher
-	if err := cbor.Unmarshal(voucherBytes(t, "ov_extended.pem"), &ov); err != nil {
+	if err := cbor.Unmarshal(voucherBytes(t, "ov.pem"), &ov); err != nil {
 		t.Fatalf("error parsing voucher test data: %v", err)
 	}
 
-	if err := ov.VerifyEntries(); err != nil {
+	var mfgKey crypto.Signer
+	if data, err := os.ReadFile("testdata/mfg_key.pem"); err != nil {
+		t.Fatalf("error reading manufacturer key: %v", err)
+	} else if blk, _ := pem.Decode(data); blk == nil {
+		t.Fatal("unable to parse manufacturer key PEM")
+	} else if mfgKey, err = x509.ParseECPrivateKey(blk.Bytes); err != nil {
+		t.Fatalf("error parsing manufacturer key: %v", err)
+	}
+
+	nextKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("error generating key for next device owner: %v", err)
+	}
+
+	extended, err := fdo.ExtendVoucher(&ov, mfgKey, nextKey.Public().(*ecdsa.PublicKey), nil)
+	if err != nil {
+		t.Fatalf("error extending voucher: %v", err)
+	}
+
+	if err := extended.VerifyEntries(); err != nil {
 		t.Errorf("error verifying voucher entries: %v", err)
 	}
 }

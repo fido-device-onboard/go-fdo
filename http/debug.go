@@ -8,8 +8,8 @@ import (
 	"encoding/hex"
 	"log/slog"
 
-	"github.com/fido-device-onboard/go-fdo/cbor"
-	"github.com/fido-device-onboard/go-fdo/cbor/cdn"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor/cdn"
 )
 
 func debugEnabled() bool {

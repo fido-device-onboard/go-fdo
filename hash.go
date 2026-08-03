@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"hash"
 
-	"github.com/fido-device-onboard/go-fdo/cbor"
-	"github.com/fido-device-onboard/go-fdo/protocol"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor"
+	"github.com/fido-device-onboard/go-fdo/v2/protocol"
 )
 
 type fallibleHash interface {

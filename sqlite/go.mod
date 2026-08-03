@@ -1,11 +1,11 @@
-module github.com/fido-device-onboard/go-fdo/sqlite
+module github.com/fido-device-onboard/go-fdo/v2/sqlite
 
 go 1.25.0
 
-replace github.com/fido-device-onboard/go-fdo => ../
+replace github.com/fido-device-onboard/go-fdo/v2 => ../
 
 require (
-	github.com/fido-device-onboard/go-fdo v0.0.0-00010101000000-000000000000
+	github.com/fido-device-onboard/go-fdo/v2 v2.0.0-00010101000000-000000000000
 	github.com/ncruces/go-sqlite3 v0.35.3
 )
 

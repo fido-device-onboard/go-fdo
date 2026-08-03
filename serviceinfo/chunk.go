@@ -10,7 +10,7 @@ import (
 	"io"
 	"sync"
 
-	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor"
 )
 
 // ErrSizeTooSmall indicates that a chunk could not be read due to insufficient

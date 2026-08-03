@@ -9,7 +9,7 @@ import (
 	"io"
 	"maps"
 
-	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor"
 )
 
 // Crypter uses a given key and cipher to encypt and decrypt data.

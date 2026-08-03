@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/fido-device-onboard/go-fdo"
+	"github.com/fido-device-onboard/go-fdo/v2"
 )
 
 // DeviceKeyType enumerates how DeviceKey is encoded and stored.

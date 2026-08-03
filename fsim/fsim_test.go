@@ -26,12 +26,12 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/fido-device-onboard/go-fdo/cbor"
-	"github.com/fido-device-onboard/go-fdo/cbor/cdn"
-	"github.com/fido-device-onboard/go-fdo/fdotest"
-	"github.com/fido-device-onboard/go-fdo/fsim"
-	"github.com/fido-device-onboard/go-fdo/protocol"
-	"github.com/fido-device-onboard/go-fdo/serviceinfo"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor/cdn"
+	"github.com/fido-device-onboard/go-fdo/v2/fdotest"
+	"github.com/fido-device-onboard/go-fdo/v2/fsim"
+	"github.com/fido-device-onboard/go-fdo/v2/protocol"
+	"github.com/fido-device-onboard/go-fdo/v2/serviceinfo"
 )
 
 func TestClientWithDataModules(t *testing.T) {
