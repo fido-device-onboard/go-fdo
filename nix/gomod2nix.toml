@@ -41,11 +41,11 @@ schema = 3
     version = "v0.0.22"
     hash = "sha256-6O/0jc33pKUzlzUGpH8Ekk54XgJvx6Qe7kJtbcNJAV4="
   [mod."github.com/ncruces/go-sqlite3"]
-    version = "v0.35.2"
-    hash = "sha256-KZ3akAAeRwBvhoAy2wHFkTfUBE/5YAwDKNMJ//6FDlM="
+    version = "v0.35.3"
+    hash = "sha256-z094knnbvLfvPvFLeYkCa3R09+ZateJ+1a0Efs6WkjE="
   [mod."github.com/ncruces/go-sqlite3-wasm/v3"]
-    version = "v3.2.35303"
-    hash = "sha256-1r8S8G0da0R1JFF6uVD0MqulTkhULig6/DnY61tDVVU="
+    version = "v3.2.35304"
+    hash = "sha256-nRE653FF9AJ2zDKHEGQBjBEF+dZCexrqn07uT/IZ2bc="
   [mod."github.com/ncruces/julianday"]
     version = "v1.0.0"
     hash = "sha256-EelxOI6DLHy0jYnAcTeda24wLWkGOYuFtoJvuDg874s="
