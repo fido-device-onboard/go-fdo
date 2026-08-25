@@ -164,6 +164,8 @@ func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid pro
 	// Sign to1d rendezvous blob — use delegate key if available
 	var signingKey crypto.Signer
 	var delegateChain []*x509.Certificate
+	mfgKey := ov.Header.Val.ManufacturerKey
+	keyType := mfgKey.Type
 
 	if delegateName != "" && c.DelegateKeys != nil {
 		dKey, dChain, dErr := c.DelegateKeys.DelegateKey(delegateName)
@@ -173,8 +175,6 @@ func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid pro
 		signingKey = dKey
 		delegateChain = dChain
 	} else {
-		mfgKey := ov.Header.Val.ManufacturerKey
-		keyType := mfgKey.Type
 		oKey, _, oErr := c.OwnerKeys.OwnerKey(ctx, keyType, mfgKey.RsaBits())
 		if errors.Is(oErr, ErrNotFound) {
 			return 0, fmt.Errorf("no available owner key for TO0.OwnerSign [type=%s]", keyType)
@@ -184,7 +184,7 @@ func (c *TO0Client) ownerSign(ctx context.Context, transport Transport, guid pro
 		signingKey = oKey
 	}
 
-	opts, err := signOptsFor(signingKey, false)
+	opts, err := signOptsFor(signingKey, keyType == protocol.RsaPssKeyType)
 	if err != nil {
 		return 0, fmt.Errorf("error determining signing options for TO0.OwnerSign: %w", err)
 	}

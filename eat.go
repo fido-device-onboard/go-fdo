@@ -77,8 +77,6 @@ var (
 	eatFdoClaim = cose.Label{Int64: -257}
 	// If needed for a given ROE, is an unprotected header item (not payload)
 	eatMaroePrefixClaim = cose.Label{Int64: -258} //nolint:unused
-	// An unprotected header item
-	eatUnprotectedNonceClaim = cose.Label{Int64: -259}
 )
 
 // eatoken is used for the Device attestation. Entity Attestation Tokens in

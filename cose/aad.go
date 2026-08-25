@@ -52,7 +52,7 @@ var (
 func mustEncodeDomainAAD(tag string) []byte {
 	data, err := cbor.Marshal([]string{tag})
 	if err != nil {
-		panic("cose: failed to encode domain AAD tag: " + err.Error())
+		panic("cose: failed to encode domain AAD tag " + tag + ": " + err.Error())
 	}
 	return data
 }

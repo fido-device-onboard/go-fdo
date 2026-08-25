@@ -334,6 +334,7 @@ func sendHelloDevice(ctx context.Context, transport Transport, c *TO2Config) (pr
 		KexSuiteName:         c.KeyExchange,
 		CipherSuite:          c.CipherSuite,
 		SigInfoA:             *aSigInfo,
+		CapFlags:             GlobalCapabilityFlags,
 	}
 
 	rawHello, err := cbor.Marshal(hello)
@@ -454,6 +455,7 @@ type helloDeviceMsg struct {
 	KexSuiteName         kex.Suite
 	CipherSuite          kex.CipherSuiteID
 	SigInfoA             sigInfo
+	CapFlags             CapabilityFlags `cbor:",omitempty"`
 }
 
 type ovhValidationContext struct {
@@ -471,12 +473,6 @@ type ovhValidationContext struct {
 //
 //nolint:gocyclo
 func sendProveDevice(ctx context.Context, transport Transport, proveOVNonce protocol.Nonce, rawHelloDevice []byte, c *TO2Config) (*ovhValidationContext, kex.Session, error) {
-	// Generate a new nonce for SetupDevice
-	var setupDeviceNonce protocol.Nonce
-	if _, err := rand.Read(setupDeviceNonce[:]); err != nil {
-		return nil, nil, fmt.Errorf("error generating new nonce for TO2.ProveDevice request: %w", err)
-	}
-
 	// Create key exchange session and generate device parameter (xB)
 	sess := c.KeyExchange.New(nil, c.CipherSuite)
 	rsaOwnerPublicKey := (*rsa.PublicKey)(nil) // we don't know owner key yet
@@ -488,11 +484,6 @@ func sendProveDevice(ctx context.Context, transport Transport, proveOVNonce prot
 
 	// Build and sign the device EAT
 	token := cose.Sign1[eatoken, []byte]{
-		Header: cose.Header{
-			Unprotected: map[cose.Label]any{
-				eatUnprotectedNonceClaim: setupDeviceNonce,
-			},
-		},
 		Payload: cbor.NewByteWrap(newEAT(c.Cred.GUID, proveOVNonce, struct {
 			KeyExchangeB []byte
 		}{
@@ -738,11 +729,7 @@ func (s *TO2Server) ovNextEntry(ctx context.Context, msg io.Reader) (*ovEntry, e
 // getting replacement credentials. The device reports its max service info
 // size, and gets back replacement GUID/RvInfo/Owner2Key.
 func sendDeviceServiceInfoReady(ctx context.Context, transport Transport, ownerPublicKey crypto.PublicKey, sess kex.Session, c *TO2Config) (protocol.Nonce, *VoucherHeader, error) {
-	// Generate a new nonce for SetupDevice
 	var setupDeviceNonce protocol.Nonce
-	if _, err := rand.Read(setupDeviceNonce[:]); err != nil {
-		return protocol.Nonce{}, nil, fmt.Errorf("error generating new nonce for TO2.DeviceServiceInfoReady: %w", err)
-	}
 
 	msg := deviceServiceInfoReady{
 		MaxOwnerServiceInfoSize: &c.MaxServiceInfoSizeReceive,
@@ -826,17 +813,6 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 	var eat eatoken
 	if err := cbor.Unmarshal([]byte(proof.Payload.Val), &eat); err != nil {
 		return nil, fmt.Errorf("error decoding TO2.ProveDevice request: %w", err)
-	}
-
-	// Parse SetupDevice nonce from unprotected headers
-	var setupDeviceNonce protocol.Nonce
-	if ok, err := proof.Unprotected.Parse(eatUnprotectedNonceClaim, &setupDeviceNonce); err != nil {
-		return nil, fmt.Errorf("error parsing SetupDevice nonce from TO2.ProveDevice request unprotected header: %w", err)
-	} else if !ok {
-		return nil, fmt.Errorf("TO2.ProveDevice request missing SetupDevice nonce in unprotected headers")
-	}
-	if err := s.Session.SetSetupDeviceNonce(ctx, setupDeviceNonce); err != nil {
-		return nil, fmt.Errorf("error storing SetupDevice nonce from TO2.ProveDevice request: %w", err)
 	}
 
 	// Retrieve voucher (GUID was stored by helloDeviceAck)

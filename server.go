@@ -233,17 +233,6 @@ type TO2Server struct {
 	// If VerifyVoucher is nil, the default behavior is to reject all vouchers
 	// with zero extensions.
 	VerifyVoucher func(context.Context, Voucher) error
-
-	// MaxDeviceServiceInfoSize configures the maximum size service info that
-	// Owner can receive and that the device should send. If left unset, then
-	// DefaultMTU is used.
-	//
-	// Setting this configuration does not actually enforce that the device
-	// does not send larger service info. The server transport should be
-	// configured to only read data of a maximum size. Choosing a lower value
-	// is useful when it can help a well-behaved device communicate faster over
-	// a well understood network.
-	MaxDeviceServiceInfoSize func(context.Context, Voucher) (uint16, error)
 }
 
 // Resell implements the FDO Resale Protocol by removing a voucher from
