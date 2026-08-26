@@ -20,6 +20,10 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           # We need full history to amend the commit.
           fetch-depth: 0
+          # Required since actions/checkout v7 blocks fork PR checkouts in
+          # pull_request_target by default. This workflow intentionally checks
+          # out PR code to update generated nix files and push back.
+          allow-unsafe-pr-checkout: true
 
       - name: Install Nix
         uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342
