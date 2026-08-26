@@ -24,8 +24,8 @@ require (
 )
 
 require (
-	github.com/ncruces/go-sqlite3 v0.35.2 // indirect
-	github.com/ncruces/go-sqlite3-wasm/v3 v3.2.35303 // indirect
+	github.com/ncruces/go-sqlite3 v0.35.3 // indirect
+	github.com/ncruces/go-sqlite3-wasm/v3 v3.2.35304 // indirect
 	github.com/ncruces/julianday v1.0.0 // indirect
 	github.com/neilotoole/jsoncolor v0.9.1 // indirect
 	golang.org/x/crypto v0.54.0 // indirect
