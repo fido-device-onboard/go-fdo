@@ -7,11 +7,11 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/fido-device-onboard/go-fdo"
-	"github.com/fido-device-onboard/go-fdo/fdotest"
-	fdo_http "github.com/fido-device-onboard/go-fdo/http"
-	"github.com/fido-device-onboard/go-fdo/http/internal/httputil"
-	"github.com/fido-device-onboard/go-fdo/protocol"
+	"github.com/fido-device-onboard/go-fdo/v2"
+	"github.com/fido-device-onboard/go-fdo/v2/fdotest"
+	fdo_http "github.com/fido-device-onboard/go-fdo/v2/http"
+	"github.com/fido-device-onboard/go-fdo/v2/http/internal/httputil"
+	"github.com/fido-device-onboard/go-fdo/v2/protocol"
 )
 
 func TestClient(t *testing.T) {

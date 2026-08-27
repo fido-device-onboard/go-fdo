@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor"
 )
 
 // Rendezvous Variables

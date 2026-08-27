@@ -6,7 +6,7 @@ package cose
 import (
 	"fmt"
 
-	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor"
 )
 
 // Mac0 is a message authentication code structure that is used when the

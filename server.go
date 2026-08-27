@@ -13,9 +13,9 @@ import (
 	"io"
 	"time"
 
-	"github.com/fido-device-onboard/go-fdo/kex"
-	"github.com/fido-device-onboard/go-fdo/protocol"
-	"github.com/fido-device-onboard/go-fdo/serviceinfo"
+	"github.com/fido-device-onboard/go-fdo/v2/kex"
+	"github.com/fido-device-onboard/go-fdo/v2/protocol"
+	"github.com/fido-device-onboard/go-fdo/v2/serviceinfo"
 )
 
 // DIServer implements the DI protocol.
@@ -200,6 +200,19 @@ type TO2Server struct {
 	Vouchers  OwnerVoucherPersistentState
 	OwnerKeys OwnerKeyPersistentState
 
+	// DelegateKeys provides delegate key material for the Voucher Transfer
+	// Protocol. When set, the server can onboard devices on behalf of a
+	// delegated owner.
+	DelegateKeys DelegateKeyPersistentState
+
+	// OnboardDelegate is the name of the delegate key to use for onboarding.
+	// Only consulted when DelegateKeys is non-nil.
+	OnboardDelegate string
+
+	// RvDelegate is the name of the delegate key to use for RV redirect
+	// signing. Only consulted when DelegateKeys is non-nil.
+	RvDelegate string
+
 	// This field must be non-nil in order to use the Resale Protocol (see
 	// [TO2Server.Resell]).
 	VouchersForExtension VoucherReseller
@@ -220,17 +233,6 @@ type TO2Server struct {
 	// If VerifyVoucher is nil, the default behavior is to reject all vouchers
 	// with zero extensions.
 	VerifyVoucher func(context.Context, Voucher) error
-
-	// MaxDeviceServiceInfoSize configures the maximum size service info that
-	// Owner can receive and that the device should send. If left unset, then
-	// DefaultMTU is used.
-	//
-	// Setting this configuration does not actually enforce that the device
-	// does not send larger service info. The server transport should be
-	// configured to only read data of a maximum size. Choosing a lower value
-	// is useful when it can help a well-behaved device communicate faster over
-	// a well understood network.
-	MaxDeviceServiceInfoSize func(context.Context, Voucher) (uint16, error)
 }
 
 // Resell implements the FDO Resale Protocol by removing a voucher from
@@ -287,31 +289,31 @@ func (s *TO2Server) Respond(ctx context.Context, msgType uint8, msg io.Reader) (
 	ctx = contextWithErrMsg(ctx)
 	captureMsgType(ctx, msgType)
 
-	// Handle each message type
+	// Handle each message type (FDO 2.0 flow: device proves first)
 	var err error
 	switch msgType {
-	case protocol.TO2HelloDeviceMsgType:
-		respType = protocol.TO2ProveOVHdrMsgType
+	case protocol.TO2HelloDeviceProbeMsgType:
+		respType = protocol.TO2HelloDeviceAck20MsgType
+		resp, err = s.helloDeviceAck(ctx, msg)
+	case protocol.TO2ProveDevice20MsgType:
+		respType = protocol.TO2ProveOVHdr20MsgType
 		resp, err = s.proveOVHdr(ctx, msg)
-	case protocol.TO2GetOVNextEntryMsgType:
-		respType = protocol.TO2OVNextEntryMsgType
+	case protocol.TO2GetOVNextEntry20MsgType:
+		respType = protocol.TO2OVNextEntry20MsgType
 		resp, err = s.ovNextEntry(ctx, msg)
-	case protocol.TO2ProveDeviceMsgType:
-		respType = protocol.TO2SetupDeviceMsgType
+	case protocol.TO2DeviceSvcInfoRdy20MsgType:
+		respType = protocol.TO2SetupDevice20MsgType
 		resp, err = s.setupDevice(ctx, msg)
-	case protocol.TO2DeviceServiceInfoReadyMsgType:
-		respType = protocol.TO2OwnerServiceInfoReadyMsgType
-		resp, err = s.ownerServiceInfoReady(ctx, msg)
-	case protocol.TO2DeviceServiceInfoMsgType:
-		respType = protocol.TO2OwnerServiceInfoMsgType
+	case protocol.TO2DeviceSvcInfo20MsgType:
+		respType = protocol.TO2OwnerSvcInfo20MsgType
 		resp, err = s.ownerServiceInfo(ctx, msg)
 		if err != nil {
 			s.Modules.CleanupModules(ctx)
 		}
-	case protocol.TO2DoneMsgType:
+	case protocol.TO2Done20MsgType:
 		s.Modules.CleanupModules(ctx)
-		respType = protocol.TO2Done2MsgType
-		resp, err = s.to2Done2(ctx, msg)
+		respType = protocol.TO2DoneAck20MsgType
+		resp, err = s.to2DoneAck(ctx, msg)
 	}
 
 	// Return response on success
@@ -342,7 +344,7 @@ func (s *TO2Server) CryptSession(ctx context.Context) (kex.Session, error) {
 
 // HandleError performs session cleanup before the token is invalidated.
 func (s *TO2Server) HandleError(ctx context.Context, errMsg protocol.ErrorMessage) {
-	// This should only be applicable if errMsg.PrevMsgType == 69, but the
+	// This should only be applicable if errMsg.PrevMsgType == 89, but the
 	// device reported error message cannot be completely trusted
 	s.Modules.CleanupModules(ctx)
 }

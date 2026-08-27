@@ -10,10 +10,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/fido-device-onboard/go-fdo/cose"
-	"github.com/fido-device-onboard/go-fdo/kex"
-	"github.com/fido-device-onboard/go-fdo/protocol"
-	"github.com/fido-device-onboard/go-fdo/serviceinfo"
+	"github.com/fido-device-onboard/go-fdo/v2/cose"
+	"github.com/fido-device-onboard/go-fdo/v2/kex"
+	"github.com/fido-device-onboard/go-fdo/v2/protocol"
+	"github.com/fido-device-onboard/go-fdo/v2/serviceinfo"
 )
 
 /*
@@ -119,6 +119,13 @@ type TO2SessionState interface {
 	// opaque "authorization" token.
 	XSession(context.Context) (kex.Suite, kex.Session, error)
 
+	// SetHelloDeviceHash stores the hash of the raw HelloDevice message for
+	// hash binding in TO2.ProveOVHdr.
+	SetHelloDeviceHash(context.Context, protocol.Hash) error
+
+	// HelloDeviceHash retrieves the stored hash of the HelloDevice message.
+	HelloDeviceHash(context.Context) (protocol.Hash, error)
+
 	// SetProveDeviceNonce stores the Nonce used in TO2.ProveDevice for use in
 	// TO2.Done.
 	SetProveDeviceNonce(context.Context, protocol.Nonce) error
@@ -133,6 +140,14 @@ type TO2SessionState interface {
 	// SetupDeviceNonce returns the Nonce used in TO2.SetupDevice and
 	// TO2.Done2.
 	SetupDeviceNonce(context.Context) (protocol.Nonce, error)
+
+	// SetKexCipherSuite stores the key exchange suite and cipher suite
+	// selected by the device in HelloDevice.
+	SetKexCipherSuite(context.Context, kex.Suite, kex.CipherSuiteID) error
+
+	// KexCipherSuite retrieves the key exchange suite and cipher suite
+	// selected by the device.
+	KexCipherSuite(context.Context) (kex.Suite, kex.CipherSuiteID, error)
 
 	// SetMTU sets the max service info size the device may receive.
 	SetMTU(context.Context, uint16) error
@@ -193,4 +208,15 @@ type VoucherReseller interface {
 	// RemoveVoucher untracks a voucher, whether extended or not, possibly by
 	// deleting it or marking it as removed, and returns it for extension.
 	RemoveVoucher(context.Context, protocol.GUID) (*Voucher, error)
+}
+
+// DelegateKeyPersistentState maintains delegate keys and their associated
+// certificate chains. Delegate keys allow a third party (Delegate Owner) to
+// onboard devices on behalf of the actual FDO Owner.
+type DelegateKeyPersistentState interface {
+	// DelegateKey returns the private key and certificate chain for a named
+	// delegate. The certificate chain should be ordered leaf-first (index 0
+	// is the leaf delegate certificate). The chain must be rooted by the
+	// Owner Key from the ownership voucher.
+	DelegateKey(name string) (crypto.Signer, []*x509.Certificate, error)
 }

@@ -4,8 +4,8 @@
 package fdo
 
 import (
-	"github.com/fido-device-onboard/go-fdo/cose"
-	"github.com/fido-device-onboard/go-fdo/protocol"
+	"github.com/fido-device-onboard/go-fdo/v2/cose"
+	"github.com/fido-device-onboard/go-fdo/v2/protocol"
 )
 
 // Entity Attestation Tokens (EAT)
@@ -77,8 +77,6 @@ var (
 	eatFdoClaim = cose.Label{Int64: -257}
 	// If needed for a given ROE, is an unprotected header item (not payload)
 	eatMaroePrefixClaim = cose.Label{Int64: -258} //nolint:unused
-	// An unprotected header item
-	eatUnprotectedNonceClaim = cose.Label{Int64: -259}
 )
 
 // eatoken is used for the Device attestation. Entity Attestation Tokens in

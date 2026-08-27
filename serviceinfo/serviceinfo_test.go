@@ -7,8 +7,8 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/fido-device-onboard/go-fdo/cbor"
-	"github.com/fido-device-onboard/go-fdo/serviceinfo"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor"
+	"github.com/fido-device-onboard/go-fdo/v2/serviceinfo"
 )
 
 func TestKVSize(t *testing.T) {

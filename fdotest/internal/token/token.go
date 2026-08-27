@@ -21,12 +21,12 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/fido-device-onboard/go-fdo"
-	"github.com/fido-device-onboard/go-fdo/cbor"
-	"github.com/fido-device-onboard/go-fdo/cose"
-	"github.com/fido-device-onboard/go-fdo/kex"
-	"github.com/fido-device-onboard/go-fdo/protocol"
-	"github.com/fido-device-onboard/go-fdo/serviceinfo"
+	"github.com/fido-device-onboard/go-fdo/v2"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor"
+	"github.com/fido-device-onboard/go-fdo/v2/cose"
+	"github.com/fido-device-onboard/go-fdo/v2/kex"
+	"github.com/fido-device-onboard/go-fdo/v2/protocol"
+	"github.com/fido-device-onboard/go-fdo/v2/serviceinfo"
 )
 
 type diState struct {
@@ -54,13 +54,16 @@ type to2State struct {
 		GUID protocol.GUID
 		Hmac protocol.Hmac
 	}
-	KeyExchange    keyExchange `cbor:",flat2"`
-	ProveDv        protocol.Nonce
-	SetupDv        protocol.Nonce
-	MTU            uint16
-	Devmod         *serviceinfo.Devmod
-	Modules        []string
-	DevmodComplete bool
+	KeyExchange     keyExchange `cbor:",flat2"`
+	ProveDv         protocol.Nonce
+	SetupDv         protocol.Nonce
+	MTU             uint16
+	Devmod          *serviceinfo.Devmod
+	Modules         []string
+	DevmodComplete  bool
+	HelloDeviceHash *protocol.Hash
+	KexSuiteName    kex.Suite
+	CipherSuiteID   kex.CipherSuiteID
 }
 
 type keyExchange struct {
@@ -452,6 +455,51 @@ func cloneSession(sess kex.Session, suite kex.Suite) kex.Session {
 		panic(err)
 	}
 	return cloned
+}
+
+// SetKexCipherSuite stores the key exchange suite and cipher suite
+// selected by the device in HelloDevice.
+func (s Service) SetKexCipherSuite(ctx context.Context, suite kex.Suite, cipher kex.CipherSuiteID) error {
+	return update(ctx, s, func(state *to2State) error {
+		state.KexSuiteName = suite
+		state.CipherSuiteID = cipher
+		return nil
+	})
+}
+
+// KexCipherSuite retrieves the key exchange suite and cipher suite
+// selected by the device.
+func (s Service) KexCipherSuite(ctx context.Context) (kex.Suite, kex.CipherSuiteID, error) {
+	var suite kex.Suite
+	var cipher kex.CipherSuiteID
+	_, err := fetch(ctx, s, func(state to2State) (struct{}, error) {
+		if state.KexSuiteName == "" {
+			return struct{}{}, fdo.ErrNotFound
+		}
+		suite = state.KexSuiteName
+		cipher = state.CipherSuiteID
+		return struct{}{}, nil
+	})
+	return suite, cipher, err
+}
+
+// SetHelloDeviceHash stores the hash of the raw HelloDevice message for
+// hash binding in TO2.ProveOVHdr.
+func (s Service) SetHelloDeviceHash(ctx context.Context, h protocol.Hash) error {
+	return update(ctx, s, func(state *to2State) error {
+		state.HelloDeviceHash = &h
+		return nil
+	})
+}
+
+// HelloDeviceHash retrieves the stored hash of the HelloDevice message.
+func (s Service) HelloDeviceHash(ctx context.Context) (protocol.Hash, error) {
+	return fetch(ctx, s, func(state to2State) (protocol.Hash, error) {
+		if state.HelloDeviceHash == nil {
+			return protocol.Hash{}, fdo.ErrNotFound
+		}
+		return *state.HelloDeviceHash, nil
+	})
 }
 
 // SetProveDeviceNonce stores the Nonce used in TO2.ProveDevice for use in

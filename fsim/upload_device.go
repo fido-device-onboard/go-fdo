@@ -10,8 +10,8 @@ import (
 	"io"
 	"io/fs"
 
-	"github.com/fido-device-onboard/go-fdo/cbor"
-	"github.com/fido-device-onboard/go-fdo/serviceinfo"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor"
+	"github.com/fido-device-onboard/go-fdo/v2/serviceinfo"
 )
 
 // Upload implements https://github.com/fido-alliance/fdo-sim/blob/main/fsim-repository/fdo.upload.md

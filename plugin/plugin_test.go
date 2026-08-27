@@ -6,8 +6,8 @@ package plugin_test
 import (
 	"testing"
 
-	"github.com/fido-device-onboard/go-fdo/fdotest"
-	"github.com/fido-device-onboard/go-fdo/plugin"
+	"github.com/fido-device-onboard/go-fdo/v2/fdotest"
+	"github.com/fido-device-onboard/go-fdo/v2/plugin"
 )
 
 func TestPluginModuleName(t *testing.T) {

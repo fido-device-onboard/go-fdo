@@ -1,20 +1,20 @@
-module github.com/fido-device-onboard/go-fdo/examples
+module github.com/fido-device-onboard/go-fdo/v2/examples
 
 go 1.25.0
 
-replace github.com/fido-device-onboard/go-fdo/sqlite => ../sqlite
+replace github.com/fido-device-onboard/go-fdo/v2/sqlite => ../sqlite
 
-replace github.com/fido-device-onboard/go-fdo => ..
+replace github.com/fido-device-onboard/go-fdo/v2 => ..
 
-replace github.com/fido-device-onboard/go-fdo/fsim => ../fsim
+replace github.com/fido-device-onboard/go-fdo/v2/fsim => ../fsim
 
-replace github.com/fido-device-onboard/go-fdo/tpm => ../tpm
+replace github.com/fido-device-onboard/go-fdo/v2/tpm => ../tpm
 
 require (
-	github.com/fido-device-onboard/go-fdo v0.0.0-00010101000000-000000000000
-	github.com/fido-device-onboard/go-fdo/fsim v0.0.0-00010101000000-000000000000
-	github.com/fido-device-onboard/go-fdo/sqlite v0.0.0-00010101000000-000000000000
-	github.com/fido-device-onboard/go-fdo/tpm v0.0.0-00010101000000-000000000000
+	github.com/fido-device-onboard/go-fdo/v2 v2.0.0-00010101000000-000000000000
+	github.com/fido-device-onboard/go-fdo/v2/fsim v0.0.0-00010101000000-000000000000
+	github.com/fido-device-onboard/go-fdo/v2/sqlite v0.0.0-00010101000000-000000000000
+	github.com/fido-device-onboard/go-fdo/v2/tpm v0.0.0-00010101000000-000000000000
 	github.com/google/go-tpm v0.9.8
 	github.com/google/go-tpm-tools v0.4.9
 	github.com/niemeyer/muslnet v0.0.0-20250923220305-4b81d3c72602

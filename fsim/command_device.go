@@ -16,8 +16,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/fido-device-onboard/go-fdo/cbor"
-	"github.com/fido-device-onboard/go-fdo/serviceinfo"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor"
+	"github.com/fido-device-onboard/go-fdo/v2/serviceinfo"
 )
 
 const defaultCommandTimeout = time.Hour

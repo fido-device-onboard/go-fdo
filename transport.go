@@ -7,7 +7,7 @@ import (
 	"context"
 	"io"
 
-	"github.com/fido-device-onboard/go-fdo/kex"
+	"github.com/fido-device-onboard/go-fdo/v2/kex"
 )
 
 // Transport abstracts the underlying TCP/HTTP/CoAP transport for sending a

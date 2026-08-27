@@ -6,7 +6,7 @@ package cose
 import (
 	"testing"
 
-	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor"
 )
 
 func TestEmptyOrSerializedMap(t *testing.T) {

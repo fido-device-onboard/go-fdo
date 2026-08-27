@@ -15,8 +15,8 @@ import (
 	"github.com/niemeyer/muslnet"
 	"tinygo.org/x/drivers/netdev"
 
-	"github.com/fido-device-onboard/go-fdo"
-	"github.com/fido-device-onboard/go-fdo/http"
+	"github.com/fido-device-onboard/go-fdo/v2"
+	"github.com/fido-device-onboard/go-fdo/v2/http"
 )
 
 func init() {

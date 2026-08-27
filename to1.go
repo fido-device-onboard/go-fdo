@@ -13,9 +13,9 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/fido-device-onboard/go-fdo/cbor"
-	"github.com/fido-device-onboard/go-fdo/cose"
-	"github.com/fido-device-onboard/go-fdo/protocol"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor"
+	"github.com/fido-device-onboard/go-fdo/v2/cose"
+	"github.com/fido-device-onboard/go-fdo/v2/protocol"
 )
 
 // TO1Options contains optional configuration values.
@@ -23,6 +23,10 @@ type TO1Options struct {
 	// When true and an RSA key is used as a crypto.Signer argument, RSA-SSAPSS
 	// will be used for signing.
 	PSS bool
+
+	// SendCapFlags controls whether capability flags are sent in TO1.HelloRV.
+	// Set to true for FDO 2.0, false for FDO 1.1 backward compatibility.
+	SendCapFlags bool
 }
 
 // TO1 runs the TO1 protocol and returns the owner service (TO2) addresses. It
@@ -32,15 +36,17 @@ func TO1(ctx context.Context, transport Transport, cred DeviceCredential, key cr
 	ctx = contextWithErrMsg(ctx)
 
 	var usePSS bool
+	var sendCapFlags bool
 	if opts != nil {
 		usePSS = opts.PSS
+		sendCapFlags = opts.SendCapFlags
 	}
 	signOpts, err := signOptsFor(key, usePSS)
 	if err != nil {
 		return nil, fmt.Errorf("error determining signing options: %w", err)
 	}
 
-	nonce, err := helloRv(ctx, transport, cred, key, signOpts)
+	nonce, err := helloRv(ctx, transport, cred, key, signOpts, sendCapFlags)
 	if err != nil {
 		errorMsg(ctx, transport, err)
 		return nil, err
@@ -58,10 +64,11 @@ func TO1(ctx context.Context, transport Transport, cred DeviceCredential, key cr
 type helloRV struct {
 	GUID     protocol.GUID
 	ASigInfo sigInfo
+	CapFlags CapabilityFlags `cbor:",omitempty"`
 }
 
 // HelloRV(30) -> HelloRVAck(31)
-func helloRv(ctx context.Context, transport Transport, cred DeviceCredential, key crypto.Signer, opts crypto.SignerOpts) (protocol.Nonce, error) {
+func helloRv(ctx context.Context, transport Transport, cred DeviceCredential, key crypto.Signer, opts crypto.SignerOpts, sendCapFlags bool) (protocol.Nonce, error) {
 	var usePSS bool
 	if _, ok := opts.(*rsa.PSSOptions); ok {
 		usePSS = true
@@ -75,6 +82,10 @@ func helloRv(ctx context.Context, transport Transport, cred DeviceCredential, ke
 	msg := helloRV{
 		GUID:     cred.GUID,
 		ASigInfo: *eASigInfo,
+	}
+
+	if sendCapFlags {
+		msg.CapFlags = GlobalCapabilityFlags
 	}
 
 	// Make request
@@ -111,6 +122,7 @@ func helloRv(ctx context.Context, transport Transport, cred DeviceCredential, ke
 type rvAck struct {
 	NonceTO1Proof protocol.Nonce
 	BSigInfo      sigInfo
+	CapFlags      CapabilityFlags `cbor:",omitempty"`
 }
 
 // HelloRV(30) -> HelloRVAck(31)
@@ -140,6 +152,7 @@ func (s *TO1Server) helloRVAck(ctx context.Context, msg io.Reader) (*rvAck, erro
 	return &rvAck{
 		NonceTO1Proof: nonce,
 		BSigInfo:      hello.ASigInfo,
+		CapFlags:      GlobalCapabilityFlags,
 	}, nil
 }
 
@@ -149,7 +162,7 @@ func proveToRv(ctx context.Context, transport Transport, cred DeviceCredential, 
 	token := cose.Sign1[eatoken, []byte]{
 		Payload: cbor.NewByteWrap(newEAT(cred.GUID, nonce, nil, nil)),
 	}
-	if err := token.Sign(key, nil, nil, opts); err != nil {
+	if err := token.Sign(key, nil, cose.AADTO1ProveToRV, opts); err != nil {
 		return nil, fmt.Errorf("error signing EAT payload for TO1.ProveToRV: %w", err)
 	}
 	msg := token.Tag()
@@ -242,7 +255,7 @@ func (s *TO1Server) rvRedirect(ctx context.Context, msg io.Reader) (*cose.Sign1T
 	}
 
 	// Verify EAT signature
-	if ok, err := token.Verify(pub, nil, nil); err != nil {
+	if ok, err := token.Verify(pub, nil, cose.AADTO1ProveToRV); err != nil {
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
 		return nil, fmt.Errorf("error verifying EAT signature: %w", err)
 	} else if !ok {
