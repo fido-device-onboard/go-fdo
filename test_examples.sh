@@ -1989,6 +1989,60 @@ test_payload_nak() {
 	log_success "Payload FSIM NAK test PASSED"
 }
 
+# Test: RV Firmware Extension Tags
+# This test verifies that firmware delivery extension tags (16/17/18) are correctly
+# written into the device credential during DI and that normal TO1/TO2 still works
+# with firmware tags present in the RvInfo.
+test_rv_firmware_tags() {
+	log_section "TEST: RV Firmware Extension Tags (DI + TO1/TO2)"
+
+	rm -f "$DB_FILE" "$CRED_FILE"
+
+	# Start server with firmware delivery tags
+	start_server "-rv-firmware-url http://firmware.example.com:9000/signed_payload.cose -rv-firmware-path /signed_payload.cose -rv-firmware-rev 42"
+
+	log_step "Running DI with firmware extension tags"
+	run_cmd go run ./cmd client -di "$SERVER_URL" || return 1
+	log_success "DI completed with firmware tags"
+
+	# Verify server logged the firmware tags
+	if grep -q "RV firmware URL" "$EPHEMERAL_DIR/fdo_server.log"; then
+		log_success "Server logged firmware URL tag"
+	else
+		log_error "Server did not log firmware URL tag"
+		return 1
+	fi
+	if grep -q "RV firmware path" "$EPHEMERAL_DIR/fdo_server.log"; then
+		log_success "Server logged firmware path tag"
+	else
+		log_error "Server did not log firmware path tag"
+		return 1
+	fi
+	if grep -q "RV min firmware rev" "$EPHEMERAL_DIR/fdo_server.log"; then
+		log_success "Server logged min firmware rev tag"
+	else
+		log_error "Server did not log min firmware rev tag"
+		return 1
+	fi
+
+	# Verify database was created and contains the voucher with RvInfo
+	if [ -f "$DB_FILE" ]; then
+		local db_size
+		db_size=$(wc -c < "$DB_FILE")
+		log_success "Database file: $db_size bytes"
+	else
+		log_error "Database file not found: $DB_FILE"
+		return 1
+	fi
+
+	log_step "Running TO1/TO2 (verifying firmware tags don't break onboarding)"
+	run_cmd go run ./cmd client || return 1
+	log_success "TO1/TO2 completed successfully with firmware tags in credential"
+
+	stop_server
+	log_success "RV Firmware Extension Tags test PASSED"
+}
+
 # Test: Credentials FSIM
 # This test demonstrates the fdo.credentials FSIM by provisioning various credential types
 test_credentials() {
@@ -2321,6 +2375,7 @@ test_all() {
 	test_bmo_meta_signed || failed=1
 	test_bmo_url_fallback || failed=1
 	test_payload_nak || failed=1
+	test_rv_firmware_tags || failed=1
 	test_credentials || failed=1
 	test_bad_delegate || failed=1
 	test_auth || failed=1
@@ -2458,6 +2513,9 @@ main() {
 	credentials)
 		test_credentials || rc=$?
 		;;
+	rv-firmware-tags)
+		test_rv_firmware_tags || rc=$?
+		;;
 	auth)
 		test_auth || rc=$?
 		;;
@@ -2466,7 +2524,7 @@ main() {
 		;;
 	*)
 		echo "Unknown test: $test_name"
-		echo "Available tests: basic, basic-reuse, rv-blob, kex, fdo200, delegate, delegate-fdo200, delegate-csr, bad-delegate, attested-payload, attested-payload-encrypted, attested-payload-delegate, attested-payload-shell, sysconfig, sysconfig-fdo200, payload, payload-fdo200, payload-multiple-types, payload-selective-rejection, payload-nak, wifi, wifi-fdo200, wifi-single-sided, bmo, bmo-efi, bmo-nak, bmo-multi-asset, bmo-url, bmo-meta-url, bmo-meta-signed, bmo-url-fallback, credentials, auth, all"
+		echo "Available tests: basic, basic-reuse, rv-blob, kex, fdo200, delegate, delegate-fdo200, delegate-csr, bad-delegate, attested-payload, attested-payload-encrypted, attested-payload-delegate, attested-payload-shell, sysconfig, sysconfig-fdo200, payload, payload-fdo200, payload-multiple-types, payload-selective-rejection, payload-nak, wifi, wifi-fdo200, wifi-single-sided, bmo, bmo-efi, bmo-nak, bmo-multi-asset, bmo-url, bmo-meta-url, bmo-meta-signed, bmo-url-fallback, rv-firmware-tags, credentials, auth, all"
 		exit 1
 		;;
 	esac

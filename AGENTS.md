@@ -137,6 +137,7 @@ Run via `./test_examples.sh` with specific test scenarios:
 | `bmo` | Bare Metal Onboarding FSIM |
 | `bmo-meta-url` | BMO meta-URL delivery (unsigned meta-payload via CLI) |
 | `bmo-meta-signed` | BMO signed meta-payload + tampered-signature negative test |
+| `rv-firmware-tags` | RV firmware extension tags (16/17/18) DI provisioning + TO1/TO2 compatibility |
 | `auth` | FDOKeyAuth CLI - obtain bearer token via challenge-response handshake |
 | `all` | Run all tests (default) |
 

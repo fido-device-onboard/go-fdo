@@ -14,6 +14,18 @@ import (
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
 
+const (
+	// maxBMOChunkSize caps image-data chunks when the device advertises a
+	// large MaxOwnerServiceInfoSz. 64KB is the practical ceiling because
+	// MaxOwnerServiceInfoSz is a uint16.
+	maxBMOChunkSize = 65536
+
+	// bmoChunkOverhead reserves room inside the MTU for the
+	// "fdo.bmo:image-data-<n>" key plus the CBOR framing the producer wraps
+	// around each chunk.
+	bmoChunkOverhead = 100
+)
+
 // BMOOwner implements the fdo.bmo FSIM for owner-side boot image delivery.
 // It follows the specification in fdo.bmo.md and uses the generic chunking strategy.
 // This is functionally identical to PayloadOwner but uses different message names
@@ -32,6 +44,10 @@ type BMOOwner struct {
 	// When nil, the legacy unsigned "image-begin" / "set" keys are used
 	// (for backward compatibility with pre-v1.0 devices).
 	ProvisioningSigner ProvisioningSigner
+
+	// chunkSize overrides the image-data chunk size. When zero, the chunk
+	// size is derived from the negotiated MTU.
+	chunkSize int
 
 	// Internal state
 	currentSender   *chunking.ChunkSender
@@ -218,13 +234,18 @@ func (b *BMOOwner) produceInfo(ctx context.Context, producer *serviceinfo.Produc
 		image := &b.images[b.currentIndex]
 		b.currentSender = chunking.NewChunkSender("image", image.Data)
 
-		// Adjust chunk size based on negotiated MTU if client requested smaller
-		// Default chunk size (1014) works well for most clients
-		// Only reduce if MTU is smaller than default + overhead
-		mtu := producer.MTU()
-		if mtu > 50 && mtu-50 < b.currentSender.ChunkSize {
-			b.currentSender.ChunkSize = mtu - 50
+		// Fill the negotiated MTU rather than the 1014-byte default: a 27MB
+		// image needs ~27k round trips at 1014 bytes, but only ~430 at 64KB.
+		// Reserve headroom for the "<module>:image-data-<n>" key and the CBOR
+		// array framing the producer adds around the chunk.
+		want := b.chunkSize
+		if want == 0 {
+			want = maxBMOChunkSize
 		}
+		if mtu := producer.MTU(); mtu > bmoChunkOverhead && want > mtu-bmoChunkOverhead {
+			want = mtu - bmoChunkOverhead
+		}
+		b.currentSender.ChunkSize = want
 
 		// Set hash algorithm if provided
 		if image.HashAlg != "" {
@@ -347,8 +368,10 @@ func (b *BMOOwner) produceInfo(ctx context.Context, producer *serviceinfo.Produc
 		chunkIndex := b.currentSender.GetBytesSent() / int64(b.currentSender.ChunkSize)
 		chunkKey := fmt.Sprintf("image-data-%d", chunkIndex)
 
-		// Check if there's space for the chunk (size based on negotiated MTU)
-		estimatedSize := b.currentSender.ChunkSize + 50
+		// Check if there's space for the chunk. Available() already accounts
+		// for CBOR array and key name overhead, so we only need to compare
+		// against the chunk data size plus its CBOR bstr header (~5 bytes).
+		estimatedSize := b.currentSender.ChunkSize + 5
 		if producer.Available(chunkKey) < estimatedSize {
 			return true, false, nil
 		}
@@ -577,6 +600,7 @@ func (b *BMOOwner) GetLastResult() *ImageResult {
 
 // SetChunkSize sets the chunk size for data transfer (default 1014 bytes per spec).
 func (b *BMOOwner) SetChunkSize(size int) {
+	b.chunkSize = size
 	if b.currentSender != nil {
 		b.currentSender.ChunkSize = size
 	}

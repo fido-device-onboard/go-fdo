@@ -93,6 +93,9 @@ var (
 	pubkeyRequests        stringList
 	initOnly              bool
 	singleSidedWiFi       bool
+	rvFirmwareURL         string
+	rvFirmwarePath        string
+	rvMinFirmwareRev      uint64
 )
 
 type stringList []string
@@ -151,6 +154,9 @@ func init() {
 	serverFlags.Var(&pubkeyRequests, "request-pubkey", "Request public key from device with `type:id[:endpoint_url]` format (flag may be used multiple times)")
 	serverFlags.BoolVar(&initOnly, "initOnly", false, "Initialize initialization (db/key/voucher creation)")
 	serverFlags.BoolVar(&singleSidedWiFi, "single-sided-wifi", false, "Run as single-sided WiFi setup service (owner not verified by device)")
+	serverFlags.StringVar(&rvFirmwareURL, "rv-firmware-url", "", "RV firmware delivery: full `URL` of signed firmware image (written to DCTPM tag 17)")
+	serverFlags.StringVar(&rvFirmwarePath, "rv-firmware-path", "", "RV firmware delivery: image `path` on HTTP server (written to DCTPM tag 16)")
+	serverFlags.Uint64Var(&rvMinFirmwareRev, "rv-firmware-rev", 0, "RV firmware delivery: minimum firmware `revision` for anti-rollback (written to DCTPM tag 18)")
 }
 
 // validateFiles checks that all payload and BMO files exist before starting the server
@@ -276,6 +282,26 @@ func server(ctx context.Context) error { //nolint:gocyclo
 
 	// Test RVDelay by introducing a delay before TO1
 	rvInfo = append([][]protocol.RvInstruction{{{Variable: protocol.RVDelaysec, Value: mustMarshal(rvDelay)}}}, rvInfo...)
+
+	// Append RV firmware delivery extension tags (written to DCTPM for device-side parsing)
+	if rvFirmwareURL != "" || rvFirmwarePath != "" || rvMinFirmwareRev > 0 {
+		// Add firmware tags to the first directive group
+		if len(rvInfo) == 0 {
+			rvInfo = append(rvInfo, []protocol.RvInstruction{})
+		}
+		if rvFirmwarePath != "" {
+			rvInfo[0] = append(rvInfo[0], protocol.RvInstruction{Variable: protocol.RVFirmwarePath, Value: mustMarshal(rvFirmwarePath)})
+			slog.Info("RV firmware path", "path", rvFirmwarePath)
+		}
+		if rvFirmwareURL != "" {
+			rvInfo[0] = append(rvInfo[0], protocol.RvInstruction{Variable: protocol.RVFirmwareURL, Value: mustMarshal(rvFirmwareURL)})
+			slog.Info("RV firmware URL", "url", rvFirmwareURL)
+		}
+		if rvMinFirmwareRev > 0 {
+			rvInfo[0] = append(rvInfo[0], protocol.RvInstruction{Variable: protocol.RVMinFirmwareRev, Value: mustMarshal(rvMinFirmwareRev)})
+			slog.Info("RV min firmware rev", "rev", rvMinFirmwareRev)
+		}
+	}
 
 	// Invoke TO0 client if a GUID is specified
 	if to0GUID != "" {
