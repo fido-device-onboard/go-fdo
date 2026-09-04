@@ -1,0 +1,1669 @@
+<pre class='metadata'>
+Title: Appnote - FIDO Device Onboard: Zero-Touch Wi-Fi Onboarding Best Practices
+Shortname: appnote-wifi-onboarding
+Prepare for TR: false
+Level: 1
+Status: WD
+Group: fido
+URL: https://github.com/fido-alliance/internet-of-things-specs
+Editor: Brad Goodman, Dell Technologies, brad.goodman@dell.com
+Abstract: Best practices for implementing zero-touch secure FIDO device onboarding in Wi-Fi environments
+Issue Tracking: GitHub https://github.com/fido-alliance/internet-of-things-specs
+Boilerplate: omit conformance, omit feedback-header, omit abstract-header
+Markup Shorthands: css off, markdown on
+!Version: 1.0
+</pre>
+
+<pre class="link-defaults">
+spec:html; type:dfn; for:environment settings object; text:global object
+spec:infra; type:dfn; text:list
+spec:url; type:dfn; text:domain
+spec:url; type:dfn; text:valid domain;
+spec:webappsec-credential-management-1; type:dictionary; for:/; text:CredentialRequestOptions
+spec:webidl; type:interface; text:Promise
+</pre>
+
+<pre class=biblio> 
+{
+	"FDO-Specification": {
+		"authors": [
+			"FIDO Alliance"
+		],
+		"href": "https://fidoalliance.org/specs/fido-iot/",
+		"title": "FIDO Device Onboard (FDO) Specification"
+	},
+	"RFC2131": {
+		"authors": [
+			"R. Droms"
+		],
+		"href": "https://tools.ietf.org/html/rfc2131",
+		"title": "Dynamic Host Configuration Protocol"
+	},
+	"RFC2132": {
+		"authors": [
+			"S. Alexander",
+			"R. Droms"
+		],
+		"href": "https://tools.ietf.org/html/rfc2132",
+		"title": "DHCP Options and BOOTP Vendor Extensions"
+	},
+	"WiFi-FSIM": {
+		"authors": [
+			"Brad Goodman"
+		],
+		"href": "https://github.com/fido-alliance/internet-of-things-specs",
+		"title": "fdo.wifi FSIM Specification"
+	}
+}
+</pre>
+
+# Introduction
+
+The FIDO Device Onboard (FDO) specification provides a method for secure onboarding of IoT devices with minimal user involvement. The protocol defines mechanisms for devices to automatically find and contact services on the network for bare metal orchestration and provisioning. However, a fundamental challenge exists for Wi-Fi devices that are not yet connected to any network: they cannot participate in onboarding without first establishing network connectivity.
+
+This App Note defines best practices for implementing zero-touch secure FIDO device onboarding in Wi-Fi environments using minimal infrastructure changes and maintaining compatibility with existing Wi-Fi networks. The approach described here provides a pragmatic solution that can be deployed today while preserving the zero-touch principles of FDO.
+
+Future specifications may define more sophisticated mechanisms such as RCOI beacons for network discovery and FDO-EAP for zero-touch authentication, but these require significant infrastructure changes. The methods described in this document provide an immediate path forward with minimal overhead.
+
+# Terminology
+
+## Wi-Fi Onboarding Service Types
+
+**Primary Onboarding Service**: An onboarding service that performs complete device onboarding including credential issuance, configuration, and provisioning.
+
+**Wi-Fi Setup Service**: A specialized onboarding service that only provides Wi-Fi credentials to enable the device to connect to its target network for subsequent onboarding. This service does not perform full device onboarding.
+
+**Two-Step Onboarding**: A process where a device first contacts a Wi-Fi Setup Service to obtain network credentials, then re-attempts onboarding to find the Primary Onboarding Service.
+
+**One-Step Onboarding**: A process where a device contacts a Primary Onboarding Service directly on an open network and receives both Wi-Fi credentials and complete onboarding in a single operation.
+
+## Protocol States
+
+**Unconfigured Device**: A factory-fresh device that has not yet been onboarded and is not connected to any Wi-Fi network.
+
+**Wi-Fi Configured Device**: A device that has received Wi-Fi credentials but has not yet completed full FDO onboarding.
+
+**Fully Onboarded Device**: A device that has completed both Wi-Fi configuration and full FDO onboarding.
+
+# Architecture Overview
+
+## Core Principles
+
+1. **Minimal Infrastructure Impact**: Solutions must work with existing Wi-Fi infrastructure without requiring significant changes to access points or network configuration.
+
+2. **Zero-Touch Operation**: No manual intervention should be required during the onboarding process.
+
+3. **Backward Compatibility**: Devices must continue to work with existing onboarding mechanisms.
+
+4. **Security Preservation**: The solution must not compromise the security guarantees of the FIDO protocol.
+
+5. **Loop Prevention**: Mechanisms must prevent infinite retry loops during multi-step onboarding.
+
+## Network Discovery Hierarchy
+
+Devices shall attempt onboarding using the following hierarchy of network discovery methods:
+
+1. **Factory-Configured Services**: Any onboarding services pre-configured in the device factory image
+2. **DHCP-Advertised Services**: Services advertised via DHCP options on connected networks
+3. **Open Network Scanning**: Attempt onboarding via any available open Wi-Fi network
+4. **Fallback Mechanisms**: Any additional discovery methods supported by the device
+
+# Wi-Fi Onboarding Mechanisms
+
+## Open Network Onboarding
+
+FIDO devices SHALL attempt onboarding via ANY available open Wi-Fi network when no other network connection is available. This ensures that devices can find onboarding services without requiring pre-configured credentials.
+
+### Implementation Requirements
+
+- Devices MUST scan for and connect to open Wi-Fi networks
+- Devices MUST attempt onboarding on each discovered open network
+- Devices MUST proceed to the next network if onboarding fails
+- Devices MUST NOT store permanent credentials for open networks used only for onboarding
+
+### Security Considerations for Network Scanning
+
+All a device does on an open network is attempt to onboard. The FIDO protocol itself provides protection against nefarious services:
+
+- FDO never trusts ANY network by design
+- The protocol requires cryptographic proof of service validity
+- Invalid credentials or malicious services will cause onboarding to fail
+- Devices will retry with the next available service/network
+- Only authentic services with valid ownership vouchers can complete successful onboarding
+
+This approach maintains the security guarantees of FDO while enabling zero-touch Wi-Fi onboarding.
+
+## DHCP Option for Onboarding Service Discovery
+
+Network administrators MAY use DHCP options to explicitly advertise onboarding services to connected devices. This provides a direct method for networks to guide devices to appropriate onboarding services.
+
+**Important Note**: DHCP options are NOT a requirement - they are a convenience. If no DHCP options are specified (or if they are present but fail), devices SHALL fall back to the standard RV (Rendezvous) service discovery mechanisms defined in the FDO specification. This ensures that onboarding can proceed through alternative discovery methods.
+
+### Alternative Discovery Methods
+
+Without DHCP options, devices can discover onboarding services through:
+
+1. **Well-Known DNS Names**: Onboarding services advertised through standard DNS resolution (e.g., `_fdo._tcp.example.com`)
+   - **Note**: These hostnames are chosen by the device manufacturer and are part of the manufacturer-specific Rendezvous list
+
+2. **Local Service Discovery**: Services advertised via protocols like Avahi/mDNS for local network discovery
+
+3. **Off-Network Access**: Networks constructed to allow outbound access ONLY to off-site (cloud-based or external) Rendezvous and Onboarding Services hosted by external providers
+
+### DHCP Option Definition
+
+The following DHCP options SHALL be used for advertising FIDO onboarding services:
+
+#### Option 222: FIDO Onboarding Service
+- **Option Code**: 222 (from RFC 3679 private use range 222-229)
+- **Option Name**: "fdo-onboarding-service"
+- **Format**: Binary blob or text string using name=value notation
+- **Multiple Values**: Multiple options may be present to advertise multiple services
+- **Example**: `fdo-onboarding-service=onboarding.company.com` or `fdo-onboarding-service=192.168.1.100`
+
+#### Option 223: FIDO Wi-Fi Setup Service
+- **Option Code**: 223 (from RFC 3679 private use range 222-229)
+- **Option Name**: "fdo-wifi-setup-service"
+- **Format**: Binary blob or text string using name=value notation
+- **Multiple Values**: Multiple options may be present to advertise multiple services
+- **Example**: `fdo-wifi-setup-service=wifi-setup.company.com`
+
+### Service Type Differentiation
+
+Two DHCP options SHALL be defined to differentiate between service types:
+
+- **Option 222** ("fdo-onboarding-service"): Advertises Primary Onboarding Services
+- **Option 223** ("fdo-wifi-setup-service"): Advertises Wi-Fi Setup Services only
+
+**Note**: The presence of Option 222 vs Option 223 inherently indicates service type, eliminating the need for a separate service type indicator option.
+
+### Format Rationale
+
+The name=value format with hostname (rather than URL) is used for two key reasons:
+
+1. **FIDO Protocol Compatibility**: FIDO services are referenced by hostname, not URL, as FIDO uses its own protocol rather than HTTP/HTTPS
+2. **Option Disambiguation**: Since options 222 and 223 are not officially owned, the name=value format prevents conflicts with other potential uses of these option numbers by different vendors
+
+# Wi-Fi Onboarding Security Models
+
+## Overview
+
+Wi-Fi onboarding supports two distinct security models that determine how devices and services authenticate each other during the credential provisioning process. The choice of security model is independent of the credential conveyance mechanism and should be selected based on deployment requirements and security policies.
+
+## Security Model 1: Single-Sided Attestation
+
+### Concept
+
+Single-sided attestation reverses the traditional FDO security model by focusing on **device verification only**, without requiring the service to prove Owner credentials.
+
+### Security Priority Shift
+
+Unlike normal FDO onboarding, where it is critical for a device to verify it is being onboarded by a legitimate onboarding service, **Wi-Fi setup reverses this priority**:
+
+- **Normal FDO**: Device must verify legitimate service (high security requirement)
+- **Wi-Fi Setup**: Service must verify legitimate device (reversed security priority)
+- **Risk Acceptance**: Single-sided attestation is acceptable because Wi-Fi setup is low-risk - the worst case is temporary network access, which fails final onboarding
+
+### Device Legitimacy Verification (Critical Requirement)
+
+Wi-Fi Setup Services **MUST verify device legitimacy** before providing Wi-Fi credentials:
+
+1. **Ownership Voucher (OV) Possession**: Service must possess the valid Ownership Voucher for the device
+2. **Device Attestation Key (DAK) Verification**: Device must prove possession of the DAK from the OV
+3. **Cryptographic Validation**: Service must validate the device's cryptographic proof of identity
+4. **Credential Provisioning**: Only verified devices receive Wi-Fi credentials
+
+**Note**: While the service doesn't prove its own legitimacy (single-sided), it **must** verify the device's legitimacy to prevent unauthorized Wi-Fi credential distribution.
+
+### Protocol Implementation
+
+Wi-Fi Setup Services SHALL implement a **single-sided mode** of the FDO 2.0 protocol where:
+
+1. **Device Authentication**: The device proves its identity using standard FDO device certificate and cryptographic mechanisms
+2. **Owner Verification Indication**: The service provides explicit indication that it cannot verify Owner credentials through protocol signaling
+3. **Credential Delivery**: Wi-Fi credentials are provided via the `fdo.wifi` FSIM [[WiFi-FSIM]]
+
+#### Single-Sided Attestation Signaling
+
+Wi-Fi Setup Services SHALL indicate single-sided mode through explicit protocol signaling in the Owner verification step:
+
+##### Algorithm and Signature Signaling
+- **Algorithm Identifier**: Set to `0` (Strict Reserved)
+- **Signature Payload**: Zero-length signature (no signature data)
+- **Verification Result**: Always fails, but with clear indication of single-sided mode
+
+##### Protocol Message Structure
+```
+Standard Owner Verification:
+- Algorithm: -7 (ES256)
+- Signature: [cryptographic signature bytes]
+- Result: Valid/Invalid based on cryptographic verification
+
+Single-Sided Owner Verification:
+- Algorithm: 0 (Strict Reserved)  
+- Signature: [] (empty/zero-length)
+- Result: Fails with explicit "single-sided mode" indication
+```
+
+##### Device Detection Logic
+Devices SHALL detect single-sided mode by checking:
+1. **Algorithm Identifier**: Value of `0` indicates single-sided mode
+2. **Signature Length**: Zero-length signature confirms single-sided mode
+3. **Verification Context**: Failure with algorithm=0 is interpreted as "no Owner available"
+
+```go
+func detectSingleSidedMode(algorithm int, signature []byte) bool {
+    return algorithm == 0 && len(signature) == 0
+}
+```
+
+##### Server Implementation
+```go
+func generateSingleSidedOwnerVerification() OwnerVerification {
+    return OwnerVerification{
+        Algorithm: 0,           // Strict Reserved - indicates single-sided mode
+        Signature: []byte{},     // Zero-length signature
+        Message: "single-sided-attestation-mode"
+    }
+}
+```
+
+##### Client Implementation
+```go
+func processOwnerVerification(verification OwnerVerification) (Mode, error) {
+    if verification.Algorithm == 0 && len(verification.Signature) == 0 {
+        // Single-sided mode detected - service indicates it cannot verify Owner
+        return ModeSingleSided, nil
+    }
+    
+    // Standard Owner verification
+    return verifyStandardOwnerCredentials(verification)
+}
+```
+
+#### Security and Semantics
+
+This approach provides clear protocol semantics:
+
+- **Explicit Indication**: Algorithm=0 clearly signals "cannot verify Owner"
+- **Unambiguous**: Zero-length signature confirms intentional single-sided mode
+- **Distinguishable**: Different from "failed verification" (bad signature vs no signature)
+- **Protocol Compliant**: Uses existing protocol structure with clear semantics
+- **Library Compatible**: Most libraries will reject algorithm=0, which is the expected behavior
+
+##### Verification Failure Interpretation
+- **Algorithm=0, Empty Signature**: "Service cannot verify Owner" → Single-sided mode
+- **Algorithm=-7, Invalid Signature**: "Service tried but failed verification" → Standard failure
+- **Algorithm=Other, Empty Signature**: "Protocol error" → Invalid configuration
+
+This implementation provides clear, unambiguous signaling of single-sided attestation mode while maintaining protocol compatibility and security boundaries.
+
+### Single-Sided Client Profile Requirements
+
+When a device detects single-sided attestation (algorithm=0, empty signature), it MUST enter a **single-sided profile** with the following constraints. These constraints protect device privacy and enforce appropriate security boundaries when the owner has not been verified.
+
+#### 1. FSIM Restrictions
+
+In single-sided mode, the device MUST restrict available FSIMs:
+
+```text
+Single-Sided Profile - Available FSIMs:
+├── devmod       ✅ (minimal data only - see below)
+├── fdo.wifi     ✅ (untrusted networks only - see below)
+├── fdo.bmo      ❌ BLOCKED
+├── fdo.payload  ❌ BLOCKED
+├── fdo.sysconfig ❌ BLOCKED
+└── fdo.credentials ❌ BLOCKED
+```
+
+The device:
+- MUST NOT advertise blocked FSIMs in `devmod:modules`
+- MUST reject attempts by the server to use blocked FSIMs
+- SHOULD silently ignore unsolicited messages for blocked FSIMs
+
+**Rationale**: An unverified owner should not receive boot images, configuration payloads, or credentials. Wi-Fi hints are the only appropriate data to exchange with an untrusted service.
+
+#### 2. Minimal devmod Reporting
+
+The device MUST provide only the minimum `devmod` information necessary for FSIM discovery:
+
+```text
+REQUIRED (for FSIM discovery):
+- devmod:active = true
+- devmod:nummodules = 1  
+- devmod:modules = [0, 0, "fdo.wifi"]
+- devmod:sep = ";"
+
+OMIT OR EMPTY (identifying information):
+- devmod:device = ""
+- devmod:serial = ""    ← CRITICAL: never expose serial to untrusted owner
+- devmod:os = ""
+- devmod:version = ""
+- devmod:arch = ""
+```
+
+**Rationale**: Identifying information (serial numbers, device type, OS version) could be used to fingerprint or track devices. An untrusted service has no legitimate need for this data when providing only Wi-Fi hints.
+
+**Note**: For UEFI firmware implementations, reporting empty `devmod:os` is genuinely accurate - there is no OS running yet. This is not deceptive; it reflects reality.
+
+#### 3. Trust Level Enforcement
+
+**Critical**: In single-sided mode, the device MUST treat ALL received networks as **untrusted** (`trust_level = 0` / `onboard-only`), regardless of what the server specifies:
+
+```text
+Server sends:   trust_level = 1 (full-access)
+Device applies: trust_level = 0 (onboard-only)
+```
+
+This is **not an error condition**. The server MAY believe the network is trusted (from its perspective), but the device cannot verify this claim without owner attestation. The device:
+
+- SHOULD silently downgrade `trust_level` to 0
+- SHOULD NOT reject the network or report an error
+- MUST use the network only for further onboarding, not for general connectivity
+
+```go
+func applySingleSidedProfile(network *WiFiNetwork, mode AttestationMode) {
+    if mode == ModeSingleSided && network.TrustLevel > 0 {
+        // Silently downgrade - not an error, just enforcing security boundary
+        log.Debug("Single-sided mode: downgrading trust_level from %d to 0", 
+                  network.TrustLevel)
+        network.TrustLevel = 0
+    }
+}
+```
+
+**Rationale**: Trust level indicates whether the owner vouches for the network. Without owner verification, the device has no basis to trust anything the service claims about network trustworthiness.
+
+#### 4. Expected Two-Phase Flow
+
+The single-sided profile enables a secure two-phase onboarding pattern:
+
+```text
+Phase 1: Single-Sided (WiFi Hints)
+1. Device connects to bootstrap network (open or known)
+2. Device performs single-sided attestation with Wi-Fi Setup Service
+3. Device enters single-sided profile:
+   - Advertises only: devmod (minimal), fdo.wifi
+   - Reports no identifying information
+4. Server sends: fdo.wifi:network-add (trust_level may be 1)
+5. Device applies network with trust_level=0 (downgraded)
+6. Device disconnects from bootstrap network
+7. Device connects to new network (treated as untrusted/onboard-only)
+
+Phase 2: Full Owner (Complete Onboarding)
+1. Device performs full owner attestation with Primary Onboarding Service
+2. Device exits single-sided profile, enters full owner profile:
+   - Advertises all supported FSIMs
+   - Reports complete devmod data
+3. Server sends: fdo.wifi, fdo.bmo, fdo.payload, etc.
+4. Device applies networks with trust levels as specified
+5. Device receives boot image and/or payloads
+6. Onboarding complete
+```
+
+#### Profile Summary Table
+
+| Aspect | Single-Sided Profile | Full Owner Profile |
+|--------|---------------------|-------------------|
+| **FSIMs Available** | devmod, fdo.wifi only | All supported FSIMs |
+| **devmod Data** | Minimal (no identifying info) | Complete |
+| **Trust Levels** | Always downgrade to 0 | Honor as specified |
+| **Use Case** | Wi-Fi hints for bootstrap | Complete onboarding |
+
+See [[WiFi-FSIM]] for complete specification of attestation modes and client implementation requirements.
+
+## Standalone Wi-Fi Setup Service Deployment
+
+### Concept
+
+Single-sided attestation enables the deployment of **standalone, off-the-shelf Wi-Fi setup services** that require minimal infrastructure and no integration with other services. This approach allows organizations to quickly deploy Wi-Fi onboarding capabilities in isolated or new network environments.
+
+### Service Characteristics
+
+#### Minimal Requirements
+A standalone Wi-Fi setup service requires only:
+
+1. **Wi-Fi Network Configuration**: The intended Wi-Fi setup credentials for target devices
+2. **Ownership Vouchers**: The OV files for devices that are allowed to use the service
+3. **Basic Network Connectivity**: Network access to serve devices (can be isolated)
+
+#### No Special Credentials Required
+The service does **NOT** need:
+- **Owner Keys**: No Owner private keys required
+- **Certificate Authority**: No PKI infrastructure needed
+- **Service Integration**: No integration with other services
+- **External Dependencies**: No connections to external systems
+
+### Deployment Scenarios
+
+#### Isolated Network Deployment
+```
+Isolated Network Setup:
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│   Wi-Fi Setup   │    │   Target Device  │    │  Production     │
+│    Service      │◄──►│   (Unconfigured) │◄──►│   Network       │
+│  (Single-Sided) │    │                 │    │                 │
+└─────────────────┘    └──────────────────┘    └─────────────────┘
+```
+
+#### Brand-New Network Environment
+- **Greenfield Deployment**: New network with no existing infrastructure
+- **Rapid Setup**: Service can be deployed quickly without complex integration
+- **Isolated Operation**: Can operate completely independently
+
+#### Temporary or Emergency Setup
+- **Pop-up Networks**: Temporary deployment sites
+- **Emergency Onboarding**: Quick setup for urgent device deployment
+- **Remote Locations**: Sites with limited infrastructure
+
+### Service Configuration
+
+#### Required Components
+
+##### 1. Wi-Fi Credential Database
+```json
+{
+  "wifi_networks": [
+    {
+      "ssid": "Production-WiFi",
+      "password": "secure-password",
+      "security": "WPA2-PSK"
+    },
+    {
+      "ssid": "Guest-WiFi", 
+      "password": "guest-password",
+      "security": "WPA2-PSK"
+    }
+  ]
+}
+```
+
+##### 2. Device Authorization Database
+```json
+{
+  "authorized_devices": [
+    {
+      "device_id": "device-001",
+      "ov_file": "/path/to/device-001.ov",
+      "allowed_networks": ["Production-WiFi"]
+    },
+    {
+      "device_id": "device-002", 
+      "ov_file": "/path/to/device-002.ov",
+      "allowed_networks": ["Production-WiFi", "Guest-WiFi"]
+    }
+  ]
+}
+```
+
+##### 3. Service Configuration
+```json
+{
+  "service_settings": {
+    "port": 8080,
+    "attestation_mode": "single-sided",
+    "trust_level": "untrusted",
+    "fsim_module": "fdo.wifi"
+  }
+}
+```
+
+### Operational Flow
+
+#### Device Connection Process
+1. **Device Discovery**: Device finds Wi-Fi setup service via DHCP/DNS/mDNS
+2. **Single-Sided Attestation**: Device authenticates, service indicates no Owner verification
+3. **OV Verification**: Service validates device against stored Ownership Voucher
+4. **Credential Provisioning**: Service provides Wi-Fi credentials for target network
+5. **Network Transition**: Device switches to production network
+6. **Full Onboarding**: Device completes standard FDO onboarding via production network
+
+#### Service Logic
+```go
+func handleDeviceRequest(device Device) (WiFiCredentials, error) {
+    // 1. Verify device against OV
+    if !verifyDeviceWithOV(device, storedOV) {
+        return nil, errors.New("unauthorized device")
+    }
+    
+    // 2. Single-sided attestation (algorithm=0, empty signature)
+    if !performSingleSidedAttestation(device) {
+        return nil, errors.New("attestation failed")
+    }
+    
+    // 3. Provide Wi-Fi credentials
+    return getWiFiCredentials(device.DeviceID), nil
+}
+```
+
+### Benefits of Standalone Deployment
+
+#### Operational Advantages
+- **Rapid Deployment**: Service can be set up in minutes
+- **Zero Integration**: No need to integrate with existing infrastructure
+- **Isolated Security**: Can operate in completely isolated networks
+- **Simplified Management**: Minimal configuration and maintenance requirements
+
+#### Security Benefits
+- **Limited Scope**: Service only provides Wi-Fi credentials, no other access
+- **Single-Sided Security**: No Owner keys to protect or manage
+- **Clear Boundaries**: Well-defined security perimeter
+- **Audit Trail**: Device authorization through OV validation
+
+#### Cost Benefits
+- **Minimal Infrastructure**: No need for complex PKI or certificate management
+- **Reduced Complexity**: Simpler deployment and maintenance
+- **Scalable**: Easy to deploy multiple instances as needed
+- **Resource Efficient**: Low computational and storage requirements
+
+### Implementation Examples
+
+#### Basic Docker Deployment
+```dockerfile
+FROM alpine:latest
+COPY wifi-setup-service /app/
+COPY config/ /app/config/
+COPY ovs/ /app/ovs/
+EXPOSE 8080
+CMD ["/app/wifi-setup-service"]
+```
+
+#### Configuration File
+```yaml
+# docker-compose.yml
+version: '3'
+services:
+  wifi-setup:
+    image: wifi-setup-service:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config:/app/config
+      - ./ovs:/app/ovs
+    environment:
+      - MODE=single-sided
+      - TRUST_LEVEL=untrusted
+```
+
+#### Cloud Deployment
+```bash
+# Deploy to cloud provider
+gcloud run deploy wifi-setup-service \
+  --image wifi-setup-service:latest \
+  --platform managed \
+  --allow-unauthenticated \
+  --set-env-vars MODE=single-sided,TRUST_LEVEL=untrusted
+```
+
+### Use Case Examples
+
+#### Manufacturing Facility
+- **Scenario**: New manufacturing line with isolated network
+- **Deployment**: Standalone Wi-Fi setup service on local network
+- **Devices**: Manufacturing equipment needing Wi-Fi access
+- **Integration**: No integration with corporate IT systems needed
+
+#### Remote Site Deployment
+- **Scenario**: Remote location with limited connectivity
+- **Deployment**: Isolated Wi-Fi setup service
+- **Devices**: Remote sensors and controllers
+- **Integration**: Works independently of central systems
+
+#### Temporary Event Setup
+- **Scenario**: Conference or event with temporary network
+- **Deployment**: Quick-setup Wi-Fi service for event devices
+- **Devices**: Event equipment needing network access
+- **Integration**: No long-term integration required
+
+### Security Considerations
+
+#### Service Isolation
+- **Network Isolation**: Service can operate in completely isolated networks
+- **Data Minimization**: Only stores Wi-Fi credentials and OV files
+- **Limited Attack Surface**: No Owner keys or sensitive credentials
+- **Physical Security**: Can be deployed on dedicated hardware
+
+#### Operational Security
+- **OV Management**: Secure storage and handling of Ownership Vouchers
+- **Access Control**: Limited to authorized devices only
+- **Audit Logging**: Track device access and credential provisioning
+- **Regular Updates**: Keep service software updated
+
+### Migration Path
+
+#### From Standalone to Integrated
+Standalone services can be migrated to integrated deployments as needed:
+
+1. **Phase 1**: Deploy standalone service for immediate needs
+2. **Phase 2**: Add Owner verification capabilities
+3. **Phase 3**: Integrate with broader FDO infrastructure
+4. **Phase 4**: Transition to full-featured onboarding service
+
+#### Hybrid Deployment
+Organizations can maintain both standalone and integrated services:
+- **Standalone**: For remote or isolated locations
+- **Integrated**: For main facilities with full infrastructure
+
+## Security Model 2: Owner/Delegate Attestation
+
+### Concept
+
+Owner/Delegate attestation maintains the traditional FDO security model with **full mutual authentication** between device and service, but allows for delegated authority through cryptographically limited delegate keys.
+
+### Owner-Based Attestation
+
+The traditional FDO model where the service possesses and presents the full Owner credentials:
+
+#### Characteristics
+- **Full Owner Verification**: Service presents valid Owner credentials
+- **Mutual Authentication**: Both device and service verify each other's legitimacy
+- **Complete Trust**: Full cryptographic attestation with Owner authority
+- **Standard FDO**: Uses normal double-sided attestation
+
+#### Use Cases
+- **Joint Services**: Single service handling both Wi-Fi setup and full onboarding
+- **Enterprise Deployments**: Organization-controlled services with full Owner access
+- **High-Security Environments**: Scenarios requiring full cryptographic verification
+
+### Delegate Key Attestation
+
+A hybrid approach where the Owner creates **cryptographically limited delegate keys** specifically for Wi-Fi provisioning:
+
+#### Delegate Key Concept
+
+```
+Owner Key → Signs Delegate Key → Delegate Key Limited to Wi-Fi Setup Only
+```
+
+#### How Delegate Key Attestation Works
+
+1. **Delegate Key Creation**: Owner creates a delegate key specifically for Wi-Fi provisioning
+2. **Cryptographic Delegation**: Owner signs the delegate key with limited scope: "Wi-Fi setup only"
+3. **Service Authentication**: Wi-Fi service uses delegate key to prove legitimate delegation
+4. **Device Verification**: Device verifies delegate key is valid and properly scoped
+5. **Limited Authority**: Delegate key can only perform Wi-Fi setup operations
+
+#### Benefits of Delegate Key Approach
+
+- **Full Cryptographic Attestation**: Maintains mutual authentication (not single-sided)
+- **Limited Authority**: Delegate key is cryptographically restricted to Wi-Fi setup only
+- **Owner Control**: Owner maintains explicit control over delegation scope and duration
+- **No Owner Key Sharing**: Only delegate key is shared with Wi-Fi provisioning service
+- **Cryptographic Enforcement**: Delegate key limitations are enforced cryptographically
+- **Audit Trail**: Clear cryptographic record of delegation authority
+
+### Security Properties
+
+1. **Full Mutual Authentication**: Both device and service cryptographically verify each other
+2. **Limited Authority**: Delegate key is cryptographically restricted to Wi-Fi setup operations
+3. **Owner Control**: Owner maintains explicit control over delegation scope and duration
+4. **Cryptographic Enforcement**: Delegate key limitations are enforced by cryptographic validation
+5. **Audit Trail**: Clear cryptographic record of delegation authority and scope
+
+## Security Model Comparison
+
+| Aspect | Single-Sided | Owner-Based | Delegate Key |
+|--------|--------------|-------------|--------------|
+| **Attestation** | Device-only verification | Full mutual attestation | Full mutual attestation |
+| **Owner Key** | Not required | Possessed by service | Not shared (delegate key only) |
+| **Security Model** | Device verification only | Full cryptographic verification | Full cryptographic verification |
+| **Authority** | Implicit trust | Full Owner authority | Explicit limited delegation |
+| **Implementation** | Simple | Standard | More complex key management |
+| **Use Case** | Low-risk, simple deployments | High-security, joint services | High-security, separate services |
+
+## Choosing Security Models
+
+### Single-Sided Attestation When:
+- **Low-Risk Environment**: Wi-Fi setup is considered low-security operation
+- **Simple Deployment**: Minimal key management overhead is desired
+- **Third-Party Services**: Owner key sharing with third-party Wi-Fi services is not feasible
+- **Resource Constraints**: Limited resources for complex key management
+- **Acceptable Risk**: Temporary network access risk is acceptable for the use case
+
+### Owner-Based Attestation When:
+- **Joint Service Deployment**: Single service handles both Wi-Fi and full onboarding
+- **Full Control Required**: Organization maintains complete control over onboarding process
+- **Standard Security**: Full mutual attestation for all operations
+- **Simplified Architecture**: No need for separate service coordination
+
+### Delegate Key Attestation When:
+- **Separate Services**: Wi-Fi setup and full onboarding are distinct services
+- **High-Security Requirements**: Full cryptographic attestation is required
+- **Enterprise Deployment**: Enterprise security policies demand mutual authentication
+- **Key Sharing Constraints**: Owner key sharing with Wi-Fi service is not feasible
+- **Regulatory Compliance**: Regulations require full audit trails and cryptographic controls
+
+## Service Architecture Models
+
+### Joint Service Model
+
+Organizations MAY deploy a **joint service** that handles both Wi-Fi setup and full onboarding:
+
+#### Characteristics
+- **Single Service**: Unified service for both Wi-Fi setup and complete onboarding
+- **Owner Key Possession**: Service possesses the Owner Key for full attestation
+- **Full Capability**: Can provide both Wi-Fi credentials and complete device configuration
+- **Security Model**: Typically uses Owner-based attestation
+
+#### Use Cases
+- **Simplified Deployment**: Single service to manage and maintain
+- **Full Control**: Organization maintains complete control over onboarding process
+- **Standard Security**: Full mutual attestation for all operations
+
+### Separate Service Model
+
+Organizations MAY deploy **separate services** for Wi-Fi setup and full onboarding:
+
+#### Characteristics
+- **Wi-Fi Setup Service**: Limited to Wi-Fi credential provisioning only
+- **Primary Onboarding Service**: Handles complete device ownership and configuration
+- **Owner Key Distribution**: Only Primary service possesses Owner Key
+- **Key Sharing Challenge**: May be infeasible or impossible to share Owner Key with Wi-Fi service
+
+#### Deployment Scenarios
+- **Local On-Premises**: Wi-Fi setup service hosted locally, Primary service in cloud
+- **Third-Party Services**: Wi-Fi setup provided by external vendor, Primary service internal
+- **Security Boundaries**: Organizational security policies prevent Owner Key sharing
+- **Geographic Distribution**: Services hosted in different regions or jurisdictions
+
+#### Security Model Options
+Separate services can use either:
+- **Single-Sided Attestation**: Wi-Fi service uses device-only verification
+- **Delegate Key Attestation**: Wi-Fi service uses Owner-signed delegate key
+
+# Wi-Fi Credential Conveyance
+
+## Overview
+
+The credential conveyance mechanism defines how Wi-Fi credentials are transferred from the service to the device. This is independent of the security model used for authentication.
+
+## FSIM-Based Credential Provisioning
+
+### The fdo.wifi FSIM
+
+Wi-Fi credentials SHALL be provided using the `fdo.wifi` FSIM [[WiFi-FSIM]]. This FSIM provides a unified interface for Wi-Fi network configuration supporting both basic (SSID/password) and advanced (certificate-based) authentication methods.
+
+#### Conceptual Example
+
+The following illustrates the conceptual content of a basic Wi-Fi configuration (actual wire format uses CBOR encoding per [[WiFi-FSIM]]):
+
+```
+Network Configuration:
+- Network ID: "net-001"
+- SSID: "NetworkName"
+- Authentication: WPA2-PSK
+- Password: "secure-password"
+- Trust Level: onboard-only
+```
+
+#### Advanced Capabilities
+
+The `fdo.wifi` FSIM also supports:
+
+- **WPA3-Enterprise**: Certificate-based authentication with EAP-TLS, EAP-PEAP, EAP-TTLS
+- **CSR/Certificate Enrollment**: Device-generated CSRs with chunked certificate delivery
+- **CA Bundle Provisioning**: Separate CA chain delivery for enterprise networks
+- **Fast Roaming (802.11r)**: Mobility domain configuration for seamless roaming
+- **Hotspot 2.0 (Passpoint)**: Roaming consortium and operator configuration
+
+See [[WiFi-FSIM]] for complete message formats and protocol details.
+
+### FSIM Access Control
+
+#### Single-Sided Mode
+In single-sided attestation mode, devices SHALL only accept:
+- **Basic Wi-Fi configuration**: SSID, password, trust level
+- **Trust level**: Limited to `onboard-only` networks
+- **No certificate provisioning**: Certificate-based authentication not available
+
+#### Owner/Delegate Mode
+In Owner/Delegate attestation mode, devices SHALL accept:
+- **Full Wi-Fi configuration**: Basic and certificate-based networks
+- **Certificate provisioning**: CSR/certificate enrollment supported
+- **Trust levels**: Both `onboard-only` and `full-access` networks
+
+## Advanced Authentication Methods
+
+### Beyond Simple SSID/Passphrase
+
+The Wi-Fi credential conveyance system SHALL support advanced authentication methods:
+
+#### Supported Authentication Methods
+
+##### WPA3-Enterprise (Certificate-Based)
+- **Authentication**: X.509 certificates for device authentication
+- **Security Model**: MUST use Owner/Delegate attestation (`full-access` trust level)
+- **Credential Format**: Certificate provisioning via `fdo.wifi` CSR/cert flows
+
+##### WPA3-Enterprise (Username/Password)
+- **Authentication**: RADIUS-based username/password authentication
+- **Security Model**: SHOULD use Owner/Delegate attestation (`full-access` trust level)
+- **Credential Format**: EAP credentials via `fdo.wifi` network-add message
+
+##### 802.1X/EAP-TLS
+- **Authentication**: Extensible Authentication Protocol with Transport Layer Security
+- **Security Model**: MUST use Owner/Delegate attestation (`full-access` trust level)
+- **Credential Format**: Certificate provisioning via `fdo.wifi` CSR/cert flows
+
+### Certificate Provisioning Flows
+
+The `fdo.wifi` FSIM [[WiFi-FSIM]] defines a complete CSR/certificate enrollment flow using chunked transfer for large payloads:
+
+1. Device receives network metadata via `network-add`
+2. Device generates CSR and sends via chunked `csr-begin`/`csr-data`/`csr-end` messages
+3. Service signs CSR and returns certificate via chunked `cert-begin`/`cert-data`/`cert-end` messages
+4. Optionally, service sends CA bundle via `ca-begin`/`ca-data`/`ca-end` messages
+5. Device installs certificate and connects using certificate authentication
+
+#### Trust Requirements for Certificate Provisioning
+- **Single-Sided Attestation**: Certificate provisioning NOT available (limited to `onboard-only`)
+- **Owner/Delegate Attestation**: Certificate provisioning fully supported (`full-access`)
+- **Delegate Authority**: Delegate must have explicit certificate provisioning permission
+
+## Wi-Fi Network Trust Levels
+
+### Trust Level Classification
+
+Wi-Fi onboarding operates at two distinct trust levels based on the **Owner's declaration of network trustworthiness**, not the authentication method used:
+
+#### Level 1: Onboard-Only (`onboard-only`)
+
+**Characteristics**:
+- **Trust Declaration**: Owner has NOT declared the network as trustworthy
+- **Service Type**: Wi-Fi setup service provides network "hint" for onboarding only
+- **Device Behavior**: Use network ONLY for contacting legitimate Owner service, then seek full verification
+- **Purpose**: Network is treated as a temporary conduit for onboarding, not a trusted environment
+
+**Security Implications**:
+- **Limited Trust**: Device should NOT trust the network for any purpose beyond FDO onboarding
+- **Onboarding Only**: Wi-Fi credentials are accepted solely for reaching a legitimate Owner service
+- **Final Verification**: Trust is established only after successful onboarding with legitimate Owner service
+- **Temporary Access**: Network access is considered provisional and untrusted
+
+#### Level 2: Full-Access (`full-access`)
+
+**Characteristics**:
+- **Trust Declaration**: Owner has explicitly declared the network as trustworthy
+- **Service Type**: Wi-Fi setup service provides network with Owner's trust endorsement
+- **Device Behavior**: Full trust in network as declared legitimate by Owner
+- **Purpose**: Network is trusted for all device operations as per Owner's declaration
+
+**Security Implications**:
+- **Full Trust**: Device can fully trust the Wi-Fi network for all operations
+- **Complete Onboarding**: Device may complete full onboarding process via Wi-Fi network
+- **Persistent Access**: Network access is considered legitimate and trusted
+- **Full Functionality**: Device can use network for all intended purposes
+
+### Important Clarification: Trust vs Authentication
+
+**Trust Level** and **Authentication Method** are independent concepts:
+
+- **Trust Level**: Owner's declaration of whether the network itself is trustworthy
+- **Authentication Method**: Technical mechanism for connecting to the network (PSK, certificates, etc.)
+
+A network can use **enterprise-grade authentication** (WPA3-Enterprise, certificates) but still be **untrusted** if the Owner has not declared it trustworthy. Conversely, a network can use **simple authentication** (WPA2-PSK) but be **fully trusted** if the Owner has declared it legitimate.
+
+### Delegate Key Trust Permissions
+
+Delegate certificates SHALL support two distinct trust level permissions:
+
+#### Trust Level Specification in Delegate Keys
+Delegate certificates MAY specify trust level through cryptographic attributes:
+- **Trust Level**: "untrusted" OR "trusted"
+- **Scope Limitations**: Wi-Fi setup operations only
+- **Owner Control**: Explicit trust level definition in delegation
+
+#### Untrusted Delegate Permission
+- **Trust Level**: "untrusted"
+- **Device Behavior**: Treat network as untrusted, use only for FDO onboarding
+- **Use Case**: Third-party Wi-Fi services providing network hints only
+
+#### Trusted Delegate Permission
+- **Trust Level**: "trusted"
+- **Device Behavior**: Fully trust network as declared legitimate by Owner
+- **Use Case**: Enterprise Wi-Fi services with Owner's trust endorsement
+
+## Implementation Considerations
+
+### Certificate Management
+- **CA Infrastructure**: Requirement for certificate authority management
+- **Certificate Lifecycle**: Provisioning, rotation, and revocation processes
+- **Device Storage**: Secure storage for Wi-Fi authentication certificates
+- **Validation**: Certificate chain validation and revocation checking
+
+### Protocol Complexity
+- **Additional Steps**: Certificate provisioning adds complexity to onboarding flow
+- **Timeout Handling**: Extended timeouts for certificate operations
+- **Error Recovery**: Handling of certificate generation and signing failures
+- **Fallback Mechanisms**: Alternative authentication methods if certificate provisioning fails
+
+### Security Implications
+- **Enhanced Security**: Certificate-based authentication provides stronger security
+- **Trust Boundaries**: Clear separation between trusted and untrusted provisioning
+- **Audit Trails**: Certificate operations provide comprehensive audit capabilities
+- **Revocation**: Ability to revoke compromised certificates
+
+## Wi-Fi Trust Levels
+
+### Trust Level Classification
+
+Wi-Fi onboarding operates at two distinct trust levels based on the authentication method used during credential provisioning:
+
+#### Level 1: Untrusted Wi-Fi Onboarding
+
+**Characteristics**:
+- **No Owner Verification**: Wi-Fi setup service did NOT prove ownership (no Owner credentials)
+- **Single-Sided Attestation**: Only device authentication was performed
+- **Limited Trust**: Network is not trusted beyond FDO onboarding purposes
+
+**Security Implications**:
+- **Network Distrust**: Device should NOT trust the Wi-Fi network for any purpose beyond FDO
+- **Onboarding Only**: Wi-Fi credentials are accepted solely for contacting a "real" onboarding service
+- **Final Verification**: Trust is established only after successful onboarding with legitimate Owner service
+- **Temporary Access**: Network access is considered temporary and provisional
+
+**Use Cases**:
+- **Initial Setup**: First-time device connection to unknown networks
+- **Third-Party Services**: Wi-Fi setup provided by external or untrusted services
+- **Emergency Access**: Temporary network access for onboarding purposes
+- **Public Networks**: Wi-Fi setup in public or shared network environments
+
+**Device Behavior**:
+```
+Untrusted Wi-Fi Onboarding Flow:
+1. Device connects via single-sided attestation
+2. Device receives Wi-Fi credentials (untrusted)
+3. Device uses network ONLY for FDO onboarding
+4. Device connects to legitimate Owner service
+5. Device establishes trust through Owner verification
+6. Device may continue using network OR switch to trusted network
+```
+
+#### Level 2: Fully Trusted Wi-Fi Onboarding
+
+**Characteristics**:
+- **Owner Verification**: Wi-Fi setup service presented full Owner credentials
+- **Delegate Authority**: Service used Owner-signed delegate certificate proving authorization
+- **Full Trust**: Network is fully trusted for all device operations
+
+**Security Implications**:
+- **Network Trust**: Device can fully trust the Wi-Fi network for all operations
+- **Complete Onboarding**: Device may complete full onboarding process via Wi-Fi network
+- **Persistent Access**: Network access is considered permanent and trusted
+- **Full Functionality**: Device can use network for all intended purposes
+
+**Use Cases**:
+- **Enterprise Deployments**: Corporate Wi-Fi networks with full authentication
+- **Managed Environments**: Organization-controlled Wi-Fi infrastructure
+- **High-Security Scenarios**: Environments requiring full cryptographic verification
+- **Long-Term Deployments**: Permanent device installations
+
+**Device Behavior**:
+```
+Trusted Wi-Fi Onboarding Flow:
+1. Device connects via Owner verification or delegate attestation
+2. Device receives Wi-Fi credentials (trusted)
+3. Device fully trusts Wi-Fi network
+4. Device may complete full onboarding via Wi-Fi network
+5. Device uses network for all operations
+6. Device maintains long-term network relationship
+```
+
+### Delegate Key Trust Permissions
+
+Delegate certificates SHALL support two distinct trust level permissions:
+
+#### Trust Level Specification in Delegate Keys
+
+Delegate certificates MAY specify trust level through cryptographic attributes:
+
+```
+Delegate Key Structure:
+- Delegate Identity: Wi-Fi setup service identification
+- Owner Signature: Cryptographic proof of delegation
+- Trust Level: "untrusted" OR "trusted"
+- Scope Limitations: Wi-Fi setup operations only
+- Validity Period: Time-limited delegation
+```
+
+#### Untrusted Delegate Permission
+- **Trust Level**: "untrusted"
+- **Device Behavior**: Treat network as untrusted, use only for FDO onboarding
+- **Use Case**: Third-party Wi-Fi services with limited authorization
+- **Security**: Device seeks full Owner verification after network connection
+
+#### Trusted Delegate Permission
+- **Trust Level**: "trusted"
+- **Device Behavior**: Fully trust network, complete onboarding via Wi-Fi
+- **Use Case**: Enterprise Wi-Fi services with full authorization
+- **Security**: Device accepts network as fully legitimate
+
+### Wi-Fi Credential Conveyance
+
+#### Credential Format
+Wi-Fi credentials SHALL be provided using the existing FDO FSIM protocol. The credentials include whatever authentication method the target network requires (WPA2-PSK, WPA3-PSK, WPA3-Enterprise, certificates, etc.).
+
+#### Trust Level Purpose
+The critical distinction is **how the device may use the network** based on who provided the credentials:
+
+##### Onboarding-Only Use (Untrusted)
+- **Source**: Service without Owner verification (single-sided attestation)
+- **Device Behavior**: Use network ONLY to contact legitimate Owner service
+- **Purpose**: Temporary conduit for reaching real onboarding service
+- **Limitation**: No other device operations on this network
+
+##### General Use (Trusted)
+- **Source**: Service with Owner verification or authorized delegate
+- **Device Behavior**: Use network for all intended device operations
+- **Purpose**: Fully trusted network as declared legitimate by Owner
+- **Capability**: Complete device functionality on this network
+
+**Key Point**: The authentication method used to connect to the network is irrelevant to the trust level. What matters is whether an attested Owner (or authorized delegate) has declared the network suitable for general use.
+
+### Device Trust Management
+
+#### Trust Level Persistence
+Devices SHALL maintain trust level information:
+
+```go
+type NetworkTrustInfo struct {
+    SSID          string
+    TrustLevel    TrustLevel    // Untrusted or Trusted
+    OnboardingMethod string    // Single-sided, Owner, Delegate
+    LastVerified  time.Time
+    CertificateInfo *CertificateInfo // For certificate-based auth
+}
+```
+
+#### Trust Level Evolution
+- **Untrusted → Trusted**: Possible after successful Owner verification
+- **Trusted → Untrusted**: Possible if security compromise detected
+- **Trust Maintenance**: Periodic re-verification of trusted networks
+
+#### Security Policies
+Devices SHALL implement security policies based on trust level:
+- **Untrusted Networks**: Limited to FDO onboarding only
+- **Trusted Networks**: Full device functionality enabled
+- **Mixed Environments**: Dynamic adaptation based on network trust level
+
+#### Certificate Validation
+
+Certificate validation SHALL follow standard FDO 2.0 requirements:
+
+- Certificate chain to trusted manufacturer CA
+- Certificate validity period and revocation status
+- Device identifier format validation
+- Standard FDO cryptographic verification
+
+#### Credential Provisioning
+
+Wi-Fi credentials SHALL be provided via the `fdo.wifi` FSIM [[WiFi-FSIM]]:
+
+- **WPA2-PSK**: Pre-shared key for WPA2 networks
+- **WPA3-SAE**: Simultaneous Authentication of Equals for WPA3 networks
+- **Open Network**: No authentication required
+- **WPA3-Enterprise**: Certificate-based or EAP credentials
+
+#### Rate Limiting
+
+Wi-Fi Setup Services SHOULD implement standard FDO rate limiting:
+
+- **Per-Device Rate Limiting**: Limit attestation attempts per device identifier
+- **Network-Level Rate Limiting**: Prevent brute force attacks
+- **Failed Attempt Tracking**: Monitor and block suspicious patterns
+
+## Wi-Fi Credential Provisioning
+
+During TO2 protocol execution, server-side FSIMs MAY provide Wi-Fi credentials to the device using the `fdo.wifi` FSIM [[WiFi-FSIM]].
+
+### Credential Format
+
+Wi-Fi credentials are provided via the `fdo.wifi:network-add` message using CBOR encoding. Conceptually, a basic configuration includes:
+
+- **Network ID**: Unique identifier for the network
+- **SSID**: Network name
+- **Authentication Type**: open, wpa2-psk, wpa3-psk, or wpa3-enterprise
+- **Password/Credentials**: Authentication credentials (binary)
+- **Trust Level**: `onboard-only` or `full-access`
+
+See [[WiFi-FSIM]] for complete CBOR message format and field definitions.
+
+### Security Considerations
+
+- All credentials are transmitted over the already-encrypted FDO TO2 channel
+- Devices MUST validate configuration against their capabilities
+- Devices MUST enforce trust level policies
+
+## SSID Priority and Hidden SSID Optimization
+
+### SSID Priority Hints
+
+Devices SHALL implement SSID priority optimization to accelerate discovery of onboarding services in environments with many Wi-Fi networks:
+
+#### Priority SSID Prefix
+- **SSID Prefix**: Networks with SSIDs beginning with "FIDO-Onboarding" SHALL be given priority during network scanning
+- **Priority Treatment**: These networks SHALL be attempted first during onboarding attempts
+- **Non-Definitive**: This is a HINT or optimization only - not a guarantee of onboarding service presence
+- **Fallback Required**: Devices MUST still attempt other networks if priority networks fail
+
+#### Use Cases
+- **Dense Environments**: Enterprise or campus environments with dozens of Wi-Fi networks
+- **Faster Discovery**: Reduce time to find correct onboarding network
+- **Multiple Services**: When multiple potential onboarding services exist
+
+#### Implementation Requirements
+- **Prefix Matching**: Match SSID names starting with "FIDO-Onboarding" (case-sensitive)
+- **Priority Queue**: Place matching networks at the front of connection attempts
+- **Normal Fallback**: Continue with standard network discovery if priority networks fail
+- **Security Verification**: Still perform full FDO attestation regardless of SSID priority
+
+### Hidden SSID Support
+
+Devices SHALL actively scan for and attempt to connect to a hidden SSID named "FIDO-Onboarding":
+
+#### Hidden SSID Characteristics
+- **SSID Name**: "FIDO-Onboarding" (exact match, case-sensitive)
+- **Hidden Network**: Not broadcast in standard network scans
+- **Active Scan Required**: Devices MUST perform active probing for this SSID
+- **Optimization Purpose**: Provides clean deployment without cluttering visible network lists
+
+#### Deployment Considerations
+- **Optional Service**: Existence of this hidden SSID is not guaranteed
+- **No Authority Assumption**: Presence does not imply legitimate or authoritative service
+- **User Discouragement**: Hidden nature discourages average users from attempting to connect
+- **Service Discovery**: One method among many for providing onboarding service access
+
+#### Device Behavior
+- **Active Probing**: MUST actively probe for "FIDO-Onboarding" hidden SSID
+- **Priority Treatment**: If found, attempt connection before other networks
+- **Standard Verification**: Perform full FDO attestation regardless of discovery method
+- **Graceful Failure**: Continue with other discovery methods if hidden SSID is unavailable or fails
+
+#### Security Notes
+- **No Additional Risk**: Hidden SSID does not introduce new security risks
+- **Standard Protection**: FDO attestation still prevents malicious network compromise
+- **Discovery Aid**: Purely an optimization for service discovery, not a security feature
+
+# Onboarding Flow
+
+## One-Step Onboarding Flow
+
+1. Device powers on in unconfigured state
+2. Device scans for available networks with SSID priority optimization
+3. Device connects to an open network (or uses existing connection)
+4. Device receives DHCP options (if available)
+5. Device attempts onboarding with discovered Primary Onboarding Service
+6. Device receives Wi-Fi credentials via `fdo.wifi` FSIM
+7. Device connects to target Wi-Fi network
+8. Device completes onboarding process
+9. Device reboots if necessary
+
+## Two-Step Onboarding Flow
+
+1. Device powers on in unconfigured state
+2. Device scans for available networks with SSID priority optimization
+3. Device connects to an open network
+4. Device receives DHCP options (if available)
+5. Device attempts onboarding with Wi-Fi Setup Service
+6. Device receives Wi-Fi credentials via `fdo.wifi` FSIM
+7. Device connects to target Wi-Fi network
+8. Device marks itself as "Wi-Fi Configured"
+9. Device re-attempts onboarding process from step 2
+10. Device finds and connects to Primary Onboarding Service
+11. Device completes full onboarding process
+
+## Credential Management
+
+### Credential Reuse Considerations
+
+Credential reuse (or non-reuse) is determined by the Onboarding Service at the end of the TO2 protocol. When an Onboarding Service completes successfully, it MAY choose to rotate the device's FDO credentials for the next onboarding attempt, or it MAY allow credential reuse.
+
+**Wi-Fi Setup Services**: SHOULD be configured to allow credential reuse (i.e., not rotate credentials) so that subsequent Primary Onboarding Services can use the same credentials. This ensures that Wi-Fi setup does not interfere with final onboarding.
+
+**Primary Onboarding Services**: MAY use normal credential rotation policies as appropriate for the deployment.
+
+**Implementation Note**: If Wi-Fi Setup Services and Primary Services are implemented as separate services (not sharing credential storage), the Wi-Fi Setup Service MUST NOT rotate credentials to preserve them for the Primary Service. If they share credential storage or are the same service, credential rotation can follow normal policies.
+
+### State Management
+
+Devices MUST maintain the following states:
+
+- **Unconfigured**: Initial factory state, no Wi-Fi credentials
+- **Wi-Fi Configured**: Has Wi-Fi credentials, not fully onboarded
+- **Fully Onboarded**: Complete onboarding completed
+
+## What Happens with New Credentials from Primary Services
+
+If a device receives new FDO credentials from a Primary Onboarding Service after Wi-Fi setup, the behavior depends on how credentials are managed:
+
+**Shared Credential Storage**: If Wi-Fi Setup Services and Primary Services share credential storage (through implementation-defined mechanisms), new credentials will be available to both services and onboarding will succeed normally.
+
+**Separate Credential Storage**: If services use separate credential storage, subsequent onboarding attempts with rotated credentials will fail. In deployments where Wi-Fi Setup is intended ONLY for network access (with no subsequent FDO onboarding), this may be acceptable.
+
+**Same Service Implementation**: If the Wi-Fi Setup Service and Primary Service are implemented as the same physical service (just different endpoints), credential management will work normally.
+
+# Loop Prevention and Retry Logic
+
+## Retry Hierarchy
+
+To prevent infinite loops, devices MUST implement a hierarchical retry strategy:
+
+1. **Onboarding Service Retry**: If onboarding fails with a specific service, try the next onboarding service
+2. **RV Service Retry**: If all onboarding services fail, try the next RV service
+3. **Network Retry**: If all RV services fail, try the next network
+4. **Final Fallback**: Return to initial state after exhausting all options
+
+## Loop Prevention Mechanisms
+
+### Service History Tracking
+
+Devices MUST maintain a persistent service history to prevent loops:
+
+```
+struct ServiceRecord {
+    service_url: string,
+    service_type: enum {PRIMARY, WIFI_SETUP, COMBINED},
+    last_attempt: timestamp,
+    attempt_count: integer,
+    result: enum {SUCCESS, FAILURE, WIFI_ONLY},
+    network_ssid: string
+}
+```
+
+### Loop Prevention Algorithm
+
+```
+function attemptOnboarding(service, device_state):
+    # Check if service was previously attempted
+    if service in service_history:
+        record = service_history[service]
+        
+        # If device is Wi-Fi configured and this is a Wi-Fi Setup service, skip
+        if device_state == WIFI_CONFIGURED and record.service_type == WIFI_SETUP:
+            return SKIP_SERVICE
+            
+        # If service failed with WIFI_ONLY result and device is now Wi-Fi configured, skip
+        if device_state == WIFI_CONFIGURED and record.result == WIFI_ONLY:
+            return SKIP_SERVICE
+            
+        # If service was attempted more than 3 times in the last hour, skip
+        if record.attempt_count >= 3 and (current_time - record.last_attempt) < 3600:
+            return SKIP_SERVICE
+    
+    # Attempt service
+    result = attemptService(service)
+    
+    # Update history
+    updateServiceHistory(service, result)
+    
+    # If result is WIFI_ONLY, mark device as Wi-Fi configured and trigger re-onboarding
+    if result == WIFI_ONLY:
+        device_state = WIFI_CONFIGURED
+        triggerReOnboarding()
+    
+    return result
+```
+
+### Exponential Backoff for Failed Services
+
+Devices MUST implement exponential backoff for services that repeatedly fail, but MUST always retry on power-on:
+
+```
+struct ServiceBackoff {
+    service_url: string,
+    consecutive_failures: integer,
+    next_attempt_time: timestamp,
+    backoff_multiplier: float
+}
+
+function calculateBackoff(consecutive_failures):
+    base_delay = 60  # 1 minute base
+    max_delay = 3600  # 1 hour max
+    multiplier = 2.0
+    
+    delay = min(base_delay * (multiplier ^ consecutive_failures), max_delay)
+    return delay
+```
+
+**Backoff Rules:**
+- On first failure: wait 1 minute before retry
+- On consecutive failures: double the wait time (max 1 hour)
+- **ALWAYS retry on power-on/reset regardless of backoff state**
+- Reset backoff counters on successful service contact
+- Backoff is per-service, not per-network
+
+### State-Based Service Selection
+
+Devices MUST use their current state to select appropriate services:
+
+#### Unconfigured Device State
+- MAY contact both Primary and Wi-Fi Setup Services
+- MUST prioritize Primary Services when both are available
+- MUST attempt Wi-Fi Setup Services if Primary Services fail
+
+#### Wi-Fi Configured Device State
+- MUST only contact Primary Onboarding Services
+- MUST ignore all Wi-Fi Setup Service advertisements
+- MUST skip networks that only advertise Wi-Fi Setup Services
+
+#### Fully Onboarded Device State
+- MUST not attempt onboarding
+- MUST ignore all FDO service advertisements
+
+### Re-Onboarding Trigger Conditions
+
+Devices MUST trigger re-onboarding only under specific conditions:
+
+1. **Successful Wi-Fi Setup**: After receiving Wi-Fi credentials from a Wi-Fi Setup Service
+2. **Network Change**: When moving to a new network with different service advertisements
+3. **Timer Expiry**: After a configurable timeout period (default: 24 hours)
+4. **Manual Reset**: When explicitly reset by administrator
+
+### Service Response Codes
+
+Services MUST use specific response codes to indicate their type:
+
+- **Code 100**: Normal onboarding completion
+- **Code 101**: Wi-Fi credentials provided, re-onboarding required
+- **Code 102**: Service unavailable, try next service
+- **Code 103**: Invalid device state for this service type
+
+### DHCP Option-Based Loop Prevention
+
+Devices MUST use DHCP option presence to prevent inappropriate service attempts:
+
+```
+if device_state == WIFI_CONFIGURED:
+    if dhcp_option_223_present and not dhcp_option_222_present:  # Wi-Fi Setup only
+        skip_network()
+    elif dhcp_option_222_present:  # Primary service available
+        attempt_service()
+```
+
+### Retry Limits
+
+Devices MUST implement the following retry limits:
+
+- **Per Service**: Exponential backoff with 1-hour maximum delay
+- **No Maximum Attempts**: Devices MUST retry forever until successful
+- **Power-On Reset**: All backoff counters reset on power-on, allowing immediate retry
+
+### Persistent State Storage
+
+Devices MUST store loop prevention state persistently:
+
+- Service history records
+- Service backoff records
+- Current device state
+- Last successful onboarding timestamp
+
+State MUST survive reboots and power cycles to prevent reset-based loop circumvention.
+
+# Example Deployment Walkthrough
+
+## Problem Statement
+
+I have a service on our Wi-Fi network which supports FDO onboarding. I buy a bunch of machines that expect to be able to power-on and zero-touch onboard to this service. My services are on a private, secured network. These devices don't know anything about this network, what it's called or how to access it.
+
+Currently, as per normal FDO, when I buy new devices - I receive the Ownership Voucher of these devices from my manufacturer. Upon receipt, I take these vouchers and upload to my management service so it can onboard the devices.
+
+**But my devices can't find the management services, because they can't get on the network.**
+
+## Solution Overview
+
+### Step 1: Set Up Open Network
+
+Set up (or use an existing) open network. This network could be:
+
+- **Dedicated Setup Network**: Created specifically for device onboarding
+- **Existing Guest Network**: Reused for temporary device access
+- **Limited Access Network**: Restricted to only allow connectivity to the Wi-Fi Setup service
+
+The open network COULD be a limited/restricted network as to only allow connectivity to the service only:
+- **Local Network**: Connectivity only to IT infrastructure
+- **External Network**: External routes open only to the Wi-Fi Setup service
+
+### Step 2: Deploy Wi-Fi Setup Service
+
+Run a generic "FDO Wi-Fi Setup" service on that network. This service will be:
+
+- **Limited in Scope**: Performs only single-sided attestation
+- **Credential Provider**: Provides Wi-Fi credentials for the target network
+- **Non-Owner Service**: Does not complete full FDO onboarding
+
+Configure that service with Wi-Fi credentials for the network where the device will ultimately live and be onboarded.
+
+### Step 3: Configure Service Discovery
+
+Configure service discovery using one of these methods:
+
+#### Option A: DHCP Options
+Add DHCP options to point to Wi-Fi Setup service:
+- **Option 223**: `fdo-wifi-setup-service=wifi-setup.company.com`
+- **Multiple Services**: Can advertise multiple Wi-Fi Setup services
+
+#### Option B: Well-Known Hostname
+Allow Wi-Fi Setup service to advertise a well-known hostname in RV list:
+- **Standard DNS**: `_fdo-wifi-setup._tcp.example.com`
+- **mDNS/Avahi**: Local network discovery
+
+**Note**: Well-known hostnames for Rendezvous services are chosen by the device manufacturer. The Rendezvous list contains the specific hostnames that a device will attempt to find Rendezvous services at, and this list is manufacturer-specific.
+
+#### Option C: DNS Interception
+Configure DNS server to intercept lookups to a well-known DNS name in RV list:
+- **DNS Rewrite**: Redirect well-known names to Wi-Fi Setup service
+- **Split DNS**: Different responses for internal vs external queries
+
+**Note**: The intercepted DNS names must match hostnames in the device's manufacturer-specific Rendezvous list for this technique to be effective.
+
+### Step 4: Device Onboarding Flow
+
+Upon connection to open network, the endpoint will:
+
+1. **Find Wi-Fi Setup Service**
+   - Discover via DHCP options, DNS, or mDNS
+   - Connect to the service using standard FDO protocols
+
+2. **Perform Single-Sided Attestation**
+   - Device proves legitimacy using FDO device certificate
+   - Service skips Owner Key verification (single-sided mode)
+   - Service validates device is not compromised
+
+3. **Get Real Wi-Fi Credentials**
+   - Receive credentials via `fdo.wifi` FSIM [[WiFi-FSIM]]
+   - Credentials include SSID, authentication type, password, and trust level
+   - Service provides credentials for target production network
+
+4. **Switch to Production Wi-Fi Network**
+   - Device disconnects from open setup network
+   - Device connects to secured production network
+   - Device now has access to internal network resources
+
+5. **Attempt Normal FDO Onboarding**
+   - Device discovers Primary Onboarding Service on production network
+   - Device completes full FDO onboarding with Owner verification
+   - Device receives final configuration and ownership
+
+## Key Implications
+
+### Single-Sided Attestation Mode
+
+This deployment pattern introduces a distinct "single-sided attestation" mode for Wi-Fi onboarding:
+
+- **No Owner Verification**: Wi-Fi Setup service never talks to a trusted Owner
+- **Incomplete Onboarding**: Device never completes full onboarding in this phase
+- **Credential Provisioning Only**: Service exists only to provide network access
+
+### Two-Phase Onboarding
+
+The process requires two distinct phases:
+
+1. **Phase 1: Network Access**
+   - Single-sided attestation with Wi-Fi Setup service
+   - Receive Wi-Fi credentials for production network
+   - Device remains in unconfigured state
+
+2. **Phase 2: Full Onboarding**
+   - Standard FDO onboarding with Owner verification
+   - Complete device configuration and ownership
+   - Device transitions to fully onboarded state
+
+### Security Model
+
+The security model remains intact because:
+
+- **Worst Case**: Device connects to malicious network
+- **Protection**: Final onboarding fails without legitimate Owner Key
+- **Recovery**: Device retries with next available service
+- **No Persistent Compromise**: Malicious networks cannot complete ownership transfer
+
+# Security Considerations
+
+## Threat Model
+
+The proposed solution introduces additional attack surfaces that must be addressed:
+
+### Rogue Networks
+
+Attackers may create malicious open networks with fake onboarding services. The FIDO protocol's existing security model already addresses this threat:
+
+- Invalid credentials will cause onboarding to fail
+- Devices will retry with next service/network
+- Only authentic services can complete successful onboarding
+
+### Credential Exposure
+
+Wi-Fi credentials are transmitted over the encrypted FDO channel, providing protection against eavesdropping. Additional considerations:
+
+- Credentials are only exposed during initial onboarding
+- Devices should rotate passwords after initial connection
+- Network administrators should use strong passwords
+
+### Service Impersonation
+
+Attackers may attempt to impersonate legitimate onboarding services. Mitigations include:
+
+- Cryptographic verification of service authenticity
+- Use of HTTPS/TLS for service URLs
+- Validation of service certificates
+
+## Security Postulates
+
+1. **Fail-Safe Behavior**: Any onboarding failure MUST result in trying the next available service
+2. **Cryptographic Guarantees**: Only services with valid ownership vouchers can complete onboarding
+3. **Recovery Mechanisms**: Devices must have mechanisms to recover from malicious service encounters
+4. **Audit Trail**: Onboarding attempts should be logged for security analysis
+
+# Implementation Guidelines
+
+## Device Implementation Requirements
+
+### Mandatory Features
+
+- Open network scanning and connection
+- DHCP option parsing for service discovery
+- `fdo.wifi` FSIM support for Wi-Fi configuration [[WiFi-FSIM]]
+- State management for onboarding phases
+- Loop prevention logic
+- Hierarchical retry mechanisms
+
+### Recommended Features
+
+- Support for multiple Wi-Fi security types
+- Automatic credential rotation after initial connection
+- Detailed logging of onboarding attempts
+- Fallback mechanisms for edge cases
+
+## Service Implementation Requirements
+
+### Primary Onboarding Services
+
+- Support for complete device onboarding
+- Optional Wi-Fi credential provisioning
+- Clear indication of service type
+- Proper error handling and status reporting
+
+### Wi-Fi Setup Services
+
+- Wi-Fi credential provisioning only
+- No credential rotation
+- Clear indication of setup-only nature
+- Guidance for device re-onboarding
+
+## Network Administrator Guidelines
+
+### DHCP Configuration
+
+- Configure appropriate DHCP options for service advertisement
+- Use separate options for Primary vs. Wi-Fi Setup services
+- Consider network topology when placing onboarding services
+
+### Security Best Practices
+
+- Place onboarding services in network segments with appropriate access controls
+- Monitor for unusual onboarding activity
+- Use strong authentication for service access
+- Regularly rotate service credentials
+
+# Deployment Scenarios
+
+## Enterprise Environment
+
+Large enterprises may deploy dedicated onboarding networks:
+
+- Create a separate "onboarding" SSID with open access
+- Deploy Primary Onboarding Service on this network
+- Configure DHCP to advertise the service
+- Use network segmentation to isolate onboarding traffic
+
+## Retail Environment
+
+Retail deployments may use existing guest networks:
+
+- Leverage existing open guest networks
+- Deploy Wi-Fi Setup Services to guide devices to secure networks
+- Use DHCP options to advertise appropriate services
+- Implement monitoring for onboarding activity
+
+## Home/Small Office
+
+Small deployments may use simple one-step onboarding:
+
+- Configure devices to use home network directly
+- Deploy Primary Onboarding Service on existing network
+- Use manual service configuration if needed
+- Leverage existing network infrastructure
+
+# Future Enhancements
+
+## RCOI Beacon Integration
+
+Future specifications may integrate RCOI (Randomized Contact Opportunity Identifier) beacons for more sophisticated network discovery:
+
+- Passive network discovery without connection
+- Enhanced security through beacon validation
+- Reduced onboarding latency
+
+## FDO-EAP Authentication
+
+Future implementations may define FDO-EAP for zero-touch Wi-Fi authentication:
+
+- Direct integration with RADIUS infrastructure
+- Elimination of credential transmission
+- Enhanced security for sensitive environments
+
+## Automated Service Discovery
+
+Enhanced service discovery mechanisms may include:
+
+- mDNS/Bonjour integration
+- DNS-SD for service advertisement
+- Dynamic service registration
+
+# Conclusion
+
+The zero-touch Wi-Fi onboarding best practices described in this document provide a pragmatic path forward for deploying FDO device onboarding in Wi-Fi environments. By leveraging existing infrastructure and maintaining the security guarantees of the FIDO protocol, organizations can achieve true zero-touch onboarding while minimizing infrastructure changes.
+
+The hierarchical approach to service discovery, combined with proper state management and loop prevention, ensures reliable onboarding across diverse deployment scenarios. The security considerations and implementation guidelines provide a foundation for secure and robust deployments.
+
+As the FIDO ecosystem evolves, these best practices will serve as a foundation for more sophisticated onboarding mechanisms while maintaining backward compatibility and security.

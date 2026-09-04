@@ -93,13 +93,35 @@ type Devmod struct {
 
 // Write the devmod messages.
 func (d *Devmod) Write(ctx context.Context, deviceModules map[string]DeviceModule, mtu uint16, w *UnchunkWriter) {
+	d.WriteFiltered(ctx, deviceModules, mtu, w, nil)
+}
+
+// WriteFiltered writes devmod messages with optional module filtering.
+// The moduleFilter function, if provided, is called for each module name and
+// returns true if the module should be advertised, false to exclude it.
+// This is used for single-sided attestation to only advertise devmod and fdo.wifi.
+func (d *Devmod) WriteFiltered(ctx context.Context, deviceModules map[string]DeviceModule, mtu uint16, w *UnchunkWriter, moduleFilter func(string) bool) {
 	defer func() { _ = w.Close() }()
 
 	var modules []string
 	for key := range deviceModules {
 		module, _, _ := strings.Cut(key, ":")
+		// Apply filter if provided
+		if moduleFilter != nil && !moduleFilter(module) {
+			continue
+		}
 		modules = append(modules, module)
 	}
+
+	// Debug: log what modules we found
+	// fmt.Printf("[DEBUG Devmod] Found modules: %v\n", modules)
+	// fmt.Printf("[DEBUG Devmod] DeviceModules keys: %v\n", func() []string {
+	// 	keys := make([]string, 0, len(deviceModules))
+	// 	for k := range deviceModules {
+	// 		keys = append(keys, k)
+	// 	}
+	// 	return keys
+	// }())
 
 	if custom, hasCustom := deviceModules[devmodModuleName]; hasCustom {
 		if err := custom.Transition(true); err != nil {
@@ -181,6 +203,7 @@ func (d *Devmod) Validate() error {
 
 func (d *Devmod) writeModuleMessages(modules []string, mtu uint16, w *UnchunkWriter) error {
 	writeChunk := func(chunk DevmodModulesChunk) error {
+		// fmt.Printf("[DEBUG Devmod] Writing chunk with %d modules: %v\n", chunk.Len, chunk.Modules)
 		if err := w.NextServiceInfo(devmodModuleName, "modules"); err != nil {
 			return err
 		}
@@ -190,9 +213,11 @@ func (d *Devmod) writeModuleMessages(modules []string, mtu uint16, w *UnchunkWri
 	if err := w.NextServiceInfo(devmodModuleName, "nummodules"); err != nil {
 		return err
 	}
+	// fmt.Printf("[DEBUG Devmod] About to encode nummodules: %d\n", len(modules))
 	if err := cbor.NewEncoder(w).Encode(len(modules)); err != nil {
 		return err
 	}
+	// fmt.Printf("[DEBUG Devmod] Successfully encoded nummodules: %d\n", len(modules))
 
 	// Start a new message so that full MTU is available
 	if err := w.ForceNewMessage(); err != nil {
@@ -203,16 +228,19 @@ func (d *Devmod) writeModuleMessages(modules []string, mtu uint16, w *UnchunkWri
 	// module, write chunk, and continue until the last chunk is encoded.
 	const key = devmodModuleName + ":" + "modules"
 	var chunk DevmodModulesChunk
+	// fmt.Printf("[DEBUG Devmod] About to write %d modules\n", len(modules))
 	for len(modules) > 0 {
 		// Add module to chunk
 		chunk.Len++
 		chunk.Modules = append(chunk.Modules, modules[0])
+		// fmt.Printf("[DEBUG Devmod] Added module to chunk: %s (chunk size: %d)\n", modules[0], chunk.Len)
 
 		// Brute force computing the encoded size by actually encoding it
 		var size sizewriter
 		if err := cbor.NewEncoder(&size).Encode([][]any{{key, chunk}}); err != nil {
 			return fmt.Errorf("error calculating size of devmod:modules ServiceInfo: %w", err)
 		}
+		// fmt.Printf("[DEBUG Devmod] Chunk size: %d, MTU: %d\n", int(size), int(mtu))
 
 		// Continue if MTU is not exceeded
 		if int(size) <= int(mtu) {
@@ -221,6 +249,7 @@ func (d *Devmod) writeModuleMessages(modules []string, mtu uint16, w *UnchunkWri
 		}
 
 		// Back out last module and encode chunk
+		fmt.Printf("[DEBUG Devmod] MTU exceeded, backing out module\n")
 		if len(chunk.Modules) == 1 {
 			return fmt.Errorf("MTU too small to send devmod module name alone")
 		}

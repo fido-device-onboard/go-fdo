@@ -12,15 +12,120 @@
 
 `go-fdo` is a lightweight stdlib-only library for implementing FDO device, owner service, and device initialization server roles.
 
-It implements [FIDO Device Onboard Specification 1.1][fdo] as well as necessary dependencies such as [CBOR][cbor] and [COSE][cose]. Implementations of dependencies are not meant to be complete implementations of their relative specifications, but are supported and any breaking changes to their APIs will be considered a breaking change to `go-fdo`.
+It implements [FIDO Device Onboard Specification 1.1][fdo11] and [FIDO Device Onboard Specification 2.0][fdo200] as well as necessary dependencies such as [CBOR][cbor] and [COSE][cose]. Implementations of dependencies are not meant to be complete implementations of their relative specifications, but are supported and any breaking changes to their APIs will be considered a breaking change to `go-fdo`.
 
-[fdo]: https://fidoalliance.org/specs/FDO/FIDO-Device-Onboard-PS-v1.1-20220419/FIDO-Device-Onboard-PS-v1.1-20220419.html
+[fdo11]: https://fidoalliance.org/specs/FDO/FIDO-Device-Onboard-PS-v1.1-20220419/FIDO-Device-Onboard-PS-v1.1-20220419.html
+[fdo200]: https://fidoalliance.org/specifications/download-iot-specifications/
 [cbor]: https://www.rfc-editor.org/rfc/rfc8949.html
 [cose]: https://datatracker.ietf.org/doc/html/rfc8152
+
+## Security Notice
+
+⚠️ **IMPORTANT**: This library is intended for development and testing. For production deployments, you MUST follow proper security practices. See [PRODUCTION_CONSIDERATIONS.md](PRODUCTION_CONSIDERATIONS.md) for detailed production considerations including:
+
+- Certificate validation and revocation checking
+- Key management best practices
+- Transport security requirements
+- Operational security guidelines
+
+## Documentation
+
+| Document | Description |
+| -------- | ----------- |
+| [VOUCHER_TRANSFER.md](VOUCHER_TRANSFER.md) | **Voucher Transfer Protocol** — How to use the `transfer` and `did` packages for push/pull voucher management in manufacturing systems, voucher management systems, and onboarding services |
+| [delegate.md](delegate.md) | Delegate certificate support and permissions |
+| [PRODUCTION_CONSIDERATIONS.md](PRODUCTION_CONSIDERATIONS.md) | Production deployment security guidelines |
+| [CLI_COMMANDS.md](CLI_COMMANDS.md) | CLI command reference |
+| [TPM.md](TPM.md) | **TPM Integration** — Build tags, credential provisioning, NV inspection, DAK proof, and library API for downstream apps |
+| [TPM Compliance Testing](tpm/TPM_COMPLIANCE_TESTING.md) | TPM spec compliance testing guide (opt-in tests requiring sudo or env config) |
+
+## Voucher Fingerprints
+
+The library provides methods to compute stable fingerprints for vouchers, useful for tracking vouchers across the supply chain without exposing full voucher contents.
+
+```go
+// Compute a short fingerprint (first 16 bytes of SHA-256, colon-separated hex)
+fingerprint, err := voucher.Fingerprint()
+// Example: "5b:05:27:b7:15:8d:ce:7c:a6:dd:6a:96:ae:c6:0e:1d"
+
+// Compute the full SHA-256 digest as hex string
+digestHex, err := voucher.DigestHex()
+// Example: "5b0527b7158dce7ca6dd6a96aec60e1df1cfcfd2229eb45bb5c734990d944d8b"
+
+// Get raw 32-byte digest
+digest, err := voucher.Digest()
+```
+
+**Key properties:**
+- **Stable across extensions**: The fingerprint is computed from the voucher header and HMAC, which remain constant when the voucher is extended with new ownership entries
+- **Device-bound**: Includes the HMAC which binds the voucher to the device's secret
+- **Deterministic**: Same voucher always produces the same fingerprint
+
+The CLI `inspectVoucher` command displays both fingerprint and full digest when examining vouchers.
+
+## Quick Start
+
+A comprehensive test script is provided that demonstrates all major features of the FDO implementation. It serves as both a test suite and a self-documenting guide.
+
+```bash
+go work init
+go work use -r .
+./test_examples.sh all
+
+```
+
+Makefile included is for convenience, and to prove some quick ways to build, run test, run examples, and provide more of a "cheat sheet" to illustrate commands for common tasks. Try `make help` for more information.
+
+**Available tests:**
+
+| Test | Description |
+| ---- | ----------- |
+| `basic` | Basic device initialization (DI) and transfer of ownership (TO1/TO2) |
+| `basic-reuse` | Credential reuse protocol - multiple onboards without credential changes |
+| `rv-blob` | Rendezvous blob registration flow |
+| `kex` | Key exchange with ASYMKEX2048 (RSA keys) |
+| `fdo200` | FDO 2.0 protocol |
+| `delegate` | Delegate certificate support (FDO 1.01) |
+| `delegate-fdo200` | Delegate certificate support with FDO 2.0 |
+| `auth` | FDOKeyAuth CLI — obtain bearer token via challenge-response handshake |
+| `all` | Run all tests (default) |
+
+Run a specific test:
+
+```bash
+./test_examples.sh basic
+./test_examples.sh delegate-fdo200
+
+```
+
+**Requirements:** `sqlite3` must be installed for GUID extraction.
 
 ## Building the Example Application
 
 The example client and server application can be built with `go build` directly, but requires a Go workspace to build from the root package directory.
+
+### Credential Storage Build Tags
+
+Build tags select the credential storage backend at compile time. Application
+code is identical regardless of backend — only the build command changes.
+
+| Build command | Credential backend | CGO | Dynamic libs | Use case |
+|---------------|--------------------|-----|--------------|----------|
+| `go build ./examples/cmd` | Software blob (file) | **No** | None (static binary) | Default — keys and HMAC in CBOR file |
+| `go build -tags=tpm ./examples/cmd` | Hardware TPM | **No** | libc only | Production hardware on Linux |
+| `CGO_ENABLED=1 go build -tags=tpmsim ./examples/cmd` | TPM simulator | **Yes** | libc + libcrypto (OpenSSL) | Development and CI |
+
+> **Note:** The default build (no tags) produces a fully static binary with
+> zero CGO and no OpenSSL dependency. The `-tags=tpm` hardware TPM build also
+> avoids CGO/OpenSSL — only the `-tags=tpmsim` simulator build requires CGO
+> because it embeds the Microsoft reference TPM implementation (C code linked
+> against OpenSSL's libcrypto). Use `make build`, `make build-tpm`, or
+> `make build-tpmsim` as shortcuts.
+
+The `cred` module (`go-fdo/cred`) provides the `cred.Store` interface that
+abstracts credential storage. Existing apps that import `go-fdo/blob` or
+`go-fdo/tpm` directly continue to work — `cred.Store` is additive, not a
+breaking change. See [TPM.md](TPM.md) for the library API and migration guide.
 
 ```console
 $ go work init
@@ -51,6 +156,8 @@ Client options:
         A dir to download files into (FSIM disabled if empty)
   -echo-commands
         Echo all commands received to stdout (FSIM disabled if false)
+  -fdo-version int
+        FDO protocol version (101 or 200) (default 101)
   -insecure-tls
         Skip TLS certificate verification
   -kex suite
@@ -133,6 +240,7 @@ Key exchange suites:
   - ASYMKEX3072
   - ECDH256
   - ECDH384
+
 ```
 
 ### Testing Device Onboard
@@ -144,6 +252,7 @@ $ go run ./examples/cmd server -http 127.0.0.1:9999 -db ./test.db
 [2024-09-01 00:00:00] INFO: Listening
   local: 127.0.0.1:9999
   external: 127.0.0.1:9999
+
 ```
 
 Then DI, followed by TO1 and TO2 may be run. Passing the `-debug` flag allows message payloads to be viewed.
@@ -153,6 +262,7 @@ $ go run ./examples/cmd client -di http://127.0.0.1:9999
 Success
 $ go run ./examples/cmd client
 Success
+
 ```
 
 Running TO1 and TO2 again will fail, because the new voucher has not been registered for rendezvous.
@@ -164,6 +274,7 @@ $ go run ./examples/cmd client
   error: error received from TO1.HelloRV request: 2024-09-01 00:00:00 UTC [code=6,prevMsgType=30,id=0] not found
 client error: transfer of ownership not successful
 exit status 2
+
 ```
 
 If the server had been started with the `-rv-bypass` flag, then the second onboarding attempt would have failed with not found, because unextended vouchers are not automatically allowed for re-onboarding.
@@ -174,6 +285,7 @@ If the server had been started with the `-rv-bypass` flag, then the second onboa
   error: error received from TO2.HelloDevice request: 2024-09-01 00:00:00 UTC [code=6,prevMsgType=60,id=0] error retrieving voucher for device fa667c70e50b696086bbd8e05ba2773b: not found
 client error: transfer of ownership not successful
 exit status 2
+
 ```
 
 To test repeatedly without the device credential changing, run the server with the `-reuse-cred` flag to enable the [Credential Reuse Protocol][Credential Reuse Protocol].
@@ -189,6 +301,7 @@ $ go run ./examples/cmd server -http 127.0.0.1:9999 -to0 http://127.0.0.1:9999 -
 [2024-09-01 00:00:00] INFO: Listening
   local: 127.0.0.1:9999
   external: 127.0.0.1:9999
+
 ```
 
 Next, initialize the device and check that TO1 fails.
@@ -205,6 +318,7 @@ $ go run ./examples/cmd client -rv-only
 [2024-09-01 00:00:00] ERROR: TO1 failed
   base URL: http://127.0.0.1:9999
   error: error received from TO1.HelloRV request: 2024-09-01 00:00:00 +0000 UTC [code=6,prevMsgType=30,id=0] not found
+
 ```
 
 Then register an RV blob with the server.
@@ -213,6 +327,7 @@ Then register an RV blob with the server.
 $ go run ./examples/cmd server -http 127.0.0.1:9999 -to0 http://127.0.0.1:9999 -to0-guid d21d841a3f54f4e89a60ed9b9779e9e8 -db ./test.db
 [2024-09-01 00:00:00] INFO: RV blob registered
   ttl: 1193046h28m15s
+
 ```
 
 Finally, check that TO1 now succeeds.
@@ -226,6 +341,7 @@ TO1 Blob: to1d[
     Algorithm: Sha256Hash
     Value: 340129067ad5839e2a5424baa3e7aa4bb984f610f29123b47b56353f47d71145
 ]
+
 ```
 
 ### Testing Key Exchanges
@@ -237,6 +353,7 @@ $ go run ./examples/cmd server -http 127.0.0.1:9999 -db ./test.db
 [2024-09-01 00:00:00] INFO: Listening
   local: 127.0.0.1:9999
   external: 127.0.0.1:9999
+
 ```
 
 Then DI, followed by TO1 and TO2 may be run.
@@ -248,6 +365,7 @@ $ go run ./examples/cmd client -di http://127.0.0.1:9999 -di-key rsa2048
 Success
 $ go run ./examples/cmd client -kex ASYMKEX2048
 Success
+
 ```
 
 ### Testing Resale Protocol
@@ -259,6 +377,7 @@ $ go run ./examples/cmd server -http 127.0.0.1:9999 -to0 http://127.0.0.1:9999 -
 [2024-09-01 00:00:00] INFO: Listening
   local: 127.0.0.1:9999
   external: 127.0.0.1:9999
+
 ```
 
 Next, initialize the device and perform transfer of ownership.
@@ -273,6 +392,7 @@ blobcred[
   GUID          d21d841a3f54f4e89a60ed9b9779e9e8
   ...
 ]
+
 ```
 
 Then, using a randomly-generated SHA384 public key, perform resale:
@@ -319,53 +439,121 @@ qq5ZXzCeiCGxbXNPpR/DbbInW3C2Q6mGtbuXDRr/roCViWO83QGrlFf3bgha7y+U
 i2op2Hc819qjlgzt0kCmpOs75TtIIcOr2pSMy6pB+1bCr3QLdKH4bf7y8p9Hh8Tu
 s0hciw==
 -----END OWNERSHIP VOUCHER-----
+
 ```
 
 ### Testing with a TPM
 
-First, start a server in a separate console.
+When built with `-tags=tpm` or `-tags=tpmsim`, the binary stores credentials
+in the TPM instead of a blob file. DI and TO1/TO2 commands are the same — no
+extra flags needed.
+
+Inspect TPM-stored credentials:
 
 ```console
-$ go run ./examples/cmd server -http 127.0.0.1:9999 -db ./test.db
-[2024-09-01 00:00:00] INFO: Listening
-  local: 127.0.0.1:9999
-  external: 127.0.0.1:9999
+./fdo client -tpm-show
+./fdo client -tpm-export-dak > dak.pem
+./fdo client -tpm-prove
+
 ```
 
-Then run DI, with the TPM resource manager path specified. The key type must always be explicit through the `-di-key` flag.
+The `-tpm <path>` flag overrides the default TPM device for inspection commands
+(e.g., `-tpm /dev/tpm0` or `-tpm simulator`).
 
-```console
-$ go run ./examples/cmd client -di http://127.0.0.1:9999 -di-key ec384 -tpm /dev/tpmrm0
-[2024-09-01 00:00:00] INFO: tpm: max input buffer size undefined, using default
-  size: 1024
-Success
+#### End-to-End TPM Integration Tests
+
+A dedicated test script (`test_tpm_examples.sh`) runs the full DI → TO1/TO2
+flow with all credential storage going through the TPM. The server runs in
+standard (non-TPM) mode — only the client uses the TPM.
+
+```bash
+# Hardware TPM (requires /dev/tpmrm0 read/write access)
+./test_tpm_examples.sh all
+
+# Software TPM via swtpm (no hardware needed)
+TPM_MODE=sim ./test_tpm_examples.sh all
+
+# Or use the Makefile targets
+make test-tpm          # hardware TPM
+make test-tpm-sim      # software TPM (swtpm)
 ```
 
-Finally, run TO1/TO2.
+Available tests: `basic`, `basic-reuse`, `fdo200`, `all` (default).
+
+**Software TPM prerequisites:** Install `swtpm` (`sudo apt install swtpm`).
+The test script manages the swtpm lifecycle automatically — no manual setup
+required.
+
+See [TPM.md](TPM.md) for NV index details, the `cred.Store` library API for
+downstream applications, TPM spec compliance testing, and cross-language
+TPM verification (using Go's inspection commands to validate credentials
+written by other implementations such as the
+[Rust FDO client](../fido-device-onboard-rs)).
+
+### FDOKeyAuth Authentication
+
+The `auth` subcommand performs an FDOKeyAuth challenge-response handshake to
+obtain a bearer token for voucher transfer APIs. The token is printed to stdout,
+making it easy to capture in scripts.
 
 ```console
-$ go run ./examples/cmd client -di-key ec384 -tpm /dev/tpmrm0
-[2024-09-01 00:00:00] INFO: tpm: max input buffer size undefined, using default
-  size: 1024
-Success
+$ openssl ecparam -name prime256v1 -genkey -noout -o owner.pem
+$ TOKEN=$(go run ./examples/cmd auth -url https://mfg.example.com -key owner.pem)
+$ curl -H "Authorization: Bearer $TOKEN" https://mfg.example.com/api/v1/pull/vouchers
+[{"guid":"abc123...","serial":"SN-001"}]
 ```
 
-The TPM simulator may be used with 3 caveats:
-
-1. RSA3072 keys are not supported
-2. OpenSSL libraries and headers must be installed
-3. The executable must be built with cgo enabled
+Keys can also be piped from stdin (e.g., from a vault or secrets manager):
 
 ```console
-$ go run ./examples/cmd client -di http://127.0.0.1:9999 -di-key rsa2048 -tpm simulator
-[2024-09-01 00:00:00] INFO: tpm: max input buffer size undefined, using default
-  size: 1024
-Success
+$ vault kv get -field=key secret/fdo/owner | go run ./examples/cmd auth -url https://mfg.example.com -key -
+eyJhbGciOiJFUzI1NiJ9...
+```
 
-$ go run ./examples/cmd client -di-key rsa2048 -tpm simulator
-[2024-09-01 00:00:00] INFO: tpm: max input buffer size undefined, using default
-  size: 1024
-Success
+See [CLI_COMMANDS.md](CLI_COMMANDS.md#auth-command-fdokeyauth) for all flags and
+examples, and [VOUCHER_TRANSFER.md](VOUCHER_TRANSFER.md) for the full library API.
+
+## Delegate Support
+
+The FDO Delegate Protocol allows a third party to act on behalf of the device owner during onboarding (TO2) or rendezvous registration (TO0). Delegate support is available in both FDO 1.01 and FDO 2.0 protocols.
+
+For detailed documentation on creating and using delegate certificates, see [delegate.md](delegate.md).
+
+### Certificate Validation
+
+> **Important:** The reference implementation validates certificate expiration but does **not** check certificate revocation (CRL/OCSP) by default. Production deployments MUST implement revocation checking using the `CertificateChecker` interface.
+
+When running tests with delegates, you will see warnings like:
+
+```text
+WARN: No CertificateChecker configured - revocation checking (CRL/OCSP) is disabled
+```
+
+These warnings are expected during development. For production use, see [PRODUCTION_CONSIDERATIONS.md](PRODUCTION_CONSIDERATIONS.md) for detailed production requirements including:
+
+- Mandatory certificate revocation checking
+- Key management best practices
+- Transport security requirements
+- Operational security guidelines
+
+## Attested Payloads
+
+Attested payloads combine data with cryptographic proof of authenticity, allowing devices to verify that payloads originated from their legitimate owner. See [attestedpayload.md](attestedpayload.md) for details.
+
+## Development
+
+A `Makefile` is provided for convenience during development:
+
+```bash
+make setup         # Initialize Go workspace (run once after clone)
+make build         # Build default binary (no TPM, no CGO, static)
+make build-tpm     # Build with hardware TPM support (no CGO)
+make build-tpmsim  # Build with TPM simulator (requires CGO + OpenSSL)
+make lint          # Run golangci-lint and shellcheck
+make test          # Run unit and integration tests
+make test-tpm      # Run TPM integration tests (hardware TPM)
+make test-tpm-sim  # Run TPM integration tests (swtpm, no hardware)
+make               # Run lint + test (useful before commits)
 ```
 
 ## FIPS Compliance
