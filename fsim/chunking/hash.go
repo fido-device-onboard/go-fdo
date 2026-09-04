@@ -13,21 +13,26 @@ import (
 // ComputeHash computes the hash of data using the specified algorithm.
 // Supported algorithms: "sha256", "sha384", "sha512"
 func ComputeHash(alg string, data []byte) ([]byte, error) {
-	var h hash.Hash
-
-	switch alg {
-	case "sha256":
-		h = sha256.New()
-	case "sha384":
-		h = sha512.New384()
-	case "sha512":
-		h = sha512.New()
-	default:
-		return nil, fmt.Errorf("unsupported hash algorithm: %s", alg)
+	h, err := newHash(alg)
+	if err != nil {
+		return nil, err
 	}
 
 	h.Write(data)
 	return h.Sum(nil), nil
+}
+
+func newHash(alg string) (hash.Hash, error) {
+	switch alg {
+	case "sha256":
+		return sha256.New(), nil
+	case "sha384":
+		return sha512.New384(), nil
+	case "sha512":
+		return sha512.New(), nil
+	default:
+		return nil, fmt.Errorf("unsupported hash algorithm: %s", alg)
+	}
 }
 
 // VerifyHash verifies that the hash of data matches the expected hash value.

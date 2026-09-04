@@ -258,6 +258,72 @@ func TestChunkReceiverBasicFlow(t *testing.T) {
 	}
 }
 
+func TestChunkReceiverDiscardPayload(t *testing.T) {
+	receiver := &ChunkReceiver{
+		PayloadName:    "test",
+		DiscardPayload: true,
+	}
+
+	var received []byte
+	receiver.OnChunk = func(data []byte) error {
+		received = append(received, data...)
+		return nil
+	}
+	receiver.OnEnd = func(end EndMessage) error {
+		if len(receiver.GetBuffer()) != 0 {
+			t.Fatalf("expected no buffered payload, got %d bytes", len(receiver.GetBuffer()))
+		}
+		return nil
+	}
+
+	payload := []byte("hello world")
+	begin := BeginMessage{TotalSize: uint64(len(payload)), HashAlg: "sha256"}
+	beginData, _ := begin.MarshalCBOR()
+	if err := receiver.HandleMessage("test-begin", bytes.NewReader(beginData)); err != nil {
+		t.Fatalf("HandleMessage(begin) failed: %v", err)
+	}
+
+	chunkData, _ := cbor.Marshal(payload)
+	if err := receiver.HandleMessage("test-data-0", bytes.NewReader(chunkData)); err != nil {
+		t.Fatalf("HandleMessage(data) failed: %v", err)
+	}
+
+	hash, _ := ComputeHash("sha256", payload)
+	end := EndMessage{Status: 0, HashValue: hash}
+	endData, _ := end.MarshalCBOR()
+	if err := receiver.HandleMessage("test-end", bytes.NewReader(endData)); err != nil {
+		t.Fatalf("HandleMessage(end) failed: %v", err)
+	}
+	if !bytes.Equal(received, payload) {
+		t.Fatalf("streamed payload mismatch: got %q", received)
+	}
+}
+
+func TestChunkReceiverDiscardPayloadHashMismatch(t *testing.T) {
+	receiver := &ChunkReceiver{
+		PayloadName:    "test",
+		DiscardPayload: true,
+	}
+
+	payload := []byte("hello world")
+	begin := BeginMessage{TotalSize: uint64(len(payload)), HashAlg: "sha256"}
+	beginData, _ := begin.MarshalCBOR()
+	if err := receiver.HandleMessage("test-begin", bytes.NewReader(beginData)); err != nil {
+		t.Fatalf("HandleMessage(begin) failed: %v", err)
+	}
+
+	chunkData, _ := cbor.Marshal(payload)
+	if err := receiver.HandleMessage("test-data-0", bytes.NewReader(chunkData)); err != nil {
+		t.Fatalf("HandleMessage(data) failed: %v", err)
+	}
+
+	end := EndMessage{Status: 0, HashValue: make([]byte, 32)}
+	endData, _ := end.MarshalCBOR()
+	if err := receiver.HandleMessage("test-end", bytes.NewReader(endData)); err == nil {
+		t.Fatal("expected hash mismatch")
+	}
+}
+
 func TestChunkReceiverOutOfOrderChunks(t *testing.T) {
 	receiver := &ChunkReceiver{
 		PayloadName: "test",

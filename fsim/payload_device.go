@@ -146,7 +146,8 @@ func (p *Payload) handleChunkedMessage(ctx context.Context, messageName string, 
 	// Initialize receiver on first chunked message
 	if p.receiver == nil {
 		p.receiver = &chunking.ChunkReceiver{
-			PayloadName: "payload",
+			PayloadName:    "payload",
+			DiscardPayload: p.UnifiedHandler == nil,
 		}
 
 		// Set up ack callback if handler provided

@@ -5,7 +5,9 @@ package chunking
 
 import (
 	"bytes"
+	"crypto/subtle"
 	"fmt"
+	"hash"
 	"io"
 	"math"
 	"strconv"
@@ -28,10 +30,12 @@ type ChunkReceiver struct {
 	// OnBeginAck is called when *-begin with RequireAck=true is received.
 	// Returns (accepted, reasonCode, message). If accepted is false, the transfer is rejected.
 	// If this callback is nil and RequireAck is true, the transfer is automatically accepted.
-	OnBeginAck func(begin BeginMessage) (accepted bool, reasonCode int, message string)
+	OnBeginAck     func(begin BeginMessage) (accepted bool, reasonCode int, message string)
+	DiscardPayload bool
 
 	// Internal state
 	buffer       bytes.Buffer
+	hasher       hash.Hash
 	totalBytes   int64
 	expectedSize uint64
 	hashAlg      string
@@ -82,6 +86,13 @@ func (r *ChunkReceiver) handleBegin(messageBody io.Reader) error {
 	r.totalBytes = 0
 	r.nextChunk = 0
 	r.buffer.Reset()
+	r.hasher = nil
+	if r.hashAlg != "" {
+		r.hasher, err = newHash(r.hashAlg)
+		if err != nil {
+			return err
+		}
+	}
 	r.beginMsg = begin
 
 	// Handle RequireAck - check with callback if provided
@@ -154,7 +165,12 @@ func (r *ChunkReceiver) handleData(messageName string, messageBody io.Reader) er
 	}
 
 	// Buffer the chunk
-	r.buffer.Write(chunkData)
+	if !r.DiscardPayload {
+		r.buffer.Write(chunkData)
+	}
+	if r.hasher != nil {
+		_, _ = r.hasher.Write(chunkData)
+	}
 	r.totalBytes += int64(len(chunkData))
 	r.nextChunk++
 
@@ -205,10 +221,11 @@ func (r *ChunkReceiver) handleEnd(messageBody io.Reader) error {
 	}
 
 	// Verify hash if provided
-	if len(end.HashValue) > 0 && r.hashAlg != "" {
-		if err := VerifyHash(r.hashAlg, r.buffer.Bytes(), end.HashValue); err != nil {
+	if len(end.HashValue) > 0 && r.hasher != nil {
+		computed := r.hasher.Sum(nil)
+		if len(computed) != len(end.HashValue) || subtle.ConstantTimeCompare(computed, end.HashValue) != 1 {
 			r.reset()
-			return fmt.Errorf("hash verification failed: %w", err)
+			return fmt.Errorf("hash verification failed: hash mismatch")
 		}
 	}
 
@@ -325,6 +342,7 @@ func (r *ChunkReceiver) reset() {
 	r.totalBytes = 0
 	r.expectedSize = 0
 	r.hashAlg = ""
+	r.hasher = nil
 	r.nextChunk = 0
 	r.buffer.Reset()
 	r.ackPending = false
