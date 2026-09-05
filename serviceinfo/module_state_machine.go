@@ -64,7 +64,12 @@ type ModuleStateMachine interface {
 	// CleanupModules cleans up any internal state. When the context expires,
 	// all remaining cleanup should be forced (i.e. processes killed) without
 	// waiting for graceful exit.
-	CleanupModules(context.Context)
+	//
+	// The error parameter indicates whether TO2 completed successfully
+	// (nil) or failed (non-nil). Implementations can use this to decide
+	// whether to keep or remove resources created during service info
+	// exchange (e.g. upload directories).
+	CleanupModules(context.Context, error)
 }
 
 // ModulePersister is an optional interface which may be implemented by

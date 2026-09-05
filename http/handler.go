@@ -166,13 +166,17 @@ func (h Handler) handleRequest(ctx context.Context, w http.ResponseWriter, r *ht
 	}
 	if maxSize > 0 && r.ContentLength > maxSize {
 		_ = r.Body.Close()
-		writeErr(w, msgType, fmt.Errorf("content too large (%d bytes)", r.ContentLength))
+		transportErr := fmt.Errorf("content too large (%d bytes)", r.ContentLength)
+		writeErr(w, msgType, transportErr)
+		notifyTransportError(ctx, resp, msgType, transportErr)
 		h.invalidateToken(ctx)
 		return
 	}
 	if maxSize > 0 && r.ContentLength < 0 {
 		_ = r.Body.Close()
-		writeErr(w, msgType, errors.New("content length must be specified in request headers"))
+		transportErr := errors.New("content length must be specified in request headers")
+		writeErr(w, msgType, transportErr)
+		notifyTransportError(ctx, resp, msgType, transportErr)
 		h.invalidateToken(ctx)
 		return
 	}
@@ -196,6 +200,7 @@ func (h Handler) handleRequest(ctx context.Context, w http.ResponseWriter, r *ht
 		}).CryptSession(ctx)
 		if err != nil {
 			writeErr(w, msgType, err)
+			notifyTransportError(ctx, resp, msgType, err)
 			h.invalidateToken(ctx)
 			return
 		}
@@ -204,7 +209,9 @@ func (h Handler) handleRequest(ctx context.Context, w http.ResponseWriter, r *ht
 
 		decrypted, err := sess.Decrypt(rand.Reader, msg)
 		if err != nil {
-			writeErr(w, msgType, fmt.Errorf("error decrypting message %d: %w", msgType, err))
+			transportErr := fmt.Errorf("error decrypting message %d: %w", msgType, err)
+			writeErr(w, msgType, transportErr)
+			notifyTransportError(ctx, resp, msgType, transportErr)
 			h.invalidateToken(ctx)
 			return
 		}
@@ -236,6 +243,7 @@ func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, msgTy
 		}).CryptSession(ctx)
 		if err != nil {
 			writeErr(w, msgType, err)
+			notifyTransportError(ctx, resp, msgType, err)
 			h.invalidateToken(ctx)
 			return
 		}
@@ -248,7 +256,9 @@ func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, msgTy
 
 		respData, err = sess.Encrypt(rand.Reader, respData)
 		if err != nil {
-			writeErr(w, msgType, fmt.Errorf("error encrypting message %d: %w", respType, err))
+			transportErr := fmt.Errorf("error encrypting message %d: %w", respType, err)
+			writeErr(w, msgType, transportErr)
+			notifyTransportError(ctx, resp, msgType, transportErr)
 			h.invalidateToken(ctx)
 			return
 		}
@@ -263,7 +273,9 @@ func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, msgTy
 	// Marshal response to get size
 	var body bytes.Buffer
 	if err := cbor.NewEncoder(&body).Encode(respData); err != nil {
-		writeErr(w, msgType, fmt.Errorf("error marshaling response message %d: %w", respType, err))
+		transportErr := fmt.Errorf("error marshaling response message %d: %w", respType, err)
+		writeErr(w, msgType, transportErr)
+		notifyTransportError(ctx, resp, msgType, transportErr)
 		h.invalidateToken(ctx)
 		return
 	}
@@ -280,6 +292,16 @@ func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, msgTy
 		writeErr(w, msgType, fmt.Errorf("error writing response message %d: %w", respType, err))
 		h.invalidateToken(ctx)
 		return
+	}
+}
+
+// notifyTransportError calls HandleTransportError on the responder if it
+// implements the optional TransportErrorHandler interface. This ensures that
+// responders like TO2Server can clean up module resources even when the HTTP
+// transport layer fails before reaching Respond().
+func notifyTransportError(ctx context.Context, resp protocol.Responder, msgType uint8, err error) {
+	if th, ok := resp.(protocol.TransportErrorHandler); ok {
+		th.HandleTransportError(ctx, msgType, err)
 	}
 }
 

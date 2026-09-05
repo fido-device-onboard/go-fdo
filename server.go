@@ -306,10 +306,12 @@ func (s *TO2Server) Respond(ctx context.Context, msgType uint8, msg io.Reader) (
 		respType = protocol.TO2OwnerServiceInfoMsgType
 		resp, err = s.ownerServiceInfo(ctx, msg)
 		if err != nil {
-			s.Modules.CleanupModules(ctx)
+			s.cleanupCurrentModule(ctx, err)
+			s.Modules.CleanupModules(ctx, err)
 		}
 	case protocol.TO2DoneMsgType:
-		s.Modules.CleanupModules(ctx)
+		s.cleanupCurrentModule(ctx, nil)
+		s.Modules.CleanupModules(ctx, nil)
 		respType = protocol.TO2Done2MsgType
 		resp, err = s.to2Done2(ctx, msg)
 	}
@@ -344,5 +346,29 @@ func (s *TO2Server) CryptSession(ctx context.Context) (kex.Session, error) {
 func (s *TO2Server) HandleError(ctx context.Context, errMsg protocol.ErrorMessage) {
 	// This should only be applicable if errMsg.PrevMsgType == 69, but the
 	// device reported error message cannot be completely trusted
-	s.Modules.CleanupModules(ctx)
+	s.Modules.CleanupModules(ctx, fmt.Errorf("device error (message %d): %s", errMsg.PrevMsgType, errMsg.ErrString))
+}
+
+// HandleTransportError performs module cleanup when the HTTP transport layer
+// encounters an error during an active TO2 session (e.g. decryption failure,
+// content too large). These errors bypass Respond() and would otherwise skip
+// module cleanup entirely.
+func (s *TO2Server) HandleTransportError(ctx context.Context, _ uint8, err error) {
+	transportErr := fmt.Errorf("transport error: %w", err)
+	s.cleanupCurrentModule(ctx, transportErr)
+	s.Modules.CleanupModules(ctx, transportErr)
+}
+
+// cleanupCurrentModule calls Cleanup on the current active module if it
+// implements the optional serviceinfo.Cleanup interface. This allows modules
+// to clean up their own private resources (temp files, file handles, channels)
+// that are not accessible from the ModuleStateMachine.
+func (s *TO2Server) cleanupCurrentModule(ctx context.Context, err error) {
+	_, mod, modErr := s.Modules.Module(ctx)
+	if modErr != nil {
+		return // no active module
+	}
+	if c, ok := mod.(serviceinfo.Cleanup); ok {
+		c.Cleanup(ctx, err)
+	}
 }

@@ -637,7 +637,7 @@ func (s *to2ModuleStateMachine) NextModule(ctx context.Context) (bool, error) {
 	return valid, nil
 }
 
-func (s *to2ModuleStateMachine) CleanupModules(ctx context.Context) {
+func (s *to2ModuleStateMachine) CleanupModules(ctx context.Context, _ error) {
 	if s.module != nil {
 		s.module.Stop()
 		s.module = nil
