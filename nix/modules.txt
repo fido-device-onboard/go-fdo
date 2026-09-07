@@ -4,7 +4,7 @@
 # github.com/fido-device-onboard/go-fdo/fsim v0.0.0-00010101000000-000000000000 => ./fsim
 ## explicit; go 1.25.0
 # github.com/fido-device-onboard/go-fdo/sqlite v0.0.0-00010101000000-000000000000 => ./sqlite
-## explicit; go 1.25.0
+## explicit; go 1.26.0
 # github.com/fido-device-onboard/go-fdo/tpm v0.0.0-00010101000000-000000000000 => ./tpm
 ## explicit; go 1.25.0
 # github.com/google/go-tpm v0.9.8
@@ -22,10 +22,10 @@ github.com/google/go-tpm/tpmutil/tbs
 ## explicit; go 1.24.0
 github.com/google/go-tpm-tools/simulator
 github.com/google/go-tpm-tools/simulator/internal
-# github.com/ncruces/go-sqlite3 v0.35.2
-## explicit; go 1.25.0
 # github.com/ncruces/go-sqlite3 v0.35.3
-## explicit; go 1.25.0
+## explicit; go 1.26.0
+# github.com/ncruces/go-sqlite3 v0.35.4
+## explicit; go 1.26.0
 github.com/ncruces/go-sqlite3
 github.com/ncruces/go-sqlite3/driver
 github.com/ncruces/go-sqlite3/internal/dotlk
@@ -36,11 +36,11 @@ github.com/ncruces/go-sqlite3/internal/util
 github.com/ncruces/go-sqlite3/util/vfsutil
 github.com/ncruces/go-sqlite3/vfs
 github.com/ncruces/go-sqlite3/vfs/xts
-# github.com/ncruces/go-sqlite3-wasm/v3 v3.2.35303
-## explicit; go 1.25.0
 # github.com/ncruces/go-sqlite3-wasm/v3 v3.2.35304
 ## explicit; go 1.25.0
-github.com/ncruces/go-sqlite3-wasm/v3
+# github.com/ncruces/go-sqlite3-wasm/v5 v5.0.35304
+## explicit; go 1.26.0
+github.com/ncruces/go-sqlite3-wasm/v5
 # github.com/ncruces/julianday v1.0.0
 ## explicit; go 1.17
 github.com/ncruces/julianday
@@ -63,6 +63,8 @@ github.com/syumai/workers/internal/runtimecontext
 # golang.org/x/crypto v0.46.0
 ## explicit; go 1.25.0
 # golang.org/x/crypto v0.54.0
+## explicit; go 1.25.0
+# golang.org/x/crypto v0.55.0
 ## explicit; go 1.25.0
 golang.org/x/crypto/internal/alias
 golang.org/x/crypto/xts
