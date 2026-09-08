@@ -7,7 +7,7 @@ package http
 import (
 	"context"
 
-	"github.com/fido-device-onboard/go-fdo/protocol"
+	"github.com/fido-device-onboard/go-fdo/v2/protocol"
 )
 
 // AuthorizationJar stores authorization tokens. Context parameters are used to

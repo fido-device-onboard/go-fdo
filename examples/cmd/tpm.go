@@ -16,7 +16,7 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/google/go-tpm/tpm2/transport/linuxtpm"
 
-	"github.com/fido-device-onboard/go-fdo/tpm"
+	"github.com/fido-device-onboard/go-fdo/v2/tpm"
 )
 
 const tpmSimulatorPath = "simulator"

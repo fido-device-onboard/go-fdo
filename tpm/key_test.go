@@ -14,9 +14,9 @@ import (
 
 	"github.com/google/go-tpm/tpm2/transport/simulator"
 
-	"github.com/fido-device-onboard/go-fdo/cbor"
-	"github.com/fido-device-onboard/go-fdo/cose"
-	"github.com/fido-device-onboard/go-fdo/tpm"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor"
+	"github.com/fido-device-onboard/go-fdo/v2/cose"
+	"github.com/fido-device-onboard/go-fdo/v2/tpm"
 )
 
 func TestPublicKey(t *testing.T) {

@@ -13,8 +13,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/fido-device-onboard/go-fdo"
-	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/v2"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor"
 )
 
 func TestEncodeInt(t *testing.T) {

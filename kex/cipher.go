@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/fido-device-onboard/go-fdo/cose"
+	"github.com/fido-device-onboard/go-fdo/v2/cose"
 )
 
 // CipherSuiteID enumeration

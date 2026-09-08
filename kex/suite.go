@@ -10,7 +10,7 @@ import (
 	"crypto/rsa"
 	"log/slog"
 
-	"github.com/fido-device-onboard/go-fdo/cose"
+	"github.com/fido-device-onboard/go-fdo/v2/cose"
 )
 
 // Available returns whether the given key exchange and cipher suites are both
@@ -112,7 +112,7 @@ func (s Suite) Valid(device, owner crypto.PublicKey) bool { //nolint:gocyclo
 		}
 	}
 	if deviceIsRSA {
-		// FDO version 1.1 says nothing about key exchanges allowed for devices
+		// FDO 2.0 says nothing about key exchanges allowed for devices
 		// using RSA keys
 		return true
 	}

@@ -24,15 +24,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fido-device-onboard/go-fdo"
-	"github.com/fido-device-onboard/go-fdo/cbor"
-	"github.com/fido-device-onboard/go-fdo/cose"
-	"github.com/fido-device-onboard/go-fdo/fdotest/internal/memory"
-	"github.com/fido-device-onboard/go-fdo/fdotest/internal/token"
-	"github.com/fido-device-onboard/go-fdo/kex"
-	"github.com/fido-device-onboard/go-fdo/protocol"
-	"github.com/fido-device-onboard/go-fdo/serviceinfo"
-	"github.com/fido-device-onboard/go-fdo/testdata"
+	"github.com/fido-device-onboard/go-fdo/v2"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor"
+	"github.com/fido-device-onboard/go-fdo/v2/cose"
+	"github.com/fido-device-onboard/go-fdo/v2/fdotest/internal/memory"
+	"github.com/fido-device-onboard/go-fdo/v2/fdotest/internal/token"
+	"github.com/fido-device-onboard/go-fdo/v2/kex"
+	"github.com/fido-device-onboard/go-fdo/v2/protocol"
+	"github.com/fido-device-onboard/go-fdo/v2/serviceinfo"
+	"github.com/fido-device-onboard/go-fdo/v2/testdata"
 )
 
 // AllServerState includes all server state interfaces and additional functions
@@ -159,7 +159,7 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 			t.Fatal(err)
 		}
 		ovh := &fdo.VoucherHeader{
-			Version: 101,
+			Version: 200,
 			GUID:    guid,
 			RvInfo: [][]protocol.RvInstruction{
 				{

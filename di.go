@@ -11,8 +11,8 @@ import (
 	"hash"
 	"io"
 
-	"github.com/fido-device-onboard/go-fdo/cbor"
-	"github.com/fido-device-onboard/go-fdo/protocol"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor"
+	"github.com/fido-device-onboard/go-fdo/v2/protocol"
 )
 
 // DIConfig contains required device secrets and optional configuration.
@@ -225,7 +225,7 @@ func (s *DIServer[T]) setCredentials(ctx context.Context, msg io.Reader) (*setCr
 		return nil, fmt.Errorf("error generating device GUID: %w", err)
 	}
 	ovh := &VoucherHeader{
-		Version:         101,
+		Version:         200,
 		GUID:            guid,
 		DeviceInfo:      deviceInfo,
 		ManufacturerKey: mfgPubKey,
@@ -235,7 +235,7 @@ func (s *DIServer[T]) setCredentials(ctx context.Context, msg io.Reader) (*setCr
 		},
 	}
 	rvInfo, err := s.RvInfo(ctx, &Voucher{
-		Version:   101,
+		Version:   200,
 		Header:    *cbor.NewBstr(*ovh),
 		CertChain: &certChain,
 	})
@@ -315,7 +315,7 @@ func (s *DIServer[T]) diDone(ctx context.Context, msg io.Reader) (struct{}, erro
 		certChain[i] = (*cbor.X509Certificate)(cert)
 	}
 	ov := &Voucher{
-		Version:   101,
+		Version:   200,
 		Header:    *cbor.NewBstr(*ovh),
 		Hmac:      req.Hmac,
 		CertChain: &certChain,

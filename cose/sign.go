@@ -15,7 +15,7 @@ import (
 	"io"
 	"math/big"
 
-	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor"
 )
 
 // Sign1 is a COSE_Sign1 signature structure, which is used when only one

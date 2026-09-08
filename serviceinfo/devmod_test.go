@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fido-device-onboard/go-fdo/serviceinfo"
+	"github.com/fido-device-onboard/go-fdo/v2/serviceinfo"
 )
 
 func TestDevmodRequired(t *testing.T) {

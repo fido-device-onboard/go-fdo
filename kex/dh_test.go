@@ -6,7 +6,7 @@ package kex_test
 import (
 	"testing"
 
-	"github.com/fido-device-onboard/go-fdo/kex"
+	"github.com/fido-device-onboard/go-fdo/v2/kex"
 )
 
 func TestDHExchange(t *testing.T) {

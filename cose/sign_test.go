@@ -12,8 +12,8 @@ import (
 	"math/big"
 	"testing"
 
-	"github.com/fido-device-onboard/go-fdo/cbor"
-	"github.com/fido-device-onboard/go-fdo/cose"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor"
+	"github.com/fido-device-onboard/go-fdo/v2/cose"
 )
 
 func TestSignAndVerify(t *testing.T) {

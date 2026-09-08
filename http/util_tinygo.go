@@ -13,7 +13,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/fido-device-onboard/go-fdo/http/internal/httputil"
+	"github.com/fido-device-onboard/go-fdo/v2/http/internal/httputil"
 )
 
 func debugRequest(w http.ResponseWriter, r *http.Request, handler http.HandlerFunc) {

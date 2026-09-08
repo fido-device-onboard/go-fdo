@@ -8,8 +8,7 @@ import (
 	"crypto/rsa"
 	"fmt"
 
-	"github.com/fido-device-onboard/go-fdo/cose"
-	"github.com/fido-device-onboard/go-fdo/protocol"
+	"github.com/fido-device-onboard/go-fdo/v2/cose"
 )
 
 // sigInfo is used to encode parameters for the device attestation signature.
@@ -80,24 +79,4 @@ func signOptsFor(key crypto.Signer, usePSS bool) (crypto.SignerOpts, error) {
 		}
 	}
 	return opts, nil
-}
-
-func keyTypeFor(alg cose.SignatureAlgorithm) (protocol.KeyType, crypto.SignerOpts, error) {
-	switch alg {
-	case cose.ES256Alg:
-		return protocol.Secp256r1KeyType, nil, nil
-	case cose.ES384Alg:
-		return protocol.Secp384r1KeyType, nil, nil
-	case cose.RS256Alg:
-		return protocol.Rsa2048RestrKeyType, alg, nil
-	case cose.RS384Alg:
-		return protocol.RsaPkcsKeyType, alg, nil
-	case cose.PS256Alg, cose.PS384Alg:
-		return protocol.RsaPssKeyType, &rsa.PSSOptions{
-			SaltLength: rsa.PSSSaltLengthEqualsHash,
-			Hash:       alg.HashFunc(),
-		}, nil
-	default:
-		return 0, nil, fmt.Errorf("COSE signature type %d not supported", alg)
-	}
 }

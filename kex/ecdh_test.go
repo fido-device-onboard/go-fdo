@@ -7,7 +7,7 @@ import (
 	"crypto/rand"
 	"testing"
 
-	"github.com/fido-device-onboard/go-fdo/kex"
+	"github.com/fido-device-onboard/go-fdo/v2/kex"
 )
 
 func TestECDHExchange(t *testing.T) {

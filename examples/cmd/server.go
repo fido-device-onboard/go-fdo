@@ -33,14 +33,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fido-device-onboard/go-fdo"
-	"github.com/fido-device-onboard/go-fdo/cbor"
-	"github.com/fido-device-onboard/go-fdo/custom"
-	"github.com/fido-device-onboard/go-fdo/fsim"
-	transport "github.com/fido-device-onboard/go-fdo/http"
-	"github.com/fido-device-onboard/go-fdo/protocol"
-	"github.com/fido-device-onboard/go-fdo/serviceinfo"
-	"github.com/fido-device-onboard/go-fdo/sqlite"
+	"github.com/fido-device-onboard/go-fdo/v2"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor"
+	"github.com/fido-device-onboard/go-fdo/v2/custom"
+	"github.com/fido-device-onboard/go-fdo/v2/fsim"
+	transport "github.com/fido-device-onboard/go-fdo/v2/http"
+	"github.com/fido-device-onboard/go-fdo/v2/protocol"
+	"github.com/fido-device-onboard/go-fdo/v2/serviceinfo"
+	"github.com/fido-device-onboard/go-fdo/v2/sqlite"
 )
 
 var serverFlags = flag.NewFlagSet("server", flag.ContinueOnError)
@@ -278,7 +278,7 @@ func serveHTTP(ctx context.Context, rvInfo [][]protocol.RvInstruction, state *sq
 
 	// Handle messages
 	mux := http.NewServeMux()
-	mux.Handle("POST /fdo/101/msg/{msg}", handler)
+	mux.Handle("POST /fdo/200/msg/{msg}", handler)
 	srv := &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 3 * time.Second,
@@ -465,7 +465,7 @@ func registerRvBlob(ctx context.Context, state *sqlite.DB) error {
 	refresh, err := (&fdo.TO0Client{
 		Vouchers:  state,
 		OwnerKeys: state,
-	}).RegisterBlob(ctx, tlsTransport(to0Addr, nil), guid, to2Addrs)
+	}).RegisterBlob(ctx, tlsTransport(to0Addr, nil), guid, to2Addrs, "")
 	if err != nil {
 		return fmt.Errorf("error performing to0: %w", err)
 	}

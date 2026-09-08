@@ -11,10 +11,10 @@ import (
 
 	"github.com/google/go-tpm/tpm2/transport/simulator"
 
-	"github.com/fido-device-onboard/go-fdo"
-	"github.com/fido-device-onboard/go-fdo/fdotest"
-	"github.com/fido-device-onboard/go-fdo/protocol"
-	"github.com/fido-device-onboard/go-fdo/tpm"
+	"github.com/fido-device-onboard/go-fdo/v2"
+	"github.com/fido-device-onboard/go-fdo/v2/fdotest"
+	"github.com/fido-device-onboard/go-fdo/v2/protocol"
+	"github.com/fido-device-onboard/go-fdo/v2/tpm"
 )
 
 func TestTPMDevice(t *testing.T) {

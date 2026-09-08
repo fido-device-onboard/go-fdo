@@ -24,13 +24,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fido-device-onboard/go-fdo"
-	"github.com/fido-device-onboard/go-fdo/cbor"
-	"github.com/fido-device-onboard/go-fdo/cose"
-	"github.com/fido-device-onboard/go-fdo/custom"
-	"github.com/fido-device-onboard/go-fdo/kex"
-	"github.com/fido-device-onboard/go-fdo/protocol"
-	"github.com/fido-device-onboard/go-fdo/serviceinfo"
+	"github.com/fido-device-onboard/go-fdo/v2"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor"
+	"github.com/fido-device-onboard/go-fdo/v2/cose"
+	"github.com/fido-device-onboard/go-fdo/v2/custom"
+	"github.com/fido-device-onboard/go-fdo/v2/kex"
+	"github.com/fido-device-onboard/go-fdo/v2/protocol"
+	"github.com/fido-device-onboard/go-fdo/v2/serviceinfo"
 )
 
 // DB implements FDO server state persistence.
@@ -115,6 +115,9 @@ func Init(db *sql.DB) error {
 			, rv_info BLOB
 			, prove_device BLOB
 			, setup_device BLOB
+			, hello_device_hash BLOB
+			, kex_suite TEXT
+			, cipher_suite INTEGER
 			, mtu INTEGER
 			, devmod BLOB
 			, modules BLOB
@@ -1114,6 +1117,82 @@ func (db *DB) SetupDeviceNonce(ctx context.Context) (protocol.Nonce, error) {
 	var nonce protocol.Nonce
 	_ = copy(nonce[:], into)
 	return nonce, nil
+}
+
+// SetKexCipherSuite stores the key exchange suite and cipher suite
+// selected by the device in HelloDevice.
+func (db *DB) SetKexCipherSuite(ctx context.Context, suite kex.Suite, cipher kex.CipherSuiteID) error {
+	sessID, ok := db.sessionID(ctx)
+	if !ok {
+		return fdo.ErrInvalidSession
+	}
+	return db.insert(ctx, "to2_sessions", map[string]any{
+		"session":      sessID,
+		"kex_suite":    string(suite),
+		"cipher_suite": int(cipher),
+	}, []string{"session"})
+}
+
+// KexCipherSuite retrieves the key exchange suite and cipher suite
+// selected by the device.
+func (db *DB) KexCipherSuite(ctx context.Context) (kex.Suite, kex.CipherSuiteID, error) {
+	sessID, ok := db.sessionID(ctx)
+	if !ok {
+		return "", 0, fdo.ErrInvalidSession
+	}
+
+	var suiteName string
+	var cipherID int
+	if err := db.query(ctx, "to2_sessions", []string{"kex_suite", "cipher_suite"}, map[string]any{
+		"session": sessID,
+	}, &suiteName, &cipherID); err != nil {
+		return "", 0, err
+	}
+	if suiteName == "" {
+		return "", 0, fdo.ErrNotFound
+	}
+	return kex.Suite(suiteName), kex.CipherSuiteID(cipherID), nil
+}
+
+// SetHelloDeviceHash stores the hash of the raw HelloDevice message for
+// hash binding in TO2.ProveOVHdr.
+func (db *DB) SetHelloDeviceHash(ctx context.Context, h protocol.Hash) error {
+	sessID, ok := db.sessionID(ctx)
+	if !ok {
+		return fdo.ErrInvalidSession
+	}
+	data, err := cbor.Marshal(h)
+	if err != nil {
+		return fmt.Errorf("error marshaling HelloDevice hash: %w", err)
+	}
+	return db.insert(ctx, "to2_sessions", map[string]any{
+		"session":           sessID,
+		"hello_device_hash": data,
+	}, []string{"session"})
+}
+
+// HelloDeviceHash retrieves the stored hash of the HelloDevice message.
+func (db *DB) HelloDeviceHash(ctx context.Context) (protocol.Hash, error) {
+	sessID, ok := db.sessionID(ctx)
+	if !ok {
+		return protocol.Hash{}, fdo.ErrInvalidSession
+	}
+
+	var into []byte
+	if err := db.query(ctx, "to2_sessions", []string{"hello_device_hash"}, map[string]any{
+		"session": sessID,
+	}, &into); err != nil {
+		return protocol.Hash{}, err
+	}
+	if into == nil {
+		return protocol.Hash{}, fdo.ErrNotFound
+	}
+
+	var h protocol.Hash
+	if err := cbor.Unmarshal(into, &h); err != nil {
+		return protocol.Hash{}, fmt.Errorf("error unmarshaling HelloDevice hash: %w", err)
+	}
+	return h, nil
 }
 
 // AddOwnerKey to retrieve with [DB.OwnerKey]. chain may be nil, in which case

@@ -23,9 +23,9 @@ import (
 	"github.com/syumai/workers/cloudflare/cron"
 	_ "github.com/syumai/workers/cloudflare/d1"
 
-	"github.com/fido-device-onboard/go-fdo"
-	fdo_http "github.com/fido-device-onboard/go-fdo/http"
-	"github.com/fido-device-onboard/go-fdo/sqlite"
+	"github.com/fido-device-onboard/go-fdo/v2"
+	fdo_http "github.com/fido-device-onboard/go-fdo/v2/http"
+	"github.com/fido-device-onboard/go-fdo/v2/sqlite"
 )
 
 const oneWeekInSeconds uint32 = 7 * 24 * 60 * 60
@@ -48,8 +48,8 @@ func main() {
 	handler := http.NewServeMux()
 
 	// If building with Go instead of TinyGo, use:
-	//handler.Handle("POST /fdo/101/msg/{msg}", &fdo_http.Handler{
-	handler.Handle("/fdo/101/msg/", &fdo_http.Handler{
+	//handler.Handle("POST /fdo/200/msg/{msg}", &fdo_http.Handler{
+	handler.Handle("/fdo/200/msg/", &fdo_http.Handler{
 		Tokens: state,
 		TO0Responder: &fdo.TO0Server{
 			Session: state,

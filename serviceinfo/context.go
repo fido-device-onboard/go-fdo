@@ -7,7 +7,7 @@ import (
 	"context"
 	"crypto/x509"
 
-	"github.com/fido-device-onboard/go-fdo/protocol"
+	"github.com/fido-device-onboard/go-fdo/v2/protocol"
 )
 
 type (

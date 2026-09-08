@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor"
 )
 
 // Header is a type for embedding protected and unprotected headers into many

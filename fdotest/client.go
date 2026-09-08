@@ -30,15 +30,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fido-device-onboard/go-fdo"
-	"github.com/fido-device-onboard/go-fdo/blob"
-	"github.com/fido-device-onboard/go-fdo/cbor"
-	"github.com/fido-device-onboard/go-fdo/custom"
-	"github.com/fido-device-onboard/go-fdo/fdotest/internal/memory"
-	"github.com/fido-device-onboard/go-fdo/fdotest/internal/token"
-	"github.com/fido-device-onboard/go-fdo/kex"
-	"github.com/fido-device-onboard/go-fdo/protocol"
-	"github.com/fido-device-onboard/go-fdo/serviceinfo"
+	"github.com/fido-device-onboard/go-fdo/v2"
+	"github.com/fido-device-onboard/go-fdo/v2/blob"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor"
+	"github.com/fido-device-onboard/go-fdo/v2/custom"
+	"github.com/fido-device-onboard/go-fdo/v2/fdotest/internal/memory"
+	"github.com/fido-device-onboard/go-fdo/v2/fdotest/internal/token"
+	"github.com/fido-device-onboard/go-fdo/v2/kex"
+	"github.com/fido-device-onboard/go-fdo/v2/protocol"
+	"github.com/fido-device-onboard/go-fdo/v2/serviceinfo"
 )
 
 const timeout = 10 * time.Second
@@ -270,7 +270,7 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 		{
 			keyType:     protocol.Rsa2048RestrKeyType,
 			keyEncoding: protocol.X509KeyEnc,
-			keyExchange: kex.ASYMKEX2048Suite,
+			keyExchange: kex.DHKEXid14Suite,
 			cipherSuite: kex.A128GcmCipher,
 		},
 		{
@@ -404,7 +404,7 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 						Port:              8080,
 						TransportProtocol: protocol.HTTPTransport,
 					},
-				})
+				}, "")
 				if err != nil {
 					t.Fatal(err)
 				}

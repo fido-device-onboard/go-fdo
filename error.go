@@ -8,7 +8,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/fido-device-onboard/go-fdo/protocol"
+	"github.com/fido-device-onboard/go-fdo/v2/protocol"
 )
 
 // Define a new private type so that key cannot be created outside of this

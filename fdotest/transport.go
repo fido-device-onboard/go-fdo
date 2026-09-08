@@ -10,12 +10,12 @@ import (
 	"io"
 	"testing"
 
-	"github.com/fido-device-onboard/go-fdo"
-	"github.com/fido-device-onboard/go-fdo/cbor"
-	"github.com/fido-device-onboard/go-fdo/cbor/cdn"
-	"github.com/fido-device-onboard/go-fdo/custom"
-	"github.com/fido-device-onboard/go-fdo/kex"
-	"github.com/fido-device-onboard/go-fdo/protocol"
+	"github.com/fido-device-onboard/go-fdo/v2"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor/cdn"
+	"github.com/fido-device-onboard/go-fdo/v2/custom"
+	"github.com/fido-device-onboard/go-fdo/v2/kex"
+	"github.com/fido-device-onboard/go-fdo/v2/protocol"
 )
 
 // Transport for tests, directly calling the server's responder. No encryption
@@ -69,7 +69,7 @@ func (t *Transport) Send(ctx context.Context, msgType uint8, msg any, sess kex.S
 		isProtocolStart = msgType == 30
 	case protocol.TO2Protocol:
 		responder = t.TO2Responder
-		isProtocolStart = msgType == 60
+		isProtocolStart = msgType == 80
 	case protocol.AnyProtocol:
 		return 0, nil, nil
 	default:
@@ -95,7 +95,7 @@ func (t *Transport) Send(ctx context.Context, msgType uint8, msg any, sess kex.S
 	}
 
 	switch respType {
-	case 13, 23, 33, 71, protocol.ErrorMsgType:
+	case 13, 23, 33, 91, protocol.ErrorMsgType:
 		if err := t.Tokens.InvalidateToken(t.Tokens.TokenContext(context.Background(), t.token)); err != nil {
 			t.T.Logf("error invalidating token: %v", err)
 		}

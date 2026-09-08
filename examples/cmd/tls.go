@@ -20,8 +20,8 @@ import (
 	net_http "net/http"
 	"time"
 
-	"github.com/fido-device-onboard/go-fdo"
-	"github.com/fido-device-onboard/go-fdo/http"
+	"github.com/fido-device-onboard/go-fdo/v2"
+	"github.com/fido-device-onboard/go-fdo/v2/http"
 )
 
 var insecureTLS bool

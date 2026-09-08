@@ -12,9 +12,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/fido-device-onboard/go-fdo/cbor"
-	"github.com/fido-device-onboard/go-fdo/cose"
-	"github.com/fido-device-onboard/go-fdo/protocol"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor"
+	"github.com/fido-device-onboard/go-fdo/v2/cose"
+	"github.com/fido-device-onboard/go-fdo/v2/protocol"
 )
 
 // AllInOne is a construct with functionality that is only possible when

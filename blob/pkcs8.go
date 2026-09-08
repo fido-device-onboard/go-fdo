@@ -10,7 +10,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 
-	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor"
 )
 
 // Pkcs8Key CBOR-encodes a private key to a byte string of PKCS8 DER content.

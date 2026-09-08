@@ -9,8 +9,8 @@ import (
 	"io"
 	"log/slog"
 
-	"github.com/fido-device-onboard/go-fdo/cbor"
-	"github.com/fido-device-onboard/go-fdo/serviceinfo"
+	"github.com/fido-device-onboard/go-fdo/v2/cbor"
+	"github.com/fido-device-onboard/go-fdo/v2/serviceinfo"
 )
 
 // Interop implements https://github.com/fido-alliance/conformance-test-tools-resources/blob/821c7114ae193148d276464a80c98d5535fa5681/docs/FDO/Pre-Interop/Step-by-step.md?plain=1#L36
