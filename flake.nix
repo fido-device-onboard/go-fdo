@@ -21,7 +21,7 @@
     ...
   }:
     flake-utils.lib.eachDefaultSystem (system: let
-      go = pkgs.go_1_25;
+      go = pkgs.go_1_26;
       pkgs = nixpkgs.legacyPackages.${system};
 
       tinygo_patched = pkgs.tinygo.overrideAttrs (old: {
