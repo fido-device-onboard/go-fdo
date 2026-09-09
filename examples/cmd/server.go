@@ -702,7 +702,7 @@ func (s moduleStateMachines) NextModule(ctx context.Context) (bool, error) {
 	return valid, nil
 }
 
-func (s moduleStateMachines) CleanupModules(ctx context.Context) {
+func (s moduleStateMachines) CleanupModules(ctx context.Context, _ error) {
 	token, ok := s.DB.TokenFromContext(ctx)
 	if !ok {
 		return
