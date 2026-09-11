@@ -366,6 +366,26 @@ func (c *CredentialsOwner) produceInfo(ctx context.Context, producer *serviceinf
 		return true, false, nil
 	}
 
+	// Step 4.5: Send pending pubkey-result before declaring done.
+	// This is required because Yield() is not part of the OwnerModule interface
+	// and is never called by the service-info processing framework.
+	// We combine pubkey-result + active=false in the same ProduceInfo call to
+	// save a round trip.
+	if c.pendingPubkeyResult != nil {
+		data, err := cbor.Marshal(c.pendingPubkeyResult)
+		if err != nil {
+			return false, false, fmt.Errorf("encode pubkey-result: %w", err)
+		}
+		if err := producer.WriteChunk("pubkey-result", data); err != nil {
+			return false, false, fmt.Errorf("send pubkey-result: %w", err)
+		}
+		slog.Debug("[fdo.credentials] Sent pubkey-result",
+			"status", c.pendingPubkeyResult.StatusCode,
+			"message", c.pendingPubkeyResult.Message)
+		c.pendingPubkeyResult = nil
+		// Fall through to send active=false in the same round.
+	}
+
 	// Step 5: All done, send active=false
 	if err := producer.WriteChunk("active", []byte{0xf4}); err != nil { // CBOR false
 		return false, false, fmt.Errorf("write active=false: %w", err)

@@ -49,8 +49,8 @@ type CredentialsDevice struct {
 	currentCredentialData []byte // Store data from OnEnd callback before reset
 
 	// Registered Credentials state (responding to owner requests)
-	pendingPubkeyRequest *pubkeyRequestInfo // Current request from owner
-	pubkeyResults        []RegisteredResult // Results from owner
+	// pubkey-begin/data/end are sent inline in Receive("pubkey-request"); no pending state needed.
+	pubkeyResults []RegisteredResult // Results from owner
 
 	// Enrolled Credentials state (device-initiated requests)
 	currentEnrollmentIndex int                     // Index into EnrollmentRequests
@@ -59,14 +59,6 @@ type CredentialsDevice struct {
 	responseReceiver       *chunking.ChunkReceiver // Receiver for owner's response
 	receivingResponse      bool                    // True if receiving response
 	pendingResponseResult  *responseResultInfo     // Pending result to send
-}
-
-// pubkeyRequestInfo holds info about a pending pubkey request from owner
-type pubkeyRequestInfo struct {
-	CredentialID   string
-	CredentialType int
-	Metadata       map[string]any
-	PublicKeyData  []byte // Generated/retrieved public key
 }
 
 // EnrollmentRequest represents a credential enrollment request from device to owner.
@@ -113,8 +105,6 @@ func (c *CredentialsDevice) Transition(active bool) error {
 		c.currentCredentialType = 0
 		c.currentMetadata = nil
 		c.currentCredentialData = nil
-		// Reset registered credentials state
-		c.pendingPubkeyRequest = nil
 		// Reset enrolled credentials state
 		c.currentEnrollmentIndex = 0
 		c.enrollmentSender = nil
@@ -127,54 +117,14 @@ func (c *CredentialsDevice) Transition(active bool) error {
 }
 
 // Yield implements serviceinfo.DeviceModule.
+// Pubkey sending (Registered Credentials) is handled inline in Receive("pubkey-request")
+// and no longer uses the Yield pattern, so Yield only handles:
+//   - Enrolled Credentials response-result (after receiving owner's response)
+//   - Sending new enrollment requests (Enrolled Credentials flow)
+//
+// NOTE: FDO 2.0's exchangeServiceInfo20 never calls Yield(), so anything that
+// must be sent in response to an owner message must be done inside Receive().
 func (c *CredentialsDevice) Yield(ctx context.Context, respond func(string) io.Writer, yield func()) error {
-	// Send public key in response to owner's pubkey-request (Registered Credentials)
-	// Note: Yield is only called once, so we must send all messages here
-	if c.pendingPubkeyRequest != nil {
-		req := c.pendingPubkeyRequest
-
-		// Create sender
-		sender := chunking.NewChunkSender("pubkey", req.PublicKeyData)
-		sender.BeginFields.FSIMFields = make(map[int]any)
-		sender.BeginFields.FSIMFields[-1] = req.CredentialID
-		sender.BeginFields.FSIMFields[-2] = req.CredentialType
-		if req.Metadata != nil {
-			sender.BeginFields.FSIMFields[-3] = req.Metadata
-		}
-
-		slog.Debug("[fdo.credentials] Sending public key",
-			"credential_id", req.CredentialID,
-			"credential_type", req.CredentialType,
-			"size", len(req.PublicKeyData))
-
-		// Send begin message
-		if err := sender.SendBeginToWriter(respond); err != nil {
-			return fmt.Errorf("send pubkey-begin: %w", err)
-		}
-		slog.Debug("[fdo.credentials] Sent pubkey-begin")
-
-		// Send all data chunks
-		for {
-			done, err := sender.SendNextChunkToWriter(respond)
-			if err != nil {
-				return fmt.Errorf("send pubkey-data: %w", err)
-			}
-			if done {
-				break
-			}
-			slog.Debug("[fdo.credentials] Sent pubkey-data chunk")
-		}
-
-		// Send end message
-		if err := sender.SendEndToWriter(respond); err != nil {
-			return fmt.Errorf("send pubkey-end: %w", err)
-		}
-		slog.Debug("[fdo.credentials] Sent pubkey-end")
-
-		// Clear pending request
-		c.pendingPubkeyRequest = nil
-	}
-
 	// Send response-result after receiving enrolled credential response
 	if c.pendingResponseResult != nil {
 		result := c.pendingResponseResult
@@ -281,7 +231,7 @@ func (c *CredentialsDevice) Receive(ctx context.Context, messageName string, mes
 
 	case "pubkey-request":
 		// Owner requests a public key from device
-		return c.handlePubkeyRequest(messageBody, yield)
+		return c.handlePubkeyRequest(messageBody, respond, yield)
 
 	case "pubkey-result":
 		// Owner responds to public key registration
@@ -313,24 +263,31 @@ func (c *CredentialsDevice) Receive(ctx context.Context, messageName string, mes
 }
 
 // handlePubkeyRequest processes the pubkey-request message from the owner.
-func (c *CredentialsDevice) handlePubkeyRequest(messageBody io.Reader, yield func()) error {
+// It immediately sends pubkey-begin/data/end via respond() so the response
+// is available in the current service-info round for BOTH FDO 1.01 and 2.0.
+// (FDO 2.0's exchangeServiceInfo20 never calls Yield(), so sending here is
+// the only way to ensure the data reaches the server.)
+func (c *CredentialsDevice) handlePubkeyRequest(messageBody io.Reader, respond func(string) io.Writer, yield func()) error {
 	// Decode request
 	var request map[int]any
 	if err := cbor.NewDecoder(messageBody).Decode(&request); err != nil {
 		return fmt.Errorf("decode pubkey-request: %w", err)
 	}
 
+	// CBOR positive integers decode as int64 into interface{}; cast accordingly.
 	credID, _ := request[-1].(string)
 	var credType int
-	if credTypeInt, ok := request[-2].(int); ok {
-		credType = credTypeInt
-	} else if credTypeStr, ok := request[-2].(string); ok {
-		// Handle legacy string credential types
-		switch credTypeStr {
+	switch v := request[-2].(type) {
+	case int:
+		credType = v
+	case int64:
+		credType = int(v)
+	case string:
+		switch v {
 		case "ssh_public_key":
 			credType = CredentialTypeSSHPublicKey
 		default:
-			return fmt.Errorf("unsupported credential type: %s", credTypeStr)
+			return fmt.Errorf("unsupported credential type: %s", v)
 		}
 	}
 	metadata, _ := request[-3].(map[string]any)
@@ -351,16 +308,38 @@ func (c *CredentialsDevice) handlePubkeyRequest(messageBody io.Reader, yield fun
 		return fmt.Errorf("failed to get public key: %w", err)
 	}
 
-	// Store pending request - Yield will send the response
-	c.pendingPubkeyRequest = &pubkeyRequestInfo{
-		CredentialID:   credID,
-		CredentialType: credType,
-		Metadata:       metadata,
-		PublicKeyData:  pubkeyData,
+	// Send pubkey-begin/data/end immediately via respond().
+	// This works for both FDO 1.01 (UnchunkWriter) and FDO 2.0 (responseWriter
+	// buffers that are flushed after Receive returns).
+	sender := chunking.NewChunkSender("pubkey", pubkeyData)
+	sender.BeginFields.FSIMFields = make(map[int]any)
+	sender.BeginFields.FSIMFields[-1] = credID
+	sender.BeginFields.FSIMFields[-2] = credType
+	if metadata != nil {
+		sender.BeginFields.FSIMFields[-3] = metadata
 	}
 
-	// Signal that we have data to send
-	yield()
+	slog.Debug("[fdo.credentials] Sending public key",
+		"credential_id", credID,
+		"credential_type", credType,
+		"size", len(pubkeyData))
+
+	if err := sender.SendBeginToWriter(respond); err != nil {
+		return fmt.Errorf("send pubkey-begin: %w", err)
+	}
+	for {
+		done, err := sender.SendNextChunkToWriter(respond)
+		if err != nil {
+			return fmt.Errorf("send pubkey-data: %w", err)
+		}
+		if done {
+			break
+		}
+	}
+	if err := sender.SendEndToWriter(respond); err != nil {
+		return fmt.Errorf("send pubkey-end: %w", err)
+	}
+	slog.Debug("[fdo.credentials] Sent pubkey-begin/data/end")
 	return nil
 }
 

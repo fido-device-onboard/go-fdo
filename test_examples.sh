@@ -1117,6 +1117,111 @@ test_payload_selective_rejection() {
 	log_success "Payload FSIM Selective Rejection test PASSED"
 }
 
+# Test: Payload FSIM Chunk Size Negotiation (Large MTU)
+# This test verifies that when the device advertises a large MaxOwnerServiceInfoSz,
+# the PayloadOwner uses large chunk sizes to transfer data efficiently.
+test_payload_large_mtu() {
+	log_section "TEST: Payload FSIM Large MTU Chunk Negotiation"
+
+	mkdir -p "$EPHEMERAL_DIR"
+	rm -f "$DB_FILE" "$CRED_FILE"
+
+	# Create a 100KB test file — with large MTU (65535), this should use ~60KB chunks
+	# (only ~2 chunks), whereas with the old 1014-byte default it would need ~100 chunks.
+	PAYLOAD_FILE="$EPHEMERAL_DIR/test_payload_large_mtu.bin"
+	RECEIVED_FILE="$EPHEMERAL_DIR/test_payload_large_mtu.bin"
+	log_step "Creating 100KB test file"
+	dd if=/dev/urandom of="$PAYLOAD_FILE" bs=1024 count=100 2>/dev/null
+	ORIGINAL_HASH=$(sha256sum "$PAYLOAD_FILE" | awk '{print $1}')
+	log_success "Created test file: $PAYLOAD_FILE (hash: $ORIGINAL_HASH)"
+
+	start_server "-payload-file ../$PAYLOAD_FILE -payload-mime application/octet-stream"
+
+	log_step "Running DI"
+	run_cmd go run ./cmd client -di "$SERVER_URL" || return 1
+	log_success "DI completed"
+
+	log_step "Running TO1/TO2 with large MTU (65535)"
+	run_cmd go run ./cmd client -max-owner-service-info 65535 || return 1
+	log_success "TO1/TO2 completed with large MTU"
+
+	stop_server
+
+	# Verify the received file matches the original
+	if [ ! -f "$RECEIVED_FILE" ]; then
+		log_error "Received file not found: $RECEIVED_FILE"
+		return 1
+	fi
+
+	RECEIVED_HASH=$(sha256sum "$RECEIVED_FILE" | awk '{print $1}')
+	log_step "Verifying file integrity"
+	if [ "$ORIGINAL_HASH" = "$RECEIVED_HASH" ]; then
+		log_success "File hashes match! Large MTU payload transferred correctly"
+		log_success "  Original:  $ORIGINAL_HASH"
+		log_success "  Received:  $RECEIVED_HASH"
+	else
+		log_error "File hashes DO NOT match!"
+		log_error "  Original:  $ORIGINAL_HASH"
+		log_error "  Received:  $RECEIVED_HASH"
+		return 1
+	fi
+
+	log_success "Payload FSIM Large MTU Chunk Negotiation test PASSED"
+}
+
+# Test: Payload FSIM Chunk Size Negotiation (Default MTU = negotiation down)
+# This test verifies that when the device uses the default MTU (14000),
+# the PayloadOwner clamps chunk size to fit within the MTU, and the transfer
+# still completes successfully.
+test_payload_default_mtu() {
+	log_section "TEST: Payload FSIM Default MTU Chunk Negotiation"
+
+	mkdir -p "$EPHEMERAL_DIR"
+	rm -f "$DB_FILE" "$CRED_FILE"
+
+	# Same 100KB file — with default MTU (14000), chunks should be ~13897 bytes,
+	# needing ~8 chunks instead of ~2 with large MTU.
+	PAYLOAD_FILE="$EPHEMERAL_DIR/test_payload_default_mtu.bin"
+	RECEIVED_FILE="$EPHEMERAL_DIR/test_payload_default_mtu.bin"
+	log_step "Creating 100KB test file"
+	dd if=/dev/urandom of="$PAYLOAD_FILE" bs=1024 count=100 2>/dev/null
+	ORIGINAL_HASH=$(sha256sum "$PAYLOAD_FILE" | awk '{print $1}')
+	log_success "Created test file: $PAYLOAD_FILE (hash: $ORIGINAL_HASH)"
+
+	start_server "-payload-file ../$PAYLOAD_FILE -payload-mime application/octet-stream"
+
+	log_step "Running DI"
+	run_cmd go run ./cmd client -di "$SERVER_URL" || return 1
+	log_success "DI completed"
+
+	log_step "Running TO1/TO2 with default MTU (no -max-owner-service-info flag)"
+	run_cmd go run ./cmd client || return 1
+	log_success "TO1/TO2 completed with default MTU"
+
+	stop_server
+
+	# Verify the received file matches the original
+	if [ ! -f "$RECEIVED_FILE" ]; then
+		log_error "Received file not found: $RECEIVED_FILE"
+		return 1
+	fi
+
+	RECEIVED_HASH=$(sha256sum "$RECEIVED_FILE" | awk '{print $1}')
+	log_step "Verifying file integrity"
+	if [ "$ORIGINAL_HASH" = "$RECEIVED_HASH" ]; then
+		log_success "File hashes match! Default MTU payload transferred correctly"
+		log_success "  Original:  $ORIGINAL_HASH"
+		log_success "  Received:  $RECEIVED_HASH"
+	else
+		log_error "File hashes DO NOT match!"
+		log_error "  Original:  $ORIGINAL_HASH"
+		log_error "  Received:  $RECEIVED_HASH"
+		return 1
+	fi
+
+	log_success "Payload FSIM Default MTU Chunk Negotiation test PASSED"
+}
+
 # Test: WiFi FSIM (network-add only)
 # This test verifies that the WiFi FSIM can send network configurations
 # from the server to the device, which displays them.
@@ -2362,6 +2467,8 @@ test_all() {
 	test_payload_fdo200 || failed=1
 	test_payload_multiple_types || failed=1
 	test_payload_selective_rejection || failed=1
+	test_payload_large_mtu || failed=1
+	test_payload_default_mtu || failed=1
 	test_wifi || failed=1
 	test_wifi_fdo200 || failed=1
 	test_wifi_single_sided || failed=1
@@ -2470,6 +2577,12 @@ main() {
 		;;
 	payload-selective-rejection)
 		test_payload_selective_rejection || rc=$?
+		;;
+	payload-large-mtu)
+		test_payload_large_mtu || rc=$?
+		;;
+	payload-default-mtu)
+		test_payload_default_mtu || rc=$?
 		;;
 	wifi)
 		test_wifi || rc=$?

@@ -61,6 +61,7 @@ var (
 	bmoSupportedTypes     string // Comma-separated list of supported BMO MIME types (empty = accept all)
 	payloadSupportedTypes string // Comma-separated list of supported Payload MIME types (empty = accept all)
 	allowSingleSided      bool   // Allow single-sided attestation (WiFi-only mode)
+	maxOwnerServiceInfo   int    // Maximum owner service info size (MTU) the device advertises
 	clientDBPath          string // SQLite database file path (matches server -db flag)
 
 	// Voucher management flags
@@ -179,6 +180,7 @@ func init() {
 	clientFlags.StringVar(&bmoSupportedTypes, "bmo-supported-types", "", "Comma-separated list of supported BMO MIME `types` (empty = accept all)")
 	clientFlags.StringVar(&payloadSupportedTypes, "payload-supported-types", "", "Comma-separated list of supported Payload MIME `types` (empty = accept all)")
 	clientFlags.BoolVar(&allowSingleSided, "allow-single-sided", false, "Allow single-sided attestation (WiFi-only mode, owner not verified)")
+	clientFlags.IntVar(&maxOwnerServiceInfo, "max-owner-service-info", 0, "Maximum owner service info `size` (MTU) the device advertises (0 = default 14000)")
 	clientFlags.StringVar(&clientDBPath, "db", "", "SQLite database file path")
 
 	// Voucher management flags
@@ -243,7 +245,7 @@ func client(ctx context.Context) error {
 	if !ok {
 		return fmt.Errorf("invalid key exchange cipher suite: %s", cipherSuite)
 	}
-	newDC, err := transferOwnership(ctx, dc.RvInfo, fdo.TO2Config{
+	to2Conf := fdo.TO2Config{
 		Cred:       *dc,
 		HmacSha256: hmacSha256,
 		HmacSha384: hmacSha384,
@@ -260,7 +262,11 @@ func client(ctx context.Context) error {
 		CipherSuite:          kexCipherSuiteID,
 		AllowCredentialReuse: true,
 		AllowSingleSided:     allowSingleSided,
-	})
+	}
+	if maxOwnerServiceInfo > 0 {
+		to2Conf.MaxServiceInfoSizeReceive = uint16(maxOwnerServiceInfo) //nolint:gosec
+	}
+	newDC, err := transferOwnership(ctx, dc.RvInfo, to2Conf)
 	if rvOnly {
 		return nil
 	}

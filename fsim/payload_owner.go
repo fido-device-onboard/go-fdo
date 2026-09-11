@@ -14,11 +14,27 @@ import (
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
 )
 
+const (
+	// maxPayloadChunkSize caps payload-data chunks when the device advertises
+	// a large MaxOwnerServiceInfoSz. 60000 is chosen to stay below the 65535
+	// uint16 ceiling while leaving room for protocol framing.
+	maxPayloadChunkSize = 60000
+
+	// payloadChunkOverhead reserves room inside the MTU for the
+	// "fdo.payload:payload-data-<n>" key plus the CBOR framing the producer
+	// wraps around each chunk.
+	payloadChunkOverhead = 100
+)
+
 // PayloadOwner implements the fdo.payload FSIM for owner-side payload delivery.
 // It follows the specification in fdo.payload.md and uses the generic chunking strategy.
 type PayloadOwner struct {
 	// Payloads to send to the device
 	payloads []PayloadToSend
+
+	// chunkSize overrides the payload-data chunk size. When zero, the chunk
+	// size is derived from the negotiated MTU (capped at maxPayloadChunkSize).
+	chunkSize int
 
 	// Internal state
 	currentSender *chunking.ChunkSender
@@ -142,6 +158,20 @@ func (p *PayloadOwner) produceInfo(ctx context.Context, producer *serviceinfo.Pr
 				p.currentIndex+1, len(p.payloads), payload.MimeType, payload.Name, payload.RequireAck)
 			p.currentSender = chunking.NewChunkSender("payload", payload.Data)
 
+			// Fill the negotiated MTU rather than the 1014-byte default.
+			// Reserve headroom for the "fdo.payload:payload-data-<n>" key and
+			// the CBOR array framing the producer adds around the chunk.
+			want := p.chunkSize
+			if want == 0 {
+				want = maxPayloadChunkSize
+			}
+			if mtu := producer.MTU(); mtu > payloadChunkOverhead && want > mtu-payloadChunkOverhead {
+				want = mtu - payloadChunkOverhead
+			}
+			p.currentSender.ChunkSize = want
+			fmt.Printf("[PayloadOwner] Negotiated chunk size: %d (MTU=%d, requested=%d)\n",
+				want, producer.MTU(), p.chunkSize)
+
 			// Set hash algorithm if provided
 			if payload.HashAlg != "" {
 				p.currentSender.BeginFields.HashAlg = payload.HashAlg
@@ -217,16 +247,14 @@ func (p *PayloadOwner) produceInfo(ctx context.Context, producer *serviceinfo.Pr
 
 		case stateSendingChunks:
 			// Send chunks one at a time, respecting MTU limits
-			// Check if we have space for the next chunk
 			chunkIndex := p.currentSender.GetBytesSent() / int64(p.currentSender.ChunkSize)
 			chunkKey := fmt.Sprintf("payload-data-%d", chunkIndex)
 
-			// Estimate the size needed for the next chunk (chunk size + CBOR overhead)
-			// Add some buffer for CBOR encoding overhead
-			estimatedSize := p.currentSender.ChunkSize + 50
+			// Check if there's space for the chunk. Available() already accounts
+			// for CBOR array and key name overhead, so we only need to compare
+			// against the chunk data size plus its CBOR bstr header (~5 bytes).
+			estimatedSize := p.currentSender.ChunkSize + 5
 			if producer.Available(chunkKey) < estimatedSize {
-				// Not enough space, block and continue in next round
-				fmt.Printf("[PayloadOwner] Not enough MTU space for next chunk, blocking\n")
 				return true, false, nil
 			}
 
@@ -391,9 +419,10 @@ func (p *PayloadOwner) GetLastResult() *PayloadResult {
 	return p.lastResult
 }
 
-// SetChunkSize sets the chunk size for data transfer (default 1014 bytes per spec).
+// SetChunkSize overrides the payload-data chunk size. When zero (default),
+// the chunk size is derived from the negotiated MTU (capped at
+// maxPayloadChunkSize). A non-zero value requests that specific size but
+// will still be clamped down to the negotiated MTU if necessary.
 func (p *PayloadOwner) SetChunkSize(size int) {
-	if p.currentSender != nil {
-		p.currentSender.ChunkSize = size
-	}
+	p.chunkSize = size
 }
