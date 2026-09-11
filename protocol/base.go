@@ -3,11 +3,19 @@
 
 package protocol
 
+import (
+	"encoding/hex"
+)
+
 // GUID is implemented as a 128-bit cryptographically strong random number.
 //
 // The GUID type identifies a Device during onboarding, and is replaced each
 // time onboarding is successful in the Transfer Ownership 2 (TO2) protocol.
 type GUID [16]byte
+
+func (g GUID) String() string {
+	return hex.EncodeToString(g[:])
+}
 
 // Nonce is a byte array with length (16 bytes) 128-bit Random number.
 //

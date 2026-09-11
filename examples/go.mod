@@ -1,17 +1,20 @@
 module github.com/fido-device-onboard/go-fdo/examples
 
-go 1.25.0
+go 1.25
 
 replace github.com/fido-device-onboard/go-fdo/sqlite => ../sqlite
 
-replace github.com/fido-device-onboard/go-fdo => ..
+replace github.com/fido-device-onboard/go-fdo => ../.
 
 replace github.com/fido-device-onboard/go-fdo/fsim => ../fsim
 
 replace github.com/fido-device-onboard/go-fdo/tpm => ../tpm
 
+replace github.com/fido-device-onboard/go-fdo/cred => ../cred
+
 require (
 	github.com/fido-device-onboard/go-fdo v0.0.0-00010101000000-000000000000
+	github.com/fido-device-onboard/go-fdo/cred v0.0.0-00010101000000-000000000000
 	github.com/fido-device-onboard/go-fdo/fsim v0.0.0-00010101000000-000000000000
 	github.com/fido-device-onboard/go-fdo/sqlite v0.0.0-00010101000000-000000000000
 	github.com/fido-device-onboard/go-fdo/tpm v0.0.0-00010101000000-000000000000

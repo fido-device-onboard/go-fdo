@@ -1,0 +1,25 @@
+[
+  {
+    "version": "1.0",
+    "network_id": "net-001",
+    "ssid": "Setup-WiFi",
+    "auth_type": 1,
+    "password": "setup-password",
+    "trust_level": 0
+  },
+  {
+    "version": "1.0",
+    "network_id": "net-002",
+    "ssid": "Guest-Network",
+    "auth_type": 0,
+    "trust_level": 0
+  },
+  {
+    "version": "1.0",
+    "network_id": "net-003",
+    "ssid": "Enterprise-WiFi",
+    "auth_type": 3,
+    "trust_level": 1,
+    "needs_cert": true
+  }
+]

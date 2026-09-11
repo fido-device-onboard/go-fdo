@@ -192,6 +192,64 @@ func TestParseURL(t *testing.T) {
 	}
 }
 
+func TestParseFirmwareTags(t *testing.T) {
+	directives := protocol.ParseDeviceRvInfo([][]protocol.RvInstruction{
+		{
+			{Variable: protocol.RVProtocol, Value: cborMarshal(t, protocol.RVProtHTTP)},
+			{Variable: protocol.RVDns, Value: cborMarshal(t, "firmware.example.com")},
+			{Variable: protocol.RVDevPort, Value: cborMarshal(t, uint16(8080))},
+			{Variable: protocol.RVFirmwarePath, Value: cborMarshal(t, "/images/firmware-v2.cose")},
+			{Variable: protocol.RVFirmwareURL, Value: cborMarshal(t, "http://firmware.example.com:8080/images/firmware-v2.cose")},
+			{Variable: protocol.RVMinFirmwareRev, Value: cborMarshal(t, uint64(42))},
+		},
+	})
+	if n := len(directives); n != 1 {
+		t.Fatalf("expected one directive, got %d", n)
+	}
+	d := directives[0]
+
+	if d.FirmwarePath != "/images/firmware-v2.cose" {
+		t.Fatalf("expected firmware path %q, got %q", "/images/firmware-v2.cose", d.FirmwarePath)
+	}
+	if d.FirmwareURL != "http://firmware.example.com:8080/images/firmware-v2.cose" {
+		t.Fatalf("expected firmware URL %q, got %q", "http://firmware.example.com:8080/images/firmware-v2.cose", d.FirmwareURL)
+	}
+	if d.MinFirmwareRev != 42 {
+		t.Fatalf("expected min firmware rev 42, got %d", d.MinFirmwareRev)
+	}
+
+	// Also verify standard RV fields still work alongside firmware tags
+	if len(d.URLs) != 1 {
+		t.Fatalf("expected 1 URL, got %d", len(d.URLs))
+	}
+	if got := d.URLs[0].String(); got != "http://firmware.example.com:8080" {
+		t.Fatalf("expected URL %q, got %q", "http://firmware.example.com:8080", got)
+	}
+}
+
+func TestParseFirmwareTagsEmpty(t *testing.T) {
+	// Verify firmware fields default to zero values when tags are absent
+	directives := protocol.ParseDeviceRvInfo([][]protocol.RvInstruction{
+		{
+			{Variable: protocol.RVProtocol, Value: cborMarshal(t, protocol.RVProtHTTP)},
+			{Variable: protocol.RVDns, Value: cborMarshal(t, "example.com")},
+		},
+	})
+	if n := len(directives); n != 1 {
+		t.Fatalf("expected one directive, got %d", n)
+	}
+	d := directives[0]
+	if d.FirmwarePath != "" {
+		t.Fatalf("expected empty firmware path, got %q", d.FirmwarePath)
+	}
+	if d.FirmwareURL != "" {
+		t.Fatalf("expected empty firmware URL, got %q", d.FirmwareURL)
+	}
+	if d.MinFirmwareRev != 0 {
+		t.Fatalf("expected zero min firmware rev, got %d", d.MinFirmwareRev)
+	}
+}
+
 func cborMarshal(t *testing.T, v any) []byte {
 	t.Helper()
 

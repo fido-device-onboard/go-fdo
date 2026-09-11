@@ -326,3 +326,191 @@ func getMaxInputBuffer(t TPM) uint32 {
 	slog.Info("tpm: max input buffer size undefined, using default", "size", defaultMaxDigestBuffer)
 	return defaultMaxDigestBuffer
 }
+
+// =========================================================================
+// Spec-compliant HMAC — persistent key with empty-auth (userWithAuth=1)
+// =========================================================================
+
+// NewSpecHmac returns an HMAC backed by a persistent HMAC key at the given
+// handle. Per spec Table 11, the key has userWithAuth=1 with empty authValue,
+// so key usage requires only an empty password auth session.
+//
+// Unlike NewHmac which creates an ephemeral primary key, this uses the
+// pre-provisioned persistent key created during Device Initialization.
+// The key must already exist at the specified handle.
+func NewSpecHmac(t TPM, h crypto.Hash, handle uint32) (Hmac, error) {
+	// Read persistent HMAC key name
+	readResp, err := (tpm2.ReadPublic{ObjectHandle: tpm2.TPMHandle(handle)}).Execute(t)
+	if err != nil {
+		return nil, fmt.Errorf("ReadPublic HMAC key (0x%08X): %w", handle, err)
+	}
+
+	return &specHmac{
+		Device:    t,
+		Hash:      h,
+		keyHandle: handle,
+		keyName:   readResp.Name,
+	}, nil
+}
+
+// specHmac is a hash.Hash backed by a persistent TPM HMAC key with
+// empty-auth authorization (userWithAuth=1, empty authValue).
+type specHmac struct {
+	Device    TPM
+	Hash      crypto.Hash
+	keyHandle uint32         // persistent HMAC key handle
+	keyName   tpm2.TPM2BName // persistent HMAC key name
+
+	bufSize uint32
+
+	started    bool
+	authHandle *tpm2.AuthHandle // sequence handle
+	err        error
+}
+
+func (h *specHmac) start() {
+	if h.started {
+		return
+	}
+
+	// Start HMAC sequence with empty password auth on persistent key
+	sequenceAuth := make([]byte, 16)
+	if _, err := rand.Read(sequenceAuth); err != nil {
+		h.err = fmt.Errorf("generating auth buffer: %w", err)
+		return
+	}
+
+	hmacStartResp, err := tpm2.HmacStart{
+		Handle: tpm2.AuthHandle{
+			Handle: tpm2.TPMHandle(h.keyHandle),
+			Name:   h.keyName,
+			Auth:   tpm2.PasswordAuth(nil), // empty authValue per spec
+		},
+		Auth: tpm2.TPM2BAuth{
+			Buffer: sequenceAuth,
+		},
+		HashAlg: tpm2.TPMAlgNull,
+	}.Execute(h.Device)
+	if err != nil {
+		h.err = fmt.Errorf("HmacStart (spec): %w", err)
+		return
+	}
+
+	h.authHandle = &tpm2.AuthHandle{
+		Handle: hmacStartResp.SequenceHandle,
+		Auth:   tpm2.PasswordAuth(sequenceAuth),
+	}
+	h.started = true
+}
+
+// Write implements the hash.Hash interface and never returns an error.
+// Caller should check Err() for underlying TPM sequence errors.
+func (h *specHmac) Write(p []byte) (int, error) {
+	if h.authHandle == nil && h.started {
+		h.err = fmt.Errorf("call to write after sum without reset")
+		return 0, nil
+	}
+
+	h.start()
+	if h.err != nil {
+		return 0, nil
+	}
+
+	if h.authHandle == nil {
+		h.err = fmt.Errorf("sequence completed, reset required")
+		return 0, nil
+	}
+
+	r := bytes.NewBuffer(p)
+	buf := make([]byte, h.BlockSize())
+	for {
+		n, err := io.ReadFull(r, buf)
+		if errors.Is(err, io.EOF) {
+			return len(p), nil
+		}
+		if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+			h.err = fmt.Errorf("spec hmac: read failed: %w", err)
+			return 0, nil
+		}
+
+		if _, err := (tpm2.SequenceUpdate{
+			SequenceHandle: *h.authHandle,
+			Buffer: tpm2.TPM2BMaxBuffer{
+				Buffer: buf[:n],
+			},
+		}).Execute(h.Device); err != nil {
+			h.err = fmt.Errorf("spec hmac: SequenceUpdate failed: %w", err)
+			return 0, nil
+		}
+	}
+}
+
+// Sum implements the hash.Hash interface.
+func (h *specHmac) Sum(b []byte) []byte {
+	if h.authHandle == nil && h.started {
+		h.err = fmt.Errorf("multiple calls to sum")
+		return b
+	}
+
+	h.start()
+	if h.err != nil {
+		return b
+	}
+
+	if h.authHandle == nil {
+		h.err = fmt.Errorf("sequence completed, reset required")
+		return b
+	}
+
+	sequenceCompleteRsp, err := tpm2.SequenceComplete{
+		SequenceHandle: *h.authHandle,
+		Hierarchy:      tpm2.TPMRHNull,
+	}.Execute(h.Device)
+	if err != nil {
+		h.err = fmt.Errorf("spec hmac: SequenceComplete failed: %w", err)
+		return b
+	}
+
+	h.authHandle = nil
+	return append(b, sequenceCompleteRsp.Result.Buffer...)
+}
+
+// Reset preserves the key but resets the digest to its initial state.
+func (h *specHmac) Reset() {
+	if h.authHandle != nil {
+		_, err := tpm2.SequenceComplete{
+			SequenceHandle: *h.authHandle,
+			Hierarchy:      tpm2.TPMRHNull,
+		}.Execute(h.Device)
+		if err != nil {
+			h.err = fmt.Errorf("spec hmac: reset: completing sequence: %w", err)
+			return
+		}
+	}
+	h.authHandle = nil
+	h.started = false
+	h.err = nil
+}
+
+// Size implements the hash.Hash interface.
+func (h *specHmac) Size() int { return h.Hash.Size() }
+
+// BlockSize implements the hash.Hash interface.
+func (h *specHmac) BlockSize() int {
+	if h.bufSize == 0 {
+		h.bufSize = getMaxInputBuffer(h.Device)
+	}
+	return int(h.bufSize)
+}
+
+// Err returns any errors that have occurred since the last reset.
+func (h *specHmac) Err() error { return h.err }
+
+// Close is a no-op for spec HMAC since the key is persistent.
+// Only the active sequence (if any) is flushed.
+func (h *specHmac) Close() error {
+	if h.authHandle != nil {
+		h.Reset()
+	}
+	return nil
+}

@@ -6,7 +6,7 @@ labels: ""
 assignees: ""
 ---
 
-### Nature of the bug
+## Nature of the bug
 
 Spec non-conformance, panic, etc.
 

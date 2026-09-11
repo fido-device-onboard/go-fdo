@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/hex"
 	"log/slog"
+	"strings"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cbor/cdn"
@@ -24,17 +25,21 @@ func tryDebugNotation(b []byte) string {
 	return d
 }
 
+func sanitizeLogValue(s string) string {
+	return strings.NewReplacer("\n", "\\n", "\r", "\\r").Replace(s)
+}
+
 func debugUnencryptedMessage(msgType uint8, msg any) {
-	if debugEnabled() {
+	if !debugEnabled() {
 		return
 	}
 	body, _ := cbor.Marshal(msg)
-	slog.Debug("unencrypted request", "msg", msgType, "body", tryDebugNotation(body))
+	slog.Debug("unencrypted request", "msg", msgType, "body", sanitizeLogValue(tryDebugNotation(body)))
 }
 
 func debugDecryptedMessage(msgType uint8, decrypted []byte) {
-	if debugEnabled() {
+	if !debugEnabled() {
 		return
 	}
-	slog.Debug("decrypted response", "msg", msgType, "body", tryDebugNotation(decrypted))
+	slog.Debug("decrypted response", "msg", msgType, "body", sanitizeLogValue(tryDebugNotation(decrypted)))
 }
