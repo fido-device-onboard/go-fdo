@@ -1,6 +1,6 @@
 module github.com/fido-device-onboard/go-fdo/examples
 
-go 1.25.0
+go 1.26.0
 
 replace github.com/fido-device-onboard/go-fdo/sqlite => ../sqlite
 
@@ -18,17 +18,18 @@ require (
 	github.com/google/go-tpm v0.9.8
 	github.com/google/go-tpm-tools v0.4.9
 	github.com/niemeyer/muslnet v0.0.0-20250923220305-4b81d3c72602
-	github.com/syumai/workers v0.27.0
+	github.com/syumai/workers v0.35.0
 	hermannm.dev/devlog v0.6.0
 	tinygo.org/x/drivers v0.36.0
 )
 
 require (
-	github.com/ncruces/go-sqlite3 v0.35.3 // indirect
-	github.com/ncruces/go-sqlite3-wasm/v3 v3.2.35304 // indirect
+	github.com/ncruces/go-sqlite3 v0.35.4 // indirect
+	github.com/ncruces/go-sqlite3-wasm/v5 v5.0.35304 // indirect
 	github.com/ncruces/julianday v1.0.0 // indirect
 	github.com/neilotoole/jsoncolor v0.9.1 // indirect
-	golang.org/x/crypto v0.54.0 // indirect
+	github.com/syumai/workers-go v0.35.0 // indirect
+	golang.org/x/crypto v0.55.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/term v0.45.0 // indirect
 )
