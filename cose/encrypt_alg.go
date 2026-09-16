@@ -157,7 +157,7 @@ func aesGcm(key []byte) (Crypter, error) {
 	if err != nil {
 		return nil, err
 	}
-	aead, err := cipher.NewGCM(b)
+	aead, err := cipher.NewGCMWithRandomNonce(b)
 	if err != nil {
 		return nil, err
 	}
@@ -185,9 +185,17 @@ type aeadCrypter struct {
 	AEAD cipher.AEAD
 }
 
+const randomNonceSize = 12
+
 func (c *aeadCrypter) Encrypt(rand io.Reader, plaintext, additionalData []byte) ([]byte, HeaderMap, error) {
 	if additionalData == nil {
 		return nil, nil, fmt.Errorf("AAD must be provided")
+	}
+
+	if c.AEAD.NonceSize() == 0 {
+		sealed := c.AEAD.Seal(nil, nil, plaintext, additionalData)
+		nonce, ciphertext := sealed[:randomNonceSize], sealed[randomNonceSize:]
+		return ciphertext, HeaderMap{IvLabel: nonce}, nil
 	}
 
 	nonce := make([]byte, c.AEAD.NonceSize())
@@ -208,6 +216,13 @@ func (c *aeadCrypter) Decrypt(rand io.Reader, ciphertext, additionalData []byte,
 		return nil, fmt.Errorf("error reading IV from unprotected headers: %w", err)
 	} else if !ok {
 		return nil, fmt.Errorf("missing expected IV unprotected header")
+	}
+
+	if c.AEAD.NonceSize() == 0 {
+		if len(nonce) != randomNonceSize {
+			return nil, fmt.Errorf("invalid IV size: expected %d bytes, got %d", randomNonceSize, len(nonce))
+		}
+		return c.AEAD.Open(nil, nil, append(nonce, ciphertext...), additionalData)
 	}
 
 	return c.AEAD.Open(ciphertext[:0], nonce, ciphertext, additionalData)
