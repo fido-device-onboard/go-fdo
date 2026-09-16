@@ -88,6 +88,8 @@ var (
 	bmoDelegateProvision  string                  // Sign BMO provisioning messages with delegate cert:key
 	bmoProvisioningSigner fsim.ProvisioningSigner // Populated at serve-time when bmoSign or bmoDelegateProvision is set
 	payloadFiles          stringList              // Multiple payload files with types (format: type:file)
+	payloadDuration       uint64                  // Advisory estimated transfer+apply duration for payloads (seconds, 0=omit)
+	bmoDuration           uint64                  // Advisory estimated transfer+apply duration for BMO images (seconds, 0=omit)
 	wifiConfigFile        string
 	credentials           stringList
 	pubkeyRequests        stringList
@@ -149,6 +151,8 @@ func init() {
 	serverFlags.BoolVar(&bmoSign, "bmo-sign", false, "Sign fdo.bmo provisioning messages (image-begin, set) with the EC-P256 owner key per fdo.bmo.md Authenticated Provisioning")
 	serverFlags.StringVar(&bmoDelegateProvision, "bmo-delegate-provision", "", "Sign fdo.bmo provisioning messages with a delegate. Format: `cert.pem:key.pem` where cert leaf MUST carry OIDPermitProvision and chain to the EC-P256 owner key")
 	serverFlags.Var(&payloadFiles, "payload", "Use fdo.payload FSIM with `type:file` format with RequireAck (flag may be used multiple times for NAK testing)")
+	serverFlags.Uint64Var(&payloadDuration, "payload-duration", 0, "Advisory estimated transfer+apply time in `seconds` for fdo.payload (sent in payload-begin; 0=omit)")
+	serverFlags.Uint64Var(&bmoDuration, "bmo-duration", 0, "Advisory estimated transfer+apply time in `seconds` for fdo.bmo (sent in image-begin; 0=omit)")
 	serverFlags.StringVar(&wifiConfigFile, "wifi-config", "", "Use fdo.wifi FSIM with network config from JSON `file`")
 	serverFlags.Var(&credentials, "credential", "Use fdo.credentials FSIM with `type:id:data[:endpoint_url]` format (flag may be used multiple times)")
 	serverFlags.Var(&pubkeyRequests, "request-pubkey", "Request public key from device with `type:id[:endpoint_url]` format (flag may be used multiple times)")
@@ -1138,6 +1142,9 @@ func ownerModules(modules []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 						log.Fatalf("error reading payload file %q: %v", filePath, err)
 					}
 					payloadOwner.AddPayloadWithAck(mimeType, filepath.Base(filePath), data, nil)
+					if payloadDuration > 0 {
+						payloadOwner.SetLastEstimatedDuration(payloadDuration)
+					}
 					log.Printf("Payload: Added payload with RequireAck: type=%s, file=%s", mimeType, filePath)
 				}
 			} else {
@@ -1147,6 +1154,9 @@ func ownerModules(modules []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 					log.Fatalf("error reading payload file %q: %v", payloadFile, err)
 				}
 				payloadOwner.AddPayload(payloadMimeType, filepath.Base(payloadFile), data, nil)
+				if payloadDuration > 0 {
+					payloadOwner.SetLastEstimatedDuration(payloadDuration)
+				}
 			}
 
 			if !yield("fdo.payload", payloadOwner) {
@@ -1171,6 +1181,9 @@ func ownerModules(modules []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 						log.Fatalf("error reading BMO file %q: %v", filePath, err)
 					}
 					bmoOwner.AddImageWithAck(imageType, filepath.Base(filePath), data, nil)
+					if bmoDuration > 0 {
+						bmoOwner.SetLastEstimatedDuration(bmoDuration)
+					}
 					log.Printf("BMO: Added image with RequireAck: type=%s, file=%s", imageType, filePath)
 				}
 			} else if bmoFile != "" {
@@ -1180,6 +1193,9 @@ func ownerModules(modules []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 					log.Fatalf("error reading BMO file %q: %v", bmoFile, err)
 				}
 				bmoOwner.AddImage(bmoImageType, filepath.Base(bmoFile), data, nil)
+				if bmoDuration > 0 {
+					bmoOwner.SetLastEstimatedDuration(bmoDuration)
+				}
 			}
 
 			// Handle URL delivery mode (Mode 1)
@@ -1249,6 +1265,9 @@ func ownerModules(modules []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 				}
 
 				bmoOwner.AddImageURL(imageType, url, expectedHash, tlsCA)
+				if bmoDuration > 0 {
+					bmoOwner.SetLastEstimatedDuration(bmoDuration)
+				}
 				log.Printf("BMO: Added URL image: type=%s, url=%s, has_hash=%v, has_ca=%v", imageType, url, len(expectedHash) > 0, len(tlsCA) > 0)
 			}
 
@@ -1322,6 +1341,9 @@ func ownerModules(modules []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 				}
 
 				bmoOwner.AddImageMetaURL(metaURL, metaSigner, tlsCA)
+				if bmoDuration > 0 {
+					bmoOwner.SetLastEstimatedDuration(bmoDuration)
+				}
 				log.Printf("BMO: Added meta-URL: url=%s, has_signer=%v, has_ca=%v", metaURL, len(metaSigner) > 0, len(tlsCA) > 0)
 			}
 

@@ -26,6 +26,7 @@ The `*-begin` value is a CBOR map that uses small unsigned integer keys for comp
 | 1 | `hash_alg` | `tstr` | Hash algorithm identifier (e.g., `"sha256"`, `"sha384"`). |
 | 2 | `metadata` | `map` | Optional FSIM-specific metadata (format undefined at this layer). |
 | 3 | `require_ack` | `bool` | If true, sender waits for `*-ack` before sending data chunks. See [Acknowledgment Gate](#acknowledgment-gate). |
+| 4 | `estimated_duration` | `uint` | Advisory: estimated seconds for the complete transfer and application of this payload. See [Estimated Duration](#estimated-duration). |
 
 Reserved Key Policy:
 
@@ -39,7 +40,8 @@ payload-begin = {
   ? 0: uint,        ; total_size
   ? 1: tstr,        ; hash_alg
   ? 2: any,         ; metadata map (FSIM-defined)
-  ? 3: bool         ; require_ack
+  ? 3: bool,        ; require_ack
+  ? 4: uint          ; estimated_duration (seconds, advisory)
 }
 ```
 
@@ -100,6 +102,40 @@ payload-end = {
 - If `total_size` is provided and the receiver observes more bytes than announced, it MUST treat the transfer as invalid.
 - When `total_size` is omitted, receivers rely solely on `*-end` to determine completion.
 - If the byte count at completion does not match the declared `total_size`, the discrepancy MUST be treated as the same protocol-level TO2 error described above.
+
+## Estimated Duration
+
+The `estimated_duration` field (key 4) provides an **advisory** estimate, in seconds, of how long the complete transfer and application of this payload is expected to take. This includes both network transfer time and any post-transfer processing (e.g., writing to disk, applying configuration, running an installer).
+
+### Motivation
+
+Devices often run internal watchdog timers during onboarding. If a payload transfer takes longer than the watchdog expects, the device may abort a transfer that would have otherwise succeeded. Hardcoded watchdog values are fragile -- they cannot account for varying payload sizes, network speeds, or server-side processing time.
+
+The server knows (or can estimate) how long a transfer will take based on `total_size`, expected throughput, and knowledge of what the device will do with the payload. By communicating this estimate to the device, the server enables the device to adjust its watchdog or timeout accordingly.
+
+### Semantics
+
+- `estimated_duration` is **purely advisory**. Receivers are NOT required to act on it.
+- Receivers MAY use this value to adjust internal watchdog timers, progress indicators, or retry logic.
+- Receivers SHOULD treat the value as a rough estimate, not a guarantee. Applying a safety margin (e.g., 2x) is reasonable.
+- If `estimated_duration` exceeds the receiver's maximum acceptable timeout, the receiver knows early that the transfer is likely to fail and MAY reject it (via `*-ack` if `require_ack` is set) rather than starting a transfer that will be killed by a watchdog.
+- The value `0` means "no estimate available" and SHOULD be treated the same as the field being absent.
+- Senders MAY compute the estimate from `total_size / expected_throughput + processing_overhead`, or simply supply a configured value.
+
+### Example
+
+A server delivering a 2.8 GiB ISO image over a 100 Mbit/s link with ~60s of post-transfer processing:
+
+```cbor
+{
+  0: 2927861760,                     ; total_size
+  1: "sha256",                       ; hash_alg
+  4: 300,                            ; estimated_duration: ~5 minutes
+  -1: "application/x-iso9660-image"  ; FSIM: mime_type
+}
+```
+
+A device with a default 1800s watchdog receives `estimated_duration: 300` -- well within limits, no adjustment needed. If the estimate were `3600`, the device knows its 1800s watchdog will fire and can either extend it or reject the transfer.
 
 ## Error Handling
 

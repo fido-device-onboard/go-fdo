@@ -19,10 +19,11 @@ import (
 // It contains generic fields (non-negative keys) and FSIM-specific fields (negative keys).
 type BeginMessage struct {
 	// Generic fields (keys 0-127 reserved by chunking spec)
-	TotalSize  uint64         // Key 0: Total bytes that will be transmitted (optional)
-	HashAlg    string         // Key 1: Hash algorithm identifier (e.g., "sha256", "sha384")
-	Metadata   map[string]any // Key 2: Optional FSIM-specific metadata
-	RequireAck bool           // Key 3: If true, sender waits for *-ack before sending data
+	TotalSize         uint64         // Key 0: Total bytes that will be transmitted (optional)
+	HashAlg           string         // Key 1: Hash algorithm identifier (e.g., "sha256", "sha384")
+	Metadata          map[string]any // Key 2: Optional FSIM-specific metadata
+	RequireAck        bool           // Key 3: If true, sender waits for *-ack before sending data
+	EstimatedDuration uint64         // Key 4: Advisory estimate of total transfer+apply time in seconds (0 = unset)
 
 	// FSIM-specific fields use negative integer keys to avoid collisions
 	// Example: -1 for network_id, -2 for ssid, etc.
@@ -45,6 +46,9 @@ func (b *BeginMessage) MarshalCBOR() ([]byte, error) {
 	}
 	if b.RequireAck {
 		m[3] = true
+	}
+	if b.EstimatedDuration > 0 {
+		m[4] = b.EstimatedDuration
 	}
 
 	// Add FSIM-specific fields (negative keys)
@@ -100,6 +104,8 @@ func (b *BeginMessage) UnmarshalCBOR(data []byte) error {
 				if v, ok := val.(bool); ok {
 					b.RequireAck = v
 				}
+			case 4:
+				b.EstimatedDuration = parseUint64(val)
 			default:
 				// Negative keys are FSIM-specific
 				if k < 0 {
@@ -138,6 +144,8 @@ func (b *BeginMessage) UnmarshalCBOR(data []byte) error {
 				if v, ok := val.(bool); ok {
 					b.RequireAck = v
 				}
+			case 4:
+				b.EstimatedDuration = parseUint64(val)
 			default:
 				// Negative keys are FSIM-specific
 				if ki < 0 {
@@ -175,6 +183,8 @@ func (b *BeginMessage) UnmarshalCBOR(data []byte) error {
 				if v, ok := val.(bool); ok {
 					b.RequireAck = v
 				}
+			case 4:
+				b.EstimatedDuration = parseUint64(val)
 			}
 		}
 	}
@@ -370,6 +380,23 @@ func (a *AckMessage) UnmarshalCBOR(data []byte) error {
 	}
 
 	return nil
+}
+
+// parseUint64 extracts a uint64 from a CBOR-decoded value that may be int, int64, or uint64.
+func parseUint64(val any) uint64 {
+	switch v := val.(type) {
+	case uint64:
+		return v
+	case int:
+		if v >= 0 {
+			return uint64(v)
+		}
+	case int64:
+		if v >= 0 {
+			return uint64(v)
+		}
+	}
+	return 0
 }
 
 // convertToStringMap converts a map[any]any to map[string]any for metadata.

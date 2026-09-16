@@ -27,6 +27,19 @@
 - [✅] Document attested payload commands
 - [ ] Create CLI command reference cheat sheet
 
+### Protocol Defects
+
+- [ ] **Throttle the device ServiceInfo poll loop.** In
+  `exchangeServiceInfo20` (`to2_client_v200.go`), once `deviceDone` is set
+  the loop skips the chunk-read branch entirely -- including its
+  `time.Sleep(10ms)` -- and so re-sends an empty `DeviceServiceInfo` as
+  fast as the network allows for as long as the owner keeps the exchange
+  open. Any owner that stalls, deliberately or from a slow backend, is
+  hammered by its own devices. Needs a minimum inter-round delay on the
+  device side. This is a defect today, independent of deferred onboarding,
+  but it also blocks the `wait` action of the proposed `fdo.defer` FSIM --
+  see `DESIGN-PROPOSALS.md` §1.
+
 ### Code Quality
 
 - [✅] Fix goimports formatting issues in examples/cmd/client.go
@@ -79,6 +92,11 @@
 - [ ] Create CLI command API documentation
 
 ---
+
+## Design Proposals (see DESIGN-PROPOSALS.md)
+
+- [ ] **Deferred Onboarding ("Delay" FSIM)** — mechanism for server to tell device "I own you but have nothing for you yet; retry later." Requires design of retry/wait/abort semantics, interaction with credential reuse, and backoff strategy.
+- [ ] **Delegated Payload Attestation** — separate TO2 transport authority from payload signing authority. Allows third-party delivery services to mechanically run TO2 without being trusted to choose/modify payloads. Builds on existing attested payload and delegate certificate infrastructure. Requires new `provision` OID and payload signature verification at the device.
 
 ## Notes
 

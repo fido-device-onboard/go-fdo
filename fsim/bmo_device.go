@@ -477,6 +477,11 @@ func (b *BMO) supportsDeliveryMode(mode uint) bool {
 // Unified mode callbacks
 
 func (b *BMO) onBeginUnified(begin chunking.BeginMessage) error {
+	if begin.EstimatedDuration > 0 {
+		slog.Info("fdo.bmo: server estimates transfer+apply time",
+			"estimated_duration_sec", begin.EstimatedDuration,
+			"total_size", begin.TotalSize)
+	}
 	b.begin = begin
 	return nil
 }
@@ -725,6 +730,13 @@ func (b *BMO) onBeginChunked(begin chunking.BeginMessage) error {
 		"image_type", imageType,
 		"name", name,
 		"size", begin.TotalSize)
+
+	if begin.EstimatedDuration > 0 {
+		slog.Info("fdo.bmo: server estimates transfer+apply time",
+			"estimated_duration_sec", begin.EstimatedDuration,
+			"image_type", imageType,
+			"total_size", begin.TotalSize)
+	}
 
 	return b.ChunkedHandler.BeginImage(imageType, name, begin.TotalSize, metadata)
 }
