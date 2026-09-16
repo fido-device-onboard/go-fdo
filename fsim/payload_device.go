@@ -253,6 +253,11 @@ func (p *Payload) onBeginAck(begin chunking.BeginMessage) (accepted bool, reason
 
 // onBeginUnified is called when payload-begin is received in unified mode.
 func (p *Payload) onBeginUnified(begin chunking.BeginMessage) error {
+	if begin.EstimatedDuration > 0 {
+		slog.Info("fdo.payload: server estimates transfer+apply time",
+			"estimated_duration_sec", begin.EstimatedDuration,
+			"total_size", begin.TotalSize)
+	}
 	// Store begin message for later use in onEndUnified
 	p.begin = begin
 	return nil
@@ -353,6 +358,13 @@ func (p *Payload) onBeginChunked(begin chunking.BeginMessage) error {
 		"mime_type", mimeType,
 		"name", name,
 		"size", begin.TotalSize)
+
+	if begin.EstimatedDuration > 0 {
+		slog.Info("fdo.payload: server estimates transfer+apply time",
+			"estimated_duration_sec", begin.EstimatedDuration,
+			"mime_type", mimeType,
+			"total_size", begin.TotalSize)
+	}
 
 	// Call application handler
 	return p.ChunkedHandler.BeginPayload(mimeType, name, begin.TotalSize, metadata)

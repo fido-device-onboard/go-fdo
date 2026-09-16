@@ -58,12 +58,13 @@ const (
 
 // PayloadToSend represents a payload to be sent to the device per fdo.payload.md.
 type PayloadToSend struct {
-	MimeType   string         // Required: MIME type (field -1)
-	Name       string         // Optional: Payload name (field -2)
-	Data       []byte         // Payload data
-	Metadata   map[string]any // Optional: Metadata map (field -3)
-	HashAlg    string         // Optional: Hash algorithm (e.g., "sha256")
-	RequireAck bool           // Optional: Request ack before sending data (default: false)
+	MimeType          string         // Required: MIME type (field -1)
+	Name              string         // Optional: Payload name (field -2)
+	Data              []byte         // Payload data
+	Metadata          map[string]any // Optional: Metadata map (field -3)
+	HashAlg           string         // Optional: Hash algorithm (e.g., "sha256")
+	RequireAck        bool           // Optional: Request ack before sending data (default: false)
+	EstimatedDuration uint64         // Optional: Advisory transfer+apply time in seconds (0 = auto-compute from size)
 }
 
 // PayloadResult represents the result received from the device.
@@ -114,6 +115,16 @@ func (p *PayloadOwner) AddPayloadWithAck(mimeType, name string, data []byte, met
 		HashAlg:    "sha256",
 		RequireAck: true,
 	})
+}
+
+// SetLastEstimatedDuration sets the estimated_duration (advisory, in seconds) on the
+// most recently added payload. A value of 0 means "do not send the field". This is
+// an advisory hint to the device for how long the transfer and application may take,
+// allowing it to adjust internal watchdogs.
+func (p *PayloadOwner) SetLastEstimatedDuration(seconds uint64) {
+	if len(p.payloads) > 0 {
+		p.payloads[len(p.payloads)-1].EstimatedDuration = seconds
+	}
 }
 
 // Transition implements serviceinfo.OwnerModule.
@@ -189,6 +200,11 @@ func (p *PayloadOwner) produceInfo(ctx context.Context, producer *serviceinfo.Pr
 			// Set RequireAck if requested
 			if payload.RequireAck {
 				p.currentSender.BeginFields.RequireAck = true
+			}
+
+			// Set estimated duration (advisory) per chunking-strategy.md
+			if payload.EstimatedDuration > 0 {
+				p.currentSender.BeginFields.EstimatedDuration = payload.EstimatedDuration
 			}
 
 			p.sendState = stateSendingBegin

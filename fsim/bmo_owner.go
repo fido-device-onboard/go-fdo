@@ -102,6 +102,8 @@ type ImageToSend struct {
 	ExpectedHash []byte // Optional: Expected hash of final image (field -9)
 	MetaSigner   []byte // Optional: COSE_Key for meta-payload signature (field -10)
 
+	EstimatedDuration uint64 // Optional: Advisory transfer+apply time in seconds (0 = unset)
+
 	// Optional additional metadata fields
 	Version     string // Optional: Version string (field -4)
 	Description string // Optional: Description (field -5)
@@ -183,6 +185,16 @@ func (b *BMOOwner) AddImageMetaURL(metaURL string, metaSigner []byte, tlsCA []by
 		TLSCA:        tlsCA,
 		RequireAck:   true, // Meta-URL mode should always use RequireAck
 	})
+}
+
+// SetLastEstimatedDuration sets the estimated_duration (advisory, in seconds) on the
+// most recently added image. A value of 0 means "do not send the field". This is
+// an advisory hint to the device for how long the transfer and application may take,
+// allowing it to adjust internal watchdogs.
+func (b *BMOOwner) SetLastEstimatedDuration(seconds uint64) {
+	if len(b.images) > 0 {
+		b.images[len(b.images)-1].EstimatedDuration = seconds
+	}
 }
 
 // AddBiosParam adds a BIOS parameter to be set on the device.
@@ -292,6 +304,11 @@ func (b *BMOOwner) produceInfo(ctx context.Context, producer *serviceinfo.Produc
 		// Set RequireAck if requested
 		if image.RequireAck {
 			b.currentSender.BeginFields.RequireAck = true
+		}
+
+		// Set estimated duration (advisory) per chunking-strategy.md
+		if image.EstimatedDuration > 0 {
+			b.currentSender.BeginFields.EstimatedDuration = image.EstimatedDuration
 		}
 
 		b.sendState = bmoStateSendingBegin

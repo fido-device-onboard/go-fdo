@@ -484,6 +484,7 @@ The wire-level `fdo.bmo:image-begin` message body is a tagged `COSE_Sign1` (CBOR
 {
   0: 524288000,                    / total_size: 500MB ISO /
   1: "sha256",                     / hash algorithm /
+  4: 600,                          / estimated_duration: ~10 min (advisory, per chunking spec) /
   -1: "application/x-iso9660-image", / image_type (required) /
   -2: "inst.ks=http://... quiet",  / boot_args (optional) /
   -3: "rhel-9.3-installer.iso",   / name (optional) /

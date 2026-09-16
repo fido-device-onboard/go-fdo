@@ -93,6 +93,7 @@ Payload transfers use the generic `payload-begin` map from the chunking strategy
     {
       0: 4096,                      / total_size per chunk spec /
       1: "sha256",                  / optional hash algorithm /
+      4: 300,                       / estimated_duration per chunk spec (advisory, seconds) /
       -1: "application/x-sh",       / mime_type (required) /
       -2: "setup.sh",               / payload name (optional) /
       -3: {                         / payload metadata (optional) /
@@ -109,7 +110,7 @@ Payload transfers use the generic `payload-begin` map from the chunking strategy
 | `-2` | name | tstr | Optional | Descriptive name for the payload (e.g., filename). |
 | `-3` | metadata | map | Optional | Additional FSIM-defined metadata (version, description, etc.). |
 
-All non-negative keys remain reserved for the generic chunking fields (`total_size`, `hash_alg`, etc.) as documented in `chunking-strategy.md`.
+All non-negative keys remain reserved for the generic chunking fields (`total_size`, `hash_alg`, `estimated_duration`, etc.) as documented in `chunking-strategy.md`.
 
 ### PayloadResult
 
