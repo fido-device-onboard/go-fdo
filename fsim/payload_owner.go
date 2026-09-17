@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/fsim/chunking"
@@ -36,6 +37,10 @@ type PayloadOwner struct {
 	// size is derived from the negotiated MTU (capped at maxPayloadChunkSize).
 	chunkSize int
 
+	// LogHandler receives diagnostic logs uploaded by the device. If nil, the
+	// owner declines every offered log with AckReasonDiagnosticsNotRequested.
+	LogHandler PayloadLogHandler
+
 	// Internal state
 	currentSender *chunking.ChunkSender
 	currentIndex  int
@@ -43,6 +48,13 @@ type PayloadOwner struct {
 	sentActive    bool
 	lastResult    *PayloadResult
 	lastError     *PayloadErrorInfo
+	logReceiver   *chunking.ChunkReceiver
+	logAck        *chunking.AckMessage
+	lastLog       *PayloadLogInfo
+
+	// Decision recorded by onLogBeginAck for ProduceInfo to put on the wire.
+	logAckReasonCode int
+	logAckMessage    string
 }
 
 type payloadSendState int
@@ -78,6 +90,32 @@ type PayloadErrorInfo struct {
 	Code    int    // Error code (see fdo.payload.md)
 	Message string // Human-readable error message
 	Details string // Optional additional details
+}
+
+// PayloadLogInfo is a diagnostic log uploaded by the device via the
+// payload-log-* messages described in fdo.payload.md.
+type PayloadLogInfo struct {
+	Data        []byte // Assembled log content
+	ContentType string // MIME type, defaults to "text/plain"
+	Truncated   bool   // Device clipped the output to a local size cap
+	Source      string // Origin, e.g. "installer", "stderr"
+}
+
+// PayloadLogHandler receives diagnostic logs uploaded by the device after a
+// payload has been applied.
+//
+// Logs are supplementary. Declining one, or failing to store it, never
+// changes the outcome reported in payload-result.
+type PayloadLogHandler interface {
+	// AcceptLog decides whether to receive a log the device has offered.
+	// Returning false sends payload-log-ack [false, reasonCode, message] and
+	// the device proceeds directly to payload-result. A reasonCode of 0 is
+	// replaced with AckReasonDiagnosticsNotRequested.
+	AcceptLog(mimeType, name string, size uint64, contentType string) (accepted bool, reasonCode int, message string)
+
+	// HandleLog is called with the fully assembled log. An error is logged
+	// but does not fail the session.
+	HandleLog(ctx context.Context, mimeType, name string, log *PayloadLogInfo) error
 }
 
 var _ serviceinfo.OwnerModule = (*PayloadOwner)(nil)
@@ -142,6 +180,9 @@ func (p *PayloadOwner) reset() {
 	p.sendState = stateIdle
 	p.lastResult = nil
 	p.lastError = nil
+	p.logReceiver = nil
+	p.logAck = nil
+	p.lastLog = nil
 }
 
 // produceInfo generates messages to send to the device using the chunking library.
@@ -152,6 +193,23 @@ func (p *PayloadOwner) produceInfo(ctx context.Context, producer *serviceinfo.Pr
 			return false, false, fmt.Errorf("error sending active message: %w", err)
 		}
 		p.sentActive = true
+		return false, false, nil
+	}
+
+	// Answer a pending payload-log-begin before anything else. The device is
+	// blocked waiting on this ack and will not send payload-result until it
+	// has been answered.
+	if p.logAck != nil {
+		ack := p.logAck
+		p.logAck = nil
+		data, err := ack.MarshalCBOR()
+		if err != nil {
+			return false, false, fmt.Errorf("failed to encode payload-log-ack: %w", err)
+		}
+		if err := producer.WriteChunk("payload-log-ack", data); err != nil {
+			return false, false, fmt.Errorf("failed to send payload-log-ack: %w", err)
+		}
+		slog.Debug("fdo.payload sent log ack", "accepted", ack.Accepted, "reason", ack.ReasonCode)
 		return false, false, nil
 	}
 
@@ -315,6 +373,12 @@ func (p *PayloadOwner) produceInfo(ctx context.Context, producer *serviceinfo.Pr
 func (p *PayloadOwner) receive(ctx context.Context, key string, messageBody io.Reader, respond func(string) io.Writer) error {
 	slog.Debug("fdo.payload owner received message", "key", key)
 
+	// Diagnostic log upload (device -> owner). Checked before the switch so
+	// payload-log-* is not confused with the outbound payload transfer.
+	if strings.HasPrefix(key, "payload-log-") {
+		return p.receiveLog(ctx, key, messageBody)
+	}
+
 	switch key {
 	case "active":
 		// Device responds with active status
@@ -424,6 +488,129 @@ func (p *PayloadOwner) receive(ctx context.Context, key string, messageBody io.R
 
 	return nil
 }
+
+// receiveLog handles the payload-log-* reverse-direction chunked transfer
+// described in fdo.payload.md. Failures here are logged and swallowed:
+// diagnostics are supplementary and must never fail a session that would
+// otherwise have succeeded.
+func (p *PayloadOwner) receiveLog(ctx context.Context, key string, messageBody io.Reader) error {
+	messageName := strings.TrimPrefix(key, "payload-")
+	isBegin := strings.HasSuffix(messageName, "-begin")
+
+	if isBegin {
+		p.logReceiver = &chunking.ChunkReceiver{
+			PayloadName:    "payload-log",
+			OnBeginAck:     p.onLogBeginAck,
+			DiscardPayload: p.LogHandler == nil,
+		}
+		p.logReceiver.OnEnd = p.onLogEnd(ctx)
+	}
+
+	if p.logReceiver == nil {
+		slog.Warn("fdo.payload: log message outside of a transfer", "key", key)
+		_, _ = io.Copy(io.Discard, messageBody)
+		return nil
+	}
+
+	if err := p.logReceiver.HandleMessage(messageName, messageBody); err != nil {
+		slog.Warn("fdo.payload: discarding malformed diagnostic log", "key", key, "error", err)
+		p.logReceiver = nil
+		return nil
+	}
+
+	// The chunking receiver records the accept/reject decision; hand it to
+	// ProduceInfo, which owns the wire. Only consider this immediately after
+	// the begin message: the receiver's own ack-pending flag is cleared by
+	// its SendAck, which is not used here because the owner replies through
+	// ProduceInfo rather than a respond writer. Without the isBegin guard
+	// every subsequent chunk would queue a duplicate ack.
+	if isBegin && p.logReceiver.IsAckPending() {
+		p.logAck = &chunking.AckMessage{
+			Accepted:   p.logReceiver.IsAckAccepted(),
+			ReasonCode: p.logAckReasonCode,
+			Message:    p.logAckMessage,
+		}
+		if !p.logReceiver.IsAckAccepted() {
+			p.logReceiver = nil
+		}
+	}
+
+	if strings.HasSuffix(messageName, "-end") {
+		p.logReceiver = nil
+	}
+
+	return nil
+}
+
+// onLogBeginAck applies the LogHandler's accept/reject policy.
+func (p *PayloadOwner) onLogBeginAck(begin chunking.BeginMessage) (accepted bool, reasonCode int, message string) {
+	contentType, _ := begin.Metadata["content_type"].(string)
+	if contentType == "" {
+		contentType = "text/plain"
+	}
+	if p.LogHandler == nil {
+		p.logAckReasonCode = chunking.AckReasonDiagnosticsNotRequested
+		p.logAckMessage = "Diagnostics not collected"
+		return false, p.logAckReasonCode, p.logAckMessage
+	}
+
+	var mimeType, name string
+	if p.currentSender != nil {
+		mimeType, _ = p.currentSender.BeginFields.FSIMFields[-1].(string)
+		name, _ = p.currentSender.BeginFields.FSIMFields[-2].(string)
+	}
+
+	accepted, reasonCode, message = p.LogHandler.AcceptLog(mimeType, name, begin.TotalSize, contentType)
+	if !accepted && reasonCode == 0 {
+		reasonCode = chunking.AckReasonDiagnosticsNotRequested
+	}
+	p.logAckReasonCode, p.logAckMessage = reasonCode, message
+	return accepted, reasonCode, message
+}
+
+// onLogEnd assembles the log and hands it to the LogHandler.
+func (p *PayloadOwner) onLogEnd(ctx context.Context) func(chunking.EndMessage) error {
+	return func(chunking.EndMessage) error {
+		if p.LogHandler == nil || p.logReceiver == nil {
+			return nil
+		}
+		begin := p.logReceiver.GetBeginMessage()
+
+		contentType, _ := begin.Metadata["content_type"].(string)
+		if contentType == "" {
+			contentType = "text/plain"
+		}
+		truncated, _ := begin.Metadata["truncated"].(bool)
+		source, _ := begin.Metadata["source"].(string)
+
+		// Copy: the receiver resets its buffer once this callback returns.
+		data := append([]byte(nil), p.logReceiver.GetBuffer()...)
+		log := &PayloadLogInfo{
+			Data:        data,
+			ContentType: contentType,
+			Truncated:   truncated,
+			Source:      source,
+		}
+		p.lastLog = log
+
+		var mimeType, name string
+		if p.currentSender != nil {
+			mimeType, _ = p.currentSender.BeginFields.FSIMFields[-1].(string)
+			name, _ = p.currentSender.BeginFields.FSIMFields[-2].(string)
+		}
+
+		slog.Info("fdo.payload received device diagnostics",
+			"bytes", len(data), "content_type", contentType, "truncated", truncated, "source", source)
+
+		if err := p.LogHandler.HandleLog(ctx, mimeType, name, log); err != nil {
+			slog.Warn("fdo.payload: log handler failed", "error", err)
+		}
+		return nil
+	}
+}
+
+// GetLastLog returns the last diagnostic log uploaded by the device.
+func (p *PayloadOwner) GetLastLog() *PayloadLogInfo { return p.lastLog }
 
 // GetLastError returns the last error reported by the device.
 func (p *PayloadOwner) GetLastError() *PayloadErrorInfo {

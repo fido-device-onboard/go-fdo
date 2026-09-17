@@ -92,7 +92,13 @@ func (p *ServiceInfoProcessor) ProcessServiceInfo(ctx context.Context, deviceInf
 		keyModule, messageName, _ := strings.Cut(key, ":")
 		// Only process keys that match the current module
 		if keyModule != moduleName {
-			// Skip keys for other modules - they'll be processed when that module is active
+			// Discard keys for other modules. Note that these are dropped, not
+			// deferred: nothing replays them when that module becomes current.
+			// A module that completes before its peer's final message arrives
+			// therefore loses that message. See chunking-strategy.md
+			// "Completion Ordering".
+			slog.Warn("discarding device service info for non-current module",
+				"key", key, "current_module", moduleName)
 			if _, err := io.Copy(io.Discard, messageBody); err != nil {
 				return nil, fmt.Errorf("error discarding service info for module %q: %w", keyModule, err)
 			}

@@ -1,6 +1,6 @@
 # FSIM Chunking Package
 
-This package provides generic, reusable chunking support for FDO Service Info Modules (FSIMs) following the pattern defined in [chunking-strategy.md](../../chunking-strategy.md).
+This package provides generic, reusable chunking support for FDO Service Info Modules (FSIMs) following the pattern defined in [chunking-strategy.md](https://github.com/bkgoodman/fdo-sim/blob/main/fsim-repository/chunking-strategy.md), maintained in the `fdo-sim` repository. See [SPECIFICATIONS.md](../../SPECIFICATIONS.md).
 
 ## Overview
 
@@ -21,6 +21,10 @@ The chunking package implements the common begin/data/end/result message flow th
 ### Owner-Side (Sender)
 
 - **`ChunkSender`**: Handles sending chunked payloads with automatic hash computation and progress tracking
+
+Note that "device-side" and "owner-side" describe the *typical* deployment, not
+a restriction. Both types are direction-agnostic; see
+[Reverse-Direction Transfers](#reverse-direction-transfers).
 
 ### Utilities
 
@@ -286,6 +290,128 @@ Using negative integer keys for FSIM-specific metadata:
 - Maintains CBOR compactness
 - Follows the pattern from chunking-strategy.md
 - Allows future extensions without breaking changes
+
+## Reverse-Direction Transfers
+
+The chunking rules are defined in terms of *sender* and *receiver*, not owner
+and device, so either party may send a chunked payload. The primary use is
+**diagnostic logs**: the device uploads handler output to the owner after
+applying a payload (see `chunking-strategy.md` "Diagnostic Payloads").
+
+A device sends with the `*ToWriter` variants, which take the device module's
+`respond func(string) io.Writer` in place of a `Producer`:
+
+```go
+sender := chunking.NewChunkSender("payload-log", logBytes)
+sender.BeginFields.HashAlg = "sha256"
+sender.BeginFields.RequireAck = true
+sender.BeginFields.Metadata = map[string]any{
+    "content_type": "text/plain",
+    "source":       "installer",
+}
+// Size chunks to the negotiated MTU.
+if mtu, ok := ctx.Value(serviceinfo.MTUKey{}).(uint16); ok {
+    sender.ChunkSize = int(mtu) - 100
+}
+
+if err := sender.SendBeginToWriter(respond); err != nil { /* ... */ }
+// ...after the peer's *-log-ack accepts:
+for {
+    done, err := sender.SendNextChunkToWriter(respond)
+    if err != nil { /* ... */ }
+    if done { break }
+}
+err := sender.SendEndToWriter(respond)
+```
+
+The owner receives with an ordinary `ChunkReceiver`, then replies through
+`ProduceInfo` rather than a `respond` writer.
+
+### Three Traps
+
+**Drive it from `Receive`, not `Yield`.** `Yield` is never called on the FDO 2.0
+client path (`processOwnerServiceInfo20`), so a `Yield`-based implementation
+compiles, passes 1.0.1 tests, and silently does nothing under
+`-fdo-version 200`.
+
+**`IsAckPending()` is cleared only by `SendAck`.** An owner replying through
+`ProduceInfo` cannot call `SendAck` (it has no `respond` writer), so the flag
+stays set and every subsequent chunk will re-queue a duplicate ack unless the
+check is gated to the begin message:
+
+```go
+isBegin := strings.HasSuffix(messageName, "-begin")
+if isBegin && receiver.IsAckPending() {
+    // capture the accept/reject decision for ProduceInfo to send
+}
+```
+
+**Don't complete the module before the peer's `*-result` arrives.**
+`ServiceInfoProcessor.ProcessServiceInfo` discards device KVs whose module name
+does not match the current owner module cursor — they are dropped, not queued,
+and (until recently) without any log line. An owner module that returns
+`moduleDone = true` right after `*-end` will therefore lose the device's
+`*-result`, and any diagnostic log that precedes it.
+
+`PayloadOwner` avoids this by parking in `stateWaitingResult` and returning
+`(false, false, nil)` until `payload-result` arrives. Do the same in any FSIM
+that expects a reply. See `chunking-strategy.md` "Completion Ordering".
+
+### Worked Example: `fdo.payload` Diagnostic Logs
+
+`fsim.Payload` / `fsim.PayloadOwner` implement this pattern. Device side — set
+`LogProvider`; returning `nil` suppresses the transfer. `MaxLogSize` caps the
+upload (default 64 KiB) and sets the `truncated` flag.
+
+```go
+type LogProvider interface {
+    PayloadLog(ctx context.Context, mimeType, name string, statusCode int) (*PayloadLog, error)
+}
+
+type PayloadLog struct {
+    Data        []byte
+    ContentType string // defaults to "text/plain"
+    Truncated   bool
+    Source      string // e.g. "installer", "stderr"
+}
+
+device := &fsim.Payload{
+    UnifiedHandler: myHandler,
+    LogProvider:    myLogProvider,
+    MaxLogSize:     64 * 1024,
+}
+```
+
+Owner side — set `LogHandler`. If nil, every offered log is declined with
+reason 5. `GetLastLog()` returns the most recent upload.
+
+```go
+type PayloadLogHandler interface {
+    AcceptLog(mimeType, name string, size uint64, contentType string) (accepted bool, reasonCode int, message string)
+    HandleLog(ctx context.Context, mimeType, name string, log *PayloadLogInfo) error
+}
+
+owner := &fsim.PayloadOwner{LogHandler: myCollector}
+```
+
+A `HandleLog` error is logged but never fails the session — diagnostics are
+supplementary by design. Exercise it end-to-end with
+`./test_examples.sh payload-log`, or via the CLI:
+
+```bash
+go run ./cmd server -payload-file config.json -payload-log-dir ./device-logs
+go run ./cmd client -payload-send-log
+```
+
+### Ack Reason Codes
+
+| Constant | Value | Meaning |
+| -------- | ----- | ------- |
+| `AckReasonUnsupportedType` | 1 | MIME type or format not supported |
+| `AckReasonSizeExceeded` | 2 | Payload too large |
+| `AckReasonNotApplicable` | 3 | Not applicable to current state |
+| `AckReasonPolicyViolation` | 4 | Rejected by policy |
+| `AckReasonDiagnosticsNotRequested` | 5 | Peer does not want the diagnostic log |
 
 ## Future Enhancements
 

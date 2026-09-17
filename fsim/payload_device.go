@@ -74,6 +74,48 @@ type PayloadAckHandler interface {
 	AcceptPayload(mimeType, name string, size uint64, metadata map[string]any) (accepted bool, reasonCode int, message string)
 }
 
+// PayloadLog is diagnostic output produced while applying a payload, returned
+// by a LogProvider and transferred to the owner via the payload-log-* messages
+// described in fdo.payload.md.
+type PayloadLog struct {
+	// Data is the raw diagnostic output. Empty data suppresses the transfer.
+	Data []byte
+
+	// ContentType is the MIME type of Data. Defaults to "text/plain".
+	ContentType string
+
+	// Truncated indicates the provider already clipped the output.
+	Truncated bool
+
+	// Source describes where the output came from, e.g. "installer", "stderr".
+	Source string
+}
+
+// LogProvider supplies diagnostic output after a payload has been applied.
+//
+// payload-result carries only a single-line summary, bounded by the negotiated
+// ServiceInfo MTU. A LogProvider lets a device return substantial diagnostics -
+// installer logs, tracebacks, validation reports - using a reverse-direction
+// chunked transfer.
+//
+// The log is supplementary: it never affects the status reported in
+// payload-result, and the owner may decline to receive it.
+type LogProvider interface {
+	// PayloadLog returns diagnostic output for the payload just processed.
+	// Returning a nil PayloadLog, or one with empty Data, suppresses the
+	// transfer. statusCode is the value about to be sent in payload-result.
+	PayloadLog(ctx context.Context, mimeType, name string, statusCode int) (*PayloadLog, error)
+}
+
+// defaultMaxLogSize bounds diagnostic output a device will upload. Logs are a
+// convenience, not a reason to blow up an onboarding session, and the FDO 2.0
+// client path buffers a module's responses in memory before sending them.
+const defaultMaxLogSize = 64 * 1024
+
+// logChunkOverhead reserves room inside the MTU for the
+// "fdo.payload:payload-log-data-<n>" key and the CBOR framing around a chunk.
+const logChunkOverhead = 100
+
 // Payload implements the fdo.payload FSIM for device-side payload delivery.
 // It follows the specification in fdo.payload.md and uses the generic chunking strategy.
 // Applications can use either UnifiedPayloadHandler (simple, buffered) or ChunkedPayloadHandler (streaming).
@@ -90,6 +132,14 @@ type Payload struct {
 	// If nil and RequireAck=true, payloads are automatically accepted.
 	AckHandler PayloadAckHandler
 
+	// Optional: Supplies diagnostic output to return to the owner after a
+	// payload is applied. If nil, no payload-log-* transfer is attempted.
+	LogProvider LogProvider
+
+	// MaxLogSize caps diagnostic output in bytes. Zero selects
+	// defaultMaxLogSize. Output beyond the cap is truncated and flagged.
+	MaxLogSize int
+
 	// Active indicates if the module is active
 	Active bool
 
@@ -99,6 +149,7 @@ type Payload struct {
 	begin        chunking.BeginMessage
 	resultStatus int
 	resultMsg    string
+	logSender    *chunking.ChunkSender
 }
 
 var _ serviceinfo.DeviceModule = (*Payload)(nil)
@@ -113,6 +164,12 @@ func (p *Payload) Transition(active bool) error {
 
 // Receive implements serviceinfo.DeviceModule.
 func (p *Payload) Receive(ctx context.Context, messageName string, messageBody io.Reader, respond func(string) io.Writer, yield func()) error {
+	// The owner's response to our payload-log-begin. Checked before the
+	// generic "payload-" prefix so it is not mistaken for a chunking message
+	// belonging to the inbound payload transfer.
+	if messageName == "payload-log-ack" {
+		return p.handleLogAck(messageBody, respond)
+	}
 
 	// Handle chunked payload messages
 	if strings.HasPrefix(messageName, "payload-") {
@@ -135,6 +192,7 @@ func (p *Payload) reset() {
 	}
 	p.receiver = nil
 	p.buffer = nil
+	p.logSender = nil
 }
 
 // handleChunkedMessage processes payload-begin, payload-data-<n>, and payload-end messages.
@@ -196,27 +254,150 @@ func (p *Payload) handleChunkedMessage(ctx context.Context, messageName string, 
 		}
 	}
 
-	// After successful end message, send result per fdo.payload.md
+	// After successful end message, offer diagnostics and then send the
+	// result. payload-result is terminal per chunking-strategy.md, so the
+	// log transfer must precede it.
 	if strings.HasSuffix(messageName, "-end") && !p.receiver.IsReceiving() {
-		// Send payload-result as array [status_code, ?message]
-		result := chunking.ResultMessage{
-			StatusCode: p.resultStatus,
-			Message:    p.resultMsg,
-		}
-		resultData, err := result.MarshalCBOR()
-		if err != nil {
-			return fmt.Errorf("failed to encode result: %w", err)
-		}
-
-		w := respond("payload-result")
-		if _, err := w.Write(resultData); err != nil {
-			return fmt.Errorf("failed to send result: %w", err)
-		}
-
 		p.receiver = nil
+
+		started, err := p.startLogTransfer(ctx, respond)
+		if err != nil {
+			return err
+		}
+		if started {
+			// Result is deferred until the owner accepts or declines the log.
+			return nil
+		}
+
+		return p.sendResult(respond)
 	}
 
 	return nil
+}
+
+// sendResult sends the terminal payload-result message.
+func (p *Payload) sendResult(respond func(string) io.Writer) error {
+	result := chunking.ResultMessage{
+		StatusCode: p.resultStatus,
+		Message:    p.resultMsg,
+	}
+	resultData, err := result.MarshalCBOR()
+	if err != nil {
+		return fmt.Errorf("failed to encode result: %w", err)
+	}
+
+	w := respond("payload-result")
+	if _, err := w.Write(resultData); err != nil {
+		return fmt.Errorf("failed to send result: %w", err)
+	}
+	return nil
+}
+
+// startLogTransfer asks the LogProvider for diagnostics and, if any are
+// available, sends payload-log-begin with require_ack set. It reports whether
+// a transfer was started; when false the caller should send payload-result
+// immediately.
+func (p *Payload) startLogTransfer(ctx context.Context, respond func(string) io.Writer) (bool, error) {
+	if p.LogProvider == nil {
+		return false, nil
+	}
+
+	mimeType, _ := p.begin.FSIMFields[-1].(string)
+	name, _ := p.begin.FSIMFields[-2].(string)
+
+	log, err := p.LogProvider.PayloadLog(ctx, mimeType, name, p.resultStatus)
+	if err != nil {
+		// Diagnostics are supplementary: failing to collect them must not
+		// fail onboarding or suppress the result.
+		slog.Warn("fdo.payload: log provider failed", "error", err)
+		return false, nil
+	}
+	if log == nil || len(log.Data) == 0 {
+		return false, nil
+	}
+
+	maxSize := p.MaxLogSize
+	if maxSize <= 0 {
+		maxSize = defaultMaxLogSize
+	}
+	data, truncated := log.Data, log.Truncated
+	if len(data) > maxSize {
+		data, truncated = data[:maxSize], true
+	}
+
+	contentType := log.ContentType
+	if contentType == "" {
+		contentType = "text/plain"
+	}
+	metadata := map[string]any{"content_type": contentType}
+	if truncated {
+		metadata["truncated"] = true
+	}
+	if log.Source != "" {
+		metadata["source"] = log.Source
+	}
+
+	sender := chunking.NewChunkSender("payload-log", data)
+	sender.BeginFields.HashAlg = "sha256"
+	sender.BeginFields.RequireAck = true
+	sender.BeginFields.Metadata = metadata
+	if mtu, ok := ctx.Value(serviceinfo.MTUKey{}).(uint16); ok && int(mtu) > logChunkOverhead {
+		sender.ChunkSize = int(mtu) - logChunkOverhead
+	}
+
+	if err := sender.SendBeginToWriter(respond); err != nil {
+		return false, fmt.Errorf("failed to send payload-log-begin: %w", err)
+	}
+	p.logSender = sender
+
+	slog.Debug("fdo.payload sent log begin",
+		"size", len(data), "truncated", truncated, "content_type", contentType)
+
+	return true, nil
+}
+
+// handleLogAck processes the owner's payload-log-ack. On acceptance the log
+// chunks and payload-log-end are sent, followed by the terminal
+// payload-result. On rejection the result is sent immediately.
+func (p *Payload) handleLogAck(messageBody io.Reader, respond func(string) io.Writer) error {
+	sender := p.logSender
+	p.logSender = nil
+	if sender == nil {
+		slog.Warn("fdo.payload: received payload-log-ack with no log transfer in progress")
+		return nil
+	}
+
+	data, err := io.ReadAll(messageBody)
+	if err != nil {
+		return fmt.Errorf("failed to read payload-log-ack: %w", err)
+	}
+	var ack chunking.AckMessage
+	if err := ack.UnmarshalCBOR(data); err != nil {
+		return fmt.Errorf("failed to decode payload-log-ack: %w", err)
+	}
+
+	if !ack.Accepted {
+		slog.Debug("fdo.payload: owner declined log",
+			"reason_code", ack.ReasonCode, "message", ack.Message)
+		return p.sendResult(respond)
+	}
+
+	for {
+		done, err := sender.SendNextChunkToWriter(respond)
+		if err != nil {
+			return fmt.Errorf("failed to send payload-log chunk: %w", err)
+		}
+		if done {
+			break
+		}
+	}
+	if err := sender.SendEndToWriter(respond); err != nil {
+		return fmt.Errorf("failed to send payload-log-end: %w", err)
+	}
+
+	slog.Debug("fdo.payload sent log", "bytes", sender.GetBytesSent())
+
+	return p.sendResult(respond)
 }
 
 // onBeginAck is called when payload-begin with RequireAck=true is received.

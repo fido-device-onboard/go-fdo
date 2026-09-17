@@ -54,6 +54,26 @@ This document provides guidance for AI agents and automated tools working with t
 make setup    # Initialize Go workspace (run once after clone)
 ```
 
+### Go Toolchain
+
+The system `go` on the dev box is **1.18**, which cannot build this module
+(needs 1.25 for `iter`, `log/slog`, `crypto/ecdh`). The correct toolchain is
+installed at `/home/bradgoodman/go`, and `GOPATH` must be pointed elsewhere or
+Go warns that `GOPATH == GOROOT`:
+
+```bash
+export GOROOT=/home/bradgoodman/go
+export GOPATH=/home/bradgoodman/gomods
+export PATH=$GOPATH/bin:$GOROOT/bin:$PATH
+```
+
+### Known Pre-existing Failure
+
+`make lint` fails in the **TPM** package only, with
+`fatal error: openssl/aes.h: No such file or directory`. This is the
+`go-tpm-tools` simulator's cgo build needing OpenSSL headers, not a code
+problem. The base library, FSIM, and sqlite lint targets all report 0 issues.
+
 ### Building and Testing
 
 ```bash
@@ -133,6 +153,7 @@ Run via `./test_examples.sh` with specific test scenarios:
 | `attested-payload` | Attested payload creation and verification |
 | `sysconfig` | System configuration FSIM |
 | `payload` | File payload transfer FSIM |
+| `payload-log` | Device diagnostic log upload (`payload-log-*` reverse-direction transfer), with negative control |
 | `wifi` | WiFi configuration FSIM |
 | `bmo` | Bare Metal Onboarding FSIM |
 | `bmo-meta-url` | BMO meta-URL delivery (unsigned meta-payload via CLI) |
@@ -227,6 +248,15 @@ Each test in `test_examples.sh` follows this pattern:
 
 ## Common Development Tasks
 
+### FSIM Specifications Live Elsewhere
+
+The authoritative FSIM specs are in the **`fdo-sim`** repository
+(<https://github.com/bkgoodman/fdo-sim>, directory `fsim-repository/`), not in
+this repo. Copies previously kept at this repo's root drifted out of sync and
+were removed; see `SPECIFICATIONS.md` for the index. **Edit the spec in
+`fdo-sim`** — do not re-add copies here. Implementation notes specific to this
+codebase belong in `fsim/*.md`.
+
 ### Adding New FSIMs
 
 1. Implement `serviceinfo.DeviceModule` interface
@@ -269,6 +299,7 @@ RUN go build -tags=requirefips -o fdo ./examples/cmd
 ```
 go-fdo/
 ├── README.md                    # Main documentation
+├── SPECIFICATIONS.md            # Index of FSIM specs (authoritative copies live in fdo-sim)
 ├── Makefile                     # Build targets
 ├── test_examples.sh             # Integration tests
 ├── AGENTS.md                    # This file

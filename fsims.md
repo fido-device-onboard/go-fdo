@@ -56,6 +56,8 @@ FDO Service Info Modules (FSIMs) are specialized protocol extensions that enable
 
 **Design Philosophy**: The payload FSIM treats data as having semantic meaning through its MIME type, allowing diverse devices to interpret and apply the same data in ways appropriate to their capabilities and operating environment.
 
+**Diagnostic Feedback**: Because the device *processes* the payload rather than merely storing it, processing can fail in ways the owner cannot predict. `payload-result` reports a status code plus a one-line message bounded by the ServiceInfo MTU, which is not enough for an installer log or a traceback. The module therefore supports an optional `payload-log-*` upload — the chunking mechanism run in reverse, device to owner — sent before the terminal `payload-result`. The owner may decline it. See [fdo.payload.md](https://github.com/bkgoodman/fdo-sim/blob/main/fsim-repository/fdo.payload.md) and [chunking-strategy.md](https://github.com/bkgoodman/fdo-sim/blob/main/fsim-repository/chunking-strategy.md#diagnostic-payloads), and the Go API in [fsim/chunking/README.md](fsim/chunking/README.md#worked-example-fdopayload-diagnostic-logs).
+
 ---
 
 ### fdo.sysconfig - Fundamental System Configuration

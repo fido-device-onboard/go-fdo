@@ -161,6 +161,11 @@ go run ./cmd client -bmo-supported-types application/x-iso9660-image,application
 
 # Configure supported payload MIME types for data transfer
 go run ./cmd client -payload-supported-types application/json,text/plain
+
+# Return handler diagnostics to the owner after applying a payload
+# (fdo.payload payload-log-*). Without this the device sends only the
+# one-line summary in payload-result.
+go run ./cmd client -payload-send-log
 ```
 
 #### Data Transfer FSIMs
@@ -290,6 +295,13 @@ go run ./cmd server -initOnly -db fdo.db
 ```bash
 # Payload FSIM - Distribute files to devices (firmware, configuration)
 go run ./cmd server -payload application/json:config.json -payload application/octet-stream:firmware.bin
+
+# Payload FSIM - also collect device diagnostics into a directory.
+# Devices that run with -payload-send-log upload handler output (installer
+# logs, tracebacks) before sending payload-result; without this flag the
+# owner declines them. See fdo.payload.md "fdo.payload:payload-log-*"
+# in the fdo-sim repo (SPECIFICATIONS.md), and fsim/chunking/README.md.
+go run ./cmd server -payload-file config.json -payload-log-dir ./device-logs
 
 # BMO FSIM - Boot image management for device updates
 go run ./cmd server -bmo application/x-iso9660-image:boot.iso
@@ -681,7 +693,7 @@ capture with `$()` or pipe into another command.
 
 The `meta` command provides tools for creating, signing, and verifying BMO (Bare Metal Onboarding) meta-payloads. Meta-payloads enable **meta-URL delivery mode** (mode 2) where the device fetches a CBOR descriptor from a URL, which then points to the actual boot image. This decouples image versioning from fleet management — an OS vendor can update the meta-payload to point to a new image version without requiring owner reconfiguration.
 
-See [fdo.bmo.md](fdo.bmo.md#mode-2-meta-payload-indirection) for the full specification of meta-URL delivery.
+See [fdo.bmo.md](https://github.com/bkgoodman/fdo-sim/blob/main/fsim-repository/fdo.bmo.md#mode-2-meta-payload-indirection) for the full specification of meta-URL delivery.
 
 ### Basic Usage
 

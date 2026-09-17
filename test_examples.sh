@@ -945,6 +945,91 @@ test_payload() {
 	log_success "Payload FSIM test PASSED"
 }
 
+# Test: Payload FSIM diagnostic log upload (payload-log-*)
+# Verifies the reverse-direction chunked transfer defined in
+# chunking-strategy.md "Diagnostic Payloads": the device uploads handler
+# output to the owner before sending the terminal payload-result.
+test_payload_log() {
+	log_section "TEST: Payload FSIM diagnostic log upload"
+
+	mkdir -p "$EPHEMERAL_DIR"
+	rm -f "$DB_FILE" "$CRED_FILE"
+
+	PAYLOAD_FILE="$EPHEMERAL_DIR/test_payload_log.bin"
+	LOG_DIR="$EPHEMERAL_DIR/payload-logs"
+	rm -rf "$LOG_DIR"
+
+	log_step "Creating test payload"
+	dd if=/dev/urandom of="$PAYLOAD_FILE" bs=1024 count=10 2>/dev/null
+	log_success "Created test file: $PAYLOAD_FILE"
+
+	start_server "-reuse-cred -payload-file ../$PAYLOAD_FILE -payload-mime application/octet-stream -payload-log-dir ../$LOG_DIR"
+
+	log_step "Running DI"
+	run_cmd go run ./cmd client -di "$SERVER_URL" || return 1
+	log_success "DI completed"
+
+	# --- Negative control: no -payload-send-log means no log transfer ---
+	log_step "Running TO1/TO2 WITHOUT -payload-send-log (negative control)"
+	run_cmd go run ./cmd client || return 1
+	if [ -d "$LOG_DIR" ] && [ -n "$(ls -A "$LOG_DIR" 2>/dev/null)" ]; then
+		log_error "Device uploaded a log without -payload-send-log:"
+		ls -l "$LOG_DIR"
+		stop_server
+		return 1
+	fi
+	log_success "No log uploaded when the device does not offer one"
+
+	# --- Positive: device offers a log, owner accepts and stores it ---
+	log_step "Running TO1/TO2 WITH -payload-send-log"
+	run_cmd go run ./cmd client -payload-send-log || return 1
+	log_success "TO1/TO2 completed"
+
+	stop_server
+
+	log_step "Verifying the owner stored the device diagnostics"
+	if [ ! -d "$LOG_DIR" ]; then
+		log_error "Log directory was never created: $LOG_DIR"
+		return 1
+	fi
+	LOG_COUNT=$(find "$LOG_DIR" -name '*.log' -type f | wc -l)
+	if [ "$LOG_COUNT" -lt 1 ]; then
+		log_error "No diagnostic log stored in $LOG_DIR"
+		return 1
+	fi
+	log_success "Owner stored $LOG_COUNT diagnostic log(s)"
+
+	STORED_LOG=$(find "$LOG_DIR" -name '*.log' -type f | head -1)
+	log_step "Checking log contents: $STORED_LOG"
+	if ! grep -q "handling payload" "$STORED_LOG"; then
+		log_error "Stored log missing expected handler trace:"
+		cat "$STORED_LOG"
+		return 1
+	fi
+	if ! grep -q "final status=0" "$STORED_LOG"; then
+		log_error "Stored log missing final status line:"
+		cat "$STORED_LOG"
+		return 1
+	fi
+	log_success "Log content verified:"
+	sed 's/^/    /' "$STORED_LOG"
+
+	# The owner must have logged acceptance, and the payload must still have
+	# completed normally - diagnostics are supplementary.
+	log_step "Verifying server acknowledged and payload still succeeded"
+	if ! grep -q "accepting device diagnostics" "$EPHEMERAL_DIR/fdo_server.log"; then
+		log_error "Server never logged accepting the diagnostics"
+		return 1
+	fi
+	if ! grep -q "wrote .* bytes of device diagnostics" "$EPHEMERAL_DIR/fdo_server.log"; then
+		log_error "Server never logged writing the diagnostics"
+		return 1
+	fi
+	log_success "Server accepted and stored diagnostics"
+
+	log_success "Payload FSIM diagnostic log test PASSED"
+}
+
 # Test: Payload FSIM with Multiple Types
 # This test demonstrates sending multiple payloads with different MIME types
 # and verifies that all are received correctly
@@ -2464,6 +2549,7 @@ test_all() {
 	test_sysconfig || failed=1
 	test_sysconfig_fdo200 || failed=1
 	test_payload || failed=1
+	test_payload_log || failed=1
 	test_payload_fdo200 || failed=1
 	test_payload_multiple_types || failed=1
 	test_payload_selective_rejection || failed=1
@@ -2572,6 +2658,9 @@ main() {
 	payload-fdo200)
 		test_payload_fdo200 || rc=$?
 		;;
+	payload-log)
+		test_payload_log || rc=$?
+		;;
 	payload-multiple-types)
 		test_payload_multiple_types || rc=$?
 		;;
@@ -2637,7 +2726,7 @@ main() {
 		;;
 	*)
 		echo "Unknown test: $test_name"
-		echo "Available tests: basic, basic-reuse, rv-blob, kex, fdo200, delegate, delegate-fdo200, delegate-csr, bad-delegate, attested-payload, attested-payload-encrypted, attested-payload-delegate, attested-payload-shell, sysconfig, sysconfig-fdo200, payload, payload-fdo200, payload-multiple-types, payload-selective-rejection, payload-nak, wifi, wifi-fdo200, wifi-single-sided, bmo, bmo-efi, bmo-nak, bmo-multi-asset, bmo-url, bmo-meta-url, bmo-meta-signed, bmo-url-fallback, rv-firmware-tags, credentials, auth, all"
+		echo "Available tests: basic, basic-reuse, rv-blob, kex, fdo200, delegate, delegate-fdo200, delegate-csr, bad-delegate, attested-payload, attested-payload-encrypted, attested-payload-delegate, attested-payload-shell, sysconfig, sysconfig-fdo200, payload, payload-log, payload-fdo200, payload-multiple-types, payload-selective-rejection, payload-nak, wifi, wifi-fdo200, wifi-single-sided, bmo, bmo-efi, bmo-nak, bmo-multi-asset, bmo-url, bmo-meta-url, bmo-meta-signed, bmo-url-fallback, rv-firmware-tags, credentials, auth, all"
 		exit 1
 		;;
 	esac

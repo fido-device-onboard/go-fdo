@@ -333,6 +333,10 @@ const (
 	AckReasonSizeExceeded    = 2 // Payload too large
 	AckReasonNotApplicable   = 3 // Payload not applicable to current state
 	AckReasonPolicyViolation = 4 // Rejected by policy
+
+	// AckReasonDiagnosticsNotRequested rejects a reverse-direction diagnostic
+	// log transfer (see chunking-strategy.md "Diagnostic Payloads").
+	AckReasonDiagnosticsNotRequested = 5
 )
 
 // MarshalCBOR encodes AckMessage to CBOR array format: [accepted, ?reason_code, ?message]

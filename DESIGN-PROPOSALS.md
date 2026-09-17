@@ -300,7 +300,7 @@ timezone, DNS) similarly needs attestation in a zero-trust delivery model.
 | `attested_payload.go` | Standalone attested payload create/verify with delegate support |
 | `attestedpayload.md` | Attested payload format specification |
 | `delegate.md` | Delegate certificate creation and CSR workflows |
-| `fdo.bmo.md` | BMO spec including "Authenticated Provisioning" section |
+| `fdo.bmo.md` (in `fdo-sim`) | BMO spec including "Authenticated Provisioning" section |
 
 ---
 

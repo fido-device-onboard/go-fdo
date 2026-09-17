@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/tls"
@@ -60,6 +61,7 @@ var (
 	enrollCSR             string // CSR enrollment request (format: id:csrdata)
 	bmoSupportedTypes     string // Comma-separated list of supported BMO MIME types (empty = accept all)
 	payloadSupportedTypes string // Comma-separated list of supported Payload MIME types (empty = accept all)
+	payloadSendLog        bool   // Offer device diagnostics to the owner via fdo.payload payload-log-*
 	allowSingleSided      bool   // Allow single-sided attestation (WiFi-only mode)
 	maxOwnerServiceInfo   int    // Maximum owner service info size (MTU) the device advertises
 	clientDBPath          string // SQLite database file path (matches server -db flag)
@@ -179,6 +181,7 @@ func init() {
 	clientFlags.StringVar(&enrollCSR, "enroll-csr", "", "CSR enrollment `request` (format: id:csrdata)")
 	clientFlags.StringVar(&bmoSupportedTypes, "bmo-supported-types", "", "Comma-separated list of supported BMO MIME `types` (empty = accept all)")
 	clientFlags.StringVar(&payloadSupportedTypes, "payload-supported-types", "", "Comma-separated list of supported Payload MIME `types` (empty = accept all)")
+	clientFlags.BoolVar(&payloadSendLog, "payload-send-log", false, "Offer handler diagnostics to the owner via fdo.payload payload-log-*")
 	clientFlags.BoolVar(&allowSingleSided, "allow-single-sided", false, "Allow single-sided attestation (WiFi-only mode, owner not verified)")
 	clientFlags.IntVar(&maxOwnerServiceInfo, "max-owner-service-info", 0, "Maximum owner service info `size` (MTU) the device advertises (0 = default 14000)")
 	clientFlags.StringVar(&clientDBPath, "db", "", "SQLite database file path")
@@ -485,10 +488,19 @@ TO1:
 
 // payloadHandler implements fsim.UnifiedPayloadHandler to save received payloads.
 // The framework handles all chunking transparently - we just receive the complete payload.
-type payloadHandler struct{}
+type payloadHandler struct {
+	// trace accumulates a record of what the handler did, to be returned to
+	// the owner as a diagnostic log when -payload-send-log is set.
+	trace bytes.Buffer
+}
+
+func (h *payloadHandler) tracef(format string, args ...any) {
+	_, _ = fmt.Fprintf(&h.trace, format, args...)
+}
 
 func (h *payloadHandler) HandlePayload(ctx context.Context, mimeType, name string, size uint64, metadata map[string]any, payload []byte) (statusCode int, message string, err error) {
 	fmt.Printf("[fdo.payload] HandlePayload called: name=%s, mime=%s, size=%d, received=%d bytes\n", name, mimeType, size, len(payload))
+	h.tracef("handling payload name=%s mime=%s announced=%d received=%d\n", name, mimeType, size, len(payload))
 
 	// Save payload to file
 	filename := name
@@ -497,10 +509,29 @@ func (h *payloadHandler) HandlePayload(ctx context.Context, mimeType, name strin
 	}
 	if err := os.WriteFile(filename, payload, 0644); err != nil {
 		fmt.Printf("[fdo.payload] ERROR: failed to save file: %v\n", err)
+		h.tracef("write %s failed: %v\n", filename, err)
 		return 2, fmt.Sprintf("failed to save payload: %v", err), err
 	}
 	fmt.Printf("[fdo.payload] Saved payload to: %s (%d bytes)\n", filename, len(payload))
+	h.tracef("wrote %d bytes to %s\n", len(payload), filename)
 	return 0, fmt.Sprintf("saved to %s", filename), nil
+}
+
+// PayloadLog implements fsim.LogProvider, returning the handler's trace so the
+// owner can retain it. Returning nil suppresses the transfer entirely.
+func (h *payloadHandler) PayloadLog(_ context.Context, mimeType, name string, statusCode int) (*fsim.PayloadLog, error) {
+	if !payloadSendLog || h.trace.Len() == 0 {
+		return nil, nil
+	}
+	h.tracef("final status=%d\n", statusCode)
+	data := append([]byte(nil), h.trace.Bytes()...)
+	h.trace.Reset()
+	fmt.Printf("[fdo.payload] Offering %d bytes of diagnostics to owner\n", len(data))
+	return &fsim.PayloadLog{
+		Data:        data,
+		ContentType: "text/plain",
+		Source:      "payload-handler",
+	}, nil
 }
 
 // bmoHandler implements fsim.UnifiedImageHandler to receive boot images.
@@ -761,8 +792,12 @@ func transferOwnership2(ctx context.Context, transport fdo.Transport, to1d *cose
 
 	// Add payload handler to receive and save payloads
 	// Using UnifiedHandler - the framework handles chunking transparently
+	payloadDeviceHandler := &payloadHandler{}
 	payloadFSIM := &fsim.Payload{
-		UnifiedHandler: &payloadHandler{},
+		UnifiedHandler: payloadDeviceHandler,
+	}
+	if payloadSendLog {
+		payloadFSIM.LogProvider = payloadDeviceHandler
 	}
 	// Add AckHandler if supported types are specified (for NAK testing)
 	if payloadSupportedTypes != "" {

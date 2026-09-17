@@ -32,6 +32,8 @@ It implements [FIDO Device Onboard Specification 1.1][fdo11] and [FIDO Device On
 
 | Document | Description |
 | -------- | ----------- |
+| [SPECIFICATIONS.md](SPECIFICATIONS.md) | **FSIM specifications** — index of the authoritative specs, which live in the [`fdo-sim`](https://github.com/bkgoodman/fdo-sim) repository, not here |
+| [fsims.md](fsims.md) | Which FSIM to use for which job, and why |
 | [VOUCHER_TRANSFER.md](VOUCHER_TRANSFER.md) | **Voucher Transfer Protocol** — How to use the `transfer` and `did` packages for push/pull voucher management in manufacturing systems, voucher management systems, and onboarding services |
 | [delegate.md](delegate.md) | Delegate certificate support and permissions |
 | [PRODUCTION_CONSIDERATIONS.md](PRODUCTION_CONSIDERATIONS.md) | Production deployment security guidelines |

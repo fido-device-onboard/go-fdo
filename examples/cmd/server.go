@@ -89,6 +89,7 @@ var (
 	bmoProvisioningSigner fsim.ProvisioningSigner // Populated at serve-time when bmoSign or bmoDelegateProvision is set
 	payloadFiles          stringList              // Multiple payload files with types (format: type:file)
 	payloadDuration       uint64                  // Advisory estimated transfer+apply duration for payloads (seconds, 0=omit)
+	payloadLogDir         string                  // Directory to store device diagnostic logs (fdo.payload payload-log-*)
 	bmoDuration           uint64                  // Advisory estimated transfer+apply duration for BMO images (seconds, 0=omit)
 	wifiConfigFile        string
 	credentials           stringList
@@ -152,6 +153,7 @@ func init() {
 	serverFlags.StringVar(&bmoDelegateProvision, "bmo-delegate-provision", "", "Sign fdo.bmo provisioning messages with a delegate. Format: `cert.pem:key.pem` where cert leaf MUST carry OIDPermitProvision and chain to the EC-P256 owner key")
 	serverFlags.Var(&payloadFiles, "payload", "Use fdo.payload FSIM with `type:file` format with RequireAck (flag may be used multiple times for NAK testing)")
 	serverFlags.Uint64Var(&payloadDuration, "payload-duration", 0, "Advisory estimated transfer+apply time in `seconds` for fdo.payload (sent in payload-begin; 0=omit)")
+	serverFlags.StringVar(&payloadLogDir, "payload-log-dir", "", "Accept fdo.payload device diagnostic logs and write them to `dir` (unset = decline logs)")
 	serverFlags.Uint64Var(&bmoDuration, "bmo-duration", 0, "Advisory estimated transfer+apply time in `seconds` for fdo.bmo (sent in image-begin; 0=omit)")
 	serverFlags.StringVar(&wifiConfigFile, "wifi-config", "", "Use fdo.wifi FSIM with network config from JSON `file`")
 	serverFlags.Var(&credentials, "credential", "Use fdo.credentials FSIM with `type:id:data[:endpoint_url]` format (flag may be used multiple times)")
@@ -161,6 +163,41 @@ func init() {
 	serverFlags.StringVar(&rvFirmwareURL, "rv-firmware-url", "", "RV firmware delivery: full `URL` of signed firmware image (written to DCTPM tag 17)")
 	serverFlags.StringVar(&rvFirmwarePath, "rv-firmware-path", "", "RV firmware delivery: image `path` on HTTP server (written to DCTPM tag 16)")
 	serverFlags.Uint64Var(&rvMinFirmwareRev, "rv-firmware-rev", 0, "RV firmware delivery: minimum firmware `revision` for anti-rollback (written to DCTPM tag 18)")
+}
+
+// payloadLogCollector accepts diagnostic logs uploaded by a device via the
+// fdo.payload payload-log-* messages and writes them to a directory.
+//
+// payload-result carries only a single-line summary bounded by the negotiated
+// ServiceInfo MTU; this is how substantial output (installer logs, tracebacks)
+// gets off the device and into the hands of an operator.
+type payloadLogCollector struct{ dir string }
+
+// AcceptLog implements fsim.PayloadLogHandler.
+func (c *payloadLogCollector) AcceptLog(mimeType, name string, size uint64, contentType string) (bool, int, string) {
+	log.Printf("Payload: accepting device diagnostics: name=%s mime=%s content_type=%s size=%d",
+		name, mimeType, contentType, size)
+	return true, 0, ""
+}
+
+// HandleLog implements fsim.PayloadLogHandler.
+func (c *payloadLogCollector) HandleLog(_ context.Context, _, name string, l *fsim.PayloadLogInfo) error {
+	if err := os.MkdirAll(c.dir, 0o755); err != nil {
+		return fmt.Errorf("error creating payload log directory: %w", err)
+	}
+	// The name comes from the owner's own payload metadata, but take the base
+	// unconditionally rather than trusting it to be a bare filename.
+	base := filepath.Base(name)
+	if base == "." || base == string(filepath.Separator) || base == "" {
+		base = "payload"
+	}
+	file := filepath.Join(c.dir, fmt.Sprintf("%s-%d.log", base, time.Now().UnixNano()))
+	if err := os.WriteFile(file, l.Data, 0o600); err != nil {
+		return fmt.Errorf("error writing payload log: %w", err)
+	}
+	log.Printf("Payload: wrote %d bytes of device diagnostics to %s (truncated=%v source=%s)",
+		len(l.Data), file, l.Truncated, l.Source)
+	return nil
 }
 
 // validateFiles checks that all payload and BMO files exist before starting the server
@@ -1128,6 +1165,9 @@ func ownerModules(modules []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 
 		if slices.Contains(modules, "fdo.payload") && (payloadFile != "" || len(payloadFiles) > 0) {
 			payloadOwner := &fsim.PayloadOwner{}
+			if payloadLogDir != "" {
+				payloadOwner.LogHandler = &payloadLogCollector{dir: payloadLogDir}
+			}
 
 			// Handle multi-file NAK testing mode (with RequireAck)
 			if len(payloadFiles) > 0 {

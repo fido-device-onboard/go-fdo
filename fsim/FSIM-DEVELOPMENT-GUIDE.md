@@ -316,9 +316,32 @@ func (w *Device) Yield(ctx context.Context, respond func(string) io.Writer, yiel
 **Key Points:**
 
 - Call `yield()` after **every message** you send
-- Don't use ChunkSender in Yield (it expects a Producer interface)
 - Manually construct begin/end messages
 - Use CBOR encoding for messages
+
+**You can use ChunkSender here.** An earlier version of this guide said not to,
+on the grounds that it requires a `Producer`. That is only true of `SendBegin`,
+`SendNextChunk` and `SendEnd`. The `*ToWriter` variants take a
+`respond func(string) io.Writer` and are intended exactly for device-side
+sending:
+
+```go
+sender := chunking.NewChunkSender("payload-log", data)
+sender.BeginFields.HashAlg = "sha256"
+if mtu, ok := ctx.Value(serviceinfo.MTUKey{}).(uint16); ok {
+    sender.ChunkSize = int(mtu) - 100 // leave room for the key and CBOR framing
+}
+if err := sender.SendBeginToWriter(respond); err != nil { return err }
+for {
+    done, err := sender.SendNextChunkToWriter(respond)
+    if err != nil { return err }
+    if done { break }
+}
+return sender.SendEndToWriter(respond)
+```
+
+This gets you chunk indexing, size accounting and hash computation for free.
+See `fsim/payload_device.go` for a working example (diagnostic log upload).
 
 ---
 
@@ -333,6 +356,31 @@ func (w *Device) Yield(ctx context.Context, respond func(string) io.Writer, yiel
 - After device processes owner's messages
 - When owner blocks (blockPeer=true)
 - Periodically during TO2 protocol
+
+### ⚠️ Yield Is Never Called Under FDO 2.0
+
+This is the single most dangerous gap in the device-module API. The FDO 2.0
+client path (`processOwnerServiceInfo20` in `to2_client_v200.go`) only ever
+calls `Receive`. It never calls `Yield`.
+
+The consequence: a module that emits data from `Yield` will compile, pass every
+FDO 1.0.1 test, and then **silently send nothing** when a client runs with
+`-fdo-version 200`. There is no error and no warning.
+
+If your module must work on both protocol versions, drive sends from `Receive`
+instead, keyed off whichever inbound message should trigger them. `Receive`
+also supplies a `respond` writer, so the mechanics are identical:
+
+| | FDO 1.0.1 | FDO 2.0 |
+| --- | --- | --- |
+| `Receive` called | yes | yes |
+| `Yield` called | yes | **no** |
+| `respond` writer | pipe-backed, chunked across rounds | buffered, sent in next request |
+| `yield()` callback | forces a message boundary | no-op |
+
+Because the 2.0 `respond` buffers the whole response in memory before sending,
+a module sending bulk data from `Receive` should also bound its size — see
+`MaxLogSize` in `fsim.Payload`.
 
 ### Yield Pattern: Send Data
 
