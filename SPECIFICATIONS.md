@@ -17,7 +17,6 @@ spec in `fdo-sim`, not here.
 | [chunking-strategy.md](https://github.com/bkgoodman/fdo-sim/blob/main/fsim-repository/chunking-strategy.md) | `fsim/chunking/` |
 | [fdo.bmo.md](https://github.com/bkgoodman/fdo-sim/blob/main/fsim-repository/fdo.bmo.md) | `fsim/bmo_*.go` |
 | [fdo.credentials.md](https://github.com/bkgoodman/fdo-sim/blob/main/fsim-repository/fdo.credentials.md) | `fsim/credentials_*.go`, `fsim/credential_*.go` |
-| [fdo.csr.md](https://github.com/bkgoodman/fdo-sim/blob/main/fsim-repository/fdo.csr.md) | `fsim/csr_*.go` |
 | [fdo.payload.md](https://github.com/bkgoodman/fdo-sim/blob/main/fsim-repository/fdo.payload.md) | `fsim/payload_*.go` |
 | [fdo.sysconfig.md](https://github.com/bkgoodman/fdo-sim/blob/main/fsim-repository/fdo.sysconfig.md) | `fsim/sysconfig_*.go` |
 | [fdo.wifi-setup.md](https://github.com/bkgoodman/fdo-sim/blob/main/fsim-repository/fdo.wifi-setup.md) | `fsim/wifi_*.go` |
@@ -29,6 +28,18 @@ spec in `fdo-sim`, not here.
 
 Source comments throughout `fsim/` reference these documents by filename
 (e.g. "per fdo.payload.md"). Those refer to the `fdo-sim` originals.
+
+## Legacy / Superseded
+
+| Specification | Status |
+| ------------- | ------ |
+| [fdo.csr.md](https://github.com/bkgoodman/fdo-sim/blob/main/fsim-repository/fdo.csr.md) | **Superseded by `fdo.credentials.md`**, which states that it "incorporates and extends concepts from *fdo.csr* — certificate enrollment and server-generated keys". An upstream FIDO Alliance document (2023), not maintained here. |
+
+The `fsim/csr_*.go` implementation of `fdo.csr` remains in the tree but is
+**not wired into the example CLI and has no integration test**. New work
+needing certificate enrollment should use `fdo.credentials` (`x509_cert`
+credential type), which covers the same ground with the shared chunking
+pattern. See `fsim/CSR_IMPLEMENTATION.md` for the historical notes.
 
 ## Documentation That Does Live Here
 
