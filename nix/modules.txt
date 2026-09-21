@@ -17,13 +17,11 @@ github.com/google/go-tpm/tpm2/transport/simulator
 github.com/google/go-tpm/tpmutil
 github.com/google/go-tpm/tpmutil/tbs
 # github.com/google/go-tpm-tools v0.4.7
-## explicit; go 1.24.0
-# github.com/google/go-tpm-tools v0.4.9
-## explicit; go 1.24.0
+## explicit; go 1.26
+# github.com/google/go-tpm-tools v0.4.10
+## explicit; go 1.26
 github.com/google/go-tpm-tools/simulator
 github.com/google/go-tpm-tools/simulator/internal
-# github.com/ncruces/go-sqlite3 v0.35.3
-## explicit; go 1.26.0
 # github.com/ncruces/go-sqlite3 v0.35.4
 ## explicit; go 1.26.0
 github.com/ncruces/go-sqlite3
@@ -36,8 +34,6 @@ github.com/ncruces/go-sqlite3/internal/util
 github.com/ncruces/go-sqlite3/util/vfsutil
 github.com/ncruces/go-sqlite3/vfs
 github.com/ncruces/go-sqlite3/vfs/xts
-# github.com/ncruces/go-sqlite3-wasm/v3 v3.2.35304
-## explicit; go 1.25.0
 # github.com/ncruces/go-sqlite3-wasm/v5 v5.0.35304
 ## explicit; go 1.26.0
 github.com/ncruces/go-sqlite3-wasm/v5
@@ -61,8 +57,6 @@ github.com/syumai/workers/internal/jshttp
 github.com/syumai/workers/internal/jsutil
 github.com/syumai/workers/internal/runtimecontext
 # golang.org/x/crypto v0.46.0
-## explicit; go 1.25.0
-# golang.org/x/crypto v0.54.0
 ## explicit; go 1.25.0
 # golang.org/x/crypto v0.55.0
 ## explicit; go 1.25.0
