@@ -382,7 +382,11 @@ func initBMOProvisioningSigner(ctx context.Context, state *sqlite.DB) error {
 	}
 
 	if bmoSign {
-		bmoProvisioningSigner = &fsim.OwnerSigner{Key: ownerKey}
+		ecKey, ok := ownerKey.(*ecdsa.PrivateKey)
+		if !ok {
+			return fmt.Errorf("bmo provisioning: owner key is %T, expected *ecdsa.PrivateKey", ownerKey)
+		}
+		bmoProvisioningSigner = &fsim.OwnerSigner{Key: ecKey}
 		log.Printf("BMO: provisioning messages will be signed with EC-P256 owner key")
 		return nil
 	}
@@ -413,7 +417,11 @@ func initBMOProvisioningSigner(ctx context.Context, state *sqlite.DB) error {
 	if err := fdo.VerifyDelegateChain(chain, &ownerPub, &fdo.OIDPermitProvision); err != nil {
 		return fmt.Errorf("-bmo-delegate-provision: chain does not validate against owner key with OIDPermitProvision: %w", err)
 	}
-	bmoProvisioningSigner = &fsim.DelegateSigner{Key: signer, Chain: chain}
+	ecSigner, ok := signer.(*ecdsa.PrivateKey)
+	if !ok {
+		return fmt.Errorf("-bmo-delegate-provision: key is %T, expected *ecdsa.PrivateKey", signer)
+	}
+	bmoProvisioningSigner = &fsim.DelegateSigner{Key: ecSigner, Chain: chain}
 	log.Printf("BMO: provisioning messages will be signed with delegate (leaf CN=%s, %d-cert chain)", chain[0].Subject.CommonName, len(chain))
 	return nil
 }
