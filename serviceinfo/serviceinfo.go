@@ -7,7 +7,8 @@ package serviceinfo
 import "fmt"
 
 // DefaultMTU for service info when Max(Owner|Device)ServiceInfoSz is null.
-const DefaultMTU = 1300
+// 14000 bytes allows room for HTTP/COSE overhead within typical 16KB client buffers.
+const DefaultMTU = 14000
 
 // KV is a ServiceInfoKV structure.
 type KV struct {

@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="780" height="320" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .label { font-family: Arial, sans-serif; font-size: 14px; font-weight: bold; fill: #fff; }
+      .sublabel { font-family: Arial, sans-serif; font-size: 11px; fill: rgba(255,255,255,0.85); }
+      .arrow-text { font-family: Arial, sans-serif; font-size: 11px; fill: #2c3e50; font-weight: bold; }
+      .arrow-detail { font-family: Arial, sans-serif; font-size: 10px; fill: #7f8c8d; font-style: italic; }
+      .note { font-family: Arial, sans-serif; font-size: 10px; fill: #95a5a6; font-style: italic; }
+      .zone-label { font-family: Arial, sans-serif; font-size: 10px; font-weight: bold; fill: #95a5a6; letter-spacing: 2px; }
+    </style>
+    <marker id="arr" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+      <polygon points="0 1, 10 5, 0 9" fill="#2c3e50" />
+    </marker>
+    <marker id="arr-orange" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+      <polygon points="0 1, 10 5, 0 9" fill="#e67e22" />
+    </marker>
+    <marker id="arr-gray" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+      <polygon points="0 1, 10 5, 0 9" fill="#95a5a6" />
+    </marker>
+    <marker id="arr-green" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+      <polygon points="0 1, 10 5, 0 9" fill="#27ae60" />
+    </marker>
+  </defs>
+
+  <rect width="780" height="320" fill="#fafafa" rx="6"/>
+
+  <!-- Zone labels -->
+  <text x="135" y="22" class="zone-label" text-anchor="middle">OFFLINE</text>
+  <text x="460" y="22" class="zone-label" text-anchor="middle">ONLINE</text>
+
+  <!-- Zone divider -->
+  <line x1="280" y1="30" x2="280" y2="280" stroke="#bdc3c7" stroke-width="1" stroke-dasharray="6,4"/>
+
+  <!-- Owner box -->
+  <rect x="40" y="45" width="140" height="65" rx="8" fill="#e67e22"/>
+  <text x="110" y="72" class="label" text-anchor="middle">Owner</text>
+  <text x="110" y="89" class="sublabel" text-anchor="middle">private key</text>
+
+  <!-- Signed artifact box -->
+  <rect x="40" y="140" width="140" height="65" rx="8" fill="#f39c12"/>
+  <text x="110" y="163" class="label" text-anchor="middle">Signed Artifact</text>
+  <text x="110" y="180" class="sublabel" text-anchor="middle">COSE_Sign1 (tag 18)</text>
+  <text x="110" y="194" class="sublabel" text-anchor="middle">+ scope constraints</text>
+
+  <!-- Arrow: Owner signs -->
+  <line x1="110" y1="110" x2="110" y2="135" stroke="#e67e22" stroke-width="2.5" marker-end="url(#arr-orange)"/>
+  <text x="145" y="128" class="arrow-text">signs</text>
+
+  <!-- Conduit box -->
+  <rect x="330" y="100" width="150" height="55" rx="8" fill="#95a5a6"/>
+  <text x="405" y="124" class="label" text-anchor="middle">Onboarding</text>
+  <text x="405" y="141" class="sublabel" text-anchor="middle">Service (conduit)</text>
+
+  <!-- Arrow: artifact to conduit -->
+  <line x1="180" y1="170" x2="325" y2="127" stroke="#95a5a6" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arr-gray)"/>
+  <text x="258" y="138" class="arrow-detail">hand off</text>
+
+  <!-- Device box -->
+  <rect x="580" y="100" width="160" height="55" rx="8" fill="#2980b9"/>
+  <text x="660" y="124" class="label" text-anchor="middle">Device</text>
+  <text x="660" y="141" class="sublabel" text-anchor="middle">verifies signature</text>
+
+  <!-- Arrow: conduit delivers to device -->
+  <line x1="480" y1="127" x2="575" y2="127" stroke="#95a5a6" stroke-width="2" marker-end="url(#arr-gray)"/>
+  <text x="527" y="120" class="arrow-text" text-anchor="middle">TO2</text>
+  <text x="527" y="145" class="arrow-detail" text-anchor="middle">delivers artifact</text>
+
+  <!-- Verification result -->
+  <rect x="610" y="185" width="100" height="35" rx="6" fill="#27ae60"/>
+  <text x="660" y="207" class="label" text-anchor="middle">ACCEPT</text>
+  <line x1="660" y1="155" x2="660" y2="180" stroke="#27ae60" stroke-width="2" marker-end="url(#arr-green)"/>
+  <text x="690" y="173" class="arrow-detail">sig OK</text>
+
+  <!-- Bottom notes -->
+  <text x="390" y="250" class="note" text-anchor="middle">Artifact authority: the Owner signed the payload offline.</text>
+  <text x="390" y="265" class="note" text-anchor="middle">The conduit delivers it but cannot forge, alter, or retarget it.</text>
+  <text x="390" y="280" class="note" text-anchor="middle">Even a compromised conduit cannot install unauthorized images.</text>
+</svg>

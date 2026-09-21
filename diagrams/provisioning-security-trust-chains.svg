@@ -1,0 +1,306 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="960" height="820" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .title { font-family: Arial, sans-serif; font-size: 20px; font-weight: bold; fill: #2c3e50; }
+      .subtitle { font-family: Arial, sans-serif; font-size: 13px; fill: #666; font-style: italic; }
+      .section-title { font-family: Arial, sans-serif; font-size: 15px; font-weight: bold; fill: #fff; }
+      .section-subtitle { font-family: Arial, sans-serif; font-size: 11px; fill: rgba(255,255,255,0.8); }
+      .box-label { font-family: Arial, sans-serif; font-size: 12px; font-weight: bold; fill: #2c3e50; }
+      .box-detail { font-family: Arial, sans-serif; font-size: 10px; fill: #555; }
+      .box-detail-mono { font-family: 'Courier New', monospace; font-size: 9px; fill: #555; }
+      .arrow-label { font-family: Arial, sans-serif; font-size: 10px; fill: #c0392b; font-weight: bold; }
+      .arrow-label-blue { font-family: Arial, sans-serif; font-size: 10px; fill: #2980b9; font-weight: bold; }
+      .arrow-label-green { font-family: Arial, sans-serif; font-size: 10px; fill: #27ae60; font-weight: bold; }
+      .check-label { font-family: Arial, sans-serif; font-size: 10px; fill: #27ae60; font-weight: bold; }
+      .fail-label { font-family: Arial, sans-serif; font-size: 10px; fill: #c0392b; font-weight: bold; }
+      .note-text { font-family: Arial, sans-serif; font-size: 10px; fill: #777; font-style: italic; }
+      .case-num { font-family: Arial, sans-serif; font-size: 22px; font-weight: bold; fill: #fff; }
+      .case-title { font-family: Arial, sans-serif; font-size: 11px; font-weight: bold; fill: #fff; }
+    </style>
+    <marker id="arrow-red" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <polygon points="0 0, 8 4, 0 8" fill="#c0392b" />
+    </marker>
+    <marker id="arrow-blue" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <polygon points="0 0, 8 4, 0 8" fill="#2980b9" />
+    </marker>
+    <marker id="arrow-green" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <polygon points="0 0, 8 4, 0 8" fill="#27ae60" />
+    </marker>
+    <marker id="arrow-gray" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <polygon points="0 0, 8 4, 0 8" fill="#95a5a6" />
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="960" height="820" fill="#fafafa" rx="4"/>
+
+  <!-- Title -->
+  <text x="480" y="32" class="title" text-anchor="middle">Provisioning Security: What the Device Must Verify</text>
+  <text x="480" y="50" class="subtitle" text-anchor="middle">Four authorization paths for BMO images, payloads, and configuration</text>
+
+  <!-- ================================================================== -->
+  <!-- TRUST ANCHOR STRIP (top) -->
+  <!-- ================================================================== -->
+  <rect x="30" y="65" width="900" height="50" rx="6" fill="#1a5276"/>
+  <text x="480" y="85" class="section-title" text-anchor="middle">Trust Anchor: Owner Public Key (from Ownership Voucher, proven in TO2)</text>
+  <text x="480" y="102" class="section-subtitle" text-anchor="middle">The device establishes this key by walking the voucher chain and verifying ProveOVHdr. All authorization flows back to it.</text>
+
+  <!-- ================================================================== -->
+  <!-- CASE 1: Owner Channel -->
+  <!-- ================================================================== -->
+  <rect x="30" y="130" width="440" height="155" rx="6" fill="#fff" stroke="#2ecc71" stroke-width="2"/>
+  <!-- Case badge -->
+  <rect x="30" y="130" width="50" height="30" rx="6" fill="#27ae60"/>
+  <text x="55" y="151" class="case-num" text-anchor="middle">1</text>
+  <rect x="80" y="130" width="160" height="30" rx="0 6 0 0" fill="#27ae60"/>
+  <text x="160" y="150" class="case-title" text-anchor="middle">Owner Channel Authority</text>
+
+  <!-- Owner Service box -->
+  <rect x="55" y="175" width="130" height="50" rx="4" fill="#d5f5e3" stroke="#27ae60" stroke-width="1.5"/>
+  <text x="120" y="195" class="box-label" text-anchor="middle">Owner Service</text>
+  <text x="120" y="210" class="box-detail" text-anchor="middle">Holds Owner key</text>
+
+  <!-- Arrow: TO2 ProveOVHdr -->
+  <line x1="185" y1="200" x2="275" y2="200" stroke="#27ae60" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <text x="230" y="193" class="arrow-label-green" text-anchor="middle">TO2 session</text>
+
+  <!-- Device box -->
+  <rect x="280" y="175" width="170" height="50" rx="4" fill="#eaf2f8" stroke="#2980b9" stroke-width="1.5"/>
+  <text x="365" y="195" class="box-label" text-anchor="middle">Device</text>
+  <text x="365" y="210" class="box-detail" text-anchor="middle">Peer proved Owner key</text>
+
+  <!-- Arrow: bare payload -->
+  <line x1="185" y1="240" x2="275" y2="260" stroke="#95a5a6" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrow-gray)"/>
+  <text x="200" y="260" class="box-detail" text-anchor="start">Bare CBOR map</text>
+  <text x="200" y="272" class="box-detail" text-anchor="start">(no signature)</text>
+
+  <!-- Checks -->
+  <text x="320" y="260" class="check-label">&#x2713; Peer is Owner</text>
+  <text x="320" y="272" class="check-label">&#x2713; Implicitly authorized</text>
+
+  <!-- ================================================================== -->
+  <!-- CASE 2: Delegate Channel -->
+  <!-- ================================================================== -->
+  <rect x="490" y="130" width="440" height="155" rx="6" fill="#fff" stroke="#3498db" stroke-width="2"/>
+  <!-- Case badge -->
+  <rect x="490" y="130" width="50" height="30" rx="6" fill="#2980b9"/>
+  <text x="515" y="151" class="case-num" text-anchor="middle">2</text>
+  <rect x="540" y="130" width="180" height="30" fill="#2980b9"/>
+  <text x="630" y="150" class="case-title" text-anchor="middle">Delegate Channel Authority</text>
+
+  <!-- Delegate Service box -->
+  <rect x="515" y="175" width="130" height="50" rx="4" fill="#d6eaf8" stroke="#2980b9" stroke-width="1.5"/>
+  <text x="580" y="195" class="box-label" text-anchor="middle">Delegate Service</text>
+  <text x="580" y="210" class="box-detail" text-anchor="middle">Holds PERM.7 cert</text>
+
+  <!-- Arrow: TO2 w/ delegate chain -->
+  <line x1="645" y1="200" x2="735" y2="200" stroke="#2980b9" stroke-width="2" marker-end="url(#arrow-blue)"/>
+  <text x="690" y="193" class="arrow-label-blue" text-anchor="middle">TO2 session</text>
+
+  <!-- Device box -->
+  <rect x="740" y="175" width="170" height="50" rx="4" fill="#eaf2f8" stroke="#2980b9" stroke-width="1.5"/>
+  <text x="825" y="195" class="box-label" text-anchor="middle">Device</text>
+  <text x="825" y="210" class="box-detail" text-anchor="middle">Delegate chain valid</text>
+
+  <!-- Arrow: bare payload -->
+  <line x1="645" y1="240" x2="735" y2="260" stroke="#95a5a6" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrow-gray)"/>
+  <text x="660" y="260" class="box-detail" text-anchor="start">Bare CBOR map</text>
+  <text x="660" y="272" class="box-detail" text-anchor="start">(no signature)</text>
+
+  <!-- Checks -->
+  <text x="780" y="260" class="check-label">&#x2713; x509 chain &#x2192; Owner key</text>
+  <text x="780" y="272" class="check-label">&#x2713; Leaf has PERM.7</text>
+
+  <!-- ================================================================== -->
+  <!-- CASE 3: Owner Artifact -->
+  <!-- ================================================================== -->
+  <rect x="30" y="300" width="440" height="230" rx="6" fill="#fff" stroke="#e67e22" stroke-width="2"/>
+  <!-- Case badge -->
+  <rect x="30" y="300" width="50" height="30" rx="6" fill="#e67e22"/>
+  <text x="55" y="321" class="case-num" text-anchor="middle">3</text>
+  <rect x="80" y="300" width="180" height="30" fill="#e67e22"/>
+  <text x="170" y="320" class="case-title" text-anchor="middle">Owner-Signed Artifact</text>
+
+  <!-- Owner (offline) box -->
+  <rect x="55" y="345" width="110" height="45" rx="4" fill="#fdebd0" stroke="#e67e22" stroke-width="1.5"/>
+  <text x="110" y="363" class="box-label" text-anchor="middle">Owner</text>
+  <text x="110" y="378" class="box-detail" text-anchor="middle">(offline signer)</text>
+
+  <!-- Signed artifact -->
+  <rect x="190" y="345" width="120" height="45" rx="4" fill="#f9e79f" stroke="#f39c12" stroke-width="1.5"/>
+  <text x="250" y="360" class="box-label" text-anchor="middle">COSE_Sign1</text>
+  <text x="250" y="373" class="box-detail-mono" text-anchor="middle">tag 18 | no x5chain</text>
+  <text x="250" y="385" class="box-detail-mono" text-anchor="middle">+ scope constraints</text>
+
+  <!-- Arrow: sign -->
+  <line x1="165" y1="367" x2="185" y2="367" stroke="#e67e22" stroke-width="2" marker-end="url(#arrow-red)"/>
+
+  <!-- Conduit box -->
+  <rect x="55" y="410" width="110" height="40" rx="4" fill="#f2f3f4" stroke="#95a5a6" stroke-width="1"/>
+  <text x="110" y="428" class="box-label" text-anchor="middle">Conduit</text>
+  <text x="110" y="440" class="box-detail" text-anchor="middle">(any service)</text>
+
+  <!-- Arrow: deliver -->
+  <line x1="250" y1="395" x2="250" y2="410" stroke="#95a5a6" stroke-width="1" stroke-dasharray="3,3"/>
+  <line x1="165" y1="425" x2="310" y2="470" stroke="#95a5a6" stroke-width="1.5" marker-end="url(#arrow-gray)"/>
+  <text x="225" y="455" class="box-detail" text-anchor="middle">delivers</text>
+
+  <!-- Device box -->
+  <rect x="315" y="455" width="140" height="60" rx="4" fill="#eaf2f8" stroke="#2980b9" stroke-width="1.5"/>
+  <text x="385" y="475" class="box-label" text-anchor="middle">Device</text>
+  <text x="385" y="490" class="check-label" text-anchor="middle">&#x2713; Sig vs Owner key</text>
+  <text x="385" y="502" class="check-label" text-anchor="middle">&#x2713; content_type</text>
+  <text x="385" y="514" class="check-label" text-anchor="middle">&#x2713; scope (guid, time)</text>
+
+  <!-- ================================================================== -->
+  <!-- CASE 4: Delegate Artifact -->
+  <!-- ================================================================== -->
+  <rect x="490" y="300" width="440" height="230" rx="6" fill="#fff" stroke="#8e44ad" stroke-width="2"/>
+  <!-- Case badge -->
+  <rect x="490" y="300" width="50" height="30" rx="6" fill="#8e44ad"/>
+  <text x="515" y="321" class="case-num" text-anchor="middle">4</text>
+  <rect x="540" y="300" width="200" height="30" fill="#8e44ad"/>
+  <text x="640" y="320" class="case-title" text-anchor="middle">Delegate-Signed Artifact</text>
+
+  <!-- Owner (offline) box -->
+  <rect x="515" y="345" width="100" height="40" rx="4" fill="#fdebd0" stroke="#e67e22" stroke-width="1.5"/>
+  <text x="565" y="363" class="box-label" text-anchor="middle">Owner</text>
+  <text x="565" y="377" class="box-detail" text-anchor="middle">issues cert</text>
+
+  <!-- Arrow: issues cert -->
+  <line x1="615" y1="365" x2="650" y2="365" stroke="#e67e22" stroke-width="1.5" marker-end="url(#arrow-red)"/>
+
+  <!-- Delegate signer box -->
+  <rect x="655" y="345" width="110" height="40" rx="4" fill="#e8daef" stroke="#8e44ad" stroke-width="1.5"/>
+  <text x="710" y="363" class="box-label" text-anchor="middle">Delegate</text>
+  <text x="710" y="377" class="box-detail" text-anchor="middle">(IT team)</text>
+
+  <!-- Signed artifact -->
+  <rect x="790" y="345" width="120" height="45" rx="4" fill="#f9e79f" stroke="#f39c12" stroke-width="1.5"/>
+  <text x="850" y="360" class="box-label" text-anchor="middle">COSE_Sign1</text>
+  <text x="850" y="373" class="box-detail-mono" text-anchor="middle">tag 18 + x5chain</text>
+  <text x="850" y="385" class="box-detail-mono" text-anchor="middle">+ scope constraints</text>
+
+  <!-- Arrow: sign -->
+  <line x1="765" y1="367" x2="785" y2="367" stroke="#8e44ad" stroke-width="2" marker-end="url(#arrow-red)"/>
+
+  <!-- Conduit box -->
+  <rect x="655" y="410" width="110" height="40" rx="4" fill="#f2f3f4" stroke="#95a5a6" stroke-width="1"/>
+  <text x="710" y="428" class="box-label" text-anchor="middle">Conduit</text>
+  <text x="710" y="440" class="box-detail" text-anchor="middle">(any service)</text>
+
+  <!-- Arrow: deliver -->
+  <line x1="850" y1="395" x2="850" y2="410" stroke="#95a5a6" stroke-width="1" stroke-dasharray="3,3"/>
+  <line x1="765" y1="425" x2="810" y2="470" stroke="#95a5a6" stroke-width="1.5" marker-end="url(#arrow-gray)"/>
+  <text x="780" y="455" class="box-detail" text-anchor="middle">delivers</text>
+
+  <!-- Device box -->
+  <rect x="730" y="455" width="185" height="60" rx="4" fill="#eaf2f8" stroke="#2980b9" stroke-width="1.5"/>
+  <text x="822" y="472" class="box-label" text-anchor="middle">Device</text>
+  <text x="822" y="487" class="check-label" text-anchor="middle">&#x2713; x5chain &#x2192; Owner key</text>
+  <text x="822" y="499" class="check-label" text-anchor="middle">&#x2713; Leaf PERM.7, sig valid</text>
+  <text x="822" y="511" class="check-label" text-anchor="middle">&#x2713; content_type, scope</text>
+
+  <!-- ================================================================== -->
+  <!-- BOTTOM: Device Decision Flowchart -->
+  <!-- ================================================================== -->
+  <rect x="30" y="550" width="900" height="255" rx="6" fill="#fff" stroke="#34495e" stroke-width="2"/>
+  <rect x="30" y="550" width="900" height="30" rx="6 6 0 0" fill="#34495e"/>
+  <text x="480" y="570" class="section-title" text-anchor="middle">Device Decision: How the Client Authorizes a Provisioning Message</text>
+
+  <!-- Decision diamond: tag 18? -->
+  <polygon points="170,610 260,640 170,670 80,640" fill="#fef9e7" stroke="#f39c12" stroke-width="1.5"/>
+  <text x="170" y="637" class="box-label" text-anchor="middle">First byte</text>
+  <text x="170" y="650" class="box-detail" text-anchor="middle">0xD2?</text>
+
+  <!-- YES branch (right) -->
+  <line x1="260" y1="640" x2="330" y2="640" stroke="#27ae60" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <text x="290" y="633" class="check-label" text-anchor="middle">YES</text>
+
+  <!-- Parse COSE_Sign1 box -->
+  <rect x="335" y="618" width="120" height="44" rx="4" fill="#eaf2f8" stroke="#2980b9" stroke-width="1"/>
+  <text x="395" y="637" class="box-label" text-anchor="middle">Parse</text>
+  <text x="395" y="650" class="box-detail" text-anchor="middle">COSE_Sign1</text>
+
+  <!-- Arrow -->
+  <line x1="455" y1="640" x2="480" y2="640" stroke="#2980b9" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+
+  <!-- x5chain present? -->
+  <polygon points="560,610 630,640 560,670 490,640" fill="#fef9e7" stroke="#8e44ad" stroke-width="1.5"/>
+  <text x="560" y="637" class="box-label" text-anchor="middle">x5chain</text>
+  <text x="560" y="650" class="box-detail" text-anchor="middle">present?</text>
+
+  <!-- NO branch from x5chain (up) - Owner direct -->
+  <line x1="560" y1="610" x2="560" y2="590" stroke="#e67e22" stroke-width="1.5"/>
+  <line x1="560" y1="590" x2="690" y2="590" stroke="#e67e22" stroke-width="1.5" marker-end="url(#arrow-red)"/>
+  <text x="580" y="585" class="box-detail" text-anchor="start">NO</text>
+
+  <!-- Verify vs Owner key (Case 3) -->
+  <rect x="695" y="575" width="130" height="30" rx="4" fill="#d5f5e3" stroke="#27ae60" stroke-width="1"/>
+  <text x="760" y="595" class="box-detail" text-anchor="middle">Verify sig vs Owner key</text>
+
+  <!-- YES branch from x5chain (right) - Delegate -->
+  <line x1="630" y1="640" x2="690" y2="640" stroke="#8e44ad" stroke-width="1.5" marker-end="url(#arrow-red)"/>
+  <text x="650" y="633" class="box-detail" text-anchor="start">YES</text>
+
+  <!-- Validate chain + verify -->
+  <rect x="695" y="618" width="210" height="44" rx="4" fill="#e8daef" stroke="#8e44ad" stroke-width="1"/>
+  <text x="800" y="635" class="box-detail" text-anchor="middle">Validate x5chain &#x2192; Owner key</text>
+  <text x="800" y="648" class="box-detail" text-anchor="middle">Check PERM.7, verify sig vs leaf</text>
+
+  <!-- Both merge to scope check -->
+  <line x1="760" y1="605" x2="760" y2="678" stroke="#27ae60" stroke-width="1.5"/>
+  <line x1="800" y1="662" x2="800" y2="678" stroke="#8e44ad" stroke-width="1.5"/>
+  <line x1="760" y1="680" x2="800" y2="680" stroke="#34495e" stroke-width="1.5"/>
+  <line x1="780" y1="680" x2="780" y2="695" stroke="#34495e" stroke-width="1.5" marker-end="url(#arrow-gray)"/>
+
+  <!-- Scope check -->
+  <rect x="710" y="698" width="140" height="40" rx="4" fill="#fef9e7" stroke="#f39c12" stroke-width="1"/>
+  <text x="780" y="715" class="box-detail" text-anchor="middle">Evaluate scope:</text>
+  <text x="780" y="728" class="box-detail-mono" text-anchor="middle">guid, not_after, generation</text>
+
+  <!-- Arrow to ACCEPT -->
+  <line x1="780" y1="738" x2="780" y2="760" stroke="#27ae60" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <rect x="730" y="762" width="100" height="28" rx="4" fill="#27ae60"/>
+  <text x="780" y="781" class="section-title" text-anchor="middle">ACCEPT</text>
+
+  <!-- NO branch from tag 18 (down) -->
+  <line x1="170" y1="670" x2="170" y2="700" stroke="#c0392b" stroke-width="1.5"/>
+  <text x="180" y="690" class="fail-label">NO</text>
+
+  <!-- Channel authority check -->
+  <polygon points="170,700 260,730 170,760 80,730" fill="#fef9e7" stroke="#27ae60" stroke-width="1.5"/>
+  <text x="170" y="727" class="box-label" text-anchor="middle">Peer has</text>
+  <text x="170" y="740" class="box-detail" text-anchor="middle">prov. auth?</text>
+
+  <!-- YES from channel -->
+  <line x1="260" y1="730" x2="330" y2="730" stroke="#27ae60" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <text x="290" y="723" class="check-label" text-anchor="middle">YES</text>
+  <rect x="335" y="716" width="130" height="28" rx="4" fill="#d5f5e3" stroke="#27ae60" stroke-width="1"/>
+  <text x="400" y="734" class="box-detail" text-anchor="middle">Channel authority OK</text>
+
+  <!-- Arrow to ACCEPT -->
+  <line x1="465" y1="730" x2="490" y2="730" stroke="#27ae60" stroke-width="2"/>
+  <line x1="490" y1="730" x2="490" y2="762" stroke="#27ae60" stroke-width="2"/>
+  <line x1="490" y1="762" x2="525" y2="776" stroke="#27ae60" stroke-width="2" marker-end="url(#arrow-green)"/>
+  <rect x="530" y="762" width="100" height="28" rx="4" fill="#27ae60"/>
+  <text x="580" y="781" class="section-title" text-anchor="middle">ACCEPT</text>
+
+  <!-- NO from channel -->
+  <line x1="170" y1="760" x2="170" y2="780" stroke="#c0392b" stroke-width="2" marker-end="url(#arrow-red)"/>
+  <rect x="120" y="762" width="100" height="28" rx="4" fill="#c0392b"/>
+  <text x="170" y="781" class="section-title" text-anchor="middle">ERROR 15</text>
+
+  <!-- Failure from artifact path -->
+  <text x="870" y="775" class="fail-label">Any check fails</text>
+  <line x1="870" y1="780" x2="870" y2="790" stroke="#c0392b" stroke-width="2" marker-end="url(#arrow-red)"/>
+  <rect x="835" y="762" width="60" height="28" rx="4" fill="#c0392b"/>
+  <text x="865" y="781" class="section-title" text-anchor="middle">ERR</text>
+
+  <!-- No-downgrade annotation -->
+  <text x="870" y="726" class="fail-label">NO downgrade:</text>
+  <text x="870" y="738" class="box-detail">Failed artifact</text>
+  <text x="870" y="750" class="box-detail">&#x2260; unsigned msg</text>
+
+</svg>

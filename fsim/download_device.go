@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (C) 2024 Intel Corporation
+// SPDX-FileCopyrightText: (C) 2026 Dell Technologies
 // SPDX-License-Identifier: Apache 2.0
 
 package fsim
@@ -157,6 +157,7 @@ func (d *Download) finalize(respond func(string) io.Writer) error {
 		}
 		return fmt.Errorf("name not sent before data transfer completed")
 	}
+	// #nosec G703 -- rename constrained to NameToPath resolver or raw filename
 	if err := os.Rename(d.temp.Name(), resolveName(d.name)); err != nil {
 		if d.ErrorLog != nil {
 			_, _ = fmt.Fprintf(d.ErrorLog, "[file=%s] error renaming file: %v\n", d.name, err)
@@ -171,6 +172,7 @@ func (d *Download) finalize(respond func(string) io.Writer) error {
 func (d *Download) reset() {
 	if d.temp != nil {
 		_ = d.temp.Close()
+		// #nosec G703 -- removing temp file created by module within controlled directory
 		_ = os.Remove(d.temp.Name())
 	}
 	if d.hash == nil {

@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="700" height="190" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .label { font-family: Arial, sans-serif; font-size: 14px; font-weight: bold; fill: #fff; }
+      .sublabel { font-family: Arial, sans-serif; font-size: 11px; fill: rgba(255,255,255,0.85); }
+      .arrow-text { font-family: Arial, sans-serif; font-size: 11px; fill: #2c3e50; font-weight: bold; }
+      .arrow-detail { font-family: Arial, sans-serif; font-size: 10px; fill: #7f8c8d; }
+      .note { font-family: Arial, sans-serif; font-size: 11px; fill: #7f8c8d; font-style: italic; }
+    </style>
+    <marker id="arr-o" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+      <polygon points="0 1, 10 5, 0 9" fill="#e67e22" />
+    </marker>
+    <marker id="arr-b" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+      <polygon points="0 1, 10 5, 0 9" fill="#2980b9" />
+    </marker>
+  </defs>
+
+  <rect width="700" height="190" fill="#fafafa" rx="6"/>
+
+  <!-- Owner -->
+  <rect x="30" y="30" width="130" height="70" rx="10" fill="#e67e22"/>
+  <text x="95" y="60" class="label" text-anchor="middle">Owner</text>
+  <text x="95" y="78" class="sublabel" text-anchor="middle">master key</text>
+
+  <!-- Arrow: delegates -->
+  <line x1="160" y1="65" x2="220" y2="65" stroke="#e67e22" stroke-width="2.5" marker-end="url(#arr-o)"/>
+  <text x="190" y="55" class="arrow-text" text-anchor="middle">cert</text>
+
+  <!-- Delegated Service -->
+  <rect x="225" y="25" width="180" height="80" rx="10" fill="#2980b9"/>
+  <text x="315" y="52" class="label" text-anchor="middle">Delegated Service</text>
+  <text x="315" y="70" class="sublabel" text-anchor="middle">has certificate with</text>
+  <text x="315" y="85" class="sublabel" text-anchor="middle">scoped permissions</text>
+
+  <!-- Arrow: payload -->
+  <line x1="405" y1="65" x2="475" y2="65" stroke="#2980b9" stroke-width="2.5" marker-end="url(#arr-b)"/>
+  <text x="440" y="55" class="arrow-text" text-anchor="middle">payload</text>
+
+  <!-- Device -->
+  <rect x="480" y="25" width="190" height="80" rx="10" fill="#2c3e50"/>
+  <text x="575" y="52" class="label" text-anchor="middle">Device</text>
+  <text x="575" y="70" class="sublabel" text-anchor="middle">validates certificate</text>
+  <text x="575" y="85" class="sublabel" text-anchor="middle">back to Owner key</text>
+
+  <!-- Note -->
+  <text x="350" y="140" class="note" text-anchor="middle">The Owner extends trust to other services via certificates.</text>
+  <text x="350" y="157" class="note" text-anchor="middle">Permissions scope what each delegate can do (e.g. may provision, may redirect).</text>
+</svg>

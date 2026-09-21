@@ -5,98 +5,63 @@ package main
 
 import (
 	"crypto"
-	"crypto/hmac"
-	"crypto/sha256"
-	"crypto/sha512"
 	"fmt"
 	"hash"
-	"os"
-	"path/filepath"
 
 	"github.com/fido-device-onboard/go-fdo"
-	"github.com/fido-device-onboard/go-fdo/blob"
-	"github.com/fido-device-onboard/go-fdo/cbor"
-	"github.com/fido-device-onboard/go-fdo/tpm"
+	"github.com/fido-device-onboard/go-fdo/cred"
+	"github.com/fido-device-onboard/go-fdo/protocol"
 )
 
-func readCred() (_ *fdo.DeviceCredential, hmacSha256, hmacSha384 hash.Hash, key crypto.Signer, cleanup func() error, _ error) {
-	if tpmPath != "" {
-		// DeviceCredential requires integrity, so it is stored as a file and
-		// expected to be protected. In the future, it should be stored in the
-		// TPM and access-protected with a policy.
-		var dc tpm.DeviceCredential
-		if err := readCredFile(&dc); err != nil {
-			return nil, nil, nil, nil, nil, err
-		}
+// credStore is the active credential store for the session.
+// Build tags on the cred package select the backend (blob, tpm, tpmsim).
+var credStore cred.Store
 
-		hmacSha256, hmacSha384, key, cleanup, err := tpmCred()
-		if err != nil {
-			return nil, nil, nil, nil, nil, err
-		}
-		return &dc.DeviceCredential, hmacSha256, hmacSha384, key, cleanup, nil
-	}
-
-	var dc blob.DeviceCredential
-	if err := readCredFile(&dc); err != nil {
-		return nil, nil, nil, nil, nil, err
-	}
-	return &dc.DeviceCredential,
-		hmac.New(sha256.New, dc.HmacSecret),
-		hmac.New(sha512.New384, dc.HmacSecret),
-		dc.PrivateKey,
-		nil,
-		nil
-}
-
-func readCredFile(v any) error {
-	blobData, err := os.ReadFile(filepath.Clean(blobPath))
+func openCredStore() error {
+	var err error
+	credStore, err = cred.Open(blobPath)
 	if err != nil {
-		return fmt.Errorf("error reading blob credential %q: %w", blobPath, err)
-	}
-	if err := cbor.Unmarshal(blobData, v); err != nil {
-		return fmt.Errorf("error parsing blob credential %q: %w", blobPath, err)
-	}
-	if printDevice {
-		fmt.Printf("%+v\n", v)
+		return fmt.Errorf("opening credential store: %w", err)
 	}
 	return nil
 }
 
-func updateCred(newDC fdo.DeviceCredential) error {
-	if tpmPath != "" {
-		var dc tpm.DeviceCredential
-		if err := readCredFile(&dc); err != nil {
-			return err
-		}
-		dc.DeviceCredential = newDC
-		return saveCred(dc)
+// ensureCredStore lazily opens the credential store if not already open.
+func ensureCredStore() error {
+	if credStore != nil {
+		return nil
 	}
-
-	var dc blob.DeviceCredential
-	if err := readCredFile(&dc); err != nil {
-		return err
-	}
-	dc.DeviceCredential = newDC
-	return saveCred(dc)
+	return openCredStore()
 }
 
-func saveCred(dc any) error {
-	// Encode device credential to temp file
-	tmp, err := os.CreateTemp(".", "fdo_cred_*")
-	if err != nil {
-		return fmt.Errorf("error creating temp file for device credential: %w", err)
+func newDICred(keyType protocol.KeyType) (hash.Hash, hash.Hash, crypto.Signer, error) {
+	if err := ensureCredStore(); err != nil {
+		return nil, nil, nil, err
 	}
-	defer func() { _ = tmp.Close() }()
+	return credStore.NewDI(keyType)
+}
 
-	if err := cbor.NewEncoder(tmp).Encode(dc); err != nil {
+func saveCred(dc fdo.DeviceCredential) error {
+	if err := ensureCredStore(); err != nil {
 		return err
 	}
+	return credStore.Save(dc)
+}
 
-	// Rename temp file to given blob path
-	_ = tmp.Close()
-	if err := os.Rename(tmp.Name(), blobPath); err != nil {
-		return fmt.Errorf("error renaming temp blob credential to %q: %w", blobPath, err)
+func readCred() (_ *fdo.DeviceCredential, hmacSha256, hmacSha384 hash.Hash, key crypto.Signer, _ error) {
+	if err := ensureCredStore(); err != nil {
+		return nil, nil, nil, nil, err
 	}
+	dc, h256, h384, k, err := credStore.Load()
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	return dc, h256, h384, k, nil
+}
 
+func closeCredStore() error {
+	if credStore != nil {
+		return credStore.Close()
+	}
 	return nil
 }

@@ -77,6 +77,14 @@ const (
 	// Messages: TO2.SetupDevice
 	CredReuseErrCode = 102
 
+	// CHANGE_CAP_ERROR: Based on received capability flags or vendor capabilities,
+	// the client has determined that another set of protocol options (e.g., a different
+	// protocol version) is needed. As a courtesy, this error message indicates that
+	// the client is intending to restart the connection.
+	//
+	// Messages: Any
+	SwitchVersionErrCode = 103
+
 	// Something went wrong which couldn’t be classified otherwise.  (This was
 	// chosen to match the HTTP 500 error code.)
 	//

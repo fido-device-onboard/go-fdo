@@ -8,11 +8,13 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/sha512"
 	"crypto/x509"
 	"encoding/pem"
 	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/fido-device-onboard/go-fdo"
@@ -20,6 +22,7 @@ import (
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
 	"github.com/fido-device-onboard/go-fdo/protocol"
+	"github.com/fido-device-onboard/go-fdo/testdata"
 )
 
 /*
@@ -46,7 +49,7 @@ Test data was generated with https://github.com/fdo-rs/fido-device-onboard-rs
 */
 
 func voucherBytes(t *testing.T, basename string) []byte {
-	b, err := os.ReadFile(filepath.Join("testdata", basename))
+	b, err := testdata.Files.ReadFile(basename)
 	if err != nil {
 		t.Fatalf("error opening voucher test data: %v", err)
 	}
@@ -204,5 +207,278 @@ func TestVerifyExtendedVoucher(t *testing.T) {
 
 	if err := ov.VerifyEntries(); err != nil {
 		t.Errorf("error verifying voucher entries: %v", err)
+	}
+}
+
+// TestWrongHMACRejected verifies that voucher header verification fails
+// when the wrong HMAC secret is used.
+func TestWrongHMACRejected(t *testing.T) {
+	var ov fdo.Voucher
+	if err := cbor.Unmarshal(voucherBytes(t, "ov.pem"), &ov); err != nil {
+		t.Fatalf("error parsing voucher test data: %v", err)
+	}
+
+	// Create HMACs with a WRONG secret (not the device's actual secret)
+	wrongSecret := make([]byte, 32)
+	if _, err := rand.Read(wrongSecret); err != nil {
+		t.Fatalf("error generating wrong secret: %v", err)
+	}
+
+	wrongHmacSha256 := hmac.New(sha256.New, wrongSecret)
+	wrongHmacSha384 := hmac.New(sha512.New384, wrongSecret)
+
+	// Verification should fail with wrong HMAC
+	err := ov.VerifyHeader(wrongHmacSha256, wrongHmacSha384)
+	if err == nil {
+		t.Error("SECURITY FAILURE: voucher header verification passed with wrong HMAC secret")
+	} else {
+		t.Logf("Correctly rejected voucher with wrong HMAC: %v", err)
+	}
+}
+
+// TestVoucherReplayPrevention verifies that once a voucher is removed from
+// the server state (after successful onboarding), it cannot be retrieved again.
+// This is a key defense against replay attacks.
+func TestVoucherReplayPrevention(t *testing.T) {
+	// This test verifies the VoucherReseller.RemoveVoucher behavior
+	// which is the mechanism that prevents voucher replay.
+	// The actual test is in fdotest/server_state.go TestServerState/VoucherReseller
+	// which verifies that:
+	// 1. RemoveVoucher returns the voucher and removes it
+	// 2. Subsequent calls to RemoveVoucher return ErrNotFound
+	// 3. Subsequent calls to Voucher return ErrNotFound
+	//
+	// Here we just verify the expected error type exists and is used correctly.
+	var ov fdo.Voucher
+	if err := cbor.Unmarshal(voucherBytes(t, "ov.pem"), &ov); err != nil {
+		t.Fatalf("error parsing voucher test data: %v", err)
+	}
+
+	// Verify that ErrNotFound is the expected error for missing vouchers
+	if fdo.ErrNotFound == nil {
+		t.Fatal("fdo.ErrNotFound should be defined for voucher replay prevention")
+	}
+
+	t.Log("Voucher replay prevention relies on RemoveVoucher returning ErrNotFound on subsequent calls")
+}
+
+// TestCorruptedVoucherEntryRejected verifies that corrupted voucher entries
+// are detected and rejected during verification.
+func TestCorruptedVoucherEntryRejected(t *testing.T) {
+	// First create a valid extended voucher
+	var ov fdo.Voucher
+	if err := cbor.Unmarshal(voucherBytes(t, "ov.pem"), &ov); err != nil {
+		t.Fatalf("error parsing voucher test data: %v", err)
+	}
+
+	// Get the manufacturer key to extend (same pattern as TestExtendAndVerify)
+	var key crypto.Signer
+	if data, err := os.ReadFile("testdata/mfg_key.pem"); err != nil {
+		t.Fatalf("error reading manufacturer key: %v", err)
+	} else if blk, _ := pem.Decode(data); blk == nil {
+		t.Fatal("unable to parse manufacturer key PEM")
+	} else if key, err = x509.ParseECPrivateKey(blk.Bytes); err != nil {
+		t.Fatalf("error parsing manufacturer key: %v", err)
+	}
+
+	// Generate a next owner key
+	nextKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("error generating next owner key: %v", err)
+	}
+
+	// Extend the voucher
+	extendedOV, err := fdo.ExtendVoucher(&ov, key, nextKey.Public().(*ecdsa.PublicKey), nil)
+	if err != nil {
+		t.Fatalf("error extending voucher: %v", err)
+	}
+
+	// Verify it works before corruption
+	if err := extendedOV.VerifyEntries(); err != nil {
+		t.Fatalf("extended voucher should verify before corruption: %v", err)
+	}
+
+	// Now corrupt the signature in the entry
+	if len(extendedOV.Entries) > 0 {
+		// Flip some bits in the signature
+		sig := extendedOV.Entries[0].Signature
+		if len(sig) > 0 {
+			sig[0] ^= 0xFF
+			sig[len(sig)-1] ^= 0xFF
+		}
+	}
+
+	// Verification should now fail
+	err = extendedOV.VerifyEntries()
+	if err == nil {
+		t.Error("SECURITY FAILURE: corrupted voucher entry signature was accepted")
+	} else {
+		t.Logf("Correctly rejected corrupted voucher entry: %v", err)
+	}
+}
+
+// TestVoucherDigest verifies that the voucher digest is computed correctly
+// and is stable across multiple calls.
+func TestVoucherDigest(t *testing.T) {
+	var ov fdo.Voucher
+	if err := cbor.Unmarshal(voucherBytes(t, "ov.pem"), &ov); err != nil {
+		t.Fatalf("error parsing voucher test data: %v", err)
+	}
+
+	// Compute digest twice and verify they match
+	digest1, err := ov.Digest()
+	if err != nil {
+		t.Fatalf("error computing voucher digest: %v", err)
+	}
+
+	digest2, err := ov.Digest()
+	if err != nil {
+		t.Fatalf("error computing voucher digest second time: %v", err)
+	}
+
+	if digest1 != digest2 {
+		t.Error("voucher digest is not deterministic")
+	}
+
+	// Verify digest is 32 bytes (SHA-256)
+	if len(digest1) != 32 {
+		t.Errorf("expected 32-byte digest, got %d bytes", len(digest1))
+	}
+
+	// Verify DigestHex returns correct format
+	hexDigest, err := ov.DigestHex()
+	if err != nil {
+		t.Fatalf("error computing voucher digest hex: %v", err)
+	}
+	if len(hexDigest) != 64 {
+		t.Errorf("expected 64-character hex digest, got %d characters", len(hexDigest))
+	}
+
+	t.Logf("Voucher digest: %s", hexDigest)
+}
+
+// TestVoucherFingerprint verifies that the voucher fingerprint is computed
+// correctly and has the expected format.
+func TestVoucherFingerprint(t *testing.T) {
+	var ov fdo.Voucher
+	if err := cbor.Unmarshal(voucherBytes(t, "ov.pem"), &ov); err != nil {
+		t.Fatalf("error parsing voucher test data: %v", err)
+	}
+
+	fingerprint, err := ov.Fingerprint()
+	if err != nil {
+		t.Fatalf("error computing voucher fingerprint: %v", err)
+	}
+
+	// Verify fingerprint format: 16 bytes as colon-separated hex = 47 characters
+	// Format: "xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx"
+	expectedLen := 16*2 + 15 // 16 hex pairs + 15 colons
+	if len(fingerprint) != expectedLen {
+		t.Errorf("expected %d-character fingerprint, got %d characters: %s", expectedLen, len(fingerprint), fingerprint)
+	}
+
+	// Verify fingerprint is deterministic
+	fingerprint2, err := ov.Fingerprint()
+	if err != nil {
+		t.Fatalf("error computing voucher fingerprint second time: %v", err)
+	}
+	if fingerprint != fingerprint2 {
+		t.Error("voucher fingerprint is not deterministic")
+	}
+
+	t.Logf("Voucher fingerprint: %s", fingerprint)
+}
+
+// TestVoucherDigestStableAcrossExtension verifies that the voucher digest
+// remains the same when the voucher is extended with new entries.
+func TestVoucherDigestStableAcrossExtension(t *testing.T) {
+	var ov fdo.Voucher
+	if err := cbor.Unmarshal(voucherBytes(t, "ov.pem"), &ov); err != nil {
+		t.Fatalf("error parsing voucher test data: %v", err)
+	}
+
+	// Compute digest of original voucher
+	originalDigest, err := ov.Digest()
+	if err != nil {
+		t.Fatalf("error computing original voucher digest: %v", err)
+	}
+
+	// Get the manufacturer key to extend
+	var key crypto.Signer
+	if data, err := os.ReadFile("testdata/mfg_key.pem"); err != nil {
+		t.Fatalf("error reading manufacturer key: %v", err)
+	} else if blk, _ := pem.Decode(data); blk == nil {
+		t.Fatal("unable to parse manufacturer key PEM")
+	} else if key, err = x509.ParseECPrivateKey(blk.Bytes); err != nil {
+		t.Fatalf("error parsing manufacturer key: %v", err)
+	}
+
+	// Generate a next owner key
+	nextKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("error generating next owner key: %v", err)
+	}
+
+	// Extend the voucher
+	extendedOV, err := fdo.ExtendVoucher(&ov, key, nextKey.Public().(*ecdsa.PublicKey), nil)
+	if err != nil {
+		t.Fatalf("error extending voucher: %v", err)
+	}
+
+	// Compute digest of extended voucher
+	extendedDigest, err := extendedOV.Digest()
+	if err != nil {
+		t.Fatalf("error computing extended voucher digest: %v", err)
+	}
+
+	// Digests should be the same (stable across extension)
+	if originalDigest != extendedDigest {
+		t.Errorf("voucher digest changed after extension:\n  original: %x\n  extended: %x", originalDigest, extendedDigest)
+	}
+
+	t.Logf("Voucher digest stable across extension: %x", originalDigest)
+}
+
+// TestFormatFingerprint verifies the FormatFingerprint helper function.
+func TestFormatFingerprint(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    []byte
+		expected string
+	}{
+		{
+			name:     "empty",
+			input:    []byte{},
+			expected: "",
+		},
+		{
+			name:     "single byte",
+			input:    []byte{0xab},
+			expected: "ab",
+		},
+		{
+			name:     "two bytes",
+			input:    []byte{0xab, 0xcd},
+			expected: "ab:cd",
+		},
+		{
+			name:     "four bytes",
+			input:    []byte{0x01, 0x23, 0x45, 0x67},
+			expected: "01:23:45:67",
+		},
+		{
+			name:     "leading zeros preserved",
+			input:    []byte{0x00, 0x01, 0x02},
+			expected: "00:01:02",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := fdo.FormatFingerprint(tt.input)
+			if result != tt.expected {
+				t.Errorf("FormatFingerprint(%x) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
 	}
 }

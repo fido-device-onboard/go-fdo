@@ -65,6 +65,12 @@ func NewProducer(moduleName string, mtu uint16) *Producer {
 	}
 }
 
+// MTU returns the maximum transmission unit for service info messages.
+// This is the negotiated MTU minus protocol overhead.
+func (p *Producer) MTU() int {
+	return int(p.mtu)
+}
+
 // Available returns the remaining space available for a message body in bytes.
 // If the next service info will not fit in the remaining bytes, then the
 // module should return and on the next ProduceInfo the full MTU will be

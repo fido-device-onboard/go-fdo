@@ -12,6 +12,7 @@ import (
 	"github.com/google/go-tpm/tpm2/transport/simulator"
 
 	"github.com/fido-device-onboard/go-fdo"
+	"github.com/fido-device-onboard/go-fdo/blob"
 	"github.com/fido-device-onboard/go-fdo/fdotest"
 	"github.com/fido-device-onboard/go-fdo/protocol"
 	"github.com/fido-device-onboard/go-fdo/tpm"
@@ -57,9 +58,9 @@ func TestTPMDevice(t *testing.T) {
 				t.Fatalf("error generating device key: %v", err)
 			}
 			return hmacSha256, hmacSha384, key, func(dc fdo.DeviceCredential) any {
-				return tpm.DeviceCredential{
+				return blob.DeviceCredential{
+					Active:           true,
 					DeviceCredential: dc,
-					DeviceKey:        tpm.FdoDeviceKey,
 				}
 			}
 		},

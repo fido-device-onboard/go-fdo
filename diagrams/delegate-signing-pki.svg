@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="780" height="280" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .label { font-family: Arial, sans-serif; font-size: 14px; font-weight: bold; fill: #fff; }
+      .sublabel { font-family: Arial, sans-serif; font-size: 11px; fill: rgba(255,255,255,0.85); }
+      .arrow-text { font-family: Arial, sans-serif; font-size: 11px; fill: #2c3e50; font-weight: bold; }
+      .arrow-detail { font-family: Arial, sans-serif; font-size: 10px; fill: #7f8c8d; font-style: italic; }
+      .note { font-family: Arial, sans-serif; font-size: 10px; fill: #95a5a6; font-style: italic; }
+      .cert-text { font-family: 'Courier New', monospace; font-size: 9px; fill: #8e44ad; }
+    </style>
+    <marker id="arr" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+      <polygon points="0 1, 10 5, 0 9" fill="#2c3e50" />
+    </marker>
+    <marker id="arr-purple" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+      <polygon points="0 1, 10 5, 0 9" fill="#8e44ad" />
+    </marker>
+    <marker id="arr-orange" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+      <polygon points="0 1, 10 5, 0 9" fill="#e67e22" />
+    </marker>
+  </defs>
+
+  <rect width="780" height="280" fill="#fafafa" rx="6"/>
+
+  <!-- Owner box -->
+  <rect x="40" y="40" width="140" height="65" rx="8" fill="#e67e22"/>
+  <text x="110" y="67" class="label" text-anchor="middle">Owner</text>
+  <text x="110" y="84" class="sublabel" text-anchor="middle">retains Owner key</text>
+  <text x="110" y="97" class="sublabel" text-anchor="middle">(stays in vault)</text>
+
+  <!-- Arrow: issues cert -->
+  <line x1="180" y1="72" x2="270" y2="72" stroke="#e67e22" stroke-width="2.5" marker-end="url(#arr-orange)"/>
+  <text x="225" y="63" class="arrow-text" text-anchor="middle">issues</text>
+  <text x="225" y="88" class="arrow-detail" text-anchor="middle">PERM.7 cert</text>
+
+  <!-- Delegate box -->
+  <rect x="275" y="40" width="160" height="65" rx="8" fill="#8e44ad"/>
+  <text x="355" y="67" class="label" text-anchor="middle">Delegate</text>
+  <text x="355" y="84" class="sublabel" text-anchor="middle">IT team member</text>
+  <text x="355" y="97" class="sublabel" text-anchor="middle">or build system</text>
+
+  <!-- Arrow: signs artifact -->
+  <line x1="435" y1="72" x2="520" y2="72" stroke="#8e44ad" stroke-width="2.5" marker-end="url(#arr-purple)"/>
+  <text x="477" y="63" class="arrow-text" text-anchor="middle">signs</text>
+  <text x="477" y="88" class="arrow-detail" text-anchor="middle">with delegate key</text>
+
+  <!-- Signed artifact box -->
+  <rect x="525" y="35" width="210" height="80" rx="8" fill="#f39c12"/>
+  <text x="630" y="60" class="label" text-anchor="middle">Signed Artifact</text>
+  <text x="630" y="78" class="sublabel" text-anchor="middle">COSE_Sign1 (tag 18)</text>
+  <text x="630" y="93" class="sublabel" text-anchor="middle">+ x5chain header</text>
+  <text x="630" y="108" class="sublabel" text-anchor="middle">+ scope constraints</text>
+
+  <!-- Device verification chain -->
+  <rect x="525" y="145" width="210" height="75" rx="8" fill="#2980b9"/>
+  <text x="630" y="168" class="label" text-anchor="middle">Device Verifies</text>
+  <text x="630" y="186" class="sublabel" text-anchor="middle">x5chain chains to Owner key?</text>
+  <text x="630" y="200" class="sublabel" text-anchor="middle">Leaf has PERM.7?</text>
+  <text x="630" y="214" class="sublabel" text-anchor="middle">Signature valid with leaf key?</text>
+
+  <!-- Arrow: artifact to device -->
+  <line x1="630" y1="115" x2="630" y2="140" stroke="#2c3e50" stroke-width="2" marker-end="url(#arr)"/>
+
+  <!-- Trust chain annotation -->
+  <line x1="110" y1="105" x2="110" y2="170" stroke="#e67e22" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="110" y1="170" x2="520" y2="170" stroke="#e67e22" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arr-orange)"/>
+  <text x="310" y="165" class="cert-text" text-anchor="middle">trust chain: delegate cert was signed by Owner key</text>
+
+  <!-- Bottom notes -->
+  <text x="390" y="248" class="note" text-anchor="middle">The Owner never gives out the Owner key. Delegates sign with their own keys under Owner authority.</text>
+  <text x="390" y="263" class="note" text-anchor="middle">The device validates the certificate chain back to the Owner key it already trusts from the voucher.</text>
+</svg>
