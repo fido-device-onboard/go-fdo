@@ -41,11 +41,11 @@ schema = 3
     version = "v0.0.22"
     hash = "sha256-6O/0jc33pKUzlzUGpH8Ekk54XgJvx6Qe7kJtbcNJAV4="
   [mod."github.com/ncruces/go-sqlite3"]
-    version = "v0.35.4"
-    hash = "sha256-d/YFOKcN21W2ozr355XSmGPYGBFQm+tOIlQUasl0m2c="
-  [mod."github.com/ncruces/go-sqlite3-wasm/v5"]
-    version = "v5.0.35304"
-    hash = "sha256-G/I2/cwtO44jjrHzrigUvrzyWgZoQL0sBwVgOXXFcwQ="
+    version = "v0.35.5"
+    hash = "sha256-L+rJUv2mu2CJdA+a+N2aiusCcv0M3J182upODE0yD+k="
+  [mod."github.com/ncruces/go-sqlite3-wasm/v6"]
+    version = "v6.2.35304"
+    hash = "sha256-iIv+ApTUi7t92kNhJAWgb8edRiJeW7ZXYmbjvQkzbjE="
   [mod."github.com/ncruces/julianday"]
     version = "v1.0.0"
     hash = "sha256-EelxOI6DLHy0jYnAcTeda24wLWkGOYuFtoJvuDg874s="
@@ -77,17 +77,17 @@ schema = 3
     version = "v1.11.0"
     hash = "sha256-Lb6rHHfR62Ozg2j2JZy3MKOMKdsfzd1IYTR57r3Mhp0="
   [mod."golang.org/x/crypto"]
-    version = "v0.55.0"
-    hash = "sha256-99uV/ESeqhaDEwqbXxDpePuwzO0JoEHGhqZXZVHq/H4="
+    version = "v0.57.0"
+    hash = "sha256-3/hkB+mZVBKnoxUaJv7DOzvxaL+8uQ7V6ofW4JiHhz4="
   [mod."golang.org/x/sys"]
-    version = "v0.47.0"
-    hash = "sha256-TpbRyWWqHjddP6QzUgAbaLd2EE0S+GYNRUIDJd18r98="
+    version = "v0.48.0"
+    hash = "sha256-u+LwI76YIeg1asQKZItD2mnL4Yvx8veLhBuL8wv60Ls="
   [mod."golang.org/x/term"]
-    version = "v0.45.0"
-    hash = "sha256-vPBeJkepEZ1D9k4oaV20IuQlVmfAFv15KQgnhl9MNgw="
+    version = "v0.46.0"
+    hash = "sha256-w/LexmQ91G8N1zdjIujuaEIONVfAg7U/DciHVYp0+QY="
   [mod."golang.org/x/text"]
-    version = "v0.41.0"
-    hash = "sha256-22nHcolG87qSPahT2Ey8S5iGlCLAglE9ObYXO6XZ3ZY="
+    version = "v0.42.0"
+    hash = "sha256-bviKbNmkN4Yf2dpgwmP6yNcZEakCcv1R+YyAxCdJGkY="
   [mod."google.golang.org/protobuf"]
     version = "v1.36.11"
     hash = "sha256-7W+6jntfI/awWL3JP6yQedxqP5S9o3XvPgJ2XxxsIeE="
