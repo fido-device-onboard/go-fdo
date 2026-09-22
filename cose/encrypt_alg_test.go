@@ -13,6 +13,12 @@ import (
 )
 
 func TestEncryptDecrypt(t *testing.T) {
+	type testCase struct {
+		Name      string
+		Plaintext []byte
+		AAD       []byte
+	}
+
 	for _, table := range []struct {
 		AlgName string
 		Alg     func([]byte) (Crypter, error)
@@ -29,26 +35,80 @@ func TestEncryptDecrypt(t *testing.T) {
 		{AlgName: "AES-CBC", Alg: aesCbc, KeyBits: 256},
 	} {
 		t.Run(table.AlgName+"-"+strconv.Itoa(table.KeyBits), func(t *testing.T) {
-			key := make([]byte, table.KeyBits/8)
-			crypter, err := table.Alg(key)
-			if err != nil {
-				t.Fatal(err)
+			cases := []testCase{
+				{
+					Name:      "NonEmptyPlaintext/EmptyAAD",
+					Plaintext: []byte("Hello World!"),
+					AAD:       []byte{},
+				},
+			}
+			if table.AlgName == "AES-GCM" {
+				cases = []testCase{
+					{
+						Name:      "EmptyPlaintext/EmptyAAD",
+						Plaintext: []byte{},
+						AAD:       []byte{},
+					},
+					{
+						Name:      "EmptyPlaintext/NonEmptyAAD",
+						Plaintext: []byte{},
+						AAD:       []byte("additional authenticated data"),
+					},
+					{
+						Name:      "NonEmptyPlaintext/EmptyAAD",
+						Plaintext: []byte("Hello World!"),
+						AAD:       []byte{},
+					},
+					{
+						Name:      "NonEmptyPlaintext/NonEmptyAAD",
+						Plaintext: []byte("Hello World!"),
+						AAD:       []byte("additional authenticated data"),
+					},
+				}
 			}
 
-			expected := []byte("Hello World!")
-			plaintext := make([]byte, len(expected))
-			copy(plaintext, expected)
+			for _, tc := range cases {
+				t.Run(tc.Name, func(t *testing.T) {
+					key := make([]byte, table.KeyBits/8)
+					crypter, err := table.Alg(key)
+					if err != nil {
+						t.Fatalf("creating crypter: %v", err)
+					}
 
-			ciphertext, unprotected, err := crypter.Encrypt(rand.Reader, plaintext, []byte{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			got, err := crypter.Decrypt(rand.Reader, ciphertext, []byte{}, unprotected)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !bytes.Equal(expected, got) {
-				t.Fatalf("expected %q, got %q", string(expected), string(got))
+					plaintext := make([]byte, len(tc.Plaintext))
+					copy(plaintext, tc.Plaintext)
+
+					ciphertext, unprotected, err := crypter.Encrypt(rand.Reader, plaintext, tc.AAD)
+					if err != nil {
+						t.Fatalf("encrypting: %v", err)
+					}
+
+					if table.AlgName == "AES-GCM" {
+						// COSE carries the 12 byte GCM nonce in the IV header
+						var iv []byte
+						if ok, err := unprotected.Parse(IvLabel, &iv); err != nil {
+							t.Fatalf("parsing IV header: %v", err)
+						} else if !ok {
+							t.Fatal("missing IV header")
+						}
+						if len(iv) != 12 {
+							t.Errorf("expected 12-byte IV, got %d bytes", len(iv))
+						}
+
+						// Ciphertext includes only the encrypted payload and the 16 byte authentication tag.
+						if want := len(tc.Plaintext) + 16; len(ciphertext) != want {
+							t.Errorf("expected ciphertext length %d, got %d", want, len(ciphertext))
+						}
+					}
+
+					got, err := crypter.Decrypt(rand.Reader, ciphertext, tc.AAD, unprotected)
+					if err != nil {
+						t.Fatalf("decrypting: %v", err)
+					}
+					if !bytes.Equal(tc.Plaintext, got) {
+						t.Fatalf("expected %q, got %q", string(tc.Plaintext), string(got))
+					}
+				})
 			}
 		})
 	}
