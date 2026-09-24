@@ -1495,6 +1495,60 @@ test_bmo_signed() {
 	log_success "BMO FSIM signed-provisioning test PASSED"
 }
 
+# Test: BMO FSIM signed with scope (not_before, not_after, generation)
+# Verifies that scope constraints are included in the COSE protected header.
+test_bmo_signed_scope() {
+	log_section "TEST: BMO FSIM Authenticated Provisioning with Scope"
+
+	mkdir -p "$EPHEMERAL_DIR"
+	rm -f "$DB_FILE" "$CRED_FILE"
+
+	BMO_FILE="$EPHEMERAL_DIR/test_bmo_scope_image.bin"
+	log_step "Creating random test boot image (10KB) for scoped delivery"
+	dd if=/dev/urandom of="$BMO_FILE" bs=1024 count=10 2>/dev/null
+	ORIGINAL_HASH=$(sha256sum "$BMO_FILE" | awk '{print $1}')
+
+	# Use scope constraints: not_before in the past, not_after in the future, generation=1
+	start_server "-bmo application/x-iso9660-image:../$BMO_FILE -bmo-sign -bmo-scope-not-before 2025-01-01T00:00:00Z -bmo-scope-not-after 2030-01-01T00:00:00Z -bmo-scope-generation 1"
+
+	log_step "Running DI"
+	run_cmd go run ./cmd client -di "$SERVER_URL" -di-key ec256 || return 1
+	log_success "DI completed"
+
+	log_step "Running TO1/TO2 with SCOPED signed BMO image-begin"
+	run_cmd go run ./cmd client -kex ECDH256 || return 1
+	log_success "TO1/TO2 completed with scoped signed BMO provisioning"
+
+	stop_server
+
+	# Find received file
+	RECEIVED_FILE=$(find examples/ -maxdepth 1 -name "bmo-*" -type f 2>/dev/null | head -1)
+	if [ -z "$RECEIVED_FILE" ]; then
+		log_error "No BMO received file found"
+		rm -f "$BMO_FILE"
+		return 1
+	fi
+	RECEIVED_HASH=$(sha256sum "$RECEIVED_FILE" | awk '{print $1}')
+
+	if [ "$ORIGINAL_HASH" = "$RECEIVED_HASH" ]; then
+		log_success "Scoped signed BMO transfer integrity verified"
+	else
+		log_error "Hash mismatch! Original: $ORIGINAL_HASH, Received: $RECEIVED_HASH"
+		rm -f "$BMO_FILE" "$RECEIVED_FILE"
+		return 1
+	fi
+
+	# Check server log for scope output
+	if grep -q "scope:" "$EPHEMERAL_DIR/fdo_server.log" 2>/dev/null; then
+		log_success "Server logged scope constraints"
+	else
+		log_warn "Server did not log scope constraints (check log manually)"
+	fi
+
+	rm -f "$BMO_FILE" "$RECEIVED_FILE" bmo-*
+	log_success "BMO FSIM scoped signed-provisioning test PASSED"
+}
+
 # Test: BMO FSIM with EFI application type
 # This test verifies BMO can handle EFI application transfers
 test_bmo_efi() {
@@ -2124,6 +2178,652 @@ test_bmo_url_fallback() {
 	log_success "BMO FSIM Inline Mode test PASSED"
 }
 
+# Test: BMO FSIM with delegate-signed provisioning (Model 4).
+# Creates a PERM.7 delegate chain, starts the server with
+# -bmo-delegate-provision, and verifies the device accepts the
+# delegate-signed image-begin and the payload arrives intact.
+test_bmo_delegate_provision() {
+	log_section "TEST: BMO FSIM Delegate-Signed Provisioning (Model 4)"
+
+	mkdir -p "$EPHEMERAL_DIR"
+	rm -f "$DB_FILE" "$CRED_FILE"
+
+	# Step 1: Create the database with owner certs (needed for delegate creation).
+	log_step "Creating database with owner certs"
+	start_server "-owner-certs"
+	stop_server
+
+	# Step 2: Create a delegate chain with the "provision" permission (PERM.7).
+	# The chain needs an ec256 leaf so -bmo-delegate-provision gets an EC-P256 key.
+	# Owner key type must be SECP256R1 (ec256) to match the BMO provisioning signer
+	# requirement (server.go checks for *ecdsa.PrivateKey).
+	log_step "Creating PERM.7 delegate chain"
+	run_cmd go run ./cmd delegate -db "../$DB_FILE" create provDelegate provision SECP256R1 ec256 || return 1
+	log_success "PERM.7 delegate chain created"
+
+	# Step 3: Export the delegate cert chain and private key to PEM files.
+	log_step "Exporting delegate cert chain and private key"
+	DELEGATE_CHAIN="$EPHEMERAL_DIR/delegate_chain.pem"
+	DELEGATE_KEY="$EPHEMERAL_DIR/delegate_key.pem"
+	(cd examples && go run ./cmd delegate -db "../$DB_FILE" print provDelegate) > "$DELEGATE_CHAIN" || return 1
+	(cd examples && go run ./cmd delegate -db "../$DB_FILE" key provDelegate) > "$DELEGATE_KEY" || return 1
+
+	if [ ! -s "$DELEGATE_CHAIN" ] || [ ! -s "$DELEGATE_KEY" ]; then
+		log_error "Failed to export delegate chain or key"
+		return 1
+	fi
+	log_success "Delegate chain: $(wc -l < "$DELEGATE_CHAIN") lines, Key: $(wc -l < "$DELEGATE_KEY") lines"
+
+	# Step 4: Create a test BMO image.
+	BMO_FILE="$EPHEMERAL_DIR/test_bmo_delegate.bin"
+	RECEIVED_FILE="examples/bmo-test_bmo_delegate.bin"
+	log_step "Creating random test boot image (10KB)"
+	dd if=/dev/urandom of="$BMO_FILE" bs=1024 count=10 2>/dev/null
+	ORIGINAL_HASH=$(sha256sum "$BMO_FILE" | awk '{print $1}')
+	log_success "Created test boot image (hash: $ORIGINAL_HASH)"
+
+	# Step 5: Start the server with -bmo-delegate-provision.
+	# The server validates the chain against the owner key at startup.
+	# Use paths relative to the repo root since start_server prepends ../ for the DB
+	# but the server runs from examples/. Use absolute paths to be safe.
+	ABS_DELEGATE_CHAIN="$(cd "$(dirname "$DELEGATE_CHAIN")" && pwd)/$(basename "$DELEGATE_CHAIN")"
+	ABS_DELEGATE_KEY="$(cd "$(dirname "$DELEGATE_KEY")" && pwd)/$(basename "$DELEGATE_KEY")"
+	start_server "-bmo application/x-iso9660-image:../$BMO_FILE -bmo-delegate-provision $ABS_DELEGATE_CHAIN:$ABS_DELEGATE_KEY"
+
+	log_step "Running DI (ec256 to match delegate chain key type)"
+	run_cmd go run ./cmd client -di "$SERVER_URL" -di-key ec256 || return 1
+	log_success "DI completed"
+
+	log_step "Running TO1/TO2 with delegate-signed BMO provisioning"
+	run_cmd go run ./cmd client -kex ECDH256 || return 1
+	log_success "TO1/TO2 completed with delegate-signed BMO"
+
+	stop_server
+
+	# Step 6: Verify the received file matches the original.
+	if [ ! -f "$RECEIVED_FILE" ]; then
+		log_error "Received file not found: $RECEIVED_FILE (delegate-signed provisioning may have been rejected)"
+		rm -f "$BMO_FILE"
+		return 1
+	fi
+
+	RECEIVED_HASH=$(sha256sum "$RECEIVED_FILE" | awk '{print $1}')
+	log_step "Verifying boot image integrity"
+	if [ "$ORIGINAL_HASH" = "$RECEIVED_HASH" ]; then
+		log_success "Delegate-signed BMO transfer integrity verified"
+		log_success "  Original:  $ORIGINAL_HASH"
+		log_success "  Received:  $RECEIVED_HASH"
+	else
+		log_error "Hash mismatch after delegate-signed BMO transfer"
+		rm -f "$BMO_FILE" "$RECEIVED_FILE"
+		return 1
+	fi
+
+	# Verify from server log that delegate signing was actually used
+	if grep -q "delegate" "$EPHEMERAL_DIR/fdo_server.log" 2>/dev/null; then
+		log_success "Server log confirms delegate signing was active"
+	else
+		log_error "Server log does not mention delegate signing — may have fallen back to unsigned"
+	fi
+
+	rm -f "$BMO_FILE" "$RECEIVED_FILE" bmo-*
+	log_success "BMO FSIM Delegate-Signed Provisioning test PASSED"
+}
+
+# Test: BMO Model 2 — delegate with provision permission sends UNSIGNED BMO.
+# The delegate has both onboard and provision (PERM.7) permissions. The server
+# does NOT use -bmo-sign, so the image-begin is unsigned. The device should
+# accept it because the TO2 peer proved delegate provisioning authority.
+test_bmo_delegate_unsigned() {
+	log_section "TEST: BMO Model 2 — Delegate Unsigned Provisioning (positive)"
+
+	mkdir -p "$EPHEMERAL_DIR"
+	rm -f "$DB_FILE" "$CRED_FILE"
+
+	# Step 1: Create the database with owner certs.
+	log_step "Creating database with owner certs"
+	start_server "-owner-certs"
+	stop_server
+
+	# Step 2: Create a delegate chain with BOTH onboard and provision permissions.
+	# The onboard permission is required for TO2; the provision permission
+	# (PERM.7) authorises unsigned provisioning (Model 2 channel authority).
+	log_step "Creating delegate with onboard+provision permissions"
+	run_cmd go run ./cmd delegate -db "../$DB_FILE" create provUnsigned onboard,provision SECP256R1 ec256 || return 1
+	log_success "Delegate chain with onboard+provision created"
+
+	# Step 3: Create a test BMO image.
+	BMO_FILE="$EPHEMERAL_DIR/test_bmo_model2.bin"
+	RECEIVED_FILE="examples/bmo-test_bmo_model2.bin"
+	log_step "Creating random test boot image (10KB)"
+	dd if=/dev/urandom of="$BMO_FILE" bs=1024 count=10 2>/dev/null
+	ORIGINAL_HASH=$(sha256sum "$BMO_FILE" | awk '{print $1}')
+	log_success "Created test boot image (hash: $ORIGINAL_HASH)"
+
+	# Step 4: Start the server with the delegate and BMO but WITHOUT -bmo-sign.
+	# The server sends unsigned image-begin. The device should accept it
+	# because the delegate proved PERM.7 during TO2.
+	start_server "-owner-certs -onboardDelegate provUnsigned -bmo application/x-iso9660-image:../$BMO_FILE"
+
+	log_step "Running DI (ec256 to match delegate chain)"
+	run_cmd go run ./cmd client -di "$SERVER_URL" -di-key ec256 || return 1
+	log_success "DI completed"
+
+	log_step "Running TO1/TO2 with delegate (unsigned BMO, expecting success)"
+	run_cmd go run ./cmd client -kex ECDH256 || return 1
+	log_success "TO1/TO2 completed — device accepted unsigned BMO from PERM.7 delegate"
+
+	stop_server
+
+	# Step 5: Verify the received file matches the original.
+	if [ ! -f "$RECEIVED_FILE" ]; then
+		log_error "Received file not found: $RECEIVED_FILE"
+		rm -f "$BMO_FILE"
+		return 1
+	fi
+
+	RECEIVED_HASH=$(sha256sum "$RECEIVED_FILE" | awk '{print $1}')
+	log_step "Verifying boot image integrity"
+	if [ "$ORIGINAL_HASH" = "$RECEIVED_HASH" ]; then
+		log_success "Model 2 unsigned BMO transfer integrity verified"
+		log_success "  Original:  $ORIGINAL_HASH"
+		log_success "  Received:  $RECEIVED_HASH"
+	else
+		log_error "Hash mismatch after delegate unsigned BMO transfer"
+		rm -f "$BMO_FILE" "$RECEIVED_FILE"
+		return 1
+	fi
+
+	rm -f "$BMO_FILE" "$RECEIVED_FILE" bmo-*
+	log_success "BMO Model 2 delegate unsigned provisioning test PASSED"
+}
+
+# Test: BMO Model 2 negative — delegate WITHOUT provision permission sends
+# unsigned BMO. The delegate has only onboard permission (no PERM.7). The
+# device should REJECT the unsigned provisioning because the delegate lacks
+# provision authority.
+test_bmo_delegate_unsigned_noperm() {
+	log_section "TEST: BMO Model 2 — Delegate Unsigned Provisioning (negative — no PERM.7)"
+
+	mkdir -p "$EPHEMERAL_DIR"
+	rm -f "$DB_FILE" "$CRED_FILE"
+
+	# Step 1: Create the database with owner certs.
+	log_step "Creating database with owner certs"
+	start_server "-owner-certs"
+	stop_server
+
+	# Step 2: Create a delegate chain with ONLY onboard permission (no provision).
+	log_step "Creating delegate with onboard-only permissions (no provision)"
+	run_cmd go run ./cmd delegate -db "../$DB_FILE" create onboardOnly onboard SECP256R1 ec256 || return 1
+	log_success "Delegate chain with onboard-only created"
+
+	# Step 3: Create a test BMO image.
+	BMO_FILE="$EPHEMERAL_DIR/test_bmo_noperm.bin"
+	RECEIVED_FILE="examples/bmo-test_bmo_noperm.bin"
+	log_step "Creating random test boot image (5KB)"
+	dd if=/dev/urandom of="$BMO_FILE" bs=1024 count=5 2>/dev/null
+
+	# Step 4: Start the server with the onboard-only delegate and BMO, no signing.
+	start_server "-owner-certs -onboardDelegate onboardOnly -bmo application/x-iso9660-image:../$BMO_FILE"
+
+	log_step "Running DI"
+	run_cmd go run ./cmd client -di "$SERVER_URL" -di-key ec256 || return 1
+	log_success "DI completed"
+
+	log_step "Running TO1/TO2 with delegate (unsigned BMO, expecting rejection)"
+	if run_cmd go run ./cmd client -kex ECDH256 2>/dev/null; then
+		# Protocol may complete at TO2 level but BMO should fail
+		if [ -f "$RECEIVED_FILE" ]; then
+			log_error "Device accepted unsigned BMO from delegate without PERM.7"
+			rm -f "$BMO_FILE" "$RECEIVED_FILE" bmo-*
+			return 1
+		fi
+		# Check logs for BMO rejection
+		if grep -q "unsigned.*MUST sign\|unsigned.*no delegate provisioning\|unsigned.*PERM" "$EPHEMERAL_DIR/fdo_server.log" 2>/dev/null; then
+			log_success "TO2 completed but device correctly rejected unsigned BMO (no PERM.7)"
+		elif grep -q "BMO.*error\|BMOError\|unsigned" "$EPHEMERAL_DIR/fdo_server.log" 2>/dev/null; then
+			log_success "TO2 completed, BMO rejection detected (delegate lacks PERM.7)"
+		else
+			log_error "TO2 completed without BMO error — device may have accepted"
+			cat "$EPHEMERAL_DIR/fdo_server.log" 2>/dev/null | tail -20
+			rm -f "$BMO_FILE" "$RECEIVED_FILE" bmo-*
+			return 1
+		fi
+	else
+		log_success "TO2 correctly failed — device rejected unsigned BMO (delegate lacks PERM.7)"
+	fi
+
+	stop_server
+
+	# The received file should NOT exist.
+	if [ -f "$RECEIVED_FILE" ]; then
+		log_error "Received file exists — device should have rejected unsigned from non-PERM.7 delegate"
+		rm -f "$BMO_FILE" "$RECEIVED_FILE" bmo-*
+		return 1
+	fi
+	log_success "No payload file — device correctly blocked unsigned from onboard-only delegate"
+
+	rm -f "$BMO_FILE" "$RECEIVED_FILE" bmo-*
+	log_success "BMO Model 2 negative (no PERM.7) test PASSED"
+}
+
+# Test: Pre-signed BMO artifact delivery (meta-tool round-trip)
+#
+# End-to-end test of the offline signing workflow:
+# 1. Generate Owner key
+# 2. Use go-fdo library to create a signed COSE provisioning body
+#    (simulating what fdo-meta-tool provision sign would produce)
+# 3. Server delivers the pre-signed COSE body via -bmo-presigned
+# 4. Device verifies the signature against the Owner key and accepts
+test_bmo_presigned() {
+	log_section "TEST: BMO Pre-Signed Artifact Delivery (offline signing workflow)"
+
+	mkdir -p "$EPHEMERAL_DIR"
+	rm -f "$DB_FILE" "$CRED_FILE"
+
+	BMO_FILE="$EPHEMERAL_DIR/test_presigned_image.bin"
+	COSE_FILE="$EPHEMERAL_DIR/presigned_begin.cose"
+	# The device names the output based on image-begin fields; the pre-signed
+	# COSE body may not carry a name, so look for any bmo-* file.
+	RECEIVED_FILE=""
+
+	# Step 1: Create a test image
+	log_step "Creating random test boot image (8KB)"
+	dd if=/dev/urandom of="$BMO_FILE" bs=1024 count=8 2>/dev/null
+	ORIGINAL_HASH=$(sha256sum "$BMO_FILE" | awk '{print $1}')
+	log_success "Created test boot image (hash: $ORIGINAL_HASH)"
+
+	# Step 2: Create the database with owner certs (EC-P256 for signing)
+	log_step "Creating database with owner certs"
+	start_server "-owner-certs"
+	stop_server
+
+	# Step 3: Create the pre-signed COSE body using a Go helper that
+	# marshals BeginFields and signs with the Owner key.
+	log_step "Creating pre-signed COSE provisioning body"
+	cat > "$EPHEMERAL_DIR/presign_helper.go" << 'GOHELPER'
+package main
+
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/sha256"
+	"fmt"
+	"os"
+
+	"github.com/fido-device-onboard/go-fdo/fsim"
+	"github.com/fido-device-onboard/go-fdo/fsim/chunking"
+	"github.com/fido-device-onboard/go-fdo/protocol"
+	"github.com/fido-device-onboard/go-fdo/sqlite"
+)
+
+func main() {
+	if len(os.Args) != 4 {
+		fmt.Fprintf(os.Stderr, "Usage: %s <db_file> <image_file> <output_cose>\n", os.Args[0])
+		os.Exit(1)
+	}
+	dbFile, imageFile, outFile := os.Args[1], os.Args[2], os.Args[3]
+
+	imageData, err := os.ReadFile(imageFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "reading image: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Get owner key from DB
+	db, err := sqlite.Open(dbFile, "")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "opening db: %v\n", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+	ownerKey, _, err := db.OwnerKey(context.Background(), protocol.Secp256r1KeyType, 0)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "getting owner key: %v\n", err)
+		os.Exit(1)
+	}
+	ecKey, ok := ownerKey.(*ecdsa.PrivateKey)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "owner key is not ECDSA\n")
+		os.Exit(1)
+	}
+
+	// Create BeginFields with expected hash in FSIMFields[-9]
+	hash := sha256.Sum256(imageData)
+	bf := chunking.BeginMessage{
+		TotalSize:  uint64(len(imageData)),
+		HashAlg:    "sha256",
+		FSIMFields: map[int]any{
+			-1: "application/x-iso9660-image",
+			-9: hash[:],
+		},
+	}
+
+	beginCBOR, err := bf.MarshalCBOR()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "marshaling begin: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Sign with Owner key
+	signer := &fsim.OwnerSigner{Key: ecKey}
+	signed, err := signer.Sign(beginCBOR, fsim.BMOContentTypeImageBegin)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "signing: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := os.WriteFile(outFile, signed, 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "writing output: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Pre-signed COSE body: %d bytes\n", len(signed))
+}
+GOHELPER
+	ABS_HELPER="$(cd "$(dirname "$EPHEMERAL_DIR/presign_helper.go")" && pwd)/presign_helper.go"
+	if ! (cd examples && go run "$ABS_HELPER" "../$DB_FILE" "../$BMO_FILE" "../$COSE_FILE"); then
+		log_error "Failed to create pre-signed COSE body"
+		return 1
+	fi
+	log_success "Pre-signed COSE body created: $COSE_FILE"
+
+	# Step 4: Start server with -bmo-presigned (delivers the COSE body as-is)
+	ABS_COSE="$(cd "$(dirname "$COSE_FILE")" && pwd)/$(basename "$COSE_FILE")"
+	ABS_BMO="$(cd "$(dirname "$BMO_FILE")" && pwd)/$(basename "$BMO_FILE")"
+	start_server "-bmo-presigned application/x-iso9660-image:$ABS_COSE:$ABS_BMO"
+
+	log_step "Running DI (ec256 to match owner key type)"
+	run_cmd go run ./cmd client -di "$SERVER_URL" -di-key ec256 || return 1
+	log_success "DI completed"
+
+	log_step "Running TO1/TO2 with pre-signed BMO delivery"
+	run_cmd go run ./cmd client -kex ECDH256 || return 1
+	log_success "TO1/TO2 completed with pre-signed BMO"
+
+	stop_server
+
+	# Step 5: Find the received file (device may use a default name)
+	RECEIVED_FILE=$(ls -t examples/bmo-* 2>/dev/null | head -1)
+	if [ -z "$RECEIVED_FILE" ]; then
+		log_error "No bmo-* file found in examples/ (pre-signed delivery may have failed)"
+		rm -f "$BMO_FILE" "$COSE_FILE" "$EPHEMERAL_DIR/presign_helper.go"
+		return 1
+	fi
+	log_step "Found received file: $RECEIVED_FILE"
+
+	RECEIVED_HASH=$(sha256sum "$RECEIVED_FILE" | awk '{print $1}')
+	log_step "Verifying boot image integrity"
+	if [ "$ORIGINAL_HASH" = "$RECEIVED_HASH" ]; then
+		log_success "Pre-signed BMO transfer integrity verified"
+		log_success "  Original:  $ORIGINAL_HASH"
+		log_success "  Received:  $RECEIVED_HASH"
+	else
+		log_error "Hash mismatch after pre-signed BMO transfer"
+		rm -f "$BMO_FILE" "$COSE_FILE" "$RECEIVED_FILE" "$EPHEMERAL_DIR/presign_helper.go"
+		return 1
+	fi
+
+	rm -f "$BMO_FILE" "$COSE_FILE" "$RECEIVED_FILE" "$EPHEMERAL_DIR/presign_helper.go" examples/bmo-*
+	log_success "BMO Pre-Signed Artifact Delivery test PASSED"
+}
+
+# Test: Meta-tool round-trip — fdo-meta-tool creates the signed COSE body,
+# go-fdo server delivers it via -bmo-presigned, go-fdo device accepts it.
+# This proves end-to-end interoperability between the meta-tool's offline
+# signing and the server's pre-signed delivery mechanism.
+#
+# Requires fdo-meta-tool to be built at ../go-fdo-meta-tool/fdo-meta-tool.
+# If not found, the test is skipped (not failed).
+test_bmo_presigned_metatool() {
+	log_section "TEST: Meta-Tool Round-Trip (offline sign → server → device)"
+
+	# Check if meta-tool binary exists
+	METATOOL=""
+	for candidate in \
+		"../go-fdo-meta-tool/fdo-meta-tool" \
+		"/tmp/fdo-meta-tool" \
+		"$(command -v fdo-meta-tool 2>/dev/null || true)"; do
+		if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+			METATOOL="$candidate"
+			break
+		fi
+	done
+	if [ -z "$METATOOL" ]; then
+		log_step "SKIP: fdo-meta-tool not found (build it or place at ../go-fdo-meta-tool/fdo-meta-tool)"
+		return 0
+	fi
+	log_step "Using meta-tool: $METATOOL"
+
+	mkdir -p "$EPHEMERAL_DIR"
+	rm -f "$DB_FILE" "$CRED_FILE"
+
+	BMO_FILE="$EPHEMERAL_DIR/test_metatool_image.bin"
+	COSE_FILE="$EPHEMERAL_DIR/metatool_signed.cose"
+	OWNER_KEY_FILE="$EPHEMERAL_DIR/metatool_owner.pem"
+	PAYLOAD_CBOR="$EPHEMERAL_DIR/metatool_payload.cbor"
+
+	# Step 1: Create a test image
+	log_step "Creating random test boot image (6KB)"
+	dd if=/dev/urandom of="$BMO_FILE" bs=1024 count=6 2>/dev/null
+	ORIGINAL_HASH=$(sha256sum "$BMO_FILE" | awk '{print $1}')
+	log_success "Created test boot image (hash: $ORIGINAL_HASH)"
+
+	# Step 2: Create the database with owner certs
+	log_step "Creating database with owner certs"
+	start_server "-owner-certs"
+	stop_server
+
+	# Step 3: Export the Owner private key for meta-tool signing
+	log_step "Exporting Owner private key"
+	cat > "$EPHEMERAL_DIR/export_owner_key.go" << 'GOEXPORT'
+package main
+
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/x509"
+	"encoding/pem"
+	"fmt"
+	"os"
+
+	"github.com/fido-device-onboard/go-fdo/protocol"
+	"github.com/fido-device-onboard/go-fdo/sqlite"
+)
+
+func main() {
+	if len(os.Args) != 3 {
+		fmt.Fprintf(os.Stderr, "Usage: %s <db_file> <output_pem>\n", os.Args[0])
+		os.Exit(1)
+	}
+	db, err := sqlite.Open(os.Args[1], "")
+	if err != nil { fmt.Fprintf(os.Stderr, "open: %v\n", err); os.Exit(1) }
+	defer db.Close()
+	key, _, err := db.OwnerKey(context.Background(), protocol.Secp256r1KeyType, 0)
+	if err != nil { fmt.Fprintf(os.Stderr, "key: %v\n", err); os.Exit(1) }
+	ecKey := key.(*ecdsa.PrivateKey)
+	der, err := x509.MarshalECPrivateKey(ecKey)
+	if err != nil { fmt.Fprintf(os.Stderr, "marshal: %v\n", err); os.Exit(1) }
+	f, _ := os.Create(os.Args[2])
+	pem.Encode(f, &pem.Block{Type: "EC PRIVATE KEY", Bytes: der})
+	f.Close()
+	fmt.Println("Owner key exported")
+}
+GOEXPORT
+	ABS_EXPORT="$(cd "$(dirname "$EPHEMERAL_DIR/export_owner_key.go")" && pwd)/export_owner_key.go"
+	if ! (cd examples && go run "$ABS_EXPORT" "../$DB_FILE" "../$OWNER_KEY_FILE"); then
+		log_error "Failed to export owner key"
+		return 1
+	fi
+	log_success "Owner key exported: $OWNER_KEY_FILE"
+
+	# Step 4: Create the BeginFields CBOR payload to sign
+	log_step "Creating BeginFields CBOR for meta-tool signing"
+	cat > "$EPHEMERAL_DIR/create_begin_cbor.go" << 'GOCBOR'
+package main
+
+import (
+	"crypto/sha256"
+	"fmt"
+	"os"
+
+	"github.com/fido-device-onboard/go-fdo/fsim/chunking"
+)
+
+func main() {
+	if len(os.Args) != 3 {
+		fmt.Fprintf(os.Stderr, "Usage: %s <image_file> <output_cbor>\n", os.Args[0])
+		os.Exit(1)
+	}
+	imageData, err := os.ReadFile(os.Args[1])
+	if err != nil { fmt.Fprintf(os.Stderr, "read: %v\n", err); os.Exit(1) }
+	hash := sha256.Sum256(imageData)
+	bf := chunking.BeginMessage{
+		TotalSize:  uint64(len(imageData)),
+		HashAlg:    "sha256",
+		FSIMFields: map[int]any{
+			-1: "application/x-iso9660-image",
+			-9: hash[:],
+		},
+	}
+	data, err := bf.MarshalCBOR()
+	if err != nil { fmt.Fprintf(os.Stderr, "encode: %v\n", err); os.Exit(1) }
+	os.WriteFile(os.Args[2], data, 0o644)
+	fmt.Printf("BeginFields CBOR: %d bytes\n", len(data))
+}
+GOCBOR
+	ABS_CBOR="$(cd "$(dirname "$EPHEMERAL_DIR/create_begin_cbor.go")" && pwd)/create_begin_cbor.go"
+	if ! (cd examples && go run "$ABS_CBOR" "../$BMO_FILE" "../$PAYLOAD_CBOR"); then
+		log_error "Failed to create BeginFields CBOR"
+		return 1
+	fi
+	log_success "BeginFields CBOR created: $PAYLOAD_CBOR"
+
+	# Step 5: Sign with the meta-tool
+	log_step "Signing with fdo-meta-tool provision sign"
+	if ! "$METATOOL" provision sign \
+		-key "$OWNER_KEY_FILE" \
+		-content-type "application/cbor+fdo.bmo.image-begin" \
+		-in "$PAYLOAD_CBOR" \
+		-out "$COSE_FILE"; then
+		log_error "fdo-meta-tool provision sign failed"
+		return 1
+	fi
+	log_success "Meta-tool signed COSE: $COSE_FILE ($(wc -c < "$COSE_FILE") bytes)"
+
+	# Step 6: Verify with meta-tool (self-check)
+	log_step "Self-verifying with meta-tool"
+	if "$METATOOL" provision verify -in "$COSE_FILE" -key "$OWNER_KEY_FILE" 2>&1; then
+		log_success "Meta-tool self-verify passed"
+	else
+		log_error "Meta-tool self-verify failed"
+		return 1
+	fi
+
+	# Step 7: Start server with -bmo-presigned
+	ABS_COSE="$(cd "$(dirname "$COSE_FILE")" && pwd)/$(basename "$COSE_FILE")"
+	ABS_BMO="$(cd "$(dirname "$BMO_FILE")" && pwd)/$(basename "$BMO_FILE")"
+	start_server "-bmo-presigned application/x-iso9660-image:$ABS_COSE:$ABS_BMO"
+
+	log_step "Running DI (ec256)"
+	run_cmd go run ./cmd client -di "$SERVER_URL" -di-key ec256 || return 1
+	log_success "DI completed"
+
+	log_step "Running TO1/TO2 with meta-tool-signed BMO"
+	run_cmd go run ./cmd client -kex ECDH256 || return 1
+	log_success "TO1/TO2 completed"
+
+	stop_server
+
+	# Step 8: Verify received file
+	RECEIVED_FILE=$(ls -t examples/bmo-* 2>/dev/null | head -1)
+	if [ -z "$RECEIVED_FILE" ]; then
+		log_error "No bmo-* file received"
+		return 1
+	fi
+
+	RECEIVED_HASH=$(sha256sum "$RECEIVED_FILE" | awk '{print $1}')
+	log_step "Verifying boot image integrity"
+	if [ "$ORIGINAL_HASH" = "$RECEIVED_HASH" ]; then
+		log_success "Meta-tool round-trip integrity verified"
+		log_success "  Original:  $ORIGINAL_HASH"
+		log_success "  Received:  $RECEIVED_HASH"
+	else
+		log_error "Hash mismatch in meta-tool round-trip"
+		return 1
+	fi
+
+	rm -f "$BMO_FILE" "$COSE_FILE" "$OWNER_KEY_FILE" "$PAYLOAD_CBOR" \
+		"$EPHEMERAL_DIR/export_owner_key.go" "$EPHEMERAL_DIR/create_begin_cbor.go" \
+		"$RECEIVED_FILE" examples/bmo-*
+	log_success "Meta-Tool Round-Trip test PASSED"
+}
+
+# Test: BMO provisioning COSE negative test — unsigned provisioning rejected
+# when the device has an Owner public key (from TO2 voucher walk).
+# This verifies the device enforces the spec requirement that provisioning
+# messages MUST be signed when the device knows the Owner key.
+test_bmo_signed_negative() {
+	log_section "TEST: BMO Signed Provisioning — Negative (unsigned rejected)"
+
+	mkdir -p "$EPHEMERAL_DIR"
+	rm -f "$DB_FILE" "$CRED_FILE"
+
+	BMO_FILE="$EPHEMERAL_DIR/test_bmo_neg.bin"
+	RECEIVED_FILE="examples/bmo-test_bmo_neg.bin"
+	log_step "Creating random test boot image (5KB)"
+	dd if=/dev/urandom of="$BMO_FILE" bs=1024 count=5 2>/dev/null
+
+	# Start server WITHOUT -bmo-sign — sends unsigned image-begin.
+	# The go-fdo device should reject this because it has the Owner public key
+	# from the TO2 voucher walk and requires signed provisioning.
+	start_server "-bmo application/x-iso9660-image:../$BMO_FILE"
+
+	log_step "Running DI"
+	run_cmd go run ./cmd client -di "$SERVER_URL" -di-key ec256 || return 1
+	log_success "DI completed"
+
+	log_step "Running TO1/TO2 (expecting BMO rejection of unsigned provisioning)"
+	if run_cmd go run ./cmd client -kex ECDH256 2>/dev/null; then
+		# The protocol may complete at the TO2 level, but the BMO payload
+		# should NOT have been accepted.
+		if [ -f "$RECEIVED_FILE" ]; then
+			log_error "Device accepted unsigned BMO — should have rejected it"
+			rm -f "$BMO_FILE" "$RECEIVED_FILE" bmo-*
+			return 1
+		fi
+		# TO2 completed but BMO was rejected — check logs
+		if grep -q "unsigned.*MUST sign\|unsigned.*Owner public key" "$EPHEMERAL_DIR/fdo_server.log" 2>/dev/null; then
+			log_success "TO2 completed but device correctly rejected unsigned provisioning"
+		else
+			# The error might appear differently — check for any BMO error
+			if grep -q "BMO.*error\|BMOError\|unsigned" "$EPHEMERAL_DIR/fdo_server.log" 2>/dev/null; then
+				log_success "TO2 completed, BMO rejection detected in server log"
+			else
+				log_error "TO2 completed without BMO error — device may have accepted unsigned provisioning"
+				cat "$EPHEMERAL_DIR/fdo_server.log" 2>/dev/null | tail -20
+				rm -f "$BMO_FILE" "$RECEIVED_FILE" bmo-*
+				return 1
+			fi
+		fi
+	else
+		log_success "TO2 correctly failed — device rejected unsigned provisioning"
+	fi
+
+	stop_server
+
+	# The received file should NOT exist
+	if [ -f "$RECEIVED_FILE" ]; then
+		log_error "Received file exists despite unsigned provisioning — should have been rejected"
+		rm -f "$BMO_FILE" "$RECEIVED_FILE" bmo-*
+		return 1
+	fi
+	log_success "No payload file created — device correctly blocked unsigned provisioning"
+
+	rm -f "$BMO_FILE" "$RECEIVED_FILE" bmo-*
+	log_success "BMO Signed Provisioning negative test PASSED"
+}
+
 # Test: Payload FSIM NAK (device rejects first type, accepts second)
 # This test verifies the NAK flow where device rejects unsupported MIME types
 test_payload_nak() {
@@ -2560,6 +3260,7 @@ test_all() {
 	test_wifi_single_sided || failed=1
 	test_bmo || failed=1
 	test_bmo_signed || failed=1
+	test_bmo_signed_scope || failed=1
 	test_bmo_efi || failed=1
 	test_bmo_nak || failed=1
 	test_bmo_multi_asset || failed=1
@@ -2567,6 +3268,12 @@ test_all() {
 	test_bmo_meta_url || failed=1
 	test_bmo_meta_signed || failed=1
 	test_bmo_url_fallback || failed=1
+	test_bmo_delegate_provision || failed=1
+	test_bmo_delegate_unsigned || failed=1
+	test_bmo_delegate_unsigned_noperm || failed=1
+	test_bmo_presigned || failed=1
+	test_bmo_presigned_metatool || failed=1
+	test_bmo_signed_negative || failed=1
 	test_payload_nak || failed=1
 	test_rv_firmware_tags || failed=1
 	test_credentials || failed=1
@@ -2688,6 +3395,9 @@ main() {
 	bmo-signed)
 		test_bmo_signed || rc=$?
 		;;
+	bmo-signed-scope)
+		test_bmo_signed_scope || rc=$?
+		;;
 	bmo-efi)
 		test_bmo_efi || rc=$?
 		;;
@@ -2709,6 +3419,24 @@ main() {
 	bmo-url-fallback)
 		test_bmo_url_fallback || rc=$?
 		;;
+	bmo-delegate-provision)
+		test_bmo_delegate_provision || rc=$?
+		;;
+	bmo-delegate-unsigned)
+		test_bmo_delegate_unsigned || rc=$?
+		;;
+	bmo-delegate-unsigned-noperm)
+		test_bmo_delegate_unsigned_noperm || rc=$?
+		;;
+	bmo-presigned)
+		test_bmo_presigned || rc=$?
+		;;
+	bmo-presigned-metatool)
+		test_bmo_presigned_metatool || rc=$?
+		;;
+	bmo-signed-negative)
+		test_bmo_signed_negative || rc=$?
+		;;
 	payload-nak)
 		test_payload_nak || rc=$?
 		;;
@@ -2726,7 +3454,7 @@ main() {
 		;;
 	*)
 		echo "Unknown test: $test_name"
-		echo "Available tests: basic, basic-reuse, rv-blob, kex, fdo200, delegate, delegate-fdo200, delegate-csr, bad-delegate, attested-payload, attested-payload-encrypted, attested-payload-delegate, attested-payload-shell, sysconfig, sysconfig-fdo200, payload, payload-log, payload-fdo200, payload-multiple-types, payload-selective-rejection, payload-nak, wifi, wifi-fdo200, wifi-single-sided, bmo, bmo-efi, bmo-nak, bmo-multi-asset, bmo-url, bmo-meta-url, bmo-meta-signed, bmo-url-fallback, rv-firmware-tags, credentials, auth, all"
+		echo "Available tests: basic, basic-reuse, rv-blob, kex, fdo200, delegate, delegate-fdo200, delegate-csr, bad-delegate, attested-payload, attested-payload-encrypted, attested-payload-delegate, attested-payload-shell, sysconfig, sysconfig-fdo200, payload, payload-log, payload-fdo200, payload-multiple-types, payload-selective-rejection, payload-nak, wifi, wifi-fdo200, wifi-single-sided, bmo, bmo-signed, bmo-signed-scope, bmo-efi, bmo-nak, bmo-multi-asset, bmo-url, bmo-meta-url, bmo-meta-signed, bmo-url-fallback, bmo-delegate-provision, bmo-delegate-unsigned, bmo-delegate-unsigned-noperm, bmo-presigned, bmo-presigned-metatool, bmo-signed-negative, rv-firmware-tags, credentials, auth, all"
 		exit 1
 		;;
 	esac

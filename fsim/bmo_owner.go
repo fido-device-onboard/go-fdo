@@ -104,6 +104,14 @@ type ImageToSend struct {
 
 	EstimatedDuration uint64 // Optional: Advisory transfer+apply time in seconds (0 = unset)
 
+	// PreSignedBegin, if set, is a pre-signed COSE_Sign1 (tag 18) body
+	// to deliver as-is in place of the image-begin message. This supports
+	// offline/HSM signing workflows where an external tool (e.g.
+	// fdo-meta-tool provision sign) creates the signed provisioning
+	// artifact. When set, ProvisioningSigner is NOT called for this image
+	// and the pre-signed bytes are sent verbatim.
+	PreSignedBegin []byte
+
 	// Optional additional metadata fields
 	Version     string // Optional: Version string (field -4)
 	Description string // Optional: Description (field -5)
@@ -187,6 +195,22 @@ func (b *BMOOwner) AddImageMetaURL(metaURL string, metaSigner []byte, tlsCA []by
 	})
 }
 
+// AddPreSignedImage adds a boot image with a pre-signed COSE_Sign1 provisioning
+// body. The preSignedCOSE bytes are delivered as-is to the device as the
+// image-begin message body, without any re-wrapping or re-signing by the
+// server. This supports offline/HSM signing workflows where fdo-meta-tool
+// (or similar) produces the signed artifact. The image data is still sent
+// inline in subsequent image-data chunks.
+func (b *BMOOwner) AddPreSignedImage(imageType, name string, data []byte, preSignedCOSE []byte) {
+	b.images = append(b.images, ImageToSend{
+		ImageType:      imageType,
+		Name:           name,
+		Data:           data,
+		PreSignedBegin: preSignedCOSE,
+		HashAlg:        "sha256",
+	})
+}
+
 // SetLastEstimatedDuration sets the estimated_duration (advisory, in seconds) on the
 // most recently added image. A value of 0 means "do not send the field". This is
 // an advisory hint to the device for how long the transfer and application may take,
@@ -236,8 +260,8 @@ func (b *BMOOwner) produceInfo(ctx context.Context, producer *serviceinfo.Produc
 		return false, false, nil
 	}
 
-	// Check if we're done with all images
-	if b.currentIndex >= len(b.images) && b.sendState == bmoStateIdle {
+	// Check if we're done with all images AND there are no BIOS params left
+	if b.currentIndex >= len(b.images) && b.sendState == bmoStateIdle && len(b.biosParams) == 0 {
 		return false, true, nil
 	}
 
@@ -318,7 +342,17 @@ func (b *BMOOwner) produceInfo(ctx context.Context, producer *serviceinfo.Produc
 	switch b.sendState {
 	case bmoStateSendingBegin:
 		fmt.Printf("[BMOOwner] Sending image-begin message\n")
-		if b.ProvisioningSigner != nil {
+		image := b.images[b.currentIndex]
+		if len(image.PreSignedBegin) > 0 {
+			// Pre-signed COSE body: deliver as-is without re-wrapping.
+			// This supports offline/HSM signing via fdo-meta-tool.
+			slog.Info("fdo.bmo delivering pre-signed image-begin",
+				"image_type", b.currentSender.BeginFields.FSIMFields[-1],
+				"cose_bytes", len(image.PreSignedBegin))
+			if err := b.currentSender.SendBeginAs(producer, "image-begin", image.PreSignedBegin); err != nil {
+				return false, false, fmt.Errorf("failed to send pre-signed image-begin: %w", err)
+			}
+		} else if b.ProvisioningSigner != nil {
 			// Wrap the encoded BeginFields in a tagged COSE_Sign1 per
 			// fdo.bmo.md §"Authorization of Provisioning Messages". The
 			// wire-level message key remains "image-begin"; only the body
@@ -457,7 +491,8 @@ func (b *BMOOwner) produceInfo(ctx context.Context, producer *serviceinfo.Produc
 					slog.Debug("fdo.bmo: sent BIOS parameters", "count", len(params))
 				}
 
-				b.biosSendState = bmoBiosStateSending
+				b.biosParamIndex = len(b.biosParams) // all sent in one message
+				b.biosSendState = bmoBiosStateIdle
 				return false, false, nil
 			}
 		}

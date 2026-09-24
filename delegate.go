@@ -228,6 +228,15 @@ func DelegateCanRedirect(chain []*x509.Certificate) bool {
 	return DelegateHasPermission(chain, OIDPermitRedirect)
 }
 
+// DelegateCanProvision checks if a delegate certificate chain has the
+// fdo-ekt-permit-provision (PERM.7) permission. A delegate with this
+// permission is authorised to send provisioning payloads to devices,
+// either unsigned (Model 2: channel authority) or signed (Model 4:
+// artifact authority).
+func DelegateCanProvision(chain []*x509.Certificate) bool {
+	return DelegateHasPermission(chain, OIDPermitProvision)
+}
+
 // KeyUsageToString converts x509.KeyUsage flags to a human-readable string.
 func KeyUsageToString(keyUsage x509.KeyUsage) (s string) {
 	s = fmt.Sprintf("0x%x: ", keyUsage)

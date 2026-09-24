@@ -278,9 +278,26 @@ func (b *BMO) unwrapProvisioning(ctx context.Context, messageBody io.Reader, exp
 		return payload, true, nil
 	}
 
-	// Unsigned (legacy) — only permitted in non-conforming configurations.
+	// Unsigned — acceptable under two conditions:
+	//
+	// 1. Channel authority from an Owner-direct session (Model 1): the TO2
+	//    peer proved it holds the Owner key, so anything it sends is implicitly
+	//    authorised. However, the spec says a conforming deployment SHOULD
+	//    use signed provisioning when the Owner key is available, so we only
+	//    allow this when no Owner key is configured (test/legacy setups).
+	//
+	// 2. Channel authority from a delegate with PERM.7 (Model 2): the TO2
+	//    peer proved it holds a delegate certificate chain rooted in the Owner
+	//    key AND carrying OIDPermitProvision. This delegate is authorised to
+	//    provision, so unsigned payloads are acceptable via channel authority.
 	if ownerKey != nil {
-		return nil, false, fmt.Errorf("unsigned %s received but Owner public key is configured; a spec-compliant deployment MUST sign provisioning messages (see fdo.bmo.md §Authorization of Provisioning Messages)", expectedContentType)
+		// Check whether the TO2 peer is a PERM.7 delegate (Model 2).
+		if fdo.DelegateProvisionAuthorityFromContext(ctx) {
+			slog.Info("accepting unsigned BMO via delegate channel authority (Model 2)",
+				"message_type", expectedContentType)
+			return raw, false, nil
+		}
+		return nil, false, fmt.Errorf("unsigned %s received but Owner public key is configured and no delegate provisioning authority; a spec-compliant deployment MUST sign provisioning messages or use a PERM.7 delegate (see fdo.bmo.md §Authorization of Provisioning Messages)", expectedContentType)
 	}
 	return raw, false, nil
 }

@@ -4,6 +4,8 @@
 package fsim
 
 import (
+	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -162,5 +164,116 @@ func TestVerifyBmoSigned_NoOwnerKey(t *testing.T) {
 	signed, _ := signer.Sign([]byte("x"), BMOContentTypeSet)
 	if _, err := VerifyBmoSigned(signed, nil, BMOContentTypeSet); err == nil {
 		t.Fatal("expected error when ownerKey is nil")
+	}
+}
+
+// --- unwrapProvisioning tests for Model 2 (delegate channel authority) ---
+
+// unsignedCBOR is a minimal valid CBOR map (empty map: 0xA0) that represents
+// an unsigned provisioning message body (no COSE tag 18).
+var unsignedCBOR = []byte{0xA0}
+
+func TestUnwrapProvisioning_UnsignedRejectedWithOwnerKey(t *testing.T) {
+	// Model 1 strict: unsigned BMO with an Owner key but no delegate authority.
+	// This MUST be rejected.
+	owner := genECKey(t)
+	bmo := &BMO{OwnerPublicKey: owner.Public()}
+	ctx := context.Background()
+
+	_, _, err := bmo.unwrapProvisioning(ctx, bytes.NewReader(unsignedCBOR), BMOContentTypeImageBegin)
+	if err == nil {
+		t.Fatal("expected unsigned BMO to be rejected when Owner key is present")
+	}
+	if !strings.Contains(err.Error(), "unsigned") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestUnwrapProvisioning_UnsignedAcceptedWithDelegateProvision(t *testing.T) {
+	// Model 2: unsigned BMO with an Owner key AND delegate provision authority.
+	// This MUST be accepted.
+	owner := genECKey(t)
+	bmo := &BMO{OwnerPublicKey: owner.Public()}
+	ctx := fdo.WithDelegateProvisionAuthority(context.Background(), true)
+
+	inner, signed, err := bmo.unwrapProvisioning(ctx, bytes.NewReader(unsignedCBOR), BMOContentTypeImageBegin)
+	if err != nil {
+		t.Fatalf("expected unsigned BMO to be accepted with delegate provision authority: %v", err)
+	}
+	if signed {
+		t.Fatal("unsigned message should not be reported as signed")
+	}
+	if !bytes.Equal(inner, unsignedCBOR) {
+		t.Fatal("inner payload should match raw input")
+	}
+}
+
+func TestUnwrapProvisioning_UnsignedRejectedWithoutProvisionPerm(t *testing.T) {
+	// A delegate exists but does NOT have provision authority.
+	// Unsigned BMO MUST still be rejected.
+	owner := genECKey(t)
+	bmo := &BMO{OwnerPublicKey: owner.Public()}
+	ctx := fdo.WithDelegateProvisionAuthority(context.Background(), false)
+
+	_, _, err := bmo.unwrapProvisioning(ctx, bytes.NewReader(unsignedCBOR), BMOContentTypeImageBegin)
+	if err == nil {
+		t.Fatal("expected unsigned BMO to be rejected when delegate lacks provision authority")
+	}
+}
+
+func TestUnwrapProvisioning_UnsignedAcceptedWithNoOwnerKey(t *testing.T) {
+	// Legacy/test: no Owner key at all — unsigned is always accepted.
+	bmo := &BMO{}
+	ctx := context.Background()
+
+	inner, signed, err := bmo.unwrapProvisioning(ctx, bytes.NewReader(unsignedCBOR), BMOContentTypeImageBegin)
+	if err != nil {
+		t.Fatalf("expected unsigned BMO to be accepted with no Owner key: %v", err)
+	}
+	if signed {
+		t.Fatal("unsigned message should not be reported as signed")
+	}
+	if !bytes.Equal(inner, unsignedCBOR) {
+		t.Fatal("inner payload should match raw input")
+	}
+}
+
+func TestUnwrapProvisioning_SignedAcceptedWithOwnerKey(t *testing.T) {
+	// Model 3: Owner-signed COSE_Sign1. Verify it's accepted.
+	owner := genECKey(t)
+	signer := &OwnerSigner{Key: owner}
+	payload := []byte{0xA1, 0x01, 0x02} // minimal CBOR map {1: 2}
+	signedMsg, err := signer.Sign(payload, BMOContentTypeImageBegin)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+
+	bmo := &BMO{OwnerPublicKey: owner.Public()}
+	ctx := context.Background()
+
+	inner, wasSigned, err := bmo.unwrapProvisioning(ctx, bytes.NewReader(signedMsg), BMOContentTypeImageBegin)
+	if err != nil {
+		t.Fatalf("expected signed BMO to be accepted: %v", err)
+	}
+	if !wasSigned {
+		t.Fatal("signed message should be reported as signed")
+	}
+	if !bytes.Equal(inner, payload) {
+		t.Fatalf("payload mismatch: got %x, want %x", inner, payload)
+	}
+}
+
+func TestUnwrapProvisioning_SignedRejectedWithWrongKey(t *testing.T) {
+	// Sign with one key, verify with a different Owner key — must reject.
+	signer := &OwnerSigner{Key: genECKey(t)}
+	signedMsg, _ := signer.Sign([]byte{0xA0}, BMOContentTypeImageBegin)
+
+	wrongOwner := genECKey(t)
+	bmo := &BMO{OwnerPublicKey: wrongOwner.Public()}
+	ctx := context.Background()
+
+	_, _, err := bmo.unwrapProvisioning(ctx, bytes.NewReader(signedMsg), BMOContentTypeImageBegin)
+	if err == nil {
+		t.Fatal("expected signed BMO to be rejected with wrong Owner key")
 	}
 }

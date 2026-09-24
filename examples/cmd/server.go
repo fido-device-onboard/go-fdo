@@ -86,6 +86,10 @@ var (
 	bmoSetFile            string                  // BIOS parameters from file
 	bmoSign               bool                    // Sign BMO provisioning messages with owner key
 	bmoDelegateProvision  string                  // Sign BMO provisioning messages with delegate cert:key
+	bmoPreSigned          stringList              // Pre-signed COSE provisioning bodies (format: type:cose_file:image_file)
+	bmoScopeNotBefore     string                  // fdo.bmo.scope not_before (RFC 3339 timestamp)
+	bmoScopeNotAfter      string                  // fdo.bmo.scope not_after (RFC 3339 timestamp)
+	bmoScopeGeneration    uint64                  // fdo.bmo.scope generation counter
 	bmoProvisioningSigner fsim.ProvisioningSigner // Populated at serve-time when bmoSign or bmoDelegateProvision is set
 	payloadFiles          stringList              // Multiple payload files with types (format: type:file)
 	payloadDuration       uint64                  // Advisory estimated transfer+apply duration for payloads (seconds, 0=omit)
@@ -151,6 +155,10 @@ func init() {
 	serverFlags.StringVar(&bmoSetFile, "bmo-set-file", "", "Use fdo.bmo FSIM to set BIOS parameters from `file` (one key=value per line)")
 	serverFlags.BoolVar(&bmoSign, "bmo-sign", false, "Sign fdo.bmo provisioning messages (image-begin, set) with the EC-P256 owner key per fdo.bmo.md Authenticated Provisioning")
 	serverFlags.StringVar(&bmoDelegateProvision, "bmo-delegate-provision", "", "Sign fdo.bmo provisioning messages with a delegate. Format: `cert.pem:key.pem` where cert leaf MUST carry OIDPermitProvision and chain to the EC-P256 owner key")
+	serverFlags.Var(&bmoPreSigned, "bmo-presigned", "Deliver a pre-signed COSE provisioning body as-is. Format: `type:cose_file:image_file` — the COSE body is sent verbatim as image-begin, image data from image_file")
+	serverFlags.StringVar(&bmoScopeNotBefore, "bmo-scope-not-before", "", "fdo.bmo.scope not_before timestamp (RFC 3339, e.g. 2026-01-01T00:00:00Z)")
+	serverFlags.StringVar(&bmoScopeNotAfter, "bmo-scope-not-after", "", "fdo.bmo.scope not_after timestamp (RFC 3339, e.g. 2027-01-01T00:00:00Z)")
+	serverFlags.Uint64Var(&bmoScopeGeneration, "bmo-scope-generation", 0, "fdo.bmo.scope generation counter (monotonic supersession; 0=omit)")
 	serverFlags.Var(&payloadFiles, "payload", "Use fdo.payload FSIM with `type:file` format with RequireAck (flag may be used multiple times for NAK testing)")
 	serverFlags.Uint64Var(&payloadDuration, "payload-duration", 0, "Advisory estimated transfer+apply time in `seconds` for fdo.payload (sent in payload-begin; 0=omit)")
 	serverFlags.StringVar(&payloadLogDir, "payload-log-dir", "", "Accept fdo.payload device diagnostic logs and write them to `dir` (unset = decline logs)")
@@ -235,6 +243,20 @@ func validateFiles() error {
 		filePath := parts[1]
 		if _, err := os.Stat(filePath); err != nil {
 			return fmt.Errorf("BMO file not found: %s", filePath)
+		}
+	}
+
+	// Validate BMO pre-signed files
+	for _, psSpec := range bmoPreSigned {
+		parts := strings.SplitN(psSpec, ":", 3)
+		if len(parts) != 3 {
+			return fmt.Errorf("invalid -bmo-presigned specification %q: expected type:cose_file:image_file format", psSpec)
+		}
+		if _, err := os.Stat(parts[1]); err != nil {
+			return fmt.Errorf("BMO pre-signed COSE file not found: %s", parts[1])
+		}
+		if _, err := os.Stat(parts[2]); err != nil {
+			return fmt.Errorf("BMO pre-signed image file not found: %s", parts[2])
 		}
 	}
 
@@ -367,12 +389,45 @@ func server(ctx context.Context) error { //nolint:gocyclo
 // initBMOProvisioningSigner populates bmoProvisioningSigner from -bmo-sign or
 // -bmo-delegate-provision flags. The signer is applied to every per-session
 // BMOOwner in ownerModules. See fdo.bmo.md "Authenticated Provisioning".
+// buildBmoScope constructs a BmoScope from the CLI flags.
+// Returns nil if no scope flags are set.
+func buildBmoScope() (*fsim.BmoScope, error) {
+	hasScope := bmoScopeNotBefore != "" || bmoScopeNotAfter != "" || bmoScopeGeneration > 0
+	if !hasScope {
+		return nil, nil
+	}
+	scope := &fsim.BmoScope{}
+	if bmoScopeNotBefore != "" {
+		t, err := time.Parse(time.RFC3339, bmoScopeNotBefore)
+		if err != nil {
+			return nil, fmt.Errorf("-bmo-scope-not-before: %w", err)
+		}
+		scope.NotBefore = uint64(t.Unix())
+	}
+	if bmoScopeNotAfter != "" {
+		t, err := time.Parse(time.RFC3339, bmoScopeNotAfter)
+		if err != nil {
+			return nil, fmt.Errorf("-bmo-scope-not-after: %w", err)
+		}
+		scope.NotAfter = uint64(t.Unix())
+	}
+	if bmoScopeGeneration > 0 {
+		scope.Generation = bmoScopeGeneration
+	}
+	return scope, nil
+}
+
 func initBMOProvisioningSigner(ctx context.Context, state *sqlite.DB) error {
 	if !bmoSign && bmoDelegateProvision == "" {
 		return nil
 	}
 	if bmoSign && bmoDelegateProvision != "" {
 		return fmt.Errorf("-bmo-sign and -bmo-delegate-provision are mutually exclusive")
+	}
+
+	scope, err := buildBmoScope()
+	if err != nil {
+		return err
 	}
 
 	// Owner key is EC-P256 by convention for the example server.
@@ -386,8 +441,11 @@ func initBMOProvisioningSigner(ctx context.Context, state *sqlite.DB) error {
 		if !ok {
 			return fmt.Errorf("bmo provisioning: owner key is %T, expected *ecdsa.PrivateKey", ownerKey)
 		}
-		bmoProvisioningSigner = &fsim.OwnerSigner{Key: ecKey}
+		bmoProvisioningSigner = &fsim.OwnerSigner{Key: ecKey, Scope: scope}
 		log.Printf("BMO: provisioning messages will be signed with EC-P256 owner key")
+		if scope != nil {
+			log.Printf("BMO: scope: not_before=%d not_after=%d generation=%d", scope.NotBefore, scope.NotAfter, scope.Generation)
+		}
 		return nil
 	}
 
@@ -421,8 +479,11 @@ func initBMOProvisioningSigner(ctx context.Context, state *sqlite.DB) error {
 	if !ok {
 		return fmt.Errorf("-bmo-delegate-provision: key is %T, expected *ecdsa.PrivateKey", signer)
 	}
-	bmoProvisioningSigner = &fsim.DelegateSigner{Key: ecSigner, Chain: chain}
+	bmoProvisioningSigner = &fsim.DelegateSigner{Key: ecSigner, Chain: chain, Scope: scope}
 	log.Printf("BMO: provisioning messages will be signed with delegate (leaf CN=%s, %d-cert chain)", chain[0].Subject.CommonName, len(chain))
+	if scope != nil {
+		log.Printf("BMO: scope: not_before=%d not_after=%d generation=%d", scope.NotBefore, scope.NotAfter, scope.Generation)
+	}
 	return nil
 }
 
@@ -1212,7 +1273,7 @@ func ownerModules(modules []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 			}
 		}
 
-		if slices.Contains(modules, "fdo.bmo") && (bmoFile != "" || len(bmoFiles) > 0 || len(bmoURLs) > 0 || len(bmoMetaURLs) > 0) {
+		if slices.Contains(modules, "fdo.bmo") && (bmoFile != "" || len(bmoFiles) > 0 || len(bmoURLs) > 0 || len(bmoMetaURLs) > 0 || len(bmoPreSigned) > 0) {
 			log.Printf("[DEBUG ownerModules] BMO condition met! Creating BMOOwner")
 			bmoOwner := &fsim.BMOOwner{ProvisioningSigner: bmoProvisioningSigner}
 
@@ -1244,6 +1305,29 @@ func ownerModules(modules []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 				if bmoDuration > 0 {
 					bmoOwner.SetLastEstimatedDuration(bmoDuration)
 				}
+			}
+
+			// Handle pre-signed COSE provisioning bodies
+			for _, psSpec := range bmoPreSigned {
+				parts := strings.SplitN(psSpec, ":", 3)
+				if len(parts) != 3 {
+					log.Fatalf("invalid -bmo-presigned specification %q: expected type:cose_file:image_file format", psSpec)
+				}
+				imageType, coseFile, imageFile := parts[0], parts[1], parts[2]
+				coseData, err := os.ReadFile(coseFile)
+				if err != nil {
+					log.Fatalf("error reading COSE file %q: %v", coseFile, err)
+				}
+				imageData, err := os.ReadFile(imageFile)
+				if err != nil {
+					log.Fatalf("error reading image file %q: %v", imageFile, err)
+				}
+				bmoOwner.AddPreSignedImage(imageType, filepath.Base(imageFile), imageData, coseData)
+				if bmoDuration > 0 {
+					bmoOwner.SetLastEstimatedDuration(bmoDuration)
+				}
+				log.Printf("BMO: Added pre-signed image: type=%s, cose=%s (%d bytes), image=%s (%d bytes)",
+					imageType, coseFile, len(coseData), imageFile, len(imageData))
 			}
 
 			// Handle URL delivery mode (Mode 1)

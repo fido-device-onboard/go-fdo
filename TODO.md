@@ -48,7 +48,69 @@
 
 - [ ] Improve help text consistency across commands
 
-### Testing
+### Testing — Four Provisioning Security Models
+
+See `provisioning-security.md` for the narrative. The four models are:
+
+1. **Owner service, unsigned payloads** — channel authority, Owner runs the service
+2. **Delegate service, unsigned payloads** — channel authority, PERM.7 delegate runs the service
+3. **Owner-signed payloads** — artifact authority, Owner signs, any (onboard) service delivers
+4. **Delegate-signed payloads** — artifact authority, PERM.7 delegate signs, any service delivers
+
+#### Status Matrix (go-fdo library + server + device)
+
+| Model | Library | Server | Unit tests | Integration test | Negative integration |
+|---|---|---|---|---|---|
+| 1 | Working (unsigned rejected unless delegate has PERM.7) | Works (omit `-bmo-sign`) | 6 unwrap tests | `bmo` (positive) | `bmo-signed-negative` |
+| 2 | **Implemented** (delegate PERM.7 → accept unsigned) | Works (`-onboardDelegate` with PERM.7 chain) | 6 unwrap tests | **`bmo-delegate-unsigned`** | **`bmo-delegate-unsigned-noperm`** |
+| 3 | Implemented | `-bmo-sign` works | Yes (5 tests) | **`bmo-signed`** | `bmo-signed-negative` |
+| 4 | Implemented | `-bmo-delegate-provision` works | Yes (3 tests) | **`bmo-delegate-provision`** | None |
+
+#### Completed testing tasks
+
+- [x] **Model 2 implementation**: Added `DelegateCanProvision()`, context plumbing
+  (`WithDelegateProvisionAuthority` / `DelegateProvisionAuthorityFromContext`),
+  threaded through both FDO 1.01 and 2.0 TO2 paths. `unwrapProvisioning` now
+  accepts unsigned BMO when the TO2 peer proved PERM.7 delegate authority.
+  6 unit tests + 2 integration tests (positive + negative).
+- [x] **Model 4 integration test** (`test_bmo_delegate_provision`): Generates an
+  Owner-rooted PERM.7 delegate chain, starts server with `-bmo-delegate-provision`,
+  delivers BMO image, verifies payload integrity.
+- [x] **Model 3 negative integration test** (`test_bmo_signed_negative`): Server
+  sends unsigned BMO to a device with Owner key — device rejects it.
+
+#### Remaining testing tasks
+
+- [ ] **Model 1 clarification**: The go-fdo device rejects unsigned provisioning
+  from the Owner itself (when no delegate is used and Owner key is present). This
+  is the strict interpretation: even the Owner MUST sign. This is now documented
+  and tested (`bmo-signed-negative`). If the spec intends to allow unsigned from
+  a verified Owner TO2 session (channel authority), add an Owner-direct flag.
+- [~] **Model 4 negative variants**: Wrong root, missing PERM.7, tampered delegate
+  signature. Covered by unit tests (3 tests in `bmo_provision_test.go`). Integration
+  tests are impractical because the server validates the delegate chain at startup
+  (`initBMOProvisioningSigner`) — it refuses to start with a bad chain. A separate
+  "bypass the guard" test harness would be needed, which is more test infrastructure
+  than the risk warrants. The server startup failure IS the negative test at the
+  integration level (demonstrated by `start9-delegate-signed.sh --no-provision`
+  on the EFI client).
+- [x] **Pre-signed artifact delivery** (2026-09-23): `BMOOwner.AddPreSignedImage()`
+  accepts a pre-signed COSE_Sign1 body and delivers it as-is as the image-begin
+  message. Server CLI: `-bmo-presigned type:cose_file:image_file`. This supports
+  offline/HSM signing workflows where `fdo-meta-tool provision sign` (or similar)
+  creates the signed artifact. Integration test: `bmo-presigned`.
+- [x] **Scope emission** (2026-09-23): Server CLI flags `-bmo-scope-not-before`,
+  `-bmo-scope-not-after`, `-bmo-scope-generation` added. When any scope flag is set
+  alongside `-bmo-sign` or `-bmo-delegate-provision`, the scope is included in the
+  COSE protected header. Integration test: `bmo-signed-scope`. EFI client parses
+  and evaluates scope (QEMU test: `start13-bmo-signed-scope.sh`).
+- [x] **Fix: BIOS params never sent** (2026-09-23): `bmo_owner.go` `produceInfo`
+  had an early `moduleDone=true` return at line 263 when all images were done,
+  before reaching the BIOS params sending code. Fixed by checking for pending
+  BIOS params before returning done. Also fixed BIOS send state: all params sent
+  in one message, so `biosParamIndex` advances to `len(biosParams)` immediately.
+
+### Testing — General
 
 - [✅] Integration tests working (basic, basic-reuse, kex tests passing)
 
