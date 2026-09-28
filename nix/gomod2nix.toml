@@ -71,8 +71,11 @@ schema = 3
     version = "v1.11.1"
     hash = "sha256-sWfjkuKJyDllDEtnM8sb/pdLzPQmUYWYtmeWz/5suUc="
   [mod."github.com/syumai/workers"]
-    version = "v0.27.0"
-    hash = "sha256-acWyf6OhF+2vpejyVsTXF250RlsY52gWvLz/2SvYueU="
+    version = "v0.36.0"
+    hash = "sha256-RBc8ZM7Cjcw9JHjcEOJQL1O4o+t7ARFpJYmxUYIevMk="
+  [mod."github.com/syumai/workers-go"]
+    version = "v0.36.0"
+    hash = "sha256-qEY+TJmcHMYNim0LAxfjKJ4/dQ7sUMKEsdvAHk1bjKw="
   [mod."go.uber.org/multierr"]
     version = "v1.11.0"
     hash = "sha256-Lb6rHHfR62Ozg2j2JZy3MKOMKdsfzd1IYTR57r3Mhp0="
