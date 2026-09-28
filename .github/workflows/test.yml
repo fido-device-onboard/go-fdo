@@ -43,6 +43,12 @@ jobs:
           nix develop '.#go' -c sh -c "if go work init; then go work use -r .; fi;
             go test -v ./tpm/...
           "
+      - name: Test TPM in FIPS 140-3 only mode
+        run: |
+          nix develop '.#go' -c sh -c "if go work init; then go work use -r .; fi;
+            GOFIPS140=latest GODEBUG=fips140=only go test -v ./tpm/... &&
+            GOFIPS140=v1.0.0 GODEBUG=fips140=only go test -v ./tpm/...
+          "
       - name: Test examples
         run: |
           nix develop '.#go' -c sh -c "if go work init; then go work use -r .; fi;
