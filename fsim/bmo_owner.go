@@ -5,6 +5,7 @@ package fsim
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"log/slog"
@@ -315,6 +316,17 @@ func (b *BMOOwner) produceInfo(ctx context.Context, producer *serviceinfo.Produc
 		}
 		if len(image.ExpectedHash) > 0 {
 			b.currentSender.BeginFields.FSIMFields[-9] = image.ExpectedHash
+		} else if b.ProvisioningSigner != nil && len(image.Data) > 0 {
+			// When signing is enabled and inline data is present, always
+			// include the image hash (key -9). Without it the signed
+			// image-begin authenticates the metadata but not the bytes
+			// that follow — the device has no way to verify the image
+			// matches what the signer intended.
+			h := sha256.Sum256(image.Data)
+			b.currentSender.BeginFields.FSIMFields[-9] = h[:]
+			slog.Info("fdo.bmo: auto-computed image hash for signed inline delivery",
+				"hash_alg", "sha256",
+				"hash", fmt.Sprintf("%x", h[:8]))
 		}
 		if len(image.MetaSigner) > 0 {
 			b.currentSender.BeginFields.FSIMFields[-10] = image.MetaSigner
