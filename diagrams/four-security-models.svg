@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="720" height="400" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .title { font-family: Arial, sans-serif; font-size: 16px; font-weight: bold; fill: #2c3e50; }
+      .subtitle { font-family: Arial, sans-serif; font-size: 11px; fill: #7f8c8d; font-style: italic; }
+      .case-num { font-family: Arial, sans-serif; font-size: 26px; font-weight: bold; fill: #fff; }
+      .case-title { font-family: Arial, sans-serif; font-size: 12px; font-weight: bold; fill: #fff; }
+      .case-detail { font-family: Arial, sans-serif; font-size: 10px; fill: rgba(255,255,255,0.9); }
+      .col-header { font-family: Arial, sans-serif; font-size: 13px; font-weight: bold; fill: #2c3e50; }
+      .col-sub { font-family: Arial, sans-serif; font-size: 10px; fill: #7f8c8d; }
+      .row-header { font-family: Arial, sans-serif; font-size: 12px; font-weight: bold; fill: #2c3e50; }
+      .row-sub { font-family: Arial, sans-serif; font-size: 10px; fill: #7f8c8d; }
+      .footer { font-family: Arial, sans-serif; font-size: 11px; font-weight: bold; fill: #27ae60; }
+    </style>
+  </defs>
+
+  <rect width="720" height="400" fill="#fafafa" rx="6"/>
+
+  <!-- Title -->
+  <text x="360" y="26" class="title" text-anchor="middle">Where the Owner's Authorization Lives</text>
+  <text x="360" y="44" class="subtitle" text-anchor="middle">All four are equally valid -- they differ only in how the Owner's approval is expressed</text>
+
+  <!-- Column headers -->
+  <text x="305" y="72" class="col-header" text-anchor="middle">In the connection</text>
+  <text x="305" y="86" class="col-sub" text-anchor="middle">"I trust whoever is on the line"</text>
+  <text x="545" y="72" class="col-header" text-anchor="middle">In the payload</text>
+  <text x="545" y="86" class="col-sub" text-anchor="middle">"I trust this specific package"</text>
+
+  <!-- Row headers -->
+  <text x="88" y="150" class="row-header" text-anchor="middle">Owner</text>
+  <text x="88" y="165" class="row-header" text-anchor="middle">acts directly</text>
+  <text x="88" y="182" class="row-sub" text-anchor="middle">no middleman</text>
+
+  <text x="88" y="278" class="row-header" text-anchor="middle">Owner</text>
+  <text x="88" y="293" class="row-header" text-anchor="middle">issues a</text>
+  <text x="88" y="308" class="row-header" text-anchor="middle">certificate</text>
+  <text x="88" y="325" class="row-sub" text-anchor="middle">someone acts</text>
+  <text x="88" y="338" class="row-sub" text-anchor="middle">on their behalf</text>
+
+  <!-- Grid lines -->
+  <line x1="165" y1="98" x2="165" y2="358" stroke="#e0e0e0" stroke-width="1"/>
+  <line x1="165" y1="228" x2="690" y2="228" stroke="#e0e0e0" stroke-width="1"/>
+  <line x1="428" y1="58" x2="428" y2="358" stroke="#e0e0e0" stroke-width="1"/>
+
+  <!-- Case 1 (green) -->
+  <rect x="180" y="110" width="235" height="105" rx="12" fill="#27ae60"/>
+  <text x="210" y="152" class="case-num">1</text>
+  <text x="258" y="140" class="case-title">Owner runs the service</text>
+  <text x="258" y="159" class="case-detail">The Owner is literally the one</text>
+  <text x="258" y="174" class="case-detail">on the other end of the line.</text>
+  <text x="258" y="196" class="case-detail" style="font-weight:bold">Nothing to sign. Simplest case.</text>
+
+  <!-- Case 2 (blue) -->
+  <rect x="180" y="242" width="235" height="105" rx="12" fill="#2980b9"/>
+  <text x="210" y="284" class="case-num">2</text>
+  <text x="258" y="272" class="case-title">Delegate runs the service</text>
+  <text x="258" y="291" class="case-detail">A certificate proves the Owner</text>
+  <text x="258" y="306" class="case-detail">authorized them to run it.</text>
+  <text x="258" y="328" class="case-detail" style="font-weight:bold">Just as good as #1.</text>
+
+  <!-- Case 3 (orange) -->
+  <rect x="443" y="110" width="240" height="105" rx="12" fill="#e67e22"/>
+  <text x="473" y="152" class="case-num">3</text>
+  <text x="520" y="140" class="case-title">Owner signs the payload</text>
+  <text x="520" y="159" class="case-detail">Anyone may deliver it. The</text>
+  <text x="520" y="174" class="case-detail">Owner's signature is the approval.</text>
+  <text x="520" y="196" class="case-detail" style="font-weight:bold">Just as good as #1.</text>
+
+  <!-- Case 4 (purple) -->
+  <rect x="443" y="242" width="240" height="105" rx="12" fill="#8e44ad"/>
+  <text x="473" y="284" class="case-num">4</text>
+  <text x="520" y="272" class="case-title">Delegate signs the payload</text>
+  <text x="520" y="291" class="case-detail">A certificate proves the Owner</text>
+  <text x="520" y="306" class="case-detail">authorized them to sign.</text>
+  <text x="520" y="328" class="case-detail" style="font-weight:bold">Just as good as #3, so as good as #1.</text>
+
+  <!-- Footer -->
+  <text x="360" y="380" class="footer" text-anchor="middle">Follow any box back to its origin and you arrive at the same place: the Owner's key.</text>
+</svg>

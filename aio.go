@@ -151,7 +151,12 @@ func (aio AllInOne) RegisterOwnerAddr(ctx context.Context, ov Voucher) error {
 			},
 		}),
 	}
-	if err := sign1.Sign(nextOwner, nil, nil, opts); err != nil {
+	// FDO 2.0 uses domain-specific AAD; FDO 1.01 uses empty AAD
+	var aad []byte
+	if ov.Version >= uint16(protocol.Version200) {
+		aad = cose.AADOwnerSign
+	}
+	if err := sign1.Sign(nextOwner, nil, aad, opts); err != nil {
 		return fmt.Errorf("auto-to0: error signing to1d: %w", err)
 	}
 

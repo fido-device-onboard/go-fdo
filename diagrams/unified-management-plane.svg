@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="800" height="500" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .title { font-family: Arial, sans-serif; font-size: 20px; font-weight: bold; fill: #333; }
+      .mgmt-title { font-family: Arial, sans-serif; font-size: 16px; font-weight: bold; fill: #fff; }
+      .mgmt-text { font-family: Arial, sans-serif; font-size: 13px; fill: #ecf0f1; }
+      .config-text { font-family: Arial, sans-serif; font-size: 12px; fill: #bdc3c7; font-family: monospace; }
+      .fsim-label { font-family: Arial, sans-serif; font-size: 13px; font-weight: bold; fill: #2c3e50; }
+      .vendor-title { font-family: Arial, sans-serif; font-size: 14px; font-weight: bold; fill: #fff; }
+      .vendor-text { font-family: Arial, sans-serif; font-size: 11px; fill: #fff; }
+      .vendor-subtitle { font-family: Arial, sans-serif; font-size: 10px; fill: rgba(255,255,255,0.7); font-style: italic; }
+      .arrow-line { stroke: #7f8c8d; stroke-width: 3; fill: none; }
+      .note-text { font-family: Arial, sans-serif; font-size: 11px; fill: #666; font-style: italic; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <polygon points="0 0, 10 5, 0 10" fill="#7f8c8d" />
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="800" height="500" fill="#fafafa"/>
+
+  <!-- Title -->
+  <text x="400" y="35" class="title" text-anchor="middle">One Management Plane → Any Combination of Vendors</text>
+
+  <!-- Unified Management Plane Box -->
+  <rect x="100" y="60" width="600" height="120" rx="8" fill="#2c3e50"/>
+  <text x="400" y="90" class="mgmt-title" text-anchor="middle">UNIFIED MANAGEMENT PLANE</text>
+  <text x="400" y="115" class="mgmt-text" text-anchor="middle">User specifies configuration ONCE, in ONE format:</text>
+  
+  <!-- Configuration examples -->
+  <rect x="130" y="130" width="160" height="35" rx="4" fill="#34495e"/>
+  <text x="210" y="152" class="config-text" text-anchor="middle">wifi_ssid="CorpNet"</text>
+  
+  <rect x="320" y="130" width="160" height="35" rx="4" fill="#34495e"/>
+  <text x="400" y="152" class="config-text" text-anchor="middle">hostname="server-01"</text>
+  
+  <rect x="510" y="130" width="160" height="35" rx="4" fill="#34495e"/>
+  <text x="590" y="152" class="config-text" text-anchor="middle">oauth_token="abc..."</text>
+
+  <!-- Arrows from Management Plane -->
+  <line x1="210" y1="180" x2="210" y2="270" class="arrow-line" marker-end="url(#arrowhead)"/>
+  <line x1="400" y1="180" x2="400" y2="270" class="arrow-line" marker-end="url(#arrowhead)"/>
+  <line x1="590" y1="180" x2="590" y2="270" class="arrow-line" marker-end="url(#arrowhead)"/>
+
+  <!-- FSIM Labels on arrows -->
+  <rect x="155" y="215" width="110" height="24" rx="4" fill="#ecf0f1" stroke="#bdc3c7"/>
+  <text x="210" y="232" class="fsim-label" text-anchor="middle">fdo.wifi</text>
+  
+  <rect x="335" y="215" width="130" height="24" rx="4" fill="#ecf0f1" stroke="#bdc3c7"/>
+  <text x="400" y="232" class="fsim-label" text-anchor="middle">fdo.sysconfig</text>
+  
+  <rect x="520" y="215" width="140" height="24" rx="4" fill="#ecf0f1" stroke="#bdc3c7"/>
+  <text x="590" y="232" class="fsim-label" text-anchor="middle">fdo.credentials</text>
+
+  <!-- Vendor Boxes -->
+  <!-- Firmware Vendor -->
+  <rect x="120" y="280" width="180" height="100" rx="8" fill="#3498db"/>
+  <text x="210" y="310" class="vendor-title" text-anchor="middle">Wi-Fi Firmware</text>
+  <text x="210" y="330" class="vendor-text" text-anchor="middle">Handles: fdo.wifi FSIM</text>
+  <text x="210" y="350" class="vendor-text" text-anchor="middle">Establishes connectivity</text>
+  <text x="210" y="370" class="vendor-subtitle" text-anchor="middle">Built by: Firmware Vendor A</text>
+
+  <!-- OS Vendor -->
+  <rect x="310" y="280" width="180" height="100" rx="8" fill="#e67e22"/>
+  <text x="400" y="310" class="vendor-title" text-anchor="middle">Operating System</text>
+  <text x="400" y="330" class="vendor-text" text-anchor="middle">Handles: fdo.sysconfig FSIM</text>
+  <text x="400" y="350" class="vendor-text" text-anchor="middle">Configures OS parameters</text>
+  <text x="400" y="370" class="vendor-subtitle" text-anchor="middle">Built by: OS Vendor B</text>
+
+  <!-- Application Vendor -->
+  <rect x="500" y="280" width="180" height="100" rx="8" fill="#27ae60"/>
+  <text x="590" y="310" class="vendor-title" text-anchor="middle">Application</text>
+  <text x="590" y="330" class="vendor-text" text-anchor="middle">Handles: fdo.credentials FSIM</text>
+  <text x="590" y="350" class="vendor-text" text-anchor="middle">Authenticates to mgmt svc</text>
+  <text x="590" y="370" class="vendor-subtitle" text-anchor="middle">Built by: App Vendor C</text>
+
+  <!-- Key insight box -->
+  <rect x="100" y="410" width="600" height="70" rx="8" fill="#f8f9fa" stroke="#dee2e6" stroke-width="2"/>
+  <text x="400" y="435" class="title" text-anchor="middle" style="font-size: 14px;">Key Insight</text>
+  <text x="400" y="458" class="note-text" text-anchor="middle" style="font-style: normal; font-size: 12px;">
+    Vendors A, B, and C don't coordinate with each other. They each implement ONE standard FSIM.
+  </text>
+  <text x="400" y="473" class="note-text" text-anchor="middle" style="font-style: normal; font-size: 12px;">
+    Any management plane that speaks the standard FSIMs can configure any combination of their products.
+  </text>
+</svg>

@@ -61,7 +61,7 @@ func (v IntOrStr) MarshalCBOR() ([]byte, error) {
 	if v.Int64 != 0 {
 		return cbor.Marshal(v.Int64)
 	}
-	return cbor.Marshal(v.String)
+	return cbor.Marshal(v.Str)
 }
 
 // UnmarshalCBOR implements cbor.Unmarshaler.

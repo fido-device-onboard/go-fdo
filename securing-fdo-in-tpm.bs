@@ -1,0 +1,1 @@
+/home/bkg/internet-of-things-specs/securing-fdo-in-tpm.bs

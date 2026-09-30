@@ -23,6 +23,10 @@ type TO1Options struct {
 	// When true and an RSA key is used as a crypto.Signer argument, RSA-SSAPSS
 	// will be used for signing.
 	PSS bool
+
+	// Version specifies the FDO protocol version to use.
+	// Defaults to Version101 if not set.
+	Version protocol.Version
 }
 
 // TO1 runs the TO1 protocol and returns the owner service (TO2) addresses. It
@@ -34,6 +38,9 @@ func TO1(ctx context.Context, transport Transport, cred DeviceCredential, key cr
 	var usePSS bool
 	if opts != nil {
 		usePSS = opts.PSS
+		if opts.Version != 0 {
+			ctx = protocol.ContextWithVersion(ctx, opts.Version)
+		}
 	}
 	signOpts, err := signOptsFor(key, usePSS)
 	if err != nil {
@@ -55,11 +62,6 @@ func TO1(ctx context.Context, transport Transport, cred DeviceCredential, key cr
 	return blob, nil
 }
 
-type helloRV struct {
-	GUID     protocol.GUID
-	ASigInfo sigInfo
-}
-
 // HelloRV(30) -> HelloRVAck(31)
 func helloRv(ctx context.Context, transport Transport, cred DeviceCredential, key crypto.Signer, opts crypto.SignerOpts) (protocol.Nonce, error) {
 	var usePSS bool
@@ -71,14 +73,31 @@ func helloRv(ctx context.Context, transport Transport, cred DeviceCredential, ke
 		return protocol.Nonce{}, fmt.Errorf("error determining eASigInfo for TO1.HelloRV: %w", err)
 	}
 
-	// Define request structure
-	msg := helloRV{
-		GUID:     cred.GUID,
-		ASigInfo: *eASigInfo,
-	}
+	// FDO 2.0 includes CapabilityFlags, FDO 1.1 does not
+	version := protocol.VersionFromContext(ctx)
 
-	// Make request
-	typ, resp, err := transport.Send(ctx, protocol.TO1HelloRVMsgType, msg, nil)
+	var typ uint8
+	var resp io.ReadCloser
+
+	if version == protocol.Version200 {
+		var msg struct {
+			GUID     protocol.GUID
+			ASigInfo sigInfo
+			CapabilityFlags
+		}
+		msg.GUID = cred.GUID
+		msg.ASigInfo = *eASigInfo
+		msg.CapabilityFlags = GlobalCapabilityFlags
+		typ, resp, err = transport.Send(ctx, protocol.TO1HelloRVMsgType, msg, nil)
+	} else {
+		var msg struct {
+			GUID     protocol.GUID
+			ASigInfo sigInfo
+		}
+		msg.GUID = cred.GUID
+		msg.ASigInfo = *eASigInfo
+		typ, resp, err = transport.Send(ctx, protocol.TO1HelloRVMsgType, msg, nil)
+	}
 	if err != nil {
 		return protocol.Nonce{}, fmt.Errorf("TO1.HelloRV: %w", err)
 	}
@@ -88,7 +107,19 @@ func helloRv(ctx context.Context, transport Transport, cred DeviceCredential, ke
 	switch typ {
 	case protocol.TO1HelloRVAckMsgType:
 		captureMsgType(ctx, typ)
-		var ack rvAck
+		if version == protocol.Version200 {
+			var ack struct {
+				NonceTO1Proof protocol.Nonce
+				BSigInfo      sigInfo
+				CapabilityFlags
+			}
+			if err := cbor.NewDecoder(resp).Decode(&ack); err != nil {
+				captureErr(ctx, protocol.MessageBodyErrCode, "")
+				return protocol.Nonce{}, fmt.Errorf("error parsing TO1.HelloRVAck contents: %w", err)
+			}
+			return ack.NonceTO1Proof, nil
+		}
+		var ack rvAckBase
 		if err := cbor.NewDecoder(resp).Decode(&ack); err != nil {
 			captureErr(ctx, protocol.MessageBodyErrCode, "")
 			return protocol.Nonce{}, fmt.Errorf("error parsing TO1.HelloRVAck contents: %w", err)
@@ -108,20 +139,47 @@ func helloRv(ctx context.Context, transport Transport, cred DeviceCredential, ke
 	}
 }
 
-type rvAck struct {
+// helloRVBase contains the fields common to all FDO versions for TO1.HelloRV
+type helloRVBase struct {
+	GUID     protocol.GUID
+	ASigInfo sigInfo
+}
+
+// rvAckBase contains the fields common to all FDO versions for TO1.HelloRVAck
+type rvAckBase struct {
 	NonceTO1Proof protocol.Nonce
 	BSigInfo      sigInfo
 }
 
 // HelloRV(30) -> HelloRVAck(31)
-func (s *TO1Server) helloRVAck(ctx context.Context, msg io.Reader) (*rvAck, error) {
-	var hello helloRV
-	if err := cbor.NewDecoder(msg).Decode(&hello); err != nil {
-		return nil, fmt.Errorf("error decoding TO1.HelloRV request: %w", err)
+func (s *TO1Server) helloRVAck(ctx context.Context, msg io.Reader) (any, error) {
+	// FDO 2.0 includes CapabilityFlags in the request, FDO 1.1 does not
+	version := protocol.VersionFromContext(ctx)
+
+	var guid protocol.GUID
+	var aSigInfo sigInfo
+	if version == protocol.Version200 {
+		var hello struct {
+			GUID     protocol.GUID
+			ASigInfo sigInfo
+			CapabilityFlags
+		}
+		if err := cbor.NewDecoder(msg).Decode(&hello); err != nil {
+			return nil, fmt.Errorf("error decoding TO1.HelloRV request: %w", err)
+		}
+		guid = hello.GUID
+		aSigInfo = hello.ASigInfo
+	} else {
+		var hello helloRVBase
+		if err := cbor.NewDecoder(msg).Decode(&hello); err != nil {
+			return nil, fmt.Errorf("error decoding TO1.HelloRV request: %w", err)
+		}
+		guid = hello.GUID
+		aSigInfo = hello.ASigInfo
 	}
 
 	// Check if device has been registered
-	if _, _, err := s.RVBlobs.RVBlob(ctx, hello.GUID); errors.Is(err, ErrNotFound) {
+	if _, _, err := s.RVBlobs.RVBlob(ctx, guid); errors.Is(err, ErrNotFound) {
 		captureErr(ctx, protocol.ResourceNotFound, "")
 		return nil, ErrNotFound
 	} else if err != nil {
@@ -137,9 +195,22 @@ func (s *TO1Server) helloRVAck(ctx context.Context, msg io.Reader) (*rvAck, erro
 		return nil, fmt.Errorf("error storing nonce for TO1.ProveToRV: %w", err)
 	}
 
-	return &rvAck{
+	// FDO 2.0 includes CapabilityFlags in the response
+	if version == protocol.Version200 {
+		return &struct {
+			NonceTO1Proof protocol.Nonce
+			BSigInfo      sigInfo
+			CapabilityFlags
+		}{
+			NonceTO1Proof:   nonce,
+			BSigInfo:        aSigInfo,
+			CapabilityFlags: GlobalCapabilityFlags,
+		}, nil
+	}
+
+	return &rvAckBase{
 		NonceTO1Proof: nonce,
-		BSigInfo:      hello.ASigInfo,
+		BSigInfo:      aSigInfo,
 	}, nil
 }
 
@@ -149,7 +220,12 @@ func proveToRv(ctx context.Context, transport Transport, cred DeviceCredential, 
 	token := cose.Sign1[eatoken, []byte]{
 		Payload: cbor.NewByteWrap(newEAT(cred.GUID, nonce, nil, nil)),
 	}
-	if err := token.Sign(key, nil, nil, opts); err != nil {
+	// FDO 2.0 uses domain-specific AAD; FDO 1.01 uses empty AAD
+	var aad []byte
+	if protocol.VersionFromContext(ctx) == protocol.Version200 {
+		aad = cose.AADProveToRV
+	}
+	if err := token.Sign(key, nil, aad, opts); err != nil {
 		return nil, fmt.Errorf("error signing EAT payload for TO1.ProveToRV: %w", err)
 	}
 	msg := token.Tag()
@@ -242,7 +318,12 @@ func (s *TO1Server) rvRedirect(ctx context.Context, msg io.Reader) (*cose.Sign1T
 	}
 
 	// Verify EAT signature
-	if ok, err := token.Verify(pub, nil, nil); err != nil {
+	// FDO 2.0 uses domain-specific AAD; FDO 1.01 uses empty AAD
+	var verifyAAD []byte
+	if protocol.VersionFromContext(ctx) == protocol.Version200 {
+		verifyAAD = cose.AADProveToRV
+	}
+	if ok, err := token.Verify(pub, nil, verifyAAD); err != nil {
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
 		return nil, fmt.Errorf("error verifying EAT signature: %w", err)
 	} else if !ok {

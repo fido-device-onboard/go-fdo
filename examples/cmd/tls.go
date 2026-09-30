@@ -22,11 +22,16 @@ import (
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/http"
+	"github.com/fido-device-onboard/go-fdo/protocol"
 )
 
 var insecureTLS bool
 
 func tlsTransport(baseURL string, conf *tls.Config) fdo.Transport {
+	return tlsTransportWithVersion(baseURL, conf, protocol.Version101)
+}
+
+func tlsTransportWithVersion(baseURL string, conf *tls.Config, version protocol.Version) fdo.Transport {
 	if conf == nil {
 		conf = &tls.Config{
 			InsecureSkipVerify: insecureTLS, //nolint:gosec
@@ -34,7 +39,8 @@ func tlsTransport(baseURL string, conf *tls.Config) fdo.Transport {
 	}
 
 	return &http.Transport{
-		BaseURL: baseURL,
+		BaseURL:    baseURL,
+		FdoVersion: version,
 		Client: &net_http.Client{Transport: &net_http.Transport{
 			Proxy: net_http.ProxyFromEnvironment,
 			DialContext: (&net.Dialer{

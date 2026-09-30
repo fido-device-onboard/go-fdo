@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="700" height="200" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .label { font-family: Arial, sans-serif; font-size: 14px; font-weight: bold; fill: #fff; }
+      .sublabel { font-family: Arial, sans-serif; font-size: 11px; fill: rgba(255,255,255,0.85); }
+      .arrow-text { font-family: Arial, sans-serif; font-size: 11px; fill: #2c3e50; font-weight: bold; }
+      .arrow-detail { font-family: Arial, sans-serif; font-size: 10px; fill: #7f8c8d; font-style: italic; }
+      .note { font-family: Arial, sans-serif; font-size: 10px; fill: #95a5a6; font-style: italic; }
+    </style>
+    <marker id="arr" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+      <polygon points="0 1, 10 5, 0 9" fill="#2c3e50" />
+    </marker>
+    <marker id="arr-green" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+      <polygon points="0 1, 10 5, 0 9" fill="#27ae60" />
+    </marker>
+  </defs>
+
+  <rect width="700" height="200" fill="#fafafa" rx="6"/>
+
+  <!-- Device box -->
+  <rect x="30" y="50" width="150" height="70" rx="8" fill="#2980b9"/>
+  <text x="105" y="80" class="label" text-anchor="middle">Device</text>
+  <text x="105" y="97" class="sublabel" text-anchor="middle">Verifies Owner key</text>
+  <text x="105" y="111" class="sublabel" text-anchor="middle">via voucher walk</text>
+
+  <!-- Owner Service box -->
+  <rect x="270" y="50" width="170" height="70" rx="8" fill="#27ae60"/>
+  <text x="355" y="80" class="label" text-anchor="middle">Owner Service</text>
+  <text x="355" y="97" class="sublabel" text-anchor="middle">Holds Owner</text>
+  <text x="355" y="111" class="sublabel" text-anchor="middle">private key</text>
+
+  <!-- TO2 arrow (bidirectional) -->
+  <line x1="180" y1="72" x2="265" y2="72" stroke="#2c3e50" stroke-width="2" marker-end="url(#arr)"/>
+  <line x1="265" y1="88" x2="180" y2="88" stroke="#2c3e50" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="222" y="65" class="arrow-text" text-anchor="middle">TO2</text>
+  <text x="222" y="103" class="arrow-detail" text-anchor="middle">mutual auth</text>
+
+  <!-- Payload arrow -->
+  <line x1="440" y1="85" x2="530" y2="85" stroke="#27ae60" stroke-width="2.5" marker-end="url(#arr-green)"/>
+  <text x="485" y="78" class="arrow-text" text-anchor="middle">image-begin</text>
+  <text x="485" y="103" class="arrow-detail" text-anchor="middle">bare CBOR map</text>
+
+  <!-- Result box -->
+  <rect x="535" y="55" width="140" height="60" rx="8" fill="#2c3e50"/>
+  <text x="605" y="82" class="label" text-anchor="middle">Device boots</text>
+  <text x="605" y="99" class="sublabel" text-anchor="middle">image</text>
+
+  <!-- Bottom note -->
+  <text x="350" y="155" class="note" text-anchor="middle">Channel authority: the peer proved it holds the Owner key.</text>
+  <text x="350" y="170" class="note" text-anchor="middle">Everything it sends is implicitly authorized. No per-payload signature needed.</text>
+</svg>
