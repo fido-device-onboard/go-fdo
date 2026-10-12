@@ -13,6 +13,8 @@ import (
 	"io"
 	"time"
 
+	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/cose"
 	"github.com/fido-device-onboard/go-fdo/kex"
 	"github.com/fido-device-onboard/go-fdo/protocol"
 	"github.com/fido-device-onboard/go-fdo/serviceinfo"
@@ -97,6 +99,31 @@ func (s *DIServer[T]) Respond(ctx context.Context, msgType uint8, msg io.Reader)
 // HandleError performs session cleanup before the token is invalidated.
 func (s *DIServer[T]) HandleError(ctx context.Context, errMsg protocol.ErrorMessage) {}
 
+// TO0OwnerSignInfo contains the full context of a TO0.OwnerSign message,
+// including the voucher, the signed TO1d redirect blob, and any delegate
+// certificate chain that was used to sign the blob instead of the owner key.
+//
+// This allows an AcceptVoucher callback to make authorization decisions based
+// on whether a delegate was used and whether it has the required permissions
+// (e.g., OIDPermitRedirect).
+type TO0OwnerSignInfo struct {
+	// Voucher is the ownership voucher from the TO0.OwnerSign message.
+	Voucher Voucher
+
+	// To1d is the signed redirect blob containing rendezvous addresses.
+	To1d cose.Sign1[protocol.To1d, []byte]
+
+	// DelegateChain is the optional X.509 certificate chain used to sign
+	// the To1d blob. If nil, the blob was signed directly by the owner key.
+	// When present, the leaf certificate (index 0) is the signing delegate
+	// and the chain should be rooted by the voucher's owner key.
+	DelegateChain []*x509.Certificate
+
+	// RequestedTTL is the number of seconds the client requested for the
+	// rendezvous blob to remain active.
+	RequestedTTL uint32
+}
+
 // TO0Server implements the TO0 protocol.
 type TO0Server struct {
 	Session TO0SessionState
@@ -111,7 +138,28 @@ type TO0Server struct {
 	// If AcceptVoucher is not set, then all vouchers will be accepted and the
 	// requested TTL will be used. It is expected that some other means of
 	// authorization is used in this case.
+	//
+	// Deprecated: Use AcceptVoucherWithInfo for access to the delegate chain
+	// and TO1d blob. If both are set, AcceptVoucherWithInfo takes precedence.
 	AcceptVoucher func(ctx context.Context, ov Voucher, requestedTTLSecs uint32) (ttlSecs uint32, err error)
+
+	// AcceptVoucherWithInfo is like AcceptVoucher but receives the full
+	// TO0.OwnerSign context including the delegate certificate chain and
+	// signed TO1d blob. This enables authorization policies that inspect
+	// delegate permissions (e.g., verifying OIDPermitRedirect).
+	//
+	// If the returned TTL is 0, the request is rejected.
+	//
+	// If neither AcceptVoucher nor AcceptVoucherWithInfo is set, all
+	// vouchers will be accepted with the requested TTL.
+	AcceptVoucherWithInfo func(ctx context.Context, info TO0OwnerSignInfo) (ttlSecs uint32, err error)
+
+	// VerifyTo1d makes the Rendezvous Server verify the to1d signature in
+	// TO0.OwnerSign before storing it: against the voucher's Owner key, or
+	// against a delegate chain rooted in the Owner key that carries the
+	// fdo-ekt-permit-redirect permission. The Device always performs this
+	// check in TO2; enabling it here rejects bad blobs at registration time.
+	VerifyTo1d bool
 }
 
 // Respond validates a request and returns the appropriate response message.
