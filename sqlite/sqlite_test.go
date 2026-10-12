@@ -16,10 +16,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/fido-device-onboard/go-fdo"
+	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/fdotest"
 	fdo_http "github.com/fido-device-onboard/go-fdo/http"
 	"github.com/fido-device-onboard/go-fdo/protocol"
@@ -49,6 +51,21 @@ func TestClient(t *testing.T) {
 
 		fdotest.RunClientTestSuite(t, fdotest.Config{
 			State: state,
+		})
+	})
+
+	t.Run("with HTTP transport at FDO 2.0", func(t *testing.T) {
+		state, cleanup := newDB(t)
+		defer func() { _ = cleanup() }()
+
+		fdotest.RunClientTestSuite(t, fdotest.Config{
+			State:   state,
+			Version: protocol.Version200,
+			NewTransport: func(t *testing.T, tokens protocol.TokenService, di, to0, to1, to2 protocol.Responder) fdo.Transport {
+				tr := newTransport(t, tokens, di, to0, to1, to2).(*fdo_http.Transport)
+				tr.FdoVersion = protocol.Version200
+				return tr
+			},
 		})
 	})
 
@@ -253,4 +270,83 @@ func (tr *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp := rr.Result()
 	resp.Request = req
 	return resp, nil
+}
+
+// TestSessionVersionPinning checks that a session cannot change protocol
+// version (a message sent under a different URL version than the message
+// that started the session is rejected before reaching the responder), nor
+// protocol (a TO0 token cannot be used for TO1 or TO2 messages).
+func TestSessionVersionPinning(t *testing.T) {
+	state, cleanup := newDB(t)
+	defer func() { _ = cleanup() }()
+
+	handler := &fdo_http.Handler{
+		Tokens:       state,
+		TO0Responder: &fdo.TO0Server{Session: state, RVBlobs: state},
+		TO1Responder: &fdo.TO1Server{Session: state, RVBlobs: state},
+		TO2Responder: &fdo.TO2Server{Session: state, Vouchers: state, OwnerKeys: state},
+	}
+	post := func(version, msgType string, token string, body any) *httptest.ResponseRecorder {
+		t.Helper()
+		var buf bytes.Buffer
+		if err := cbor.NewEncoder(&buf).Encode(body); err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequest(http.MethodPost, "/fdo/"+version+"/msg/"+msgType, &buf)
+		req.Header.Set("Content-Type", "application/cbor")
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		return rr
+	}
+	msgType := func(rr *httptest.ResponseRecorder) string { return rr.Header().Get("Message-Type") }
+
+	// Start TO0 at FDO 2.0
+	hello := post("200", "20", "", fdo.GlobalCapabilityFlags)
+	if got := msgType(hello); got != "21" {
+		t.Fatalf("TO0.Hello: expected HelloAck (21), got %q: %s", got, hello.Body)
+	}
+	token := strings.TrimPrefix(hello.Header().Get("Authorization"), "Bearer ")
+	if token == "" {
+		t.Fatal("no session token returned")
+	}
+
+	// Continuing the same session at 1.01 must be rejected
+	rr := post("101", "22", token, []int{})
+	if got := msgType(rr); got != "255" {
+		t.Fatalf("expected an Error message (255) for a version change, got %q", got)
+	}
+	if !strings.Contains(rr.Body.String(), "session started with version 200") {
+		t.Errorf("expected a version pinning error, got %q", rr.Body.String())
+	}
+
+	// A session's token cannot be used for another protocol: a TO0 token
+	// must not reach the TO1 or TO2 responders
+	hello = post("200", "20", "", fdo.GlobalCapabilityFlags)
+	token = strings.TrimPrefix(hello.Header().Get("Authorization"), "Bearer ")
+	for _, tc := range []struct{ msg, want string }{
+		{"32", "TO1 message in a session started for TO0"},
+		{"82", "TO2 message in a session started for TO0"},
+	} {
+		rr := post("200", tc.msg, token, []int{})
+		if got := msgType(rr); got != "255" {
+			t.Errorf("msg %s with a TO0 token: expected an Error message (255), got %q", tc.msg, got)
+		}
+		if !strings.Contains(rr.Body.String(), tc.want) {
+			t.Errorf("msg %s with a TO0 token: expected %q, got %q", tc.msg, tc.want, rr.Body.String())
+		}
+	}
+
+	// TO2 message types are only valid under their own version
+	for _, tc := range []struct{ version, msg string }{{"200", "60"}, {"101", "80"}} {
+		rr := post(tc.version, tc.msg, "", []int{})
+		if got := msgType(rr); got != "255" {
+			t.Errorf("msg %s under /%s/: expected an Error message (255), got %q", tc.msg, tc.version, got)
+		}
+		if !strings.Contains(rr.Body.String(), "is not part of FDO version") {
+			t.Errorf("msg %s under /%s/: expected a version error, got %q", tc.msg, tc.version, rr.Body.String())
+		}
+	}
 }

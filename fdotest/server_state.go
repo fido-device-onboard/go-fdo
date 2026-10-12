@@ -47,6 +47,7 @@ type AllServerState interface {
 	fdo.VoucherPersistentState
 	fdo.OwnerVoucherPersistentState
 	fdo.OwnerKeyPersistentState
+	fdo.DelegateKeyPersistentState
 	fdo.VoucherReseller
 	ManufacturerKey(ctx context.Context, keyType protocol.KeyType, rsaBits int) (crypto.Signer, []*x509.Certificate, error)
 }

@@ -6,15 +6,23 @@ package cbor_test
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/protocol"
 )
 
 func TestEncodeInt(t *testing.T) {
@@ -553,6 +561,65 @@ func TestEncodeUntypedNull(t *testing.T) {
 	}
 }
 
+func TestEncodeX5Chain(t *testing.T) {
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "TestSubject"},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(30 * 360 * 24 * time.Hour), // Matches Java impl
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Errorf("Error creating ephemeral ECDSA key: %v", err)
+		return
+	}
+
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &privKey.PublicKey, privKey)
+	if err != nil {
+		t.Errorf("error signing CSR: %v", err)
+		return
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Errorf("error parsing signed device cert: %v", err)
+		return
+	}
+	chain := []*x509.Certificate{cert}
+	pk, err := protocol.NewPublicKey(protocol.Secp256r1KeyType, chain, false)
+	if err != nil {
+		t.Errorf("error creating public key: %v", err)
+		return
+	}
+	t.Logf("KeyEncoding as %v\n", pk)
+
+	var got []byte
+	if got, err = cbor.Marshal(&pk); err != nil {
+		t.Errorf("error marshaling x5chain: %v", err)
+		return
+	}
+
+	// Now let's see if we can decode....
+	var decoded protocol.PublicKey
+	if err := cbor.Unmarshal(got, &decoded); err != nil {
+		t.Fatal(err)
+	}
+
+	//t.Logf("X5Chain Body:  %+v", hex.EncodeToString(decoded.Body))
+	decodedChain, err := decoded.Chain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, c := range decodedChain {
+		t.Logf("X5Chain %d Chain:  %+v", i, c.Subject)
+		if c.Subject.CommonName != "TestSubject" {
+			t.Fatalf("Bad subject in decoded cert: \"%s\"", c.Subject.CommonName)
+		}
+	}
+
+}
 func TestEncodeUndefined(_ *testing.T) {
 	// No way to encode undefined
 }
@@ -1979,6 +2046,18 @@ func TestDecodeStream(t *testing.T) {
 			t.Errorf("expected %#v, got %#v", test, got)
 		}
 	}
+}
+
+func TestDecodeX5Chain(t *testing.T) {
+	body, err := hex.DecodeString("830102815902D6308202D2308201BAA0030201020208446783815695490B300D06092A864886F70D01010B050030173115301306035504030C0C46646F456E746974792043413020170D3233303930353230343635365A180F32303533303333313230343635365A30173115301306035504030C0C46646F456E7469747920434130820122300D06092A864886F70D01010105000382010F003082010A0282010100C07036212B6A05C285F04B7485B3D0EFEA9EFB8C960F554FEB65A1914F9C1970D9288C762B6E37BA7FFE288C78078597DA6B6B10C4D61F6AFF1B6F85F45AE153E2084BEBE09F366ABD66D409DA6ED1BBD07375A1C506A2F1A5F1E90FD3689904FDCEC5D6CC81071A51C32A02FE2E15CD681884E97C1107FA579DC48F30E8FB25F6BA24187CCFF6CBFF9CD4B956D7747BC018C85BEA95CE9348CB5487B0608338E519E279B68062215940ECC996CEF7D24806E63D2FC69E7C06631A2C3305F6F32397F0AF7B15A876AF092256C5384A8353488FAB807969AFF06F1D0310CED956949AD67FC5AAC2A7A176AE2DB605CC1990E14C500267596799679BE3DC337BC70203010001A320301E300F0603551D130101FF040530030101FF300B0603551D0F040403020186300D06092A864886F70D01010B0500038201010067746B8BB923FCAFF0A96ECB2FDF0624508117C32DC3F8CD08BB22D34A2186F9C1FA419EDCC55AA00B46CBCDF4AF32538053551CA31DC9C7582DF75C11D478DEB76B3E6AE37CED3799ACEA0FAFB9890AE06D21F664A50B27051D95BF5E8E80CCCA141175D5FB9EE070AB0FBB595B842B7F27362CB38A3D1CC4F8A282444D06CA27D9110B6041B0F64A2D6F6C2DBCA02BC6E7F28AAD0967781707F2270BEB9910309BBF78E6B2B583BA62D9DE05191A3F144ABD8D5C471A680616FC00F5F802560D7282F036D3A4C6800C3FECF5E2C6C6C8F345A16AE4AC40C2425D0FD603959FBECFA644D1473373FF4DD14762229EE53E7306C7920D5A5567537CDCEEB63EFB")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cert protocol.PublicKey
+	if err := cbor.Unmarshal(body, &cert); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("Certificate: %T is %+v", cert, cert)
 }
 
 func TestDecodeOVHeaderX5Chain(t *testing.T) {
