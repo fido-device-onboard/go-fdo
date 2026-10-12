@@ -149,7 +149,12 @@ func proveToRv(ctx context.Context, transport Transport, cred DeviceCredential, 
 	token := cose.Sign1[eatoken, []byte]{
 		Payload: cbor.NewByteWrap(newEAT(cred.GUID, nonce, nil, nil)),
 	}
-	if err := token.Sign(key, nil, nil, opts); err != nil {
+	// FDO 2.0 uses domain-specific AAD; FDO 1.01 uses empty AAD
+	var aad []byte
+	if protocol.VersionFromContext(ctx) == protocol.Version200 {
+		aad = cose.AADProveToRV
+	}
+	if err := token.Sign(key, nil, aad, opts); err != nil {
 		return nil, fmt.Errorf("error signing EAT payload for TO1.ProveToRV: %w", err)
 	}
 	msg := token.Tag()
@@ -242,7 +247,12 @@ func (s *TO1Server) rvRedirect(ctx context.Context, msg io.Reader) (*cose.Sign1T
 	}
 
 	// Verify EAT signature
-	if ok, err := token.Verify(pub, nil, nil); err != nil {
+	// FDO 2.0 uses domain-specific AAD; FDO 1.01 uses empty AAD
+	var verifyAAD []byte
+	if protocol.VersionFromContext(ctx) == protocol.Version200 {
+		verifyAAD = cose.AADProveToRV
+	}
+	if ok, err := token.Verify(pub, nil, verifyAAD); err != nil {
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
 		return nil, fmt.Errorf("error verifying EAT signature: %w", err)
 	} else if !ok {
