@@ -22,6 +22,7 @@ import (
 	"math"
 	"math/big"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -57,6 +58,7 @@ var (
 	echoCmds    bool
 	uploads     = make(fsVar)
 	wgetDir     string
+	fdoVersion  int
 )
 
 type fsVar map[string]string
@@ -157,11 +159,25 @@ func init() {
 	clientFlags.Var(&uploads, "upload", "List of dirs and `files` to upload files from, "+
 		"comma-separated and/or flag provided multiple times (FSIM disabled if empty)")
 	clientFlags.StringVar(&wgetDir, "wget-dir", "", "A `dir` to wget files into (FSIM disabled if empty)")
+	clientFlags.IntVar(&fdoVersion, "fdo-version", 101, "FDO protocol `version` (101 or 200)")
+}
+
+// protocolVersion returns the validated -fdo-version flag value.
+func protocolVersion() (protocol.Version, error) {
+	v := protocol.Version(fdoVersion) //#nosec G115 -- validated below
+	if fdoVersion < 0 || fdoVersion > math.MaxUint16 || !v.IsValid() {
+		return 0, fmt.Errorf("invalid FDO version: %d", fdoVersion)
+	}
+	return v, nil
 }
 
 func client(ctx context.Context) error {
 	if debug {
 		level.Set(slog.LevelDebug)
+	}
+
+	if _, err := protocolVersion(); err != nil {
+		return err
 	}
 
 	// Perform DI if given a URL
@@ -183,7 +199,7 @@ func client(ctx context.Context) error {
 	if !ok {
 		return fmt.Errorf("invalid key exchange cipher suite: %s", cipherSuite)
 	}
-	newDC := transferOwnership(ctx, dc.RvInfo, fdo.TO2Config{
+	newDC, err := transferOwnership(ctx, dc.RvInfo, fdo.TO2Config{
 		Cred:       *dc,
 		HmacSha256: hmacSha256,
 		HmacSha384: hmacSha384,
@@ -203,8 +219,11 @@ func client(ctx context.Context) error {
 	if rvOnly {
 		return nil
 	}
+	if err != nil {
+		return fmt.Errorf("transfer ownership failed: %w", err)
+	}
 	if newDC == nil {
-		fmt.Println("Credential not updated (either due to failure of TO2 or the Credential Reuse Protocol")
+		fmt.Println("Credential not updated (Credential Reuse Protocol)")
 		return nil
 	}
 
@@ -284,7 +303,8 @@ func di(ctx context.Context) (err error) { //nolint:gocyclo
 	default:
 		return fmt.Errorf("unsupported key encoding: %s", diKeyEnc)
 	}
-	cred, err := fdo.DI(ctx, tlsTransport(diURL, nil), custom.DeviceMfgInfo{
+	version, _ := protocolVersion()
+	cred, err := fdo.DI(ctx, tlsTransportWithVersion(diURL, nil, version), custom.DeviceMfgInfo{
 		KeyType:      keyType,
 		KeyEncoding:  keyEncoding,
 		SerialNumber: strconv.FormatInt(sn.Int64(), 10),
@@ -294,6 +314,7 @@ func di(ctx context.Context) (err error) { //nolint:gocyclo
 		HmacSha256: hmacSha256,
 		HmacSha384: hmacSha384,
 		Key:        key,
+		Version:    version,
 	})
 	if err != nil {
 		return err
@@ -313,9 +334,26 @@ func di(ctx context.Context) (err error) { //nolint:gocyclo
 	})
 }
 
-func transferOwnership(ctx context.Context, rvInfo [][]protocol.RvInstruction, conf fdo.TO2Config) *fdo.DeviceCredential { //nolint:gocyclo
+func transferOwnership(ctx context.Context, rvInfo [][]protocol.RvInstruction, conf fdo.TO2Config) (*fdo.DeviceCredential, error) { //nolint:gocyclo
+	version, _ := protocolVersion()
 	var to2URLs []string
 	directives := protocol.ParseDeviceRvInfo(rvInfo)
+
+	// FDO 2.0: rvserver.local is an implied fallback directive even if omitted
+	// from DCRVInfo. Append it only if no directive already references it.
+	hasRVServerLocal := false
+	for _, dir := range directives {
+		for _, u := range dir.URLs {
+			if u.Hostname() == "rvserver.local" {
+				hasRVServerLocal = true
+			}
+		}
+	}
+	if version == protocol.Version200 && !hasRVServerLocal {
+		directives = append(directives, protocol.RvDirective{
+			URLs: []*url.URL{{Scheme: "http", Host: net.JoinHostPort("rvserver.local", "8080")}},
+		})
+	}
 	for _, directive := range directives {
 		if !directive.Bypass {
 			continue
@@ -335,7 +373,7 @@ TO1:
 
 		for _, url := range directive.URLs {
 			var err error
-			to1d, err = fdo.TO1(ctx, tlsTransport(url.String(), nil), conf.Cred, conf.Key, nil)
+			to1d, err = fdo.TO1(ctx, tlsTransportWithVersion(url.String(), nil, version), conf.Cred, conf.Key, &fdo.TO1Options{Version: version})
 			if err != nil {
 				slog.Error("TO1 failed", "base URL", url.String(), "error", err)
 				continue
@@ -347,7 +385,7 @@ TO1:
 			// A 25% plus or minus jitter is allowed by spec
 			select {
 			case <-ctx.Done():
-				return nil
+				return nil, ctx.Err()
 			case <-time.After(directive.Delay):
 			}
 		}
@@ -387,21 +425,23 @@ TO1:
 		if to1d != nil {
 			fmt.Printf("TO1 Blob: %+v\n", to1d.Payload.Val)
 		}
-		return nil
+		return nil, nil
 	}
 
 	// Try TO2 on each address only once
 	for _, baseURL := range to2URLs {
-		newDC := transferOwnership2(ctx, tlsTransport(baseURL, nil), to1d, conf)
-		if newDC != nil {
-			return newDC
+		newDC, err := transferOwnership2(ctx, tlsTransportWithVersion(baseURL, nil, version), to1d, conf)
+		if err != nil {
+			continue
 		}
+		// newDC == nil means the Credential Reuse Protocol was used
+		return newDC, nil
 	}
 
-	return nil
+	return nil, fmt.Errorf("TO2 failed on all addresses")
 }
 
-func transferOwnership2(ctx context.Context, transport fdo.Transport, to1d *cose.Sign1[protocol.To1d, []byte], conf fdo.TO2Config) *fdo.DeviceCredential {
+func transferOwnership2(ctx context.Context, transport fdo.Transport, to1d *cose.Sign1[protocol.To1d, []byte], conf fdo.TO2Config) (*fdo.DeviceCredential, error) {
 	fsims := map[string]serviceinfo.DeviceModule{
 		"fido_alliance": &fsim.Interop{},
 	}
@@ -450,10 +490,16 @@ func transferOwnership2(ctx context.Context, transport fdo.Transport, to1d *cose
 	}
 	conf.DeviceModules = fsims
 
-	cred, err := fdo.TO2(ctx, transport, to1d, conf)
+	var cred *fdo.DeviceCredential
+	var err error
+	if fdoVersion == int(protocol.Version200) {
+		cred, err = fdo.TO2v200(ctx, transport, to1d, &conf)
+	} else {
+		cred, err = fdo.TO2(ctx, transport, to1d, conf)
+	}
 	if err != nil {
 		slog.Error("TO2 failed", "error", err)
-		return nil
+		return nil, err
 	}
-	return cred
+	return cred, nil
 }

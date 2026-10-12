@@ -46,25 +46,34 @@ import (
 var serverFlags = flag.NewFlagSet("server", flag.ContinueOnError)
 
 var (
-	useTLS           bool
-	addr             string
-	dbPath           string
-	dbPass           string
-	extAddr          string
-	to0Addr          string
-	to0GUID          string
-	resaleGUID       string
-	resaleKey        string
-	reuseCred        bool
-	rvBypass         bool
-	rvDelay          int
-	printOwnerPubKey string
-	importVoucher    string
-	cmdDate          bool
-	downloads        stringList
-	uploadDir        string
-	uploadReqs       stringList
-	wgets            stringList
+	useTLS               bool
+	addr                 string
+	dbPath               string
+	dbPass               string
+	extAddr              string
+	to0Addr              string
+	to0GUID              string
+	resaleGUID           string
+	resaleKey            string
+	reuseCred            bool
+	rvBypass             bool
+	rvVerifyTo1d         bool
+	lenientKex           bool
+	rvDelay              int
+	printOwnerPubKey     string
+	printOwnerPriv       string
+	printOwnerChain      string
+	printDelegateChain   string
+	printDelegatePrivKey string
+	rvDelegate           string
+	onboardDelegate      string
+	ownerCert            bool
+	importVoucher        string
+	cmdDate              bool
+	downloads            stringList
+	uploadDir            string
+	uploadReqs           stringList
+	wgets                stringList
 )
 
 type stringList []string
@@ -82,6 +91,11 @@ func init() {
 	serverFlags.StringVar(&dbPath, "db", "", "SQLite database file path")
 	serverFlags.StringVar(&dbPass, "db-pass", "", "SQLite database encryption-at-rest passphrase")
 	serverFlags.BoolVar(&debug, "debug", debug, "Print HTTP contents")
+	serverFlags.StringVar(&rvDelegate, "rvDelegate", "", "Use delegate cert (name) for RV blob signing")
+	serverFlags.StringVar(&onboardDelegate, "onboardDelegate", "", "Use delegate cert (name) for TO2")
+	serverFlags.BoolVar(&ownerCert, "owner-certs", false, "Generate Owner Certificates (in addition to keys)")
+	serverFlags.StringVar(&printOwnerPriv, "print-owner-private", "", "Print owner private key of `type` and exit")
+	serverFlags.StringVar(&printOwnerChain, "print-owner-chain", "", "Print owner chain of `type` and exit")
 	serverFlags.StringVar(&to0Addr, "to0", "", "Rendezvous server `addr`ess to register RV blobs (disables self-registration)")
 	serverFlags.StringVar(&to0GUID, "to0-guid", "", "Device `guid` to immediately register an RV blob (requires to0 flag)")
 	serverFlags.StringVar(&extAddr, "ext-http", "", "External `addr`ess devices should connect to (default \"127.0.0.1:${LISTEN_PORT}\")")
@@ -92,6 +106,8 @@ func init() {
 	serverFlags.BoolVar(&insecureTLS, "insecure-tls", false, "Listen with a self-signed TLS certificate")
 	serverFlags.BoolVar(&rvBypass, "rv-bypass", false, "Skip TO1")
 	serverFlags.IntVar(&rvDelay, "rv-delay", 0, "Delay TO1 by N `seconds`")
+	serverFlags.BoolVar(&rvVerifyTo1d, "rv-verify-to1d", false, "Verify the to1d signature (and any delegate chain) in TO0.OwnerSign before storing it")
+	serverFlags.BoolVar(&lenientKex, "lenient-kex", false, "NOT spec compliant: in FDO 2.0 TO2 accept any ECDH (EC owner) or DHKEX (RSA owner) suite the device selects, even if not offered")
 	serverFlags.StringVar(&printOwnerPubKey, "print-owner-public", "", "Print owner public key of `type` and exit")
 	serverFlags.StringVar(&importVoucher, "import-voucher", "", "Import a PEM encoded voucher file at `path`")
 	serverFlags.BoolVar(&cmdDate, "command-date", false, "Use fdo.command FSIM to have device run \"date +%s\"")
@@ -125,6 +141,14 @@ func server(ctx context.Context) error { //nolint:gocyclo
 	// If printing owner public key, do so and exit
 	if printOwnerPubKey != "" {
 		return doPrintOwnerPubKey(ctx, state)
+	}
+
+	if printOwnerPriv != "" {
+		return doPrintOwnerPrivKey(ctx, state)
+	}
+
+	if printOwnerChain != "" {
+		return doPrintOwnerChain(ctx, state)
 	}
 
 	// If importing a voucher, do so and exit
@@ -251,19 +275,36 @@ func generateKeys(state *sqlite.DB) error { //nolint:gocyclo
 	if err != nil {
 		return err
 	}
-	if err := state.AddOwnerKey(protocol.Rsa2048RestrKeyType, rsa2048OwnerKey, nil); err != nil {
+	// Generate owner certificates if requested
+	var rsa2048OwnerCert, rsa3072OwnerCert, ec256OwnerCert, ec384OwnerCert []*x509.Certificate
+	if ownerCert {
+		if rsa2048OwnerCert, err = generateCA(rsa2048OwnerKey); err != nil {
+			return err
+		}
+		if rsa3072OwnerCert, err = generateCA(rsa3072OwnerKey); err != nil {
+			return err
+		}
+		if ec256OwnerCert, err = generateCA(ec256OwnerKey); err != nil {
+			return err
+		}
+		if ec384OwnerCert, err = generateCA(ec384OwnerKey); err != nil {
+			return err
+		}
+	}
+
+	if err := state.AddOwnerKey(protocol.Rsa2048RestrKeyType, rsa2048OwnerKey, rsa2048OwnerCert); err != nil {
 		return err
 	}
-	if err := state.AddOwnerKey(protocol.RsaPkcsKeyType, rsa3072OwnerKey, nil); err != nil {
+	if err := state.AddOwnerKey(protocol.RsaPkcsKeyType, rsa3072OwnerKey, rsa3072OwnerCert); err != nil {
 		return err
 	}
-	if err := state.AddOwnerKey(protocol.RsaPssKeyType, rsa3072OwnerKey, nil); err != nil {
+	if err := state.AddOwnerKey(protocol.RsaPssKeyType, rsa3072OwnerKey, rsa3072OwnerCert); err != nil {
 		return err
 	}
-	if err := state.AddOwnerKey(protocol.Secp256r1KeyType, ec256OwnerKey, nil); err != nil {
+	if err := state.AddOwnerKey(protocol.Secp256r1KeyType, ec256OwnerKey, ec256OwnerCert); err != nil {
 		return err
 	}
-	if err := state.AddOwnerKey(protocol.Secp384r1KeyType, ec384OwnerKey, nil); err != nil {
+	if err := state.AddOwnerKey(protocol.Secp384r1KeyType, ec384OwnerKey, ec384OwnerCert); err != nil {
 		return err
 	}
 	return nil
@@ -278,7 +319,7 @@ func serveHTTP(ctx context.Context, rvInfo [][]protocol.RvInstruction, state *sq
 
 	// Handle messages
 	mux := http.NewServeMux()
-	mux.Handle("POST /fdo/101/msg/{msg}", handler)
+	mux.Handle("POST /fdo/{fdoVer}/msg/{msg}", handler)
 	srv := &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 3 * time.Second,
@@ -296,6 +337,35 @@ func serveHTTP(ctx context.Context, rvInfo [][]protocol.RvInstruction, state *sq
 		return serveTLS(lis, srv, state.DB())
 	}
 	return srv.Serve(lis)
+}
+
+func doPrintOwnerChain(ctx context.Context, state *sqlite.DB) error {
+	keyType, err := protocol.ParseKeyType(printOwnerChain)
+	if err != nil {
+		return fmt.Errorf("%w: see usage", err)
+	}
+	_, chain, err := state.OwnerKey(ctx, keyType, 3072)
+	if err != nil {
+		return err
+	}
+	fmt.Println(fdo.CertChainToString("CERTIFICATE", chain))
+	return nil
+}
+
+func doPrintOwnerPrivKey(ctx context.Context, state *sqlite.DB) error {
+	keyType, err := protocol.ParseKeyType(printOwnerPriv)
+	if err != nil {
+		return fmt.Errorf("%w: see usage", err)
+	}
+	key, _, err := state.OwnerKey(ctx, keyType, 3072)
+	if err != nil {
+		return err
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return err
+	}
+	return pem.Encode(os.Stdout, &pem.Block{Type: "PRIVATE KEY", Bytes: der})
 }
 
 func doPrintOwnerPubKey(ctx context.Context, state *sqlite.DB) error {
@@ -463,9 +533,10 @@ func registerRvBlob(ctx context.Context, state *sqlite.DB) error {
 
 	// Register RV blob with RV server
 	refresh, err := (&fdo.TO0Client{
-		Vouchers:  state,
-		OwnerKeys: state,
-	}).RegisterBlob(ctx, tlsTransport(to0Addr, nil), guid, to2Addrs)
+		Vouchers:     state,
+		OwnerKeys:    state,
+		DelegateKeys: state,
+	}).RegisterBlobWithDelegate(ctx, tlsTransport(to0Addr, nil), guid, to2Addrs, rvDelegate)
 	if err != nil {
 		return fmt.Errorf("error performing to0: %w", err)
 	}
@@ -505,8 +576,11 @@ func resell(ctx context.Context, state *sqlite.DB) error {
 
 	// Perform resale protocol
 	extended, err := (&fdo.TO2Server{
-		Vouchers:  state,
-		OwnerKeys: state,
+		Vouchers:        state,
+		OwnerKeys:       state,
+		DelegateKeys:    state,
+		OnboardDelegate: onboardDelegate,
+		RvDelegate:      rvDelegate,
 	}).Resell(ctx, guid, nextOwner, nil)
 	if err != nil {
 		// TODO: If extended != nil, then call AddVoucher to restore state
@@ -576,20 +650,25 @@ func newHandler(ctx context.Context, rvInfo [][]protocol.RvInstruction, state *s
 			RvInfo:               func(context.Context, *fdo.Voucher) ([][]protocol.RvInstruction, error) { return rvInfo, nil },
 		},
 		TO0Responder: &fdo.TO0Server{
-			Session: state,
-			RVBlobs: state,
+			Session:    state,
+			RVBlobs:    state,
+			VerifyTo1d: rvVerifyTo1d,
 		},
 		TO1Responder: &fdo.TO1Server{
 			Session: state,
 			RVBlobs: state,
 		},
 		TO2Responder: &fdo.TO2Server{
-			Session:         state,
-			Modules:         moduleStateMachines{DB: state, states: make(map[string]*moduleStateMachineState)},
-			Vouchers:        state,
-			OwnerKeys:       state,
-			RvInfo:          func(context.Context, fdo.Voucher) ([][]protocol.RvInstruction, error) { return rvInfo, nil },
-			ReuseCredential: func(context.Context, fdo.Voucher) (bool, error) { return reuseCred, nil },
+			Session:            state,
+			Modules:            moduleStateMachines{DB: state, states: make(map[string]*moduleStateMachineState)},
+			Vouchers:           state,
+			OwnerKeys:          state,
+			DelegateKeys:       state,
+			RvInfo:             func(context.Context, fdo.Voucher) ([][]protocol.RvInstruction, error) { return rvInfo, nil },
+			OnboardDelegate:    onboardDelegate,
+			RvDelegate:         rvDelegate,
+			LenientKeyExchange: lenientKex,
+			ReuseCredential:    func(context.Context, fdo.Voucher) (bool, error) { return reuseCred, nil },
 		},
 	}, nil
 }
