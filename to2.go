@@ -213,7 +213,10 @@ func TO2(ctx context.Context, transport Transport, to1d *cose.Sign1[protocol.To1
 	go c.Devmod.Write(ctx, c.DeviceModules, sendMTU, serviceInfoWriter)
 
 	// Loop, sending and receiving service info until done
-	if err := exchangeServiceInfo(ctx, transport, proveDeviceNonce, setupDeviceNonce, sendMTU, serviceInfoReader, sess, &c); err != nil {
+	sendDone := func(ctx context.Context) error {
+		return sendDone(ctx, transport, proveDeviceNonce, setupDeviceNonce, sess)
+	}
+	if err := exchangeServiceInfo(ctx, transport, sendMTU, serviceInfoReader, sess, &c, sendDone); err != nil {
 		errorMsg(ctx, transport, err)
 		return nil, err
 	}
@@ -1295,14 +1298,16 @@ type done2Msg struct {
 	NonceTO2SetupDv protocol.Nonce
 }
 
-// loop[DeviceServiceInfo(68) -> OwnerServiceInfo(69)]
+// loop[DeviceServiceInfo(68) -> OwnerServiceInfo(69)], or for FDO 2.0
+// loop[DeviceSvcInfo20(88) -> OwnerSvcInfo20(89)] (see withTO2v200). done is
+// called to finish TO2 once the Owner sends IsDone.
 func exchangeServiceInfo(ctx context.Context,
 	transport Transport,
-	proveDvNonce, setupDvNonce protocol.Nonce,
 	mtu uint16,
 	initInfo *serviceinfo.ChunkReader,
 	sess kex.Session,
 	c *TO2Config,
+	done func(context.Context) error,
 ) error {
 	// Shadow context to ensure that any goroutines still running after this
 	// function exits will shutdown
@@ -1320,7 +1325,7 @@ func exchangeServiceInfo(ctx context.Context,
 	ownerInfo, ownerInfoIn := serviceinfo.NewChunkInPipe(1000)
 
 	// Send initial device info (devmod)
-	totalRounds, done, err := exchangeServiceInfoRound(ctx, transport, mtu, initInfo, ownerInfoIn, sess)
+	totalRounds, isDone, err := exchangeServiceInfoRound(ctx, transport, mtu, initInfo, ownerInfoIn, sess)
 	_ = initInfo.Close()
 	if err != nil {
 		return fmt.Errorf("error sending devmod: %w", err)
@@ -1331,8 +1336,8 @@ func exchangeServiceInfo(ctx context.Context,
 	if totalRounds >= 1_000_000 {
 		return fmt.Errorf("exceeded 1e6 rounds of service info exchange")
 	}
-	if done {
-		return sendDone(ctx, transport, proveDvNonce, setupDvNonce, sess)
+	if isDone {
+		return done(ctx)
 	}
 
 	// Track active modules
@@ -1365,7 +1370,7 @@ func exchangeServiceInfo(ctx context.Context,
 		// the owner service without it allowing the device to respond, the
 		// device will deadlock.
 		nextOwnerInfo, ownerInfoIn := serviceinfo.NewChunkInPipe(1000)
-		rounds, done, err := exchangeServiceInfoRound(ctx, transport, mtu, deviceInfo, ownerInfoIn, sess)
+		rounds, isDone, err := exchangeServiceInfoRound(ctx, transport, mtu, deviceInfo, ownerInfoIn, sess)
 		if err != nil {
 			_ = ownerInfoIn.CloseWithError(err)
 			return err
@@ -1379,7 +1384,7 @@ func exchangeServiceInfo(ctx context.Context,
 		if totalRounds >= 1_000_000 {
 			return fmt.Errorf("exceeded 1e6 rounds of service info exchange")
 		}
-		if done {
+		if isDone {
 			// Process final service info from message with IsDone
 			deviceInfo, discard := serviceinfo.NewChunkOutPipe(1000)
 			go discardDeviceInfo(deviceInfo)
@@ -1387,7 +1392,7 @@ func exchangeServiceInfo(ctx context.Context,
 			_ = handleOwnerModuleMessages(ctxWithMTU, prevModuleName, modules, nextOwnerInfo, discard)
 
 			// Continue TO2
-			return sendDone(ctx, transport, proveDvNonce, setupDvNonce, sess)
+			return done(ctx)
 		}
 
 		// If there is no ServiceInfo to send and the last owner response did
@@ -1544,6 +1549,10 @@ func exchangeServiceInfoRound(ctx context.Context, transport Transport, mtu uint
 
 // DeviceServiceInfo(68) -> OwnerServiceInfo(69)
 func sendDeviceServiceInfo(ctx context.Context, transport Transport, msg deviceServiceInfo, sess kex.Session) (*ownerServiceInfo, error) {
+	if isTO2v200(ctx) {
+		return sendDeviceSvcInfo20(ctx, transport, msg, sess)
+	}
+
 	// Make request
 	typ, resp, err := transport.Send(ctx, protocol.TO2DeviceServiceInfoMsgType, msg, sess)
 	if err != nil {
