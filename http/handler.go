@@ -170,6 +170,14 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		ctx = h.Tokens.TokenContext(ctx, initToken)
 	}
+	if err := h.checkSessionProtocol(ctx, isProtocolStart, proto); err != nil {
+		writeErr(w, msgType, err)
+		return
+	}
+	if err := h.pinSessionVersion(ctx, isProtocolStart, version); err != nil {
+		writeErr(w, msgType, err)
+		return
+	}
 
 	debugRequest(w, r, func(w http.ResponseWriter, r *http.Request) {
 		h.handleRequest(ctx, w, r, msgType, resp)
@@ -193,6 +201,51 @@ func (h Handler) responder(proto protocol.Protocol, msgType uint8) (resp protoco
 		return nil, false
 	}
 }
+
+// checkSessionProtocol checks that a message of an existing session belongs to
+// the protocol (DI, TO0, TO1, TO2) the session was started for. It does nothing
+// for protocol start messages, which create a new session, or if the
+// TokenService does not implement protocol.TokenProtocolService.
+func (h Handler) checkSessionProtocol(ctx context.Context, isProtocolStart bool, proto protocol.Protocol) error {
+	tps, ok := h.Tokens.(protocol.TokenProtocolService)
+	if !ok || isProtocolStart {
+		return nil
+	}
+	sessProto, err := tps.TokenProtocol(ctx)
+	if err != nil {
+		return fmt.Errorf("error retrieving session protocol: %w", err)
+	}
+	if sessProto != proto {
+		return fmt.Errorf("%s message in a session started for %s", proto, sessProto)
+	}
+	return nil
+}
+
+// pinSessionVersion records the protocol version of a new session, or checks
+// that a message of an existing session uses the version the session started
+// with. It does nothing if the TokenService does not implement
+// protocol.TokenVersionService.
+func (h Handler) pinSessionVersion(ctx context.Context, isProtocolStart bool, version protocol.Version) error {
+	tvs, ok := h.Tokens.(protocol.TokenVersionService)
+	if !ok {
+		return nil
+	}
+	if isProtocolStart {
+		if err := tvs.SetTokenVersion(ctx, version); err != nil {
+			return fmt.Errorf("error recording session protocol version: %w", err)
+		}
+		return nil
+	}
+	sessVersion, err := tvs.TokenVersion(ctx)
+	if err != nil {
+		return fmt.Errorf("error retrieving session protocol version: %w", err)
+	}
+	if sessVersion != version {
+		return fmt.Errorf("message for FDO version %s in a session started with version %s", version, sessVersion)
+	}
+	return nil
+}
+
 func (h Handler) handleError(ctx context.Context, token string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var errMsg protocol.ErrorMessage

@@ -88,6 +88,11 @@ func Init(db *sql.DB) error {
 			( id BLOB PRIMARY KEY
 			, protocol INTEGER NOT NULL
 			)`,
+		`CREATE TABLE IF NOT EXISTS session_versions
+			( session BLOB PRIMARY KEY
+			, version INTEGER NOT NULL
+			, FOREIGN KEY(session) REFERENCES sessions(id) ON DELETE CASCADE
+			)`,
 		`CREATE TABLE IF NOT EXISTS device_info
 			( session BLOB
 			, key_type INTEGER
@@ -248,6 +253,52 @@ func (db *DB) loadOrStoreSecret(ctx context.Context) ([]byte, error) {
 type contextKey struct{}
 
 var tokenKey contextKey
+
+var _ protocol.TokenVersionService = (*DB)(nil)
+
+// SetTokenVersion records the protocol version of the current session.
+func (db *DB) SetTokenVersion(ctx context.Context, version protocol.Version) error {
+	sessID, ok := db.sessionID(ctx)
+	if !ok {
+		return fdo.ErrInvalidSession
+	}
+	return db.insert(ctx, "session_versions", map[string]any{
+		"session": sessID,
+		"version": int(version),
+	}, []string{"session"})
+}
+
+var _ protocol.TokenProtocolService = (*DB)(nil)
+
+// TokenProtocol returns the protocol the current session was started for.
+func (db *DB) TokenProtocol(ctx context.Context) (protocol.Protocol, error) {
+	sessID, ok := db.sessionID(ctx)
+	if !ok {
+		return 0, fdo.ErrInvalidSession
+	}
+	var proto int
+	if err := db.query(ctx, "sessions", []string{"protocol"}, map[string]any{
+		"id": sessID,
+	}, &proto); err != nil {
+		return 0, err
+	}
+	return protocol.Protocol(proto), nil //#nosec G115 -- only values written by NewToken
+}
+
+// TokenVersion returns the protocol version recorded for the current session.
+func (db *DB) TokenVersion(ctx context.Context) (protocol.Version, error) {
+	sessID, ok := db.sessionID(ctx)
+	if !ok {
+		return 0, fdo.ErrInvalidSession
+	}
+	var version int
+	if err := db.query(ctx, "session_versions", []string{"version"}, map[string]any{
+		"session": sessID,
+	}, &version); err != nil {
+		return 0, err
+	}
+	return protocol.Version(version), nil //#nosec G115 -- only values written by SetTokenVersion
+}
 
 // TokenContext injects a context with a token value so that it may be used
 // for any of the XXXState interfaces.
