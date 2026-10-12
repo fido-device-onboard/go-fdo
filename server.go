@@ -195,10 +195,11 @@ func (s *TO1Server) HandleError(ctx context.Context, errMsg protocol.ErrorMessag
 
 // TO2Server implements the TO2 protocol.
 type TO2Server struct {
-	Session   TO2SessionState
-	Modules   serviceinfo.ModuleStateMachine
-	Vouchers  OwnerVoucherPersistentState
-	OwnerKeys OwnerKeyPersistentState
+	Session      TO2SessionState
+	Modules      serviceinfo.ModuleStateMachine
+	Vouchers     OwnerVoucherPersistentState
+	OwnerKeys    OwnerKeyPersistentState
+	DelegateKeys DelegateKeyPersistentState
 
 	// This field must be non-nil in order to use the Resale Protocol (see
 	// [TO2Server.Resell]).
@@ -231,6 +232,12 @@ type TO2Server struct {
 	// is useful when it can help a well-behaved device communicate faster over
 	// a well understood network.
 	MaxDeviceServiceInfoSize func(context.Context, Voucher) (uint16, error)
+
+	// Use this delegate cert for onboarding (or empty string)
+	OnboardDelegate string
+
+	// Use this delegate cert for rendezvous (or empty string)
+	RvDelegate string
 }
 
 // Resell implements the FDO Resale Protocol by removing a voucher from
