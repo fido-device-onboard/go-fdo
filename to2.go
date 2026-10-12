@@ -486,7 +486,7 @@ func sendHelloDevice(ctx context.Context, transport Transport, c *TO2Config) (pr
 		return protocol.Nonce{}, nil, nil, fmt.Errorf("error verifying TO2.ProveOVHdr payload signature: %w", err)
 	} else if !ok {
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
-		return protocol.Nonce{}, nil, nil, fmt.Errorf("%w: TO2.ProveOVHdr payload signature verification failed", ErrCryptoVerifyFailed)
+		return protocol.Nonce{}, nil, nil, fmt.Errorf("TO2.ProveOVHdr payload signature verification failed: %w", ErrCryptoVerifyFailed)
 	}
 	if proveOVHdr.Payload.Val.NonceTO2ProveOV != proveOVNonce {
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
@@ -563,14 +563,14 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 	ov, err := s.Vouchers.Voucher(ctx, hello.GUID)
 	if err != nil || len(ov.Entries) == 0 {
 		captureErr(ctx, protocol.ResourceNotFound, "")
-		return nil, fmt.Errorf("error retrieving voucher for device %x: %w", hello.GUID, err)
+		return nil, fmt.Errorf("error retrieving voucher for device %s: %w", hello.GUID.String(), err)
 	}
 	// It is legal for this tag to have a value of zero (0), but this is
 	// only useful in re-manufacturing situations, since the Rendezvous
 	// Server cannot verify (or accept) these Ownership Proxies.
 	numEntries := len(ov.Entries)
 	if numEntries > math.MaxUint8 {
-		return nil, fmt.Errorf("voucher for device %x has too many entries", hello.GUID)
+		return nil, fmt.Errorf("voucher for device %s has too many entries", hello.GUID.String())
 	}
 
 	// Assert that owner key matches voucher, in case the key was replaced or
@@ -608,7 +608,7 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 		}
 	} else if numEntries == 0 {
 		captureErr(ctx, protocol.ResourceNotFound, "")
-		return nil, fmt.Errorf("error retrieving voucher for device %x: %w", hello.GUID, ErrNotFound)
+		return nil, fmt.Errorf("error retrieving voucher for device %s: %w", hello.GUID.String(), ErrNotFound)
 	}
 
 	// Hash request
@@ -788,7 +788,7 @@ func (s *TO2Server) ovNextEntry(ctx context.Context, msg io.Reader) (*ovEntry, e
 	}
 	ov, err := s.Vouchers.Voucher(ctx, guid)
 	if err != nil || len(ov.Entries) == 0 {
-		return nil, fmt.Errorf("error retrieving voucher for device %x: %w", guid, err)
+		return nil, fmt.Errorf("error retrieving voucher for device %s: %w", guid.String(), err)
 	}
 
 	// Return entry
@@ -939,7 +939,7 @@ func (s *TO2Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1
 	}
 	ov, err := s.Vouchers.Voucher(ctx, guid)
 	if err != nil || len(ov.Entries) == 0 {
-		return nil, fmt.Errorf("error retrieving voucher for device %x: %w", guid, err)
+		return nil, fmt.Errorf("error retrieving voucher for device %s: %w", guid.String(), err)
 	}
 
 	// Verify request signature based on device certificate chain in voucher
@@ -1157,11 +1157,11 @@ func (s *TO2Server) ownerServiceInfoReady(ctx context.Context, msg io.Reader) (*
 		}
 		ov, err := s.Vouchers.Voucher(ctx, guid)
 		if err != nil || len(ov.Entries) == 0 {
-			return nil, fmt.Errorf("error retrieving voucher for device %x: %w", guid, err)
+			return nil, fmt.Errorf("error retrieving voucher for device %s: %w", guid.String(), err)
 		}
 		size, err := s.MaxDeviceServiceInfoSize(ctx, *ov)
 		if err != nil {
-			return nil, fmt.Errorf("error getting service info size limit for device %x: %w", ov.Header.Val.GUID, err)
+			return nil, fmt.Errorf("error getting service info size limit for device %s: %w", ov.Header.Val.GUID.String(), err)
 		}
 		ownerReady.MaxDeviceServiceInfoSize = &size
 	}
@@ -1463,7 +1463,11 @@ func (s *TO2Server) fsimContext(ctx context.Context, devmod *serviceinfo.Devmod,
 		return nil, fmt.Errorf("error retrieving associated device GUID of proof session: %w", err)
 	}
 	replacementGUID, err := s.Session.ReplacementGUID(ctx)
-	if err != nil {
+	if errors.Is(err, ErrNotFound) {
+		// Credential Reuse Protocol: no replacement GUID is stored and the
+		// device keeps its current GUID
+		replacementGUID = guid
+	} else if err != nil {
 		return nil, fmt.Errorf("error retrieving replacement GUID of proof session: %w", err)
 	}
 
@@ -1529,7 +1533,18 @@ func (s *TO2Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*owner
 		if !ok {
 			break
 		}
-		moduleName, messageName, _ := strings.Cut(key, ":")
+		keyModule, messageName, _ := strings.Cut(key, ":")
+		// Only process keys that match the current module
+		if keyModule != moduleName {
+			// Discard keys for other modules. Note that these are dropped, not
+			// deferred: nothing replays them when that module becomes current.
+			slog.Warn("discarding device service info for non-current module",
+				"key", key, "current_module", moduleName)
+			if _, err := io.Copy(io.Discard, messageBody); err != nil {
+				return nil, fmt.Errorf("error discarding service info for module %q: %w", keyModule, err)
+			}
+			continue
+		}
 		if err := module.HandleInfo(ctx, messageName, messageBody); err != nil {
 			return nil, fmt.Errorf("error handling device service info %q: %w", key, err)
 		}
@@ -1688,7 +1703,7 @@ func (s *TO2Server) to2Done2(ctx context.Context, msg io.Reader) (*done2Msg, err
 	}
 	currentOV, err := s.Vouchers.Voucher(ctx, currentGUID)
 	if err != nil || len(currentOV.Entries) == 0 {
-		return nil, fmt.Errorf("error retrieving voucher for device %x: %w", currentGUID, err)
+		return nil, fmt.Errorf("error retrieving voucher for device %s: %w", currentGUID.String(), err)
 	}
 	rvInfo, err := s.Session.RvInfo(ctx)
 	if err != nil {
