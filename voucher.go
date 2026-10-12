@@ -193,6 +193,140 @@ func (v *Voucher) OwnerPublicKey() (crypto.PublicKey, error) {
 	return v.Entries[len(v.Entries)-1].Payload.Val.PublicKey.Public()
 }
 
+// VerifyCrypto checks that a voucher is valid cryptographically in its header
+// and extensions.
+//
+// A verified voucher is not inherently trustworthy to an owner service, which
+// should verify that it trusts the manufacturer (signer of first extension)
+// and the root CA of the device certificate chain.
+func (v *Voucher) VerifyCrypto(o VerifyOptions) error { //nolint:gocyclo
+	// Verify ownership voucher header
+	if err := v.VerifyHeader(o.HmacSha256, o.HmacSha384); err != nil {
+		return fmt.Errorf("bad ownership voucher header from TO2.ProveOVHdr: %w", err)
+	}
+
+	// Verify that the owner service corresponds to the most recent device
+	// initialization performed by checking that the voucher header has a GUID
+	// and/or manufacturer key corresponding to the stored device credentials.
+	if err := v.VerifyManufacturerKey(o.MfgPubKeyHash); err != nil {
+		return fmt.Errorf("bad ownership voucher header from TO2.ProveOVHdr: manufacturer key: %w", err)
+	}
+
+	// Verify each entry in the voucher's list by performing iterative
+	// signature and hash (header and GUID/devInfo) checks.
+	if err := v.VerifyEntries(); err != nil {
+		return fmt.Errorf("bad ownership voucher entries from TO2.ProveOVHdr: %w", err)
+	}
+
+	// Ensure that the voucher entry chain ends with given owner key.
+	//
+	// Note that this check is REQUIRED in this case, because the the owner public
+	// key from the ProveOVHdr message's unprotected headers is used to
+	// validate its COSE signature. If the public key were not to match the
+	// last entry of the voucher, then it would not be known that ProveOVHdr
+	// was signed by the intended owner service.
+	ownerPub := v.Header.Val.ManufacturerKey
+	if len(v.Entries) > 0 {
+		ownerPub = v.Entries[len(v.Entries)-1].Payload.Val.PublicKey
+	}
+	expectedOwnerPub, err := ownerPub.Public()
+	if err != nil {
+		return fmt.Errorf("error parsing last public key of ownership voucher: %w", err)
+	}
+	if !o.OwnerPubToValidate.(interface{ Equal(crypto.PublicKey) bool }).Equal(expectedOwnerPub) {
+		return fmt.Errorf("owner public key did not match last entry in ownership voucher")
+	}
+
+	// If no to1d blob was given, then immmediately return. This will be the
+	// case when RV bypass was used.
+	if o.To1d == nil {
+		return nil
+	}
+
+	// If the TO1.RVRedirect signature does not verify, the Device must assume
+	// that a man in the middle is monitoring its traffic, and fail TO2
+	// immediately with an error code message.
+	return verifyTo1d(o.To1d, expectedOwnerPub, v.Header.Val.Version)
+}
+
+// to1dDelegateChain returns the delegate chain carried with a to1d: in the
+// signed to1d payload (FDO 2.0) or the to1d unprotected header (FDO 1.1). It
+// returns nil if the to1d was signed by the Owner key.
+func to1dDelegateChain(to1d *cose.Sign1[protocol.To1d, []byte]) ([]*x509.Certificate, error) {
+	if dc := to1d.Payload.Val.DelegateChain; dc != nil && dc.Val != nil {
+		chain := make([]*x509.Certificate, len(*dc.Val))
+		for i, cert := range *dc.Val {
+			chain[i] = (*x509.Certificate)(cert)
+		}
+		return chain, nil
+	}
+	var delegatePubKey protocol.PublicKey
+	if found, err := to1d.Unprotected.Parse(to2DelegateClaim, &delegatePubKey); !found || err != nil {
+		return nil, nil
+	}
+	chain, err := delegatePubKey.Chain()
+	if err != nil {
+		return nil, fmt.Errorf("error parsing delegate chain from TO1d: %w", err)
+	}
+	return chain, nil
+}
+
+// verifyTo1d verifies a to1d signature against the Owner key, or against a
+// delegate chain that roots to the Owner key and carries the redirect
+// permission (otherwise any self-made chain could redirect the Device).
+//
+// The voucher's protocol version (OVHProtVer) decides whether the to1d uses
+// domain-specific AAD, as for voucher entries (FDO 2.0 Errata 1, E7). The TO2
+// session version cannot be used: the Owner signs the to1d during TO0, before
+// it knows which version a Device will use.
+func verifyTo1d(to1d *cose.Sign1[protocol.To1d, []byte], ownerPub crypto.PublicKey, voucherVersion uint16) error {
+	verifyKey := ownerPub
+	delegateChain, err := to1dDelegateChain(to1d)
+	if err != nil {
+		return err
+	}
+	if len(delegateChain) > 0 {
+		if err := VerifyDelegateChain(delegateChain, &ownerPub, &OIDPermitRedirect); err != nil {
+			return fmt.Errorf("to1d delegate chain verification failed: %w", err)
+		}
+		verifyKey = delegateChain[0].PublicKey
+	}
+
+	var aad []byte
+	if voucherVersion >= uint16(protocol.Version200) {
+		aad = cose.AADOwnerSign
+	}
+	if ok, err := to1d.Verify(verifyKey, nil, aad); err != nil {
+		return fmt.Errorf("error verifying to1d signature: %w", err)
+	} else if !ok {
+		return fmt.Errorf("%w: to1d signature verification failed", ErrCryptoVerifyFailed)
+	}
+	return nil
+}
+
+// VerifyOptions are used to verify the cryptographic signing of a voucher and
+// its extensions.
+type VerifyOptions struct {
+	// HMACs for verifying the voucher header
+	HmacSha256, HmacSha384 hash.Hash
+
+	// The expected hash of the first entry in the chain
+	MfgPubKeyHash protocol.Hash
+
+	// The public key presented in message 61 which was already used for
+	// signature verification but needs to match the end of the entry chain
+	OwnerPubToValidate crypto.PublicKey
+
+	// FUTURE: Optional delegate certificate chain
+
+	// May be nil in the case of RV bypass
+	To1d *cose.Sign1[protocol.To1d, []byte]
+
+	// TO2 session protocol version. Not used to choose AAD: voucher entry
+	// and to1d AAD follow the voucher header's version (FDO 2.0 Errata 1, E7).
+	Version protocol.Version
+}
+
 // VerifyHeader checks that the OVHeader was not modified by comparing the HMAC
 // generated using the secret from the device credentials.
 func (v *Voucher) VerifyHeader(hmacSha256, hmacSha384 hash.Hash) error {
@@ -234,7 +368,17 @@ func (v *Voucher) VerifyCertChainHash() error {
 		}
 	}
 	if !hmac.Equal(digest.Sum(nil), cchash.Value) {
-		return fmt.Errorf("%w: certificate chain hash did not match", ErrCryptoVerifyFailed)
+		// Find the first certificate to include in error
+		var cert *x509.Certificate
+		if len(*v.CertChain) > 0 {
+			cert = (*x509.Certificate)((*v.CertChain)[0])
+		}
+		return NewCertificateValidationError(
+			CertValidationErrorChainHashMismatch,
+			cert,
+			"voucher certificate chain hash",
+			"certificate chain hash did not match voucher header",
+		)
 	}
 	return nil
 }
@@ -282,7 +426,7 @@ func (v *Voucher) VerifyManufacturerCertChain(roots *x509.CertPool) error {
 // VerifyEntries checks the chain of signatures on each voucher entry payload.
 func (v *Voucher) VerifyEntries() error {
 	// Parse the public key from the voucher header
-	mfgPubKey, err := v.Header.Val.ManufacturerKey.Public()
+	prevOwnerKey, err := v.Header.Val.ManufacturerKey.Public()
 	if err != nil {
 		return fmt.Errorf("error parsing manufacturer public key: %w", err)
 	}
@@ -323,15 +467,20 @@ func (v *Voucher) VerifyEntries() error {
 	}
 
 	// Validate all entries
-	return validateNextEntry(mfgPubKey, alg, initialHash, headerInfoHash, 0, v.Entries)
+	return validateNextEntry(prevOwnerKey, alg, initialHash, headerInfoHash, 0, v.Entries, v.Header.Val.Version)
 }
 
 // Validate each entry recursively
-func validateNextEntry(prevOwnerKey crypto.PublicKey, alg protocol.HashAlg, prevHash hash.Hash, headerInfoHash []byte, i int, entries []cose.Sign1Tag[VoucherEntryPayload, []byte]) error {
+func validateNextEntry(prevOwnerKey crypto.PublicKey, alg protocol.HashAlg, prevHash hash.Hash, headerInfoHash []byte, i int, entries []cose.Sign1Tag[VoucherEntryPayload, []byte], version uint16) error {
 	entry := entries[0].Untag()
 
+	// Use domain separation AAD only for FDO 2.0+; FDO 1.01 does not use external_aad.
+	var aad []byte
+	if version >= uint16(protocol.Version200) {
+		aad = cose.AADOVEntry
+	}
 	// Check payload has a valid COSE signature from the previous owner key
-	if ok, err := entry.Verify(prevOwnerKey, nil, nil); err != nil {
+	if ok, err := entry.Verify(prevOwnerKey, nil, aad); err != nil {
 		return fmt.Errorf("COSE signature for entry %d could not be verified: %w", i, err)
 	} else if !ok {
 		return fmt.Errorf("%w: COSE signature for entry %d did not match previous owner key", ErrCryptoVerifyFailed, i)
@@ -370,7 +519,7 @@ func validateNextEntry(prevOwnerKey crypto.PublicKey, alg protocol.HashAlg, prev
 	}
 
 	// Validate the next entry recursively
-	return validateNextEntry(ownerKey, alg, prevHash, headerInfoHash, i+1, entries[1:])
+	return validateNextEntry(ownerKey, alg, prevHash, headerInfoHash, i+1, entries[1:], version)
 }
 
 // VerifyOwnerCertChain validates the certificate chain of the owner public key
@@ -393,6 +542,16 @@ func (e *VoucherEntryPayload) VerifyOwnerCertChain(roots *x509.CertPool) error {
 }
 
 func verifyCertChain(chain []*x509.Certificate, roots *x509.CertPool) error {
+	// Check certificate expiration and custom validation for all certificates
+	for i, cert := range chain {
+		if err := checkCertificateValidity(cert, i); err != nil {
+			return err
+		}
+		if err := runCustomCertificateChecker(cert); err != nil {
+			return err
+		}
+	}
+
 	// All all intermediates (if any) to a pool
 	intermediates := x509.NewCertPool()
 	if len(chain) > 2 {
@@ -412,7 +571,12 @@ func verifyCertChain(chain []*x509.Certificate, roots *x509.CertPool) error {
 		Roots:         roots,
 		Intermediates: intermediates,
 	}); err != nil {
-		return fmt.Errorf("%w: %w", ErrCryptoVerifyFailed, err)
+		return NewCertificateValidationError(
+			CertValidationErrorSignature,
+			chain[0],
+			"certificate chain",
+			fmt.Sprintf("signature verification failed: %v", err),
+		)
 	}
 
 	return nil
@@ -521,7 +685,7 @@ func ExtendVoucher[T protocol.PublicKeyOrChain](v *Voucher, owner crypto.Signer,
 		HeaderHash:   headerHash,
 		Extra:        cbor.NewBstr(extra),
 		PublicKey:    *nextOwnerPublicKey,
-	})
+	}, v.Version)
 	if err != nil {
 		return nil, err
 	}
@@ -573,7 +737,7 @@ func hashSizeForPubKey(pubKey crypto.PublicKey) (int, error) {
 	}
 }
 
-func newSignedEntry(owner crypto.Signer, usePSS bool, payload VoucherEntryPayload) (*cose.Sign1Tag[VoucherEntryPayload, []byte], error) {
+func newSignedEntry(owner crypto.Signer, usePSS bool, payload VoucherEntryPayload, version uint16) (*cose.Sign1Tag[VoucherEntryPayload, []byte], error) {
 	var entry cose.Sign1Tag[VoucherEntryPayload, []byte]
 	entry.Payload = cbor.NewByteWrap(payload)
 
@@ -582,7 +746,12 @@ func newSignedEntry(owner crypto.Signer, usePSS bool, payload VoucherEntryPayloa
 		return nil, err
 	}
 
-	if err := entry.Sign(owner, nil, nil, signOpts); err != nil {
+	// FDO 2.0 uses domain-specific AAD; FDO 1.01 uses empty AAD
+	var aad []byte
+	if version >= uint16(protocol.Version200) {
+		aad = cose.AADOVEntry
+	}
+	if err := entry.Sign(owner, nil, aad, signOpts); err != nil {
 		return nil, fmt.Errorf("error signing voucher entry payload: %w", err)
 	}
 
