@@ -161,11 +161,10 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		initToken, err := h.Tokens.NewToken(ctx, proto)
 		if err != nil {
 			writeErr(w, msgType, protocol.ErrorMessage{
-				Code:          500,
-				PrevMsgType:   msgType,
-				ErrString:     err.Error(),
-				Timestamp:     time.Now().Unix(),
-				CorrelationID: nil,
+				Code:        500,
+				PrevMsgType: msgType,
+				ErrString:   err.Error(),
+				Timestamp:   time.Now().Unix(),
 			})
 			return
 		}
@@ -375,8 +374,10 @@ func writeErr(w http.ResponseWriter, prevMsgType uint8, err error) {
 		msg.Timestamp = time.Now().Unix()
 	}
 
-	// TODO: Set correlation ID
-	msg.CorrelationID = nil
+	// TODO: Set correlation ID. EMErrorCID is always sent as a uint; 0
+	// means none (FDO 2.0 Errata 1, E4). Receivers accept null as 0.
+	var none uint
+	msg.CorrelationID = &none
 
 	var body bytes.Buffer
 	_ = cbor.NewEncoder(&body).Encode(msg)
