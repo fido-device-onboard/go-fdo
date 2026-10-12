@@ -481,7 +481,13 @@ func sendHelloDevice(ctx context.Context, transport Transport, c *TO2Config) (pr
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
 		return protocol.Nonce{}, nil, nil, fmt.Errorf("error parsing owner public key to verify TO2.ProveOVHdr payload signature: %w", err)
 	}
-	if ok, err := proveOVHdr.Verify(key, nil, nil); err != nil {
+
+	// Use domain separation AAD only for FDO 2.0+; FDO 1.01 does not use external_aad.
+	var aad []byte
+	if protocol.VersionFromContext(ctx) >= protocol.Version200 {
+		aad = cose.AADProveOVHdr
+	}
+	if ok, err := proveOVHdr.Verify(key, nil, aad); err != nil {
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
 		return protocol.Nonce{}, nil, nil, fmt.Errorf("error verifying TO2.ProveOVHdr payload signature: %w", err)
 	} else if !ok {
@@ -670,7 +676,13 @@ func (s *TO2Server) proveOVHdr(ctx context.Context, msg io.Reader) (*cose.Sign1T
 			MaxOwnerMessageSize: 65535, // TODO: Make this configurable and match handler config
 		}),
 	}
-	if err := s1.Sign(ownerKey, nil, nil, opts); err != nil {
+
+	// Use domain separation AAD only for FDO 2.0+; FDO 1.01 does not use external_aad.
+	var serverProveAAD []byte
+	if protocol.VersionFromContext(ctx) >= protocol.Version200 {
+		serverProveAAD = cose.AADProveOVHdr
+	}
+	if err := s1.Sign(ownerKey, nil, serverProveAAD, opts); err != nil {
 		clear(xA)
 		return nil, fmt.Errorf("error signing TO2.ProveOVHdr payload: %w", err)
 	}
@@ -832,7 +844,12 @@ func proveDevice(ctx context.Context, transport Transport, proveDeviceNonce prot
 	if err != nil {
 		return protocol.Nonce{}, nil, fmt.Errorf("error determining signing options for TO2.ProveDevice: %w", err)
 	}
-	if err := token.Sign(c.Key, nil, nil, opts); err != nil {
+	// Use domain separation AAD only for FDO 2.0+; FDO 1.01 does not use external_aad.
+	var proveDeviceAAD []byte
+	if protocol.VersionFromContext(ctx) >= protocol.Version200 {
+		proveDeviceAAD = cose.AADProveDevice
+	}
+	if err := token.Sign(c.Key, nil, proveDeviceAAD, opts); err != nil {
 		return protocol.Nonce{}, nil, fmt.Errorf("error signing EAT payload for TO2.ProveDevice: %w", err)
 	}
 	msg := token.Tag()
@@ -947,7 +964,12 @@ func (s *TO2Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1
 	if err != nil {
 		return nil, fmt.Errorf("error parsing device public key from ownership voucher: %w", err)
 	}
-	if ok, err := proof.Verify(devicePublicKey, nil, nil); err != nil {
+	// Use domain separation AAD only for FDO 2.0+; FDO 1.01 does not use external_aad.
+	var verifyDeviceAAD []byte
+	if protocol.VersionFromContext(ctx) >= protocol.Version200 {
+		verifyDeviceAAD = cose.AADProveDevice
+	}
+	if ok, err := proof.Verify(devicePublicKey, nil, verifyDeviceAAD); err != nil {
 		return nil, fmt.Errorf("error verifying signature of device EAT: %w", err)
 	} else if !ok {
 		return nil, fmt.Errorf("device EAT verification failed")
@@ -1020,7 +1042,12 @@ func (s *TO2Server) setupDevice(ctx context.Context, msg io.Reader) (*cose.Sign1
 	if err != nil {
 		return nil, fmt.Errorf("error determining signing options for TO2.SetupDevice message: %w", err)
 	}
-	if err := s1.Sign(ownerKey, nil, nil, opts); err != nil {
+	// Use domain separation AAD only for FDO 2.0+; FDO 1.01 does not use external_aad.
+	var setupDeviceAAD []byte
+	if protocol.VersionFromContext(ctx) >= protocol.Version200 {
+		setupDeviceAAD = cose.AADSetupDevice
+	}
+	if err := s1.Sign(ownerKey, nil, setupDeviceAAD, opts); err != nil {
 		return nil, fmt.Errorf("error signing TO2.SetupDevice payload: %w", err)
 	}
 	return s1.Tag(), nil
