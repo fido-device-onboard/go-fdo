@@ -42,11 +42,16 @@ type DIServer[T any] struct {
 	// Optional callback for before a new voucher is persisted. This
 	// modification only applies to vouchers created with DI. Vouchers created
 	// at the end of TO2 will be persisted unmodified.
+	// This is typically where one would customize voucher extension process,
+	// i.e. specifying specific owner public key for voucher extension or
+	// adding OVEExtraData to the extension.
 	BeforeVoucherPersist func(context.Context, *Voucher) error
 
 	// Optional callback for immediately after a new voucher is persisted.
 	// There is no guarantee that the device will receive and process the Done
 	// message (13) without error.
+	// This is typically where would would add logic what to do with
+	// new voucher (beyond simple storage in DB) - i.e. transmission to owner.
 	AfterVoucherPersist func(context.Context, Voucher) error
 
 	// Rendezvous directives
