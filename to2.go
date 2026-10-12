@@ -1463,7 +1463,11 @@ func (s *TO2Server) fsimContext(ctx context.Context, devmod *serviceinfo.Devmod,
 		return nil, fmt.Errorf("error retrieving associated device GUID of proof session: %w", err)
 	}
 	replacementGUID, err := s.Session.ReplacementGUID(ctx)
-	if err != nil {
+	if errors.Is(err, ErrNotFound) {
+		// Credential Reuse Protocol: no replacement GUID is stored and the
+		// device keeps its current GUID
+		replacementGUID = guid
+	} else if err != nil {
 		return nil, fmt.Errorf("error retrieving replacement GUID of proof session: %w", err)
 	}
 
@@ -1529,7 +1533,18 @@ func (s *TO2Server) ownerServiceInfo(ctx context.Context, msg io.Reader) (*owner
 		if !ok {
 			break
 		}
-		moduleName, messageName, _ := strings.Cut(key, ":")
+		keyModule, messageName, _ := strings.Cut(key, ":")
+		// Only process keys that match the current module
+		if keyModule != moduleName {
+			// Discard keys for other modules. Note that these are dropped, not
+			// deferred: nothing replays them when that module becomes current.
+			slog.Warn("discarding device service info for non-current module",
+				"key", key, "current_module", moduleName)
+			if _, err := io.Copy(io.Discard, messageBody); err != nil {
+				return nil, fmt.Errorf("error discarding service info for module %q: %w", keyModule, err)
+			}
+			continue
+		}
 		if err := module.HandleInfo(ctx, messageName, messageBody); err != nil {
 			return nil, fmt.Errorf("error handling device service info %q: %w", key, err)
 		}
