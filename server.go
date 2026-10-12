@@ -445,3 +445,38 @@ func (s *TO2Server) HandleError(ctx context.Context, errMsg protocol.ErrorMessag
 	// device reported error message cannot be completely trusted
 	s.Modules.CleanupModules(ctx)
 }
+
+// ownerServiceInfo20 converts 2.0 DeviceSvcInfo20Msg to 1.0.1 format and reuses existing logic
+func (s *TO2Server) ownerServiceInfo20(ctx context.Context, msg io.Reader) (*OwnerSvcInfo20Msg, error) {
+	var req DeviceSvcInfo20Msg
+	if err := cbor.NewDecoder(msg).Decode(&req); err != nil {
+		captureErr(ctx, protocol.MessageBodyErrCode, "")
+		return nil, fmt.Errorf("error decoding TO2.DeviceSvcInfo20 request: %w", err)
+	}
+
+	// Convert 2.0 message to 1.0.1 format and encode as CBOR
+	deviceInfo := deviceServiceInfo{
+		ServiceInfo:       req.ServiceInfo,
+		IsMoreServiceInfo: req.IsMoreServiceInfo,
+	}
+
+	var deviceInfoBuf bytes.Buffer
+	if err := cbor.NewEncoder(&deviceInfoBuf).Encode(&deviceInfo); err != nil {
+		return nil, fmt.Errorf("error encoding device service info: %w", err)
+	}
+
+	// Call the existing 1.0.1 ownerServiceInfo method
+	ownerInfo, err := s.ownerServiceInfo(ctx, &deviceInfoBuf)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert 1.0.1 response to 2.0 format
+	result := &OwnerSvcInfo20Msg{
+		IsMoreServiceInfo: ownerInfo.IsMoreServiceInfo,
+		IsDone:            ownerInfo.IsDone,
+		ServiceInfo:       ownerInfo.ServiceInfo,
+	}
+
+	return result, nil
+}
