@@ -234,7 +234,17 @@ func (v *Voucher) VerifyCertChainHash() error {
 		}
 	}
 	if !hmac.Equal(digest.Sum(nil), cchash.Value) {
-		return fmt.Errorf("%w: certificate chain hash did not match", ErrCryptoVerifyFailed)
+		// Find the first certificate to include in error
+		var cert *x509.Certificate
+		if len(*v.CertChain) > 0 {
+			cert = (*x509.Certificate)((*v.CertChain)[0])
+		}
+		return NewCertificateValidationError(
+			CertValidationErrorChainHashMismatch,
+			cert,
+			"voucher certificate chain hash",
+			"certificate chain hash did not match voucher header",
+		)
 	}
 	return nil
 }
@@ -398,6 +408,16 @@ func (e *VoucherEntryPayload) VerifyOwnerCertChain(roots *x509.CertPool) error {
 }
 
 func verifyCertChain(chain []*x509.Certificate, roots *x509.CertPool) error {
+	// Check certificate expiration and custom validation for all certificates
+	for i, cert := range chain {
+		if err := checkCertificateValidity(cert, i); err != nil {
+			return err
+		}
+		if err := runCustomCertificateChecker(cert); err != nil {
+			return err
+		}
+	}
+
 	// All all intermediates (if any) to a pool
 	intermediates := x509.NewCertPool()
 	if len(chain) > 2 {
@@ -417,7 +437,12 @@ func verifyCertChain(chain []*x509.Certificate, roots *x509.CertPool) error {
 		Roots:         roots,
 		Intermediates: intermediates,
 	}); err != nil {
-		return fmt.Errorf("%w: %w", ErrCryptoVerifyFailed, err)
+		return NewCertificateValidationError(
+			CertValidationErrorSignature,
+			chain[0],
+			"certificate chain",
+			fmt.Sprintf("signature verification failed: %v", err),
+		)
 	}
 
 	return nil
