@@ -193,7 +193,7 @@ func (c *aeadCrypter) Encrypt(rand io.Reader, plaintext, additionalData []byte) 
 	}
 
 	if c.AEAD.NonceSize() == 0 {
-		sealed := c.AEAD.Seal(nil, nil, plaintext, additionalData)
+		sealed := c.AEAD.Seal(nil, nil, plaintext, additionalData) // #nosec G407 -- the AEAD generates a random nonce per call and requires a nil nonce
 		nonce, ciphertext := sealed[:randomNonceSize], sealed[randomNonceSize:]
 		return ciphertext, HeaderMap{IvLabel: nonce}, nil
 	}
