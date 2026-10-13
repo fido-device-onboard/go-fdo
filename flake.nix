@@ -113,7 +113,7 @@
 
         go = pkgs.mkShell {
           packages = with pkgs; [
-            go_1_25
+            go_1_26
             gotools
             gomod2nix.packages.${system}.default
             golangci-lint
@@ -126,7 +126,7 @@
         tinygo = pkgs.mkShell {
           packages = with pkgs; [
             tinygo_patched
-            go_1_25
+            go_1_26
             gotools
             gomod2nix.packages.${system}.default
             golangci-lint
