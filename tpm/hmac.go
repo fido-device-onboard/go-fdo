@@ -25,8 +25,14 @@ type Hmac interface {
 
 // NewHmac returns an HMAC for either SHA256 or SHA384 (if supported by the TPM). To avoid a
 // resource leak, the hash must always be closed.
+//
+// TPM commands using the HMAC key are authorized with a salted HMAC session.
+// The HMAC key and its outputs do not depend on the session.
 func NewHmac(t TPM, h crypto.Hash) (Hmac, error) {
-	auth, closeSession, err := tpm2.HMACSession(t, tpm2.TPMAlgSHA256, 16)
+	if _, err := hmacAlg(h); err != nil {
+		return nil, err
+	}
+	auth, closeSession, err := newSaltedSession(t)
 	if err != nil {
 		return nil, fmt.Errorf("create HMAC key authorization session: %w", err)
 	}
@@ -34,6 +40,53 @@ func NewHmac(t TPM, h crypto.Hash) (Hmac, error) {
 		hmac:         hmac{Device: t, Auth: auth, Hash: h},
 		closeSession: closeSession,
 	}, nil
+}
+
+// newSaltedSession starts an unbound HMAC authorization session, salted with a transient ECC P-256 key.
+func newSaltedSession(t TPM) (_ tpm2.Session, closeSession func() error, err error) {
+	saltKey, err := tpm2.CreatePrimary{
+		PrimaryHandle: tpm2.TPMRHNull,
+		InPublic:      tpm2.New2B(tpm2.ECCEKTemplate),
+	}.Execute(t)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create ECC P-256 salting key: %w", err)
+	}
+
+	var sess tpm2.Session
+	pub, err := saltKey.OutPublic.Contents()
+	if err != nil {
+		err = fmt.Errorf("salting key: %w", err)
+	} else {
+		sess, closeSession, err = tpm2.HMACSession(t, tpm2.TPMAlgSHA256, 16,
+			tpm2.Salted(saltKey.ObjectHandle, *pub))
+		if err != nil {
+			err = fmt.Errorf("start salted session: %w", err)
+		}
+	}
+
+	if _, flushErr := (tpm2.FlushContext{FlushHandle: saltKey.ObjectHandle}).Execute(t); flushErr != nil {
+		err = errors.Join(err, fmt.Errorf("release salting key: %w", flushErr))
+		if closeSession != nil {
+			if closeErr := closeSession(); closeErr != nil {
+				err = errors.Join(err, fmt.Errorf("release session: %w", closeErr))
+			}
+		}
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	return sess, closeSession, nil
+}
+
+func hmacAlg(h crypto.Hash) (tpm2.TPMAlgID, error) {
+	switch h {
+	case crypto.SHA256:
+		return tpm2.TPMAlgSHA256, nil
+	case crypto.SHA384:
+		return tpm2.TPMAlgSHA384, nil
+	default:
+		return 0, fmt.Errorf("unsupported hash algorithm: %s", h)
+	}
 }
 
 type sessionCloser struct {
@@ -71,18 +124,14 @@ type hmac struct {
 
 // Generate HMAC key
 func (h *hmac) init() {
-	if h.inited {
+	if h.inited || h.initErr != nil {
 		return
 	}
 
-	var tpmAlg tpm2.TPMAlgID
-	switch h.Hash {
-	case crypto.SHA256:
-		tpmAlg = tpm2.TPMAlgSHA256
-	case crypto.SHA384:
-		tpmAlg = tpm2.TPMAlgSHA384
-	default:
-		panic("unsupported hash algorithm: " + h.Hash.String())
+	tpmAlg, err := hmacAlg(h.Hash)
+	if err != nil {
+		h.initErr = fmt.Errorf("tpm: %w", err)
+		return
 	}
 
 	// Generate HMAC key from template
@@ -128,7 +177,7 @@ func (h *hmac) init() {
 
 // Start a new HMAC sequence
 func (h *hmac) start() {
-	if h.started {
+	if h.started || !h.inited {
 		return
 	}
 
@@ -172,6 +221,9 @@ func (h *hmac) start() {
 //
 // Caller should check Hash.Err() for underlying TPM sequence errors.
 func (h *hmac) Write(p []byte) (int, error) {
+	if h.Err() != nil {
+		return 0, nil
+	}
 	if h.authHandle == nil && h.started {
 		h.err = fmt.Errorf("call to write after sum without reset")
 		return 0, nil
@@ -179,7 +231,7 @@ func (h *hmac) Write(p []byte) (int, error) {
 
 	h.init()
 	h.start()
-	if h.err != nil {
+	if h.Err() != nil {
 		return 0, nil
 	}
 
@@ -214,6 +266,9 @@ func (h *hmac) Write(p []byte) (int, error) {
 
 // Sum implements the hash.Hash interface.
 func (h *hmac) Sum(b []byte) []byte {
+	if h.Err() != nil {
+		return b
+	}
 	if h.authHandle == nil && h.started {
 		h.err = fmt.Errorf("multiple calls to sum")
 		return b
@@ -221,7 +276,7 @@ func (h *hmac) Sum(b []byte) []byte {
 
 	h.init()
 	h.start()
-	if h.err != nil {
+	if h.Err() != nil {
 		return b
 	}
 
