@@ -6,6 +6,7 @@ package fdo_test
 import (
 	"context"
 	"crypto/x509"
+	"fmt"
 	"io"
 	"iter"
 	"runtime"
@@ -106,6 +107,96 @@ func TestClientWithMockModuleFDO20(t *testing.T) {
 	if !deviceModule.ActiveState {
 		t.Error("device module should be active")
 	}
+}
+
+// TestClientLongOwnerRunFDO20 has the owner send more service info in one
+// IsMoreServiceInfo run than the device's receive buffer holds (1000 KVs),
+// the way a large payload is streamed one chunk per message. The device must
+// hand each KV to its module as it arrives; buffering the whole run before
+// processing it deadlocks once the buffer is full.
+func TestClientLongOwnerRunFDO20(t *testing.T) {
+	const n = 1500
+
+	var received int
+	deviceModule := &fdotest.MockDeviceModule{
+		ReceiveFunc: func(ctx context.Context, messageName string, messageBody io.Reader, respond func(message string) io.Writer, yield func()) error {
+			_, _ = io.Copy(io.Discard, messageBody)
+			switch {
+			case messageName == "begin":
+				received = 0
+			case strings.HasPrefix(messageName, "data-"):
+				received++
+			case messageName == "end":
+				return cbor.NewEncoder(respond("count")).Encode(received)
+			}
+			return nil
+		},
+	}
+
+	newOwnerModule := func() serviceinfo.OwnerModule {
+		var sent int
+		var counted bool
+		return &fdotest.MockOwnerModule{
+			HandleInfoFunc: func(ctx context.Context, messageName string, messageBody io.Reader) error {
+				if messageName != "count" {
+					_, _ = io.Copy(io.Discard, messageBody)
+					return nil
+				}
+				var got int
+				if err := cbor.NewDecoder(messageBody).Decode(&got); err != nil {
+					return err
+				}
+				if got != n {
+					t.Errorf("device received %d data messages, want %d", got, n)
+				}
+				counted = true
+				return nil
+			},
+			ProduceInfoFunc: func(ctx context.Context, producer *serviceinfo.Producer) (blockPeer, moduleDone bool, _ error) {
+				switch {
+				case counted:
+					return false, true, nil
+				case sent == 0:
+					if err := producer.WriteChunk("active", []byte{0xf5}); err != nil {
+						return false, false, err
+					}
+					if err := producer.WriteChunk("begin", []byte{0xf6}); err != nil {
+						return false, false, err
+					}
+				case sent <= n:
+					// One KV per message with IsMoreServiceInfo set, like a
+					// payload owner streaming chunks. Distinct keys: repeated
+					// keys would be unchunked into a single value.
+					if err := producer.WriteChunk(fmt.Sprintf("data-%d", sent-1), []byte{0xf6}); err != nil {
+						return false, false, err
+					}
+				case sent == n+1:
+					if err := producer.WriteChunk("end", []byte{0xf6}); err != nil {
+						return false, false, err
+					}
+					sent++
+					return false, false, nil
+				default:
+					return false, false, nil // waiting for "count"
+				}
+				sent++
+				return true, false, nil
+			},
+		}
+	}
+
+	fdotest.RunClientTestSuite(t, fdotest.Config{
+		Version: protocol.Version200,
+		NoDebug: true,
+		DeviceModules: map[string]serviceinfo.DeviceModule{
+			mockModuleName: deviceModule,
+		},
+		OwnerModules: func(ctx context.Context, replacementGUID protocol.GUID, info string, chain []*x509.Certificate, devmod serviceinfo.Devmod, supportedMods []string) iter.Seq2[string, serviceinfo.OwnerModule] {
+			return func(yield func(string, serviceinfo.OwnerModule) bool) {
+				yield(mockModuleName, newOwnerModule())
+			}
+		},
+	})
 }
 
 func TestClientWithMockModuleAndAutoUnchunking(t *testing.T) {

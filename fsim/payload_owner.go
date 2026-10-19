@@ -479,7 +479,15 @@ func (p *PayloadOwner) produceInfo(ctx context.Context, producer *serviceinfo.Pr
 				return true, false, nil
 			}
 			fmt.Printf("[PayloadOwner] Chunk sent, will continue in next round\n")
-			// Block to continue sending more chunks in next round
+			// Block to continue sending more chunks in next round.
+			//
+			// This sends the whole payload as one IsMoreServiceInfo run. It
+			// relies on the device loop handing owner info to modules as it
+			// arrives (to2.go exchangeServiceInfo, TestClientLongOwnerRunFDO20).
+			// A device loop that buffers the whole run (upstream before that
+			// fix, including the FDO 2.0 core PR #285) deadlocks after 1000
+			// chunks. Do not upstream this FSIM ahead of that fix; see
+			// TODO.md "UPSTREAMING ORDER".
 			return true, false, nil
 
 		case stateSendingEnd:

@@ -16,6 +16,27 @@
 
 ## High Priority
 
+### UPSTREAMING ORDER — port the loop fix BEFORE any streaming FSIM
+
+- [ ] **P1: upstream the device ServiceInfo loop fix before `fdo.payload` /
+  `fdo.bmo` (or any FSIM that streams content).** The FDO 2.0 core PR
+  (fido-device-onboard/go-fdo #285, from `fdo20-core` / `fdo20-core-split`
+  in `~/go-fdo-merge-pr/go-fdo-core20`) does NOT have it: its `to2.go`
+  `exchangeServiceInfo` buffers an owner's whole IsMoreServiceInfo run in
+  `NewChunkInPipe(1000)`. Nothing in #285 triggers that (no streaming FSIMs),
+  but the moment payload/BMO go upstream on top of it, any FDO 2.0 device
+  receiving more than 1000 chunks hangs (seen 2026-10-14: Stage 2 ISO stopped
+  at chunk 1000 and sat for five days).
+  - What to port from `fdo20-merge3`: `exchangeServiceInfo` in `to2.go` (the
+    `handle` closure: each round's owner info goes to the modules as it
+    arrives, handlers chained per round) and `TestClientLongOwnerRunFDO20` in
+    `fdo_test.go` (must hang without the fix, pass with it).
+  - How: a small follow-up PR once #285 merges; fold it into #285 only if a
+    review-driven rebuild happens anyway.
+  - Gate: do not open the payload/BMO upstream PR until this is merged or
+    included in it.
+  - Background: "Protocol Defects" below (the FIXED 2026-10-20 entry).
+
 ### Documentation
 
 - [✅] Create comprehensive CLI commands documentation (`CLI_COMMANDS.md`)
@@ -28,6 +49,19 @@
 - [ ] Create CLI command reference cheat sheet
 
 ### Protocol Defects
+
+- [x] **FIXED 2026-10-20 (uncommitted): device deadlocked after 1000 owner
+  KVs in one `IsMoreServiceInfo` run.** Regression from `e85b7b4` (H4: the
+  FDO 2.0 client moved onto the shared 1.1 loop). The shared loop buffered a
+  whole owner run in `NewChunkInPipe(1000)` and handed it to the modules only
+  when the run ended; the payload owner streams one chunk per message with
+  `IsMoreServiceInfo=true`, so any payload over 1000 chunks hung (Stage 2
+  ISO stopped at chunk 1000 = 60 MB). The old 2.0 loop processed each message
+  as it arrived. Fix: `exchangeServiceInfo` (`to2.go`) now hands each round's
+  owner info to the modules as it is received, chained after the previous
+  round's handler so ordering is kept. Test: `TestClientLongOwnerRunFDO20`
+  (1500-KV run; hangs without the fix). **The same regression is in the
+  upstream PR #285 (fdo20-core-split `to2.go`).**
 
 - [ ] **(Latent, post-FDO-2.0-merge work) Device-side delay when the owner
   stalls.** In the shared 1.1/2.0 device loop `exchangeServiceInfo`

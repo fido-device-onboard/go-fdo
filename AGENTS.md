@@ -19,6 +19,42 @@ This document provides guidance for AI agents and automated tools working with t
 - **Full testing required** before claiming functionality works:
   - Complete test suite: `make test` (runs both unit and integration)
 - **Test-specific scenarios** using the comprehensive test suite in `test_examples.sh`
+- **Changes to the ServiceInfo loop or chunking need a large-payload run.**
+  Any change to `exchangeServiceInfo` / `exchangeServiceInfoRound` (`to2.go`),
+  `to2_module.go`, `serviceinfo/` pipes or chunking, or an owner FSIM's
+  send path (`fsim/*_owner.go`) MUST pass `TestClientLongOwnerRunFDO20` and a
+  real transfer of more than 1000 chunks under FDO 2.0, e.g. (from `examples/`):
+
+  ```bash
+  head -c 157286400 /dev/urandom > /tmp/big.bin      # 150 MiB = 2622 x 60000-byte chunks
+  go run ./cmd server -db /tmp/big.db -http 127.0.0.1:9992 -initOnly
+  go run ./cmd server -db /tmp/big.db -http 127.0.0.1:9992 -reuse-cred \
+      -payload application/octet-stream:/tmp/big.bin &
+  go run ./cmd client -blob /tmp/big.cred -di http://127.0.0.1:9992
+  go run ./cmd client -blob /tmp/big.cred -fdo-version 200 -max-owner-service-info 65532
+  # expect TO2 success, "All chunks sent", and examples/big.bin identical to /tmp/big.bin
+  ```
+
+  The integration tests only use small payloads, so they pass even when large
+  transfers deadlock. This is how the 2026-10-10 loop regression (2.0 devices
+  hung at chunk 1000) reached a real install without any test failing.
+
+### Upstreaming Order (fdo20-merge3 -> upstream)
+
+`fdo20-merge3` is the source for everything still to go upstream after the
+FDO 2.0 core PR (fido-device-onboard/go-fdo #285, built from `fdo20-core`).
+Order matters:
+
+1. **The device ServiceInfo loop fix MUST go upstream BEFORE (or together
+   with) `fdo.payload`, `fdo.bmo`, or any FSIM that streams content.** #285
+   carries the shared loop that buffers an owner's whole IsMoreServiceInfo run
+   in a 1000-entry pipe; payload/BMO owners send one chunk per message with
+   IsMoreServiceInfo set, so any transfer over 1000 chunks deadlocks the
+   device. Port `exchangeServiceInfo` (`to2.go`, the `handle` closure that
+   processes owner info as it arrives) together with its regression test
+   `TestClientLongOwnerRunFDO20` (`fdo_test.go`). Details: `TODO.md`
+   "UPSTREAMING ORDER".
+2. Then the FSIMs, each with its tests.
 
 ### Code Quality Standards
 

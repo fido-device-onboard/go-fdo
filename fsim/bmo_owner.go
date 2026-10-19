@@ -450,6 +450,12 @@ func (b *BMOOwner) produceInfo(ctx context.Context, producer *serviceinfo.Produc
 			b.sendState = bmoStateSendingEnd
 			return true, false, nil
 		}
+		// The whole image goes out as one IsMoreServiceInfo run. A go-fdo
+		// device needs the loop fix in to2.go exchangeServiceInfo
+		// (TestClientLongOwnerRunFDO20) or it deadlocks after 1000 chunks;
+		// upstream before that fix, including the FDO 2.0 core PR #285, lacks
+		// it. Do not upstream this FSIM ahead of that fix; see TODO.md
+		// "UPSTREAMING ORDER".
 		return true, false, nil
 
 	case bmoStateSendingEnd:

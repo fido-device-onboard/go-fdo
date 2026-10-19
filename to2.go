@@ -1446,16 +1446,49 @@ func exchangeServiceInfo(ctx context.Context,
 	// of 256-65535 items" and 2 more bytes for "array of two" plus the first
 	// item indicating "IsMoreServiceInfo"
 	mtu -= 5
+	ctxWithMTU := context.WithValue(ctx, serviceinfo.MTUKey{}, mtu)
 
-	// 1000 service info buffered in and out means up to ~1MB of data for
-	// the default MTU. If both queues fill, the device will deadlock. This
-	// should only happen for a poorly behaved owner service.
+	// Track active modules
+	modules := deviceModuleMap{modules: c.DeviceModules, active: make(map[string]bool)}
+	defer stopDevicePlugins(&modules)
+
+	// handle passes the owner service info of one round to the device modules
+	// as it arrives, not after the round ends. An owner may send any number of
+	// messages in one IsMoreServiceInfo run (e.g. a large payload, one chunk per
+	// message); buffering a whole run before processing it fills the receive
+	// pipe and deadlocks the device. Each handler starts only once the previous
+	// round's handler has finished, so modules see messages in order, and the
+	// module responses it produces are sent in the next round.
+	//
+	// The returned channel yields the name of the last owner module handled,
+	// so that if the next round has no data exchanged, the handler can still
+	// yield to the appropriate device module.
+	handle := func(prev <-chan string, ownerInfo *serviceinfo.UnchunkReader) (*serviceinfo.ChunkReader, <-chan string) {
+		// 1000 service info buffered means up to ~1MB of device responses for
+		// the default MTU, all produced from a single round of owner info.
+		deviceInfo, deviceInfoIn := serviceinfo.NewChunkOutPipe(1000)
+		moduleName := make(chan string, 1)
+		go func() {
+			select {
+			case <-ctx.Done():
+				_ = deviceInfoIn.CloseWithError(ctx.Err())
+			case prevModuleName := <-prev:
+				moduleName <- handleOwnerModuleMessages(ctxWithMTU, prevModuleName, modules, ownerInfo, deviceInfoIn)
+			}
+		}()
+		return deviceInfo, moduleName
+	}
+
+	noModule := make(chan string, 1)
+	noModule <- ""
 	ownerInfo, ownerInfoIn := serviceinfo.NewChunkInPipe(1000)
+	deviceInfo, moduleName := handle(noModule, ownerInfo)
 
 	// Send initial device info (devmod)
 	totalRounds, isDone, err := exchangeServiceInfoRound(ctx, transport, mtu, initInfo, ownerInfoIn, sess)
 	_ = initInfo.Close()
 	if err != nil {
+		_ = ownerInfoIn.CloseWithError(err)
 		return fmt.Errorf("error sending devmod: %w", err)
 	}
 	if err := ownerInfoIn.Close(); err != nil {
@@ -1464,63 +1497,29 @@ func exchangeServiceInfo(ctx context.Context,
 	if totalRounds >= 1_000_000 {
 		return fmt.Errorf("exceeded 1e6 rounds of service info exchange")
 	}
-	if isDone {
-		return done(ctx)
-	}
 
-	// Track active modules
-	modules := deviceModuleMap{modules: c.DeviceModules, active: make(map[string]bool)}
-	defer stopDevicePlugins(&modules)
-
-	var prevModuleName string
-	for {
-		// Handle received owner service info and produce zero or more service
-		// info to send. Each service info grouping is automatically chunked
-		// and if it exceeds the MTU will have IsMoreServiceInfo=true.
-		//
-		// 1000 service info buffered in and out means up to ~1MB of data for
-		// the default MTU. If both queues fill, the device will deadlock. This
-		// should only happen for a poorly behaved owner module.
-		deviceInfo, deviceInfoIn := serviceinfo.NewChunkOutPipe(1000)
-		ctxWithMTU := context.WithValue(ctx, serviceinfo.MTUKey{}, mtu)
-		// Track the owner module in use so that if the next round has no data
-		// exchanged, we can still yield to the appropriate device module.
-		moduleName := make(chan string)
-		go func() {
-			select {
-			case <-ctx.Done():
-			case moduleName <- handleOwnerModuleMessages(ctxWithMTU, prevModuleName, modules, ownerInfo, deviceInfoIn):
-			}
-		}()
-
-		// Send all device service info and receive all owner service info into
-		// a buffered pipe. Note that if >1000 service info are received from
-		// the owner service without it allowing the device to respond, the
-		// device will deadlock.
-		nextOwnerInfo, ownerInfoIn := serviceinfo.NewChunkInPipe(1000)
-		rounds, isDone, err := exchangeServiceInfoRound(ctx, transport, mtu, deviceInfo, ownerInfoIn, sess)
+	for !isDone {
+		// Send the device service info produced from the last round of owner
+		// service info, while the next round of owner service info is handled
+		// as it is received. Device service info is automatically chunked and
+		// if it exceeds the MTU will have IsMoreServiceInfo=true.
+		nextOwnerInfo, nextOwnerInfoIn := serviceinfo.NewChunkInPipe(1000)
+		nextDeviceInfo, nextModuleName := handle(moduleName, nextOwnerInfo)
+		var rounds int
+		rounds, isDone, err = exchangeServiceInfoRound(ctx, transport, mtu, deviceInfo, nextOwnerInfoIn, sess)
 		if err != nil {
-			_ = ownerInfoIn.CloseWithError(err)
+			_ = nextOwnerInfoIn.CloseWithError(err)
 			return err
 		}
-		if err := ownerInfoIn.Close(); err != nil {
+		if err := nextOwnerInfoIn.Close(); err != nil {
 			return fmt.Errorf("error closing owner service info -> device module pipe: %w", err)
 		}
+		deviceInfo, moduleName = nextDeviceInfo, nextModuleName
 
 		// Limit to 1e6 (1 million) rounds and fail TO2 if exceeded
 		totalRounds += rounds
 		if totalRounds >= 1_000_000 {
 			return fmt.Errorf("exceeded 1e6 rounds of service info exchange")
-		}
-		if isDone {
-			// Process final service info from message with IsDone
-			deviceInfo, discard := serviceinfo.NewChunkOutPipe(1000)
-			go discardDeviceInfo(deviceInfo)
-			ctxWithMTU := context.WithValue(ctx, serviceinfo.MTUKey{}, mtu)
-			_ = handleOwnerModuleMessages(ctxWithMTU, prevModuleName, modules, nextOwnerInfo, discard)
-
-			// Continue TO2
-			return done(ctx)
 		}
 
 		// If there is no ServiceInfo to send and the last owner response did
@@ -1530,14 +1529,17 @@ func exchangeServiceInfo(ctx context.Context,
 		//
 		// TODO: Wait a few seconds if no service info was sent or received in
 		// the last round.
-
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case prevModuleName = <-moduleName:
-			ownerInfo = nextOwnerInfo
-		}
 	}
+
+	// Finish handling the final service info (from the message with IsDone),
+	// discarding any responses, then continue TO2.
+	go discardDeviceInfo(deviceInfo)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-moduleName:
+	}
+	return done(ctx)
 }
 
 func discardDeviceInfo(deviceInfo *serviceinfo.ChunkReader) {
