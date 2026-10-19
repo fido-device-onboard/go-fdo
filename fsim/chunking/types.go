@@ -254,6 +254,10 @@ type EndMessage struct {
 	HashValue []byte // Key 1: Hash of the full payload
 	Message   string // Key 2: Optional human-readable note or error string
 
+	// StatusSet distinguishes an explicit status of 0 from an absent key 0.
+	// When true, key 0 is always encoded; decoding sets it if key 0 is present.
+	StatusSet bool
+
 	// FSIM-specific fields use negative integer keys
 	FSIMFields map[int]any
 }
@@ -263,7 +267,7 @@ func (e *EndMessage) MarshalCBOR() ([]byte, error) {
 	m := make(map[any]any)
 
 	// Add generic fields if present
-	if e.Status != 0 {
+	if e.Status != 0 || e.StatusSet {
 		m[0] = e.Status
 	}
 	if len(e.HashValue) > 0 {
@@ -299,7 +303,7 @@ func (e *EndMessage) UnmarshalCBOR(data []byte) error {
 			switch k {
 			case 0:
 				if v, ok := val.(int64); ok {
-					e.Status = int(v)
+					e.Status, e.StatusSet = int(v), true
 				}
 			case 1:
 				if v, ok := val.([]byte); ok {
@@ -392,6 +396,12 @@ const (
 	// AckReasonDiagnosticsNotRequested rejects a reverse-direction diagnostic
 	// log transfer (see chunking-strategy.md "Diagnostic Payloads").
 	AckReasonDiagnosticsNotRequested = 5
+
+	// AckReasonBusy rejects a standalone diagnostic log offered while another
+	// transfer of the same FSIM is in progress; the device may offer it again
+	// once that transfer completes (chunking-strategy.md "Standalone
+	// Diagnostic Transfers").
+	AckReasonBusy = 6
 )
 
 // MarshalCBOR encodes AckMessage to CBOR array format: [accepted, ?reason_code, ?message]

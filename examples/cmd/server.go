@@ -183,11 +183,14 @@ func init() {
 }
 
 // payloadLogCollector accepts diagnostic logs uploaded by a device via the
-// fdo.payload payload-log-* messages and writes them to a directory.
+// fdo.payload payload-log-* messages and writes them to a per-device
+// directory (<payload-log-dir>/<guid>/).
 //
 // payload-result carries only a single-line summary bounded by the negotiated
 // ServiceInfo MTU; this is how substantial output (installer logs, tracebacks)
-// gets off the device and into the hands of an operator.
+// gets off the device and into the hands of an operator. Standalone logs
+// (device-initiated reports) get a "<file>.json" sidecar with their phase,
+// outcome and payload correlation.
 type payloadLogCollector struct{ dir string }
 
 // AcceptLog implements fsim.PayloadLogHandler.
@@ -202,9 +205,16 @@ func (c *payloadLogCollector) HandleLog(_ context.Context, _, name string, l *fs
 	if err := os.MkdirAll(c.dir, 0o755); err != nil {
 		return fmt.Errorf("error creating payload log directory: %w", err)
 	}
-	// The name comes from the owner's own payload metadata, but take the base
+	// For a nested log the name is the owner's own payload name; for a
+	// standalone log it is device-supplied. Either way take the base
 	// unconditionally rather than trusting it to be a bare filename.
 	base := filepath.Base(name)
+	if l.Standalone {
+		base = "report"
+		if phase := filepath.Base(l.Phase); l.Phase != "" && phase != "." && phase != string(filepath.Separator) {
+			base += "-" + phase
+		}
+	}
 	if base == "." || base == string(filepath.Separator) || base == "" {
 		base = "payload"
 	}
@@ -212,8 +222,31 @@ func (c *payloadLogCollector) HandleLog(_ context.Context, _, name string, l *fs
 	if err := os.WriteFile(file, l.Data, 0o600); err != nil {
 		return fmt.Errorf("error writing payload log: %w", err)
 	}
-	log.Printf("Payload: wrote %d bytes of device diagnostics to %s (truncated=%v source=%s)",
-		len(l.Data), file, l.Truncated, l.Source)
+	if !l.Standalone {
+		log.Printf("Payload: wrote %d bytes of device diagnostics to %s (truncated=%v source=%s)",
+			len(l.Data), file, l.Truncated, l.Source)
+		return nil
+	}
+
+	meta := map[string]any{
+		"phase": l.Phase, "source": l.Source, "content_type": l.ContentType, "truncated": l.Truncated,
+		"payload_name": l.PayloadName, "payload_version": l.PayloadVersion,
+		"outcome": l.Outcome, "outcome_message": l.OutcomeMessage,
+		"received": time.Now().UTC().Format(time.RFC3339),
+	}
+	js, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return fmt.Errorf("error encoding report metadata: %w", err)
+	}
+	if err := os.WriteFile(file+".json", append(js, '\n'), 0o600); err != nil {
+		return fmt.Errorf("error writing report metadata: %w", err)
+	}
+	outcome := "not stated"
+	if l.Outcome != nil {
+		outcome = fmt.Sprint(*l.Outcome)
+	}
+	log.Printf("Payload: device report phase=%q outcome=%s %q: wrote %d bytes to %s (truncated=%v source=%s)",
+		l.Phase, outcome, l.OutcomeMessage, len(l.Data), file, l.Truncated, l.Source)
 	return nil
 }
 
@@ -1166,7 +1199,11 @@ func (s moduleStateMachines) NextModule(ctx context.Context) (bool, error) {
 		}
 		log.Printf("[DEBUG NextModule] Creating state machine with modules: %v", modules)
 		log.Printf("[DEBUG NextModule] bmoFile=%q, len(bmoFiles)=%d", bmoFile, len(bmoFiles))
-		next, stop := iter.Pull2(ownerModules(modules))
+		guid, err := s.DB.GUID(ctx)
+		if err != nil {
+			return false, fmt.Errorf("error getting device GUID: %w", err)
+		}
+		next, stop := iter.Pull2(ownerModules(modules, guid))
 		module = &moduleStateMachineState{
 			Next: next,
 			Stop: stop,
@@ -1193,7 +1230,7 @@ func (s moduleStateMachines) CleanupModules(ctx context.Context) {
 	delete(s.states, token)
 }
 
-func ownerModules(modules []string) iter.Seq2[string, serviceinfo.OwnerModule] {
+func ownerModules(modules []string, guid protocol.GUID) iter.Seq2[string, serviceinfo.OwnerModule] {
 	return func(yield func(string, serviceinfo.OwnerModule) bool) {
 		log.Printf("[DEBUG ownerModules] Starting iterator with modules: %v", modules)
 		log.Printf("[DEBUG ownerModules] BMO check: contains fdo.bmo=%v, bmoFile=%q, len(bmoFiles)=%d, len(bmoURLs)=%d, len(bmoMetaURLs)=%d",
@@ -1256,10 +1293,12 @@ func ownerModules(modules []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 			}
 		}
 
-		if slices.Contains(modules, "fdo.payload") && (payloadFile != "" || len(payloadFiles) > 0) {
+		// With -payload-log-dir the module runs even with nothing to deliver,
+		// so a device can return standalone logs (e.g. an install report).
+		if slices.Contains(modules, "fdo.payload") && (payloadFile != "" || len(payloadFiles) > 0 || payloadLogDir != "") {
 			payloadOwner := &fsim.PayloadOwner{Signer: payloadSigner}
 			if payloadLogDir != "" {
-				payloadOwner.LogHandler = &payloadLogCollector{dir: payloadLogDir}
+				payloadOwner.LogHandler = &payloadLogCollector{dir: filepath.Join(payloadLogDir, guid.String())}
 			}
 
 			// Handle multi-file NAK testing mode (with RequireAck)
@@ -1280,7 +1319,7 @@ func ownerModules(modules []string) iter.Seq2[string, serviceinfo.OwnerModule] {
 					}
 					log.Printf("Payload: Added payload with RequireAck: type=%s, file=%s", mimeType, filePath)
 				}
-			} else {
+			} else if payloadFile != "" {
 				// Single file mode (no RequireAck)
 				data, err := os.ReadFile(payloadFile)
 				if err != nil {

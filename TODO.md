@@ -29,16 +29,26 @@
 
 ### Protocol Defects
 
-- [ ] **Throttle the device ServiceInfo poll loop.** In
-  `exchangeServiceInfo20` (`to2_client_v200.go`), once `deviceDone` is set
-  the loop skips the chunk-read branch entirely -- including its
-  `time.Sleep(10ms)` -- and so re-sends an empty `DeviceServiceInfo` as
-  fast as the network allows for as long as the owner keeps the exchange
-  open. Any owner that stalls, deliberately or from a slow backend, is
-  hammered by its own devices. Needs a minimum inter-round delay on the
-  device side. This is a defect today, independent of deferred onboarding,
-  but it also blocks the `wait` action of the proposed `fdo.defer` FSIM --
-  see `DESIGN-PROPOSALS.md` §1.
+- [ ] **(Latent, post-FDO-2.0-merge work) Device-side delay when the owner
+  stalls.** In the shared 1.1/2.0 device loop `exchangeServiceInfo`
+  (`to2.go`, the upstream comment "TODO: Wait a few seconds if no service
+  info was sent or received in the last round"), if the owner replies with
+  no ServiceInfo and `IsDone=false` while the device also has nothing to
+  send, the device sends the next `DeviceServiceInfo` immediately, with no
+  delay. This shouldn't happen in normal use: no existing FSIM has the owner
+  hold the conversation open with nothing to send. Only a stalled owner
+  backend would trigger it. Pre-existing upstream; independent of any FSIM.
+  Fix: in that case only, add a small device-side wait, backing off if it
+  repeats. A slow *device* module does not trigger this, because the loop
+  waits for the module before the next round. (Earlier text named
+  `exchangeServiceInfo20` / `deviceDone`; those were merged into the shared
+  loop by the 2.0 review fixes.)
+  - `fdo.defer` `wait` (`DESIGN-PROPOSALS.md` §1) is probably **not**
+    blocked by this: the owner sends a real `wait N` message and the device
+    module does the waiting, so the device paces itself. The remaining
+    concern there is whether the owner's session/HTTP state survives N
+    seconds between requests. Unverified: that a device module may block
+    for N seconds in its receive handler.
 
 - [x] **FIXED 2026-10-08:** the name comparison is skipped only for the link
   to the synthesized Owner root (bound by signature against the Owner key);
@@ -58,6 +68,20 @@
   not affected (issuers are matched by signature only).
 - [ ] **Owner side never checks `ProveDevice20.hashPrev2`** (Errata 1 made it
   well-defined; the device side checks `hashPrev`). `to2_server_v200.go`.
+- [ ] **Owner does not reassemble a ServiceInfo value split across
+  messages** (found 2026-10-14 with standalone `payload-log-*`). The device
+  chunker (`serviceinfo.ChunkReader`) splits a KV value wherever a
+  `DeviceServiceInfo` fills up and continues it, same key, in the next
+  message with `IsMoreServiceInfo=true`. `ServiceInfoProcessor`
+  (`service_info_processor.go`) unchunks each message on its own, so the
+  owner module gets a truncated value (here: "failed to decode chunk data:
+  unexpected EOF" for any device log over ~13 KB). Worked around in the
+  device FSIM: `sendLogBody` (`fsim/payload_device.go`) packs chunks so no KV
+  straddles a message (`TestSendLogBodyPacksMessages`). Any other device
+  module that sends more than one message's worth in a round hits the same
+  bug. Related trap: a `yield()` while the current message is still empty
+  makes `exchangeServiceInfoRound` end the round (`IsMoreServiceInfo=false`)
+  and everything written after it is lost.
 
 ### Code Quality
 

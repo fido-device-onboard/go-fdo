@@ -1149,6 +1149,106 @@ test_payload_log() {
 	log_success "Payload FSIM diagnostic log test PASSED"
 }
 
+# Test: standalone diagnostic logs (device-initiated "report mode")
+# Verifies chunking-strategy.md "Standalone Diagnostic Transfers": a device
+# re-runs TO2 (credential reuse) only to return a log, rejects the owner's
+# payload before any data is sent, and the owner stores the log per device
+# GUID with its phase and outcome. Negative control: an owner that does not
+# collect logs leaves the report undelivered and the client fails.
+test_payload_log_standalone() {
+	log_section "TEST: Payload FSIM standalone diagnostic log (report mode)"
+
+	mkdir -p "$EPHEMERAL_DIR"
+	rm -f "$DB_FILE" "$CRED_FILE"
+
+	PAYLOAD_FILE="$EPHEMERAL_DIR/test_payload_unwanted.bin"
+	REPORT_FILE="$EPHEMERAL_DIR/install-report.txt"
+	LOG_DIR="$EPHEMERAL_DIR/payload-logs-standalone"
+	CLIENT_OUT="$EPHEMERAL_DIR/client_report.out"
+	rm -rf "$LOG_DIR" "examples/test_payload_unwanted.bin"
+
+	dd if=/dev/urandom of="$PAYLOAD_FILE" bs=1024 count=10 2>/dev/null
+	# ~60 KB: large enough to span many ServiceInfo messages, under the
+	# example client's 64 KiB log cap so it must arrive byte-identical.
+	{
+		printf 'curtin: installing to /dev/vda\n'
+		head -c 44000 /dev/urandom | base64 -w 100
+		printf 'subiquity: install failed: test\n'
+	} >"$REPORT_FILE"
+
+	# --- Negative control: owner does not collect logs ---
+	start_server "-reuse-cred"
+	log_step "Running DI"
+	run_cmd go run ./cmd client -di "$SERVER_URL" || return 1
+	log_step "Running report-only TO2 against an owner that does not collect logs (must fail)"
+	if (cd examples && go run ./cmd client -payload-report "../$REPORT_FILE") >"$CLIENT_OUT" 2>&1; then
+		log_error "Client reported success although the owner never received the report:"
+		cat "$CLIENT_OUT"
+		stop_server
+		return 1
+	fi
+	if ! grep -q "Report 0 not sent" "$CLIENT_OUT"; then
+		log_error "Client failed for an unexpected reason:"
+		cat "$CLIENT_OUT"
+		stop_server
+		return 1
+	fi
+	log_success "Undelivered report is reported as a failure"
+	stop_server
+
+	# --- Positive: owner collects logs and also offers a payload ---
+	start_server "-reuse-cred -payload application/octet-stream:../$PAYLOAD_FILE -payload-log-dir ../$LOG_DIR"
+	log_step "Running report-only TO2 (phase=install, outcome=2)"
+	if ! (cd examples && go run ./cmd client -payload-report "../$REPORT_FILE" \
+		-payload-report-phase install -payload-report-outcome 2) >"$CLIENT_OUT" 2>&1; then
+		log_error "Report-only TO2 failed:"
+		cat "$CLIENT_OUT"
+		stop_server
+		return 1
+	fi
+	stop_server
+
+	if ! grep -q "Report 0 delivered" "$CLIENT_OUT"; then
+		log_error "Client did not confirm delivery:"
+		cat "$CLIENT_OUT"
+		return 1
+	fi
+	if grep -q "HandlePayload called" "$CLIENT_OUT" || [ -e "examples/test_payload_unwanted.bin" ]; then
+		log_error "Report-only device accepted the owner's payload"
+		return 1
+	fi
+	if grep -q "Sending chunk" "$EPHEMERAL_DIR/fdo_server.log"; then
+		log_error "Owner sent payload data to a report-only device"
+		return 1
+	fi
+	log_success "Device delivered the report and rejected the payload before any data"
+
+	STORED_LOG=$(find "$LOG_DIR" -name 'report-install-*.log' -type f | head -1)
+	if [ -z "$STORED_LOG" ]; then
+		log_error "No report stored under $LOG_DIR:"
+		find "$LOG_DIR" -type f 2>/dev/null
+		return 1
+	fi
+	GUID_DIR=$(basename "$(dirname "$STORED_LOG")")
+	if ! [[ "$GUID_DIR" =~ ^[0-9a-f]{32}$ ]]; then
+		log_error "Report not stored in a per-GUID directory: $STORED_LOG"
+		return 1
+	fi
+	if ! cmp -s "$STORED_LOG" "$REPORT_FILE"; then
+		log_error "Stored report differs from what the device sent"
+		return 1
+	fi
+	if ! grep -q '"outcome": 2' "$STORED_LOG.json" || ! grep -q '"phase": "install"' "$STORED_LOG.json"; then
+		log_error "Report metadata missing phase/outcome:"
+		cat "$STORED_LOG.json"
+		return 1
+	fi
+	log_success "Owner stored the report for device $GUID_DIR:"
+	sed 's/^/    /' "$STORED_LOG.json"
+
+	log_success "Payload FSIM standalone diagnostic log test PASSED"
+}
+
 # Test: Payload FSIM with Multiple Types
 # This test demonstrates sending multiple payloads with different MIME types
 # and verifies that all are received correctly
@@ -3561,6 +3661,7 @@ test_all() {
 	test_sysconfig_fdo200 || failed=1
 	test_payload || failed=1
 	test_payload_log || failed=1
+	test_payload_log_standalone || failed=1
 	test_payload_fdo200 || failed=1
 	test_payload_multiple_types || failed=1
 	test_payload_selective_rejection || failed=1
@@ -3693,6 +3794,9 @@ main() {
 	payload-log)
 		test_payload_log || rc=$?
 		;;
+	payload-log-standalone)
+		test_payload_log_standalone || rc=$?
+		;;
 	payload-multiple-types)
 		test_payload_multiple_types || rc=$?
 		;;
@@ -3791,7 +3895,7 @@ main() {
 		;;
 	*)
 		echo "Unknown test: $test_name"
-		echo "Available tests: basic, basic-reuse, rv-blob, kex, fdo200, fdo200-di200, kex-fdo200, delegate, delegate-fdo200, delegate-csr, bad-delegate, rv-verify-to1d, attested-payload, attested-payload-encrypted, attested-payload-delegate, attested-payload-shell, sysconfig, sysconfig-fdo200, payload, payload-log, payload-fdo200, payload-multiple-types, payload-selective-rejection, payload-nak, wifi, wifi-fdo200, wifi-single-sided, bmo, bmo-set, bmo-signed, bmo-signed-scope, bmo-efi, bmo-nak, bmo-multi-asset, bmo-url, bmo-meta-url, bmo-meta-signed, bmo-url-fallback, bmo-delegate-provision, bmo-delegate-unsigned, bmo-delegate-unsigned-noperm, bmo-presigned, bmo-presigned-metatool, bmo-owner-unsigned, bmo-meta-delegate-signed, payload-signed, payload-delegate-noperm, rv-firmware-tags, credentials, auth, all"
+		echo "Available tests: basic, basic-reuse, rv-blob, kex, fdo200, fdo200-di200, kex-fdo200, delegate, delegate-fdo200, delegate-csr, bad-delegate, rv-verify-to1d, attested-payload, attested-payload-encrypted, attested-payload-delegate, attested-payload-shell, sysconfig, sysconfig-fdo200, payload, payload-log, payload-log-standalone, payload-fdo200, payload-multiple-types, payload-selective-rejection, payload-nak, wifi, wifi-fdo200, wifi-single-sided, bmo, bmo-set, bmo-signed, bmo-signed-scope, bmo-efi, bmo-nak, bmo-multi-asset, bmo-url, bmo-meta-url, bmo-meta-signed, bmo-url-fallback, bmo-delegate-provision, bmo-delegate-unsigned, bmo-delegate-unsigned-noperm, bmo-presigned, bmo-presigned-metatool, bmo-owner-unsigned, bmo-meta-delegate-signed, payload-signed, payload-delegate-noperm, rv-firmware-tags, credentials, auth, all"
 		exit 1
 		;;
 	esac

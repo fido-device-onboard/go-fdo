@@ -63,6 +63,9 @@ var (
 	bmoSupportedTypes     string // Comma-separated list of supported BMO MIME types (empty = accept all)
 	payloadSupportedTypes string // Comma-separated list of supported Payload MIME types (empty = accept all)
 	payloadSendLog        bool   // Offer device diagnostics to the owner via fdo.payload payload-log-*
+	payloadReports        stringList
+	payloadReportPhase    string
+	payloadReportOutcome  int
 	allowSingleSided      bool   // Allow single-sided attestation (WiFi-only mode)
 	maxOwnerServiceInfo   int    // Maximum owner service info size (MTU) the device advertises
 	clientDBPath          string // SQLite database file path (matches server -db flag)
@@ -183,6 +186,9 @@ func init() {
 	clientFlags.StringVar(&bmoSupportedTypes, "bmo-supported-types", "", "Comma-separated list of supported BMO MIME `types` (empty = accept all)")
 	clientFlags.StringVar(&payloadSupportedTypes, "payload-supported-types", "", "Comma-separated list of supported Payload MIME `types` (empty = accept all)")
 	clientFlags.BoolVar(&payloadSendLog, "payload-send-log", false, "Offer handler diagnostics to the owner via fdo.payload payload-log-*")
+	clientFlags.Var(&payloadReports, "payload-report", "Report-only session: send `file` to the owner as a standalone fdo.payload log and reject all payloads (may be repeated)")
+	clientFlags.StringVar(&payloadReportPhase, "payload-report-phase", "", "Phase label for -payload-report logs, e.g. `install`")
+	clientFlags.IntVar(&payloadReportOutcome, "payload-report-outcome", -1, "Outcome for -payload-report logs: 0=success 1=warning 2=error, -1=not stated")
 	clientFlags.BoolVar(&allowSingleSided, "allow-single-sided", false, "Allow single-sided attestation (WiFi-only mode, owner not verified)")
 	clientFlags.IntVar(&maxOwnerServiceInfo, "max-owner-service-info", 0, "Maximum owner service info `size` (MTU) the device advertises (0 = default 14000)")
 	clientFlags.StringVar(&clientDBPath, "db", "", "SQLite database file path")
@@ -845,6 +851,9 @@ func transferOwnership2(ctx context.Context, transport fdo.Transport, to1d *cose
 		payloadFSIM.AckHandler = &payloadAckHandler{supportedTypes: types}
 		fmt.Printf("[fdo.payload] NAK mode enabled, supported types: %v\n", types)
 	}
+	if err := addPayloadReports(payloadFSIM); err != nil {
+		return nil, err
+	}
 	fsims["fdo.payload"] = payloadFSIM
 
 	// Add BMO handler to receive boot images
@@ -945,7 +954,60 @@ func transferOwnership2(ctx context.Context, transport fdo.Transport, to1d *cose
 		slog.Error("TO2 failed", "error", err)
 		return nil, err
 	}
+	if err := checkPayloadReports(payloadFSIM); err != nil {
+		return nil, err
+	}
 	return cred, nil
+}
+
+// addPayloadReports makes this a report-only session when -payload-report is
+// given: each file is queued as a standalone fdo.payload log.
+func addPayloadReports(payloadFSIM *fsim.Payload) error {
+	if len(payloadReports) == 0 {
+		return nil
+	}
+	payloadFSIM.ReportOnly = true
+	for _, path := range payloadReports {
+		data, err := os.ReadFile(filepath.Clean(path))
+		if err != nil {
+			return fmt.Errorf("reading -payload-report %q: %w", path, err)
+		}
+		report := &fsim.StandaloneLog{
+			PayloadLog: fsim.PayloadLog{Data: data, Source: filepath.Base(path)},
+			Phase:      payloadReportPhase,
+		}
+		if payloadReportOutcome >= 0 {
+			outcome := payloadReportOutcome
+			report.Outcome = &outcome
+		}
+		payloadFSIM.StandaloneLogs = append(payloadFSIM.StandaloneLogs, report)
+	}
+	fmt.Printf("[fdo.payload] Report-only session: %d standalone log(s) queued\n", len(payloadReports))
+	return nil
+}
+
+// checkPayloadReports prints what the owner did with each queued report and
+// fails unless all were retained.
+func checkPayloadReports(payloadFSIM *fsim.Payload) error {
+	var undelivered int
+	for i, report := range payloadFSIM.StandaloneLogs {
+		switch {
+		case report.Delivered():
+			fmt.Printf("[fdo.payload] Report %d delivered (%s)\n", i, payloadReports[i])
+			continue
+		case report.Declined != nil:
+			fmt.Printf("[fdo.payload] Report %d declined by owner: reason=%d %s\n", i, report.Declined.ReasonCode, report.Declined.Message)
+		case report.Result != nil:
+			fmt.Printf("[fdo.payload] Report %d not retained by owner: %d %s\n", i, report.Result.StatusCode, report.Result.Message)
+		default:
+			fmt.Printf("[fdo.payload] Report %d not sent (owner did not activate fdo.payload or ended the session)\n", i)
+		}
+		undelivered++
+	}
+	if undelivered > 0 {
+		return fmt.Errorf("%d of %d report(s) not delivered", undelivered, len(payloadFSIM.StandaloneLogs))
+	}
+	return nil
 }
 
 // handleVoucherOperations handles voucher listing and export operations

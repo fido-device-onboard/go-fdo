@@ -343,6 +343,15 @@ return sender.SendEndToWriter(respond)
 This gets you chunk indexing, size accounting and hash computation for free.
 See `fsim/payload_device.go` for a working example (diagnostic log upload).
 
+**Caveat for anything larger than one message (~MTU).** The loop above is
+only safe while everything fits in one `DeviceServiceInfo`. Past that, the
+service info chunker splits a value wherever the message fills up, and the
+go-fdo owner does not reassemble values split across messages (see
+`TODO.md`). Pack chunks to the MTU and `yield()` between messages, as
+`sendLogBody` in `fsim/payload_device.go` does, and never `yield()` while the
+current message is still empty: that ends the round and what you write after
+it is lost.
+
 ---
 
 ## Yield Method Patterns

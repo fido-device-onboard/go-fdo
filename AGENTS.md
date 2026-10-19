@@ -159,6 +159,7 @@ Run via `./test_examples.sh` with specific test scenarios:
 | `sysconfig` | System configuration FSIM |
 | `payload` | File payload transfer FSIM |
 | `payload-log` | Device diagnostic log upload (`payload-log-*` reverse-direction transfer), with negative control |
+| `payload-log-standalone` | Report mode: device-initiated standalone log (`-payload-report`), payload rejected before any data, stored per GUID with phase/outcome; negative control: owner without `-payload-log-dir` leaves it undelivered |
 | `wifi` | WiFi configuration FSIM |
 | `bmo` | Bare Metal Onboarding FSIM |
 | `bmo-meta-url` | BMO meta-URL delivery (unsigned meta-payload via CLI) |

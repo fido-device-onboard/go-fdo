@@ -118,6 +118,41 @@ type LogProvider interface {
 	PayloadLog(ctx context.Context, mimeType, name string, statusCode int) (*PayloadLog, error)
 }
 
+// StandaloneLog is a diagnostic log the device sends on its own initiative,
+// not tied to a payload in the current session (fdo.payload.md "Standalone
+// Diagnostics"), e.g. to report the outcome of an install that ran after an
+// earlier session staged its configuration.
+type StandaloneLog struct {
+	PayloadLog
+
+	// Phase labels the step the log describes, e.g. "install".
+	Phase string
+	// Outcome is sent as the payload-log-end status (0 = success,
+	// 1 = warning, 2 = error); nil means "not stated".
+	Outcome *int
+	// OutcomeMessage is an optional one-line summary for payload-log-end.
+	OutcomeMessage string
+	// PayloadName and PayloadVersion identify a payload delivered in an
+	// earlier session that this log reports on.
+	PayloadName    string
+	PayloadVersion string
+
+	// Set by the module once the owner has answered.
+	Result   *chunking.ResultMessage // the owner's payload-log-result
+	Declined *chunking.AckMessage    // the owner's final payload-log-ack rejection
+}
+
+// Delivered reports whether the owner confirmed it retained the log.
+func (l *StandaloneLog) Delivered() bool { return l.Result != nil && l.Result.StatusCode == 0 }
+
+type standaloneState int
+
+const (
+	standaloneIdle standaloneState = iota
+	standaloneAwaitingAck
+	standaloneAwaitingResult
+)
+
 // defaultMaxLogSize bounds diagnostic output a device will upload. Logs are a
 // convenience, not a reason to blow up an onboarding session, and the FDO 2.0
 // client path buffers a module's responses in memory before sending them.
@@ -151,6 +186,18 @@ type Payload struct {
 	// defaultMaxLogSize. Output beyond the cap is truncated and flagged.
 	MaxLogSize int
 
+	// StandaloneLogs are sent, in order, as standalone payload-log-*
+	// transfers once the owner activates the module and no payload transfer
+	// is in progress. Each entry's Result / Declined is filled in as the
+	// owner answers.
+	StandaloneLogs []*StandaloneLog
+
+	// ReportOnly makes this a report-only session: every payload-begin is
+	// rejected (payload-ack [false, 3]) before any data is sent, and a
+	// payload offered without require_ack is received, discarded and
+	// answered with payload-result [1, ...]. No handler is needed.
+	ReportOnly bool
+
 	// payload-begin is authorization-gated (chunking-strategy.md
 	// "Authorization of Begin Messages"): it is accepted signed by the Owner
 	// or a PERM.7 Delegate, or unsigned from a TO2 peer that holds
@@ -183,6 +230,10 @@ type Payload struct {
 	resultMsg    string
 	logSender    *chunking.ChunkSender
 	beginHasher  hash.Hash // chunked mode: running hash for begin expected_hash
+
+	standaloneIdx    int
+	standaloneState  standaloneState
+	standaloneSender *chunking.ChunkSender
 }
 
 var _ serviceinfo.DeviceModule = (*Payload)(nil)
@@ -201,7 +252,13 @@ func (p *Payload) Receive(ctx context.Context, messageName string, messageBody i
 	// generic "payload-" prefix so it is not mistaken for a chunking message
 	// belonging to the inbound payload transfer.
 	if messageName == "payload-log-ack" {
-		return p.handleLogAck(messageBody, respond)
+		if p.standaloneState == standaloneAwaitingAck {
+			return p.handleStandaloneAck(ctx, messageBody, respond, yield)
+		}
+		return p.handleLogAck(ctx, messageBody, respond, yield)
+	}
+	if messageName == "payload-log-result" {
+		return p.handleStandaloneResult(ctx, messageBody, respond)
 	}
 
 	// payload-begin is authorization-gated.
@@ -277,9 +334,11 @@ func (p *Payload) checkDeliveryMode(begin chunking.BeginMessage) error {
 	}
 }
 
-// Yield implements serviceinfo.DeviceModule.
+// Yield implements serviceinfo.DeviceModule. It is the device's chance to
+// start a standalone log after the owner's messages have been handled,
+// including right after the owner activates the module.
 func (p *Payload) Yield(ctx context.Context, respond func(string) io.Writer, yield func()) error {
-	return nil
+	return p.maybeStartStandalone(ctx, respond)
 }
 
 // reset clears the internal state.
@@ -290,12 +349,28 @@ func (p *Payload) reset() {
 	p.receiver = nil
 	p.buffer = nil
 	p.logSender = nil
+	p.standaloneState = standaloneIdle
+	p.standaloneSender = nil
 }
 
 // handleChunkedMessage processes payload-begin, payload-data-<n>, and payload-end messages.
 func (p *Payload) handleChunkedMessage(ctx context.Context, messageName string, messageBody io.Reader, respond func(string) io.Writer) error {
-	if p.UnifiedHandler == nil && p.ChunkedHandler == nil {
+	if p.UnifiedHandler == nil && p.ChunkedHandler == nil && !p.ReportOnly {
 		return p.sendError(respond, 4, "No payload handler configured", "")
+	}
+
+	if p.receiver == nil && p.ReportOnly {
+		p.receiver = &chunking.ChunkReceiver{
+			PayloadName:    "payload",
+			DiscardPayload: true,
+			OnBeginAck: func(chunking.BeginMessage) (bool, int, string) {
+				return false, chunking.AckReasonNotApplicable, "Report-only session"
+			},
+			OnEnd: func(chunking.EndMessage) error {
+				p.resultStatus, p.resultMsg = 1, "Report-only session; payload ignored"
+				return nil
+			},
+		}
 	}
 
 	// Initialize receiver on first chunked message
@@ -347,7 +422,7 @@ func (p *Payload) handleChunkedMessage(ctx context.Context, messageName string, 
 		// If rejected, we're done with this payload
 		if !p.receiver.IsAckAccepted() {
 			p.receiver = nil
-			return nil
+			return p.maybeStartStandalone(ctx, respond)
 		}
 	}
 
@@ -356,6 +431,9 @@ func (p *Payload) handleChunkedMessage(ctx context.Context, messageName string, 
 	// log transfer must precede it.
 	if strings.HasSuffix(messageName, "-end") && !p.receiver.IsReceiving() {
 		p.receiver = nil
+		if p.ReportOnly {
+			return p.finishPayload(ctx, respond)
+		}
 
 		started, err := p.startLogTransfer(ctx, respond)
 		if err != nil {
@@ -366,10 +444,19 @@ func (p *Payload) handleChunkedMessage(ctx context.Context, messageName string, 
 			return nil
 		}
 
-		return p.sendResult(respond)
+		return p.finishPayload(ctx, respond)
 	}
 
 	return nil
+}
+
+// finishPayload sends payload-result, ending the primary transfer, and then
+// offers any standalone log that had to wait for it.
+func (p *Payload) finishPayload(ctx context.Context, respond func(string) io.Writer) error {
+	if err := p.sendResult(respond); err != nil {
+		return err
+	}
+	return p.maybeStartStandalone(ctx, respond)
 }
 
 // sendResult sends the terminal payload-result message.
@@ -413,6 +500,21 @@ func (p *Payload) startLogTransfer(ctx context.Context, respond func(string) io.
 		return false, nil
 	}
 
+	sender := p.newLogSender(ctx, *log, nil)
+	if err := sender.SendBeginToWriter(respond); err != nil {
+		return false, fmt.Errorf("failed to send payload-log-begin: %w", err)
+	}
+	p.logSender = sender
+
+	slog.Debug("fdo.payload sent log begin",
+		"size", len(sender.Data), "metadata", sender.BeginFields.Metadata)
+
+	return true, nil
+}
+
+// newLogSender builds a payload-log sender for log, clamped to MaxLogSize,
+// with require_ack set and extra merged into the begin metadata.
+func (p *Payload) newLogSender(ctx context.Context, log PayloadLog, extra map[string]any) *chunking.ChunkSender {
 	maxSize := p.MaxLogSize
 	if maxSize <= 0 {
 		maxSize = defaultMaxLogSize
@@ -433,6 +535,9 @@ func (p *Payload) startLogTransfer(ctx context.Context, respond func(string) io.
 	if log.Source != "" {
 		metadata["source"] = log.Source
 	}
+	for k, v := range extra {
+		metadata[k] = v
+	}
 
 	sender := chunking.NewChunkSender("payload-log", data)
 	sender.BeginFields.HashAlg = "sha256"
@@ -441,22 +546,153 @@ func (p *Payload) startLogTransfer(ctx context.Context, respond func(string) io.
 	if mtu, ok := ctx.Value(serviceinfo.MTUKey{}).(uint16); ok && int(mtu) > logChunkOverhead {
 		sender.ChunkSize = int(mtu) - logChunkOverhead
 	}
+	return sender
+}
+
+// defaultLogMTU is assumed when the context carries no negotiated MTU: the
+// FDO minimum ServiceInfo size, less message framing.
+const defaultLogMTU = 1300 - 5
+
+// logAlreadyQueuedReserve is the room sendLogBody assumes is already used in
+// the current message when it starts.
+const logAlreadyQueuedReserve = 256
+
+// sendLogBody sends the data chunks and *-end of an accepted log so that no
+// service info KV straddles a message boundary. The serviceinfo chunker
+// otherwise splits a value wherever a message fills up, and an owner that
+// does not reassemble a value split across messages (go-fdo's does not)
+// receives a truncated chunk. The owner side avoids this the same way, by
+// packing chunks to producer.Available().
+func sendLogBody(ctx context.Context, sender *chunking.ChunkSender, respond func(string) io.Writer, yield func()) error {
+	mtu := defaultLogMTU
+	if v, ok := ctx.Value(serviceinfo.MTUKey{}).(uint16); ok && int(v) > logChunkOverhead {
+		mtu = int(v)
+	}
+	// What is already in the current message is unknown, but small: at most
+	// the replies to the owner's other messages in this round. Reserve room
+	// for it, and size chunks so the first one always fits, rather than
+	// yielding first: a yield while the message is still empty ends the
+	// round, and what is written after it is lost (exchangeServiceInfoRound
+	// in to2.go treats it as "nothing more to send").
+	if limit := mtu - logChunkOverhead - logAlreadyQueuedReserve; sender.ChunkSize > limit {
+		sender.ChunkSize = limit
+	}
+	used := logAlreadyQueuedReserve
+	fit := func(n int) {
+		if used+n > mtu {
+			yield()
+			used = 0
+		}
+		used += n
+	}
+
+	for remaining := len(sender.Data); remaining > 0; remaining = len(sender.Data) - int(sender.GetBytesSent()) {
+		fit(min(sender.ChunkSize, remaining) + logChunkOverhead)
+		if _, err := sender.SendNextChunkToWriter(respond); err != nil {
+			return fmt.Errorf("failed to send payload-log chunk: %w", err)
+		}
+	}
+	fit(logChunkOverhead + len(sender.EndFields.Message))
+	if err := sender.SendEndToWriter(respond); err != nil {
+		return fmt.Errorf("failed to send payload-log-end: %w", err)
+	}
+	return nil
+}
+
+// maybeStartStandalone offers the next queued standalone log, if the module
+// is idle: no payload transfer, nested log or standalone log in progress.
+func (p *Payload) maybeStartStandalone(ctx context.Context, respond func(string) io.Writer) error {
+	if p.standaloneState != standaloneIdle || p.receiver != nil || p.logSender != nil ||
+		p.standaloneIdx >= len(p.StandaloneLogs) {
+		return nil
+	}
+	l := p.StandaloneLogs[p.standaloneIdx]
+
+	extra := map[string]any{"standalone": true}
+	if l.Phase != "" {
+		extra["phase"] = l.Phase
+	}
+	if l.PayloadName != "" {
+		extra["payload_name"] = l.PayloadName
+	}
+	if l.PayloadVersion != "" {
+		extra["payload_version"] = l.PayloadVersion
+	}
+	sender := p.newLogSender(ctx, l.PayloadLog, extra)
+	if l.Outcome != nil {
+		sender.EndFields.Status, sender.EndFields.StatusSet = *l.Outcome, true
+	}
+	sender.EndFields.Message = l.OutcomeMessage
 
 	if err := sender.SendBeginToWriter(respond); err != nil {
-		return false, fmt.Errorf("failed to send payload-log-begin: %w", err)
+		return fmt.Errorf("failed to send standalone payload-log-begin: %w", err)
 	}
-	p.logSender = sender
+	p.standaloneSender = sender
+	p.standaloneState = standaloneAwaitingAck
+	slog.Debug("fdo.payload offered standalone log", "index", p.standaloneIdx, "size", len(sender.Data), "phase", l.Phase)
+	return nil
+}
 
-	slog.Debug("fdo.payload sent log begin",
-		"size", len(data), "truncated", truncated, "content_type", contentType)
+// handleStandaloneAck processes the owner's payload-log-ack for a standalone
+// log. Accepted: send the log and await payload-log-result. Busy: retry once
+// the owner's transfer is over. Otherwise the log is declined for good.
+func (p *Payload) handleStandaloneAck(ctx context.Context, messageBody io.Reader, respond func(string) io.Writer, yield func()) error {
+	sender := p.standaloneSender
+	data, err := io.ReadAll(messageBody)
+	if err != nil {
+		return fmt.Errorf("failed to read payload-log-ack: %w", err)
+	}
+	var ack chunking.AckMessage
+	if err := ack.UnmarshalCBOR(data); err != nil {
+		return fmt.Errorf("failed to decode payload-log-ack: %w", err)
+	}
 
-	return true, nil
+	if !ack.Accepted {
+		p.standaloneState, p.standaloneSender = standaloneIdle, nil
+		if ack.ReasonCode == chunking.AckReasonBusy {
+			slog.Debug("fdo.payload: owner busy; will offer standalone log again")
+			return nil
+		}
+		slog.Info("fdo.payload: owner declined standalone log", "reason_code", ack.ReasonCode, "message", ack.Message)
+		p.StandaloneLogs[p.standaloneIdx].Declined = &ack
+		p.standaloneIdx++
+		return p.maybeStartStandalone(ctx, respond)
+	}
+
+	if err := sendLogBody(ctx, sender, respond, yield); err != nil {
+		return err
+	}
+	p.standaloneState = standaloneAwaitingResult
+	slog.Debug("fdo.payload sent standalone log", "bytes", sender.GetBytesSent())
+	return nil
+}
+
+// handleStandaloneResult records the owner's payload-log-result and offers
+// the next queued log.
+func (p *Payload) handleStandaloneResult(ctx context.Context, messageBody io.Reader, respond func(string) io.Writer) error {
+	data, err := io.ReadAll(messageBody)
+	if err != nil {
+		return fmt.Errorf("failed to read payload-log-result: %w", err)
+	}
+	if p.standaloneState != standaloneAwaitingResult {
+		slog.Warn("fdo.payload: unexpected payload-log-result")
+		return nil
+	}
+	var res chunking.ResultMessage
+	if err := res.UnmarshalCBOR(data); err != nil {
+		return fmt.Errorf("failed to decode payload-log-result: %w", err)
+	}
+	slog.Info("fdo.payload: standalone log result", "status", res.StatusCode, "message", res.Message)
+	p.StandaloneLogs[p.standaloneIdx].Result = &res
+	p.standaloneIdx++
+	p.standaloneState, p.standaloneSender = standaloneIdle, nil
+	return p.maybeStartStandalone(ctx, respond)
 }
 
 // handleLogAck processes the owner's payload-log-ack. On acceptance the log
 // chunks and payload-log-end are sent, followed by the terminal
 // payload-result. On rejection the result is sent immediately.
-func (p *Payload) handleLogAck(messageBody io.Reader, respond func(string) io.Writer) error {
+func (p *Payload) handleLogAck(ctx context.Context, messageBody io.Reader, respond func(string) io.Writer, yield func()) error {
 	sender := p.logSender
 	p.logSender = nil
 	if sender == nil {
@@ -476,25 +712,16 @@ func (p *Payload) handleLogAck(messageBody io.Reader, respond func(string) io.Wr
 	if !ack.Accepted {
 		slog.Debug("fdo.payload: owner declined log",
 			"reason_code", ack.ReasonCode, "message", ack.Message)
-		return p.sendResult(respond)
+		return p.finishPayload(ctx, respond)
 	}
 
-	for {
-		done, err := sender.SendNextChunkToWriter(respond)
-		if err != nil {
-			return fmt.Errorf("failed to send payload-log chunk: %w", err)
-		}
-		if done {
-			break
-		}
-	}
-	if err := sender.SendEndToWriter(respond); err != nil {
-		return fmt.Errorf("failed to send payload-log-end: %w", err)
+	if err := sendLogBody(ctx, sender, respond, yield); err != nil {
+		return err
 	}
 
 	slog.Debug("fdo.payload sent log", "bytes", sender.GetBytesSent())
 
-	return p.sendResult(respond)
+	return p.finishPayload(ctx, respond)
 }
 
 // onBeginAck is called when payload-begin with RequireAck=true is received.

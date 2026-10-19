@@ -76,6 +76,33 @@ func TestEndMessageMarshalUnmarshal(t *testing.T) {
 	}
 }
 
+// TestEndMessageExplicitZeroStatus: a standalone log reports its outcome in
+// *-end status, so "0 = success" must survive the round trip as distinct from
+// an absent key 0 ("not stated").
+func TestEndMessageExplicitZeroStatus(t *testing.T) {
+	for _, tc := range []struct {
+		in      EndMessage
+		wantSet bool
+		want    int
+	}{
+		{EndMessage{}, false, 0},
+		{EndMessage{StatusSet: true}, true, 0},
+		{EndMessage{Status: 2}, true, 2},
+	} {
+		data, err := tc.in.MarshalCBOR()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got EndMessage
+		if err := got.UnmarshalCBOR(data); err != nil {
+			t.Fatal(err)
+		}
+		if got.StatusSet != tc.wantSet || got.Status != tc.want {
+			t.Errorf("%+v -> status %d set=%v, want %d set=%v", tc.in, got.Status, got.StatusSet, tc.want, tc.wantSet)
+		}
+	}
+}
+
 func TestResultMessageMarshalUnmarshal(t *testing.T) {
 	tests := []struct {
 		name     string
