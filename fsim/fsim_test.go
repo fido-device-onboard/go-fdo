@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (C) 2024 Intel Corporation
+// SPDX-FileCopyrightText: (C) 2026 Dell Technologies
 // SPDX-License-Identifier: Apache 2.0
 
 package fsim_test
@@ -35,10 +35,10 @@ import (
 )
 
 func TestClientWithDataModules(t *testing.T) {
-	if err := os.MkdirAll("testdata/downloads", 0755); err != nil {
+	if err := os.MkdirAll("testdata/downloads", 0750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll("testdata/uploads", 0755); err != nil {
+	if err := os.MkdirAll("testdata/uploads", 0750); err != nil {
 		t.Fatal(err)
 	}
 

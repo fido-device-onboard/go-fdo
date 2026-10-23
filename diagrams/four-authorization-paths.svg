@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="700" height="340" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .title { font-family: Arial, sans-serif; font-size: 16px; font-weight: bold; fill: #2c3e50; }
+      .axis-label { font-family: Arial, sans-serif; font-size: 12px; font-weight: bold; fill: #7f8c8d; }
+      .axis-value { font-family: Arial, sans-serif; font-size: 12px; font-weight: bold; fill: #2c3e50; }
+      .case-num { font-family: Arial, sans-serif; font-size: 28px; font-weight: bold; fill: #fff; }
+      .case-title { font-family: Arial, sans-serif; font-size: 11px; font-weight: bold; fill: #fff; }
+      .case-detail { font-family: Arial, sans-serif; font-size: 10px; fill: rgba(255,255,255,0.85); }
+    </style>
+  </defs>
+
+  <rect width="700" height="340" fill="#fafafa" rx="6"/>
+
+  <!-- Title -->
+  <text x="350" y="28" class="title" text-anchor="middle">The Four Authorization Paths</text>
+
+  <!-- Column headers -->
+  <text x="300" y="55" class="axis-label" text-anchor="middle">PAYLOAD UNSIGNED</text>
+  <text x="300" y="68" class="axis-value" text-anchor="middle">(channel authority)</text>
+  <text x="530" y="55" class="axis-label" text-anchor="middle">PAYLOAD SIGNED</text>
+  <text x="530" y="68" class="axis-value" text-anchor="middle">(artifact authority)</text>
+
+  <!-- Row headers -->
+  <text x="95" y="135" class="axis-label" text-anchor="middle">OWNER</text>
+  <text x="95" y="150" class="axis-value" text-anchor="middle">is TO2 peer</text>
+
+  <text x="95" y="245" class="axis-label" text-anchor="middle">DELEGATE</text>
+  <text x="95" y="260" class="axis-value" text-anchor="middle">is TO2 peer</text>
+  <text x="95" y="273" class="axis-value" text-anchor="middle">(with PERM.7)</text>
+
+  <!-- Grid lines -->
+  <line x1="165" y1="80" x2="165" y2="310" stroke="#ddd" stroke-width="1"/>
+  <line x1="165" y1="195" x2="660" y2="195" stroke="#ddd" stroke-width="1"/>
+  <line x1="420" y1="45" x2="420" y2="310" stroke="#ddd" stroke-width="1"/>
+
+  <!-- Case 1: Owner Channel (green) -->
+  <rect x="180" y="90" width="220" height="90" rx="10" fill="#27ae60"/>
+  <text x="210" y="127" class="case-num">1</text>
+  <text x="245" y="120" class="case-title">Owner Channel</text>
+  <text x="245" y="135" class="case-detail">Simplest. No signing.</text>
+  <text x="245" y="150" class="case-detail">Peer proved Owner key in TO2.</text>
+  <text x="245" y="165" class="case-detail">Single org, own infrastructure.</text>
+
+  <!-- Case 2: Delegate Channel (blue) -->
+  <rect x="180" y="210" width="220" height="90" rx="10" fill="#2980b9"/>
+  <text x="210" y="247" class="case-num">2</text>
+  <text x="245" y="240" class="case-title">Delegate Channel</text>
+  <text x="245" y="255" class="case-detail">Delegate chain valid to Owner key.</text>
+  <text x="245" y="270" class="case-detail">Leaf has PERM.7.</text>
+  <text x="245" y="285" class="case-detail">Delegated regional services.</text>
+
+  <!-- Case 3: Owner Artifact (orange) -->
+  <rect x="435" y="90" width="220" height="90" rx="10" fill="#e67e22"/>
+  <text x="465" y="127" class="case-num">3</text>
+  <text x="500" y="120" class="case-title">Owner-Signed Artifact</text>
+  <text x="500" y="135" class="case-detail">COSE_Sign1 by Owner key.</text>
+  <text x="500" y="150" class="case-detail">No x5chain needed.</text>
+  <text x="500" y="165" class="case-detail">Untrusted conduit delivery.</text>
+
+  <!-- Case 4: Delegate Artifact (purple) -->
+  <rect x="435" y="210" width="220" height="90" rx="10" fill="#8e44ad"/>
+  <text x="465" y="247" class="case-num">4</text>
+  <text x="500" y="240" class="case-title">Delegate-Signed Artifact</text>
+  <text x="500" y="255" class="case-detail">COSE_Sign1 + x5chain.</text>
+  <text x="500" y="270" class="case-detail">Chain to Owner key, PERM.7 on leaf.</text>
+  <text x="500" y="285" class="case-detail">Distributed IT teams.</text>
+
+</svg>

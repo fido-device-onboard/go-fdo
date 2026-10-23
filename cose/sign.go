@@ -68,6 +68,15 @@ func (s1 *Sign1[P, A]) Sign(key crypto.Signer, payload *P, additionalData A, opt
 		return fmt.Errorf("error marshaling signature protected body: %W", err)
 	}
 
+	// Set protectedRaw to match what would be produced by unmarshaling,
+	// so that reflect.DeepEqual comparisons work correctly after round-trips.
+	// Marshal the raw header map (not the bstr-wrapped version) to get the content bytes.
+	if len(body) > 0 {
+		if protectedBytes, err := cbor.Marshal(rawHeaderMap(body)); err == nil {
+			s1.SetProtectedRaw(protectedBytes)
+		}
+	}
+
 	// Sign contents of Sig_structure
 	sig := signature1[P, A]{
 		Context:       sig1Context,
@@ -79,7 +88,7 @@ func (s1 *Sign1[P, A]) Sign(key crypto.Signer, payload *P, additionalData A, opt
 	if err := cbor.NewEncoder(digest).Encode(sig); err != nil {
 		return err
 	}
-	sigBytes, err := key.Sign(rand.Reader, digest.Sum(nil)[:], opts)
+	sigBytes, err := key.Sign(rand.Reader, digest.Sum(nil), opts)
 	if err != nil {
 		return err
 	}
@@ -120,40 +129,61 @@ func (s1 Sign1[P, A]) Verify(key crypto.PublicKey, payload *P, additionalData A)
 		return false, fmt.Errorf("missing signature algorithm protected header")
 	}
 
-	// Hash signature structure
-	protected, err := newEmptyOrSerializedMap(s1.Protected)
-	if err != nil {
-		return false, fmt.Errorf("error marshaling signature protected body: %W", err)
+	// Hash signature structure.
+	// Use the preserved raw protected bytes if available (from unmarshaling).
+	// This is critical: CBOR map serialization is not deterministic, so we must
+	// use the exact same bytes that were used during signing.
+	var protectedBytes []byte
+	if rawBytes := s1.ProtectedRaw(); rawBytes != nil {
+		protectedBytes = rawBytes
+	} else {
+		// Fallback: serialize the protected header map to get the inner bytes.
+		// This is what goes INSIDE the bstr in the Sig_structure.
+		hmap, err := newRawHeaderMap(s1.Protected)
+		if err != nil {
+			return false, fmt.Errorf("error marshaling signature protected body: %w", err)
+		}
+		if len(hmap) == 0 {
+			protectedBytes = []byte{}
+		} else {
+			protectedBytes, err = cbor.Marshal(hmap)
+			if err != nil {
+				return false, fmt.Errorf("error serializing protected header: %w", err)
+			}
+		}
 	}
 	hash := alg.HashFunc()
 	if !hash.Available() {
 		return false, errors.New("unsupported algorithm")
 	}
 	h := hash.New()
-	if err := cbor.NewEncoder(h).Encode(signature1[P, A]{
+	// Use signature1Raw with the preserved raw bytes for deterministic verification
+	sigStruct := signature1Raw[P, A]{
 		Context:       sig1Context,
-		BodyProtected: protected,
+		BodyProtected: protectedBytes,
 		ExternalAad:   *cbor.NewByteWrap(additionalData),
 		Payload:       *s1.Payload,
-	}); err != nil {
+	}
+	if err := cbor.NewEncoder(h).Encode(sigStruct); err != nil {
 		return false, err
 	}
 
 	// Verify signature
+	digest := h.Sum(nil)
 	switch pub := key.(type) {
 	case *ecdsa.PublicKey:
 		// Decode signature following RFC8152 8.1.
 		n := (pub.Params().N.BitLen() + 7) / 8
 		r := new(big.Int).SetBytes(s1.Signature[:n])
 		s := new(big.Int).SetBytes(s1.Signature[n:])
-		return ecdsa.Verify(pub, h.Sum(nil), r, s), nil
+		return ecdsa.Verify(pub, digest, r, s), nil
 
 	case *rsa.PublicKey:
 		digest := h.Sum(nil)
 		return verifyRSA(pub, hash, digest, s1.Signature, alg)
 
 	default:
-		return false, fmt.Errorf("")
+		return false, fmt.Errorf("invalid key type %T in verify", key)
 	}
 }
 
@@ -196,6 +226,15 @@ type signature[P, A any] struct {
 type signature1[P, A any] struct {
 	Context       string
 	BodyProtected emptyOrSerializedMap
+	ExternalAad   cbor.ByteWrap[A]
+	Payload       cbor.ByteWrap[P]
+}
+
+// signature1Raw is like signature1 but with BodyProtected as raw bytes.
+// Used during verification when we have the original protected header bytes.
+type signature1Raw[P, A any] struct {
+	Context       string
+	BodyProtected []byte // raw bytes, encoded as CBOR bstr
 	ExternalAad   cbor.ByteWrap[A]
 	Payload       cbor.ByteWrap[P]
 }

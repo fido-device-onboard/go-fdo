@@ -33,6 +33,7 @@ import (
 	"github.com/fido-device-onboard/go-fdo"
 	"github.com/fido-device-onboard/go-fdo/blob"
 	"github.com/fido-device-onboard/go-fdo/cbor"
+	"github.com/fido-device-onboard/go-fdo/cose"
 	"github.com/fido-device-onboard/go-fdo/custom"
 	"github.com/fido-device-onboard/go-fdo/fdotest/internal/memory"
 	"github.com/fido-device-onboard/go-fdo/fdotest/internal/token"
@@ -42,6 +43,14 @@ import (
 )
 
 const timeout = 10 * time.Second
+
+// runTO2 calls the appropriate TO2 function based on protocol version
+func runTO2(ctx context.Context, transport fdo.Transport, to1d *cose.Sign1[protocol.To1d, []byte], config fdo.TO2Config, version protocol.Version) (*fdo.DeviceCredential, error) {
+	if version == protocol.Version200 {
+		return fdo.TO2v200(ctx, transport, to1d, &config)
+	}
+	return fdo.TO2(ctx, transport, to1d, config)
+}
 
 // Config provides options to modify how the test suite runs.
 type Config struct {
@@ -56,6 +65,10 @@ type Config struct {
 
 	// Explicit disable for cases such as TPM simulators
 	UnsupportedRSA3072 bool
+
+	// Version specifies the FDO protocol version to test (101 or 200).
+	// Defaults to 101 if not set.
+	Version protocol.Version
 
 	// If NewCredential is non-nil, then it will be used to create and format
 	// the device credential. Otherwise the blob package will be used.
@@ -224,6 +237,7 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 		},
 		Vouchers:             conf.State,
 		OwnerKeys:            conf.State,
+		DelegateKeys:         conf.State,
 		VouchersForExtension: conf.State,
 		RvInfo: func(context.Context, fdo.Voucher) ([][]protocol.RvInstruction, error) {
 			return [][]protocol.RvInstruction{}, nil
@@ -247,6 +261,7 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 	to0 := &fdo.TO0Client{
 		Vouchers:  conf.State,
 		OwnerKeys: conf.State,
+		Version:   conf.Version,
 	}
 
 	for _, table := range []struct {
@@ -280,7 +295,19 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 			cipherSuite: kex.A128GcmCipher,
 		},
 	} {
-		t.Run(fmt.Sprintf("Key %q Encoding %q Exchange %q Cipher %q", table.keyType, table.keyEncoding, table.keyExchange, table.cipherSuite), func(t *testing.T) {
+		// ASYMKEX cannot be used in the FDO 2.0 device-proves-first flow (the
+		// Device would need the Owner key before TO2.ProveOVHdr20), so 2.0
+		// uses the Diffie-Hellman suite for the same Owner key size.
+		keyExchange := table.keyExchange
+		if conf.Version == protocol.Version200 {
+			switch keyExchange {
+			case kex.ASYMKEX2048Suite:
+				keyExchange = kex.DHKEXid14Suite
+			case kex.ASYMKEX3072Suite:
+				keyExchange = kex.DHKEXid15Suite
+			}
+		}
+		t.Run(fmt.Sprintf("Key %q Encoding %q Exchange %q Cipher %q", table.keyType, table.keyEncoding, keyExchange, table.cipherSuite), func(t *testing.T) {
 			newCredential := func(keyType protocol.KeyType) (hmacSha256, hmacSha384 hash.Hash, key crypto.Signer, toDeviceCred func(fdo.DeviceCredential) any) {
 				secret := make([]byte, 32)
 				if _, err := rand.Read(secret); err != nil {
@@ -373,6 +400,7 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 						HmacSha384: hmacSha384,
 						Key:        key,
 						PSS:        table.keyType == protocol.RsaPssKeyType,
+						Version:    conf.Version,
 					})
 					if err != nil {
 						t.Fatal(err)
@@ -393,7 +421,8 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 				ctx, cancel := context.WithTimeout(context.Background(), timeout)
 				defer cancel()
 				if _, err := fdo.TO1(ctx, transport, *cred, key, &fdo.TO1Options{
-					PSS: table.keyType == protocol.RsaPssKeyType,
+					PSS:     table.keyType == protocol.RsaPssKeyType,
+					Version: conf.Version,
 				}); err == nil || !strings.HasSuffix(err.Error(), fdo.ErrNotFound.Error()) {
 					t.Fatalf("expected TO1 to fail with no resource found, got %v", err)
 				}
@@ -419,14 +448,15 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 				ctx, cancel := context.WithTimeout(context.Background(), timeout)
 				defer cancel()
 				to1d, err := fdo.TO1(ctx, transport, *cred, key, &fdo.TO1Options{
-					PSS: table.keyType == protocol.RsaPssKeyType,
+					PSS:     table.keyType == protocol.RsaPssKeyType,
+					Version: conf.Version,
 				})
 				if err != nil {
 					t.Fatal(err)
 				}
 				t.Logf("RV Blob: %+v", to1d)
 
-				cred, err = fdo.TO2(ctx, transport, to1d, fdo.TO2Config{
+				cred, err = runTO2(ctx, transport, to1d, fdo.TO2Config{
 					Cred:       *cred,
 					HmacSha256: hmacSha256,
 					HmacSha384: hmacSha384,
@@ -440,10 +470,10 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 						FileSep: ";",
 						Bin:     runtime.GOARCH,
 					},
-					KeyExchange:          table.keyExchange,
+					KeyExchange:          keyExchange,
 					CipherSuite:          table.cipherSuite,
 					AllowCredentialReuse: conf.Reuse,
-				})
+				}, conf.Version)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -472,7 +502,7 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 
 				ctx, cancel := context.WithTimeout(context.Background(), timeout)
 				defer cancel()
-				cred, err = fdo.TO2(ctx, transport, nil, fdo.TO2Config{
+				cred, err = runTO2(ctx, transport, nil, fdo.TO2Config{
 					Cred:       *cred,
 					HmacSha256: hmacSha256,
 					HmacSha384: hmacSha384,
@@ -486,10 +516,10 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 						FileSep: ";",
 						Bin:     runtime.GOARCH,
 					},
-					KeyExchange:          table.keyExchange,
+					KeyExchange:          keyExchange,
 					CipherSuite:          table.cipherSuite,
 					AllowCredentialReuse: conf.Reuse,
-				})
+				}, conf.Version)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -518,7 +548,7 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 
 				ctx, cancel := context.WithTimeout(context.Background(), timeout)
 				defer cancel()
-				newCred, err := fdo.TO2(ctx, transport, nil, fdo.TO2Config{
+				cred, err = runTO2(ctx, transport, nil, fdo.TO2Config{
 					Cred:       *cred,
 					HmacSha256: hmacSha256,
 					HmacSha384: hmacSha384,
@@ -533,10 +563,10 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 						Bin:     runtime.GOARCH,
 					},
 					DeviceModules:        conf.DeviceModules,
-					KeyExchange:          table.keyExchange,
+					KeyExchange:          keyExchange,
 					CipherSuite:          table.cipherSuite,
 					AllowCredentialReuse: conf.Reuse,
-				})
+				}, conf.Version)
 				if conf.CustomExpect != nil {
 					conf.CustomExpect(t, err)
 					if err != nil {
@@ -546,7 +576,6 @@ func RunClientTestSuite(t *testing.T, conf Config) {
 					t.Fatal(err)
 				}
 				t.Logf("New credential: %s", toDeviceCred(*cred))
-				cred = newCred
 			})
 		})
 	}

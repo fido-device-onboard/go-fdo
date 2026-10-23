@@ -49,6 +49,10 @@ type DIConfig struct {
 	// When true and an RSA key is used as a crypto.Signer argument, RSA-SSAPSS
 	// will be used for signing
 	PSS bool
+
+	// Version specifies the FDO protocol version to use.
+	// Defaults to Version101 if not set.
+	Version protocol.Version
 }
 
 // DI runs the DI protocol and returns the voucher header and manufacturer
@@ -72,20 +76,32 @@ type DIConfig struct {
 // [Java server]: https://github.com/fido-device-onboard/pri-fidoiot
 func DI(ctx context.Context, transport Transport, info any, c DIConfig) (*DeviceCredential, error) {
 	ctx = contextWithErrMsg(ctx)
+	if c.Version != 0 {
+		ctx = protocol.ContextWithVersion(ctx, c.Version)
+	}
+
+	// Emit DI started event for client-side tracking
+	EmitDIStarted(ctx)
 
 	ovh, err := appStart(ctx, transport, info)
 	if err != nil {
 		errorMsg(ctx, transport, err)
+		// Emit DI failed event for client-side tracking
+		EmitDIFailed(ctx, err)
 		return nil, err
 	}
 
 	// Select the appropriate hash algorithm
 	ownerPubKey, err := ovh.ManufacturerKey.Public()
 	if err != nil {
+		// Emit DI failed event for client-side tracking
+		EmitDIFailed(ctx, err)
 		return nil, fmt.Errorf("error parsing manufacturer public key type from received ownership voucher header: %w", err)
 	}
 	alg, err := hashAlgFor(c.Key.Public(), ownerPubKey)
 	if err != nil {
+		// Emit DI failed event for client-side tracking
+		EmitDIFailed(ctx, err)
 		return nil, fmt.Errorf("error selecting the appropriate hash algorithm: %w", err)
 	}
 
@@ -94,6 +110,8 @@ func DI(ctx context.Context, transport Transport, info any, c DIConfig) (*Device
 	if err := cbor.NewEncoder(ownerKeyDigest).Encode(ovh.ManufacturerKey); err != nil {
 		err = fmt.Errorf("error computing hash of initial owner (manufacturer) key: %w", err)
 		errorMsg(ctx, transport, err)
+		// Emit DI failed event for client-side tracking
+		EmitDIFailed(ctx, err)
 		return nil, err
 	}
 	ownerKeyHash := protocol.Hash{Algorithm: alg, Value: ownerKeyDigest.Sum(nil)[:]}
@@ -107,8 +125,13 @@ func DI(ctx context.Context, transport Transport, info any, c DIConfig) (*Device
 	}
 	if err := setHmac(ctx, transport, hmac, ovh); err != nil {
 		errorMsg(ctx, transport, err)
+		// Emit DI failed event for client-side tracking
+		EmitDIFailed(ctx, err)
 		return nil, err
 	}
+
+	// Emit DI completed event for client-side tracking
+	EmitDICompleted(ctx, ovh.GUID, ovh.DeviceInfo)
 
 	return &DeviceCredential{
 		Version:       ovh.Version,
@@ -121,16 +144,39 @@ func DI(ctx context.Context, transport Transport, info any, c DIConfig) (*Device
 
 // AppStart(10) -> SetCredentials(11)
 func appStart(ctx context.Context, transport Transport, info any) (*VoucherHeader, error) {
-	// Define request structure
-	var msg struct {
-		DeviceMfgInfo *cbor.Bstr[any]
-	}
-	if info != nil {
-		msg.DeviceMfgInfo = cbor.NewBstr(info)
-	}
+	// Check protocol version to determine message structure
+	// FDO 2.0 includes CapabilityFlags, FDO 1.1 does not
+	version := protocol.VersionFromContext(ctx)
 
-	// Make request
-	typ, resp, err := transport.Send(ctx, protocol.DIAppStartMsgType, msg, nil)
+	var typ uint8
+	var resp io.ReadCloser
+	var err error
+
+	if version == protocol.Version200 {
+		// FDO 2.0: Include CapabilityFlags
+		var msg struct {
+			CapabilityFlags
+			Info *cbor.Bstr[any]
+		}
+		if info != nil {
+			msg.Info = cbor.NewBstr(info)
+		}
+		msg.CapabilityFlags = GlobalCapabilityFlags
+
+		// Make request
+		typ, resp, err = transport.Send(ctx, protocol.DIAppStartMsgType, msg, nil)
+	} else {
+		// FDO 1.1: Only device info
+		var msg struct {
+			DeviceMfgInfo *cbor.Bstr[any]
+		}
+		if info != nil {
+			msg.DeviceMfgInfo = cbor.NewBstr(info)
+		}
+
+		// Make request
+		typ, resp, err = transport.Send(ctx, protocol.DIAppStartMsgType, msg, nil)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("DI.AppStart: %w", err)
 	}
@@ -140,6 +186,14 @@ func appStart(ctx context.Context, transport Transport, info any) (*VoucherHeade
 	switch typ {
 	case protocol.DISetCredentialsMsgType:
 		captureMsgType(ctx, typ)
+		if version == protocol.Version200 {
+			var setCredentials setCredentialsMsg20
+			if err := cbor.NewDecoder(resp).Decode(&setCredentials); err != nil {
+				captureErr(ctx, protocol.MessageBodyErrCode, "")
+				return nil, fmt.Errorf("error parsing DI.SetCredentials request: %w", err)
+			}
+			return &setCredentials.OVHeader.Val, nil
+		}
 		var setCredentials setCredentialsMsg
 		if err := cbor.NewDecoder(resp).Decode(&setCredentials); err != nil {
 			captureErr(ctx, protocol.MessageBodyErrCode, "")
@@ -164,18 +218,47 @@ type setCredentialsMsg struct {
 	OVHeader cbor.Bstr[VoucherHeader]
 }
 
+// setCredentialsMsg20 is DI.SetCredentials for FDO 2.0.
+type setCredentialsMsg20 struct {
+	CapabilityFlags
+	OVHeader cbor.Bstr[VoucherHeader]
+}
+
 // AppStart(10) -> SetCredentials(11)
-func (s *DIServer[T]) setCredentials(ctx context.Context, msg io.Reader) (*setCredentialsMsg, error) {
+//
+//nolint:gocyclo // Protocol handling requires multiple conditional branches
+func (s *DIServer[T]) setCredentials(ctx context.Context, msg io.Reader) (any, error) {
+	// Emit DI started event
+	EmitDIStarted(ctx)
+
 	// Decode proprietary device mfg info from app start
-	var appStart struct {
-		Info *cbor.Bstr[T]
-	}
-	if err := cbor.NewDecoder(msg).Decode(&appStart); err != nil {
-		return nil, fmt.Errorf("error decoding device manufacturing info: %w", err)
-	}
+	// FDO 2.0 includes CapabilityFlags, FDO 1.1 does not
+	version := protocol.VersionFromContext(ctx)
+
 	var info *T // Null info is valid
-	if appStart.Info != nil {
-		info = &appStart.Info.Val
+	if version == protocol.Version200 {
+		// FDO 2.0: AppStart includes CapabilityFlags
+		var appStart struct {
+			CapabilityFlags
+			Info *cbor.Bstr[T]
+		}
+		if err := cbor.NewDecoder(msg).Decode(&appStart); err != nil {
+			return nil, fmt.Errorf("error decoding device manufacturing info: %w", err)
+		}
+		if appStart.Info != nil {
+			info = &appStart.Info.Val
+		}
+	} else {
+		// FDO 1.1: AppStart only includes device info
+		var appStart struct {
+			Info *cbor.Bstr[T]
+		}
+		if err := cbor.NewDecoder(msg).Decode(&appStart); err != nil {
+			return nil, fmt.Errorf("error decoding device manufacturing info: %w", err)
+		}
+		if appStart.Info != nil {
+			info = &appStart.Info.Val
+		}
 	}
 
 	// Create and store a new device certificate chain
@@ -224,8 +307,10 @@ func (s *DIServer[T]) setCredentials(ctx context.Context, msg io.Reader) (*setCr
 	if _, err := rand.Read(guid[:]); err != nil {
 		return nil, fmt.Errorf("error generating device GUID: %w", err)
 	}
+	// The voucher is created at the DI protocol version. This decides the
+	// AAD policy for all voucher-related signatures (FDO 2.0 Errata 1, E7).
 	ovh := &VoucherHeader{
-		Version:         101,
+		Version:         uint16(version),
 		GUID:            guid,
 		DeviceInfo:      deviceInfo,
 		ManufacturerKey: mfgPubKey,
@@ -235,7 +320,7 @@ func (s *DIServer[T]) setCredentials(ctx context.Context, msg io.Reader) (*setCr
 		},
 	}
 	rvInfo, err := s.RvInfo(ctx, &Voucher{
-		Version:   101,
+		Version:   ovh.Version,
 		Header:    *cbor.NewBstr(*ovh),
 		CertChain: &certChain,
 	})
@@ -247,6 +332,12 @@ func (s *DIServer[T]) setCredentials(ctx context.Context, msg io.Reader) (*setCr
 	// Store and return voucher header
 	if err := s.Session.SetIncompleteVoucherHeader(ctx, ovh); err != nil {
 		return nil, fmt.Errorf("error storing incomplete voucher header: %w", err)
+	}
+	if version == protocol.Version200 {
+		return &setCredentialsMsg20{
+			CapabilityFlags: GlobalCapabilityFlags,
+			OVHeader:        *cbor.NewBstr(*ovh),
+		}, nil
 	}
 	return &setCredentialsMsg{
 		OVHeader: *cbor.NewBstr(*ovh),
@@ -315,7 +406,7 @@ func (s *DIServer[T]) diDone(ctx context.Context, msg io.Reader) (struct{}, erro
 		certChain[i] = (*cbor.X509Certificate)(cert)
 	}
 	ov := &Voucher{
-		Version:   101,
+		Version:   ovh.Version,
 		Header:    *cbor.NewBstr(*ovh),
 		Hmac:      req.Hmac,
 		CertChain: &certChain,
@@ -329,6 +420,10 @@ func (s *DIServer[T]) diDone(ctx context.Context, msg io.Reader) (struct{}, erro
 	if err := s.Vouchers.AddVoucher(ctx, ov); err != nil {
 		return struct{}{}, fmt.Errorf("error storing voucher: %w", err)
 	}
+
+	// Emit DI completed event with device GUID and info
+	EmitDICompleted(ctx, ovh.GUID, ovh.DeviceInfo)
+
 	if s.AfterVoucherPersist != nil {
 		if err := s.AfterVoucherPersist(ctx, *ov); err != nil {
 			return struct{}{}, fmt.Errorf("error in callback after new voucher is persisted: %w", err)

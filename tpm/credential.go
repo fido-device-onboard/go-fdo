@@ -3,12 +3,6 @@
 
 package tpm
 
-import (
-	"fmt"
-
-	"github.com/fido-device-onboard/go-fdo"
-)
-
 // DeviceKeyType enumerates how DeviceKey is encoded and stored.
 type DeviceKeyType uint8
 
@@ -22,32 +16,3 @@ const (
 	IDevIDDeviceKey DeviceKeyType = 1
 	LDevIDDeviceKey DeviceKeyType = 2
 )
-
-// DeviceCredential marshals to the structure defined in the
-// [TPM Draft Spec](https://fidoalliance.org/specs/FDO/securing-fdo-in-tpm-v1.0-rd-20231010/securing-fdo-in-tpm-v1.0-rd-20231010.html).
-type DeviceCredential struct {
-	fdo.DeviceCredential
-	DeviceKey       DeviceKeyType
-	DeviceKeyHandle uint32
-}
-
-func (dc DeviceCredential) String() string {
-	s := fmt.Sprintf(`tpmcred[
-  Version          %d
-  DeviceInfo      %q
-  GUID             %x
-  PublicKeyHash
-    Algorithm      %s
-    Value          %x
-  DeviceKey        %d
-  DeviceKeyHandle  %d
-  RvInfo
-`, dc.Version, dc.DeviceInfo, dc.GUID, dc.PublicKeyHash.Algorithm, dc.PublicKeyHash.Value, dc.DeviceKey, dc.DeviceKeyHandle)
-	for _, directive := range dc.RvInfo {
-		s += "    >\n"
-		for _, instruction := range directive {
-			s += fmt.Sprintf("      %d = %x\n", instruction.Variable, instruction.Value)
-		}
-	}
-	return s + "]"
-}
