@@ -50,6 +50,16 @@
 
 ### Protocol Defects
 
+- [ ] **FDO 2.0 ECDH `ShSe` random order is wrong (flag day with
+  fdo-uefi-rs and fido-device-onboard-rs).** `kex/ecdh.go:300` builds
+  `Shx || xB.Rand || xA.Rand` by position (written for 1.1 in `e04409d`);
+  at 2.0 the Device sends xA, so that yields `Shx || OwnerRandom ||
+  DeviceRandom`. The spec defines `Shx || DeviceRandom || OwnerRandom` by
+  role. Make the session role-aware, add a known-answer test (fixed randoms,
+  both versions, both sides), and change all three implementations together.
+  Cross-repo tracking: workstream `fdo20-spec-issues`. Spec background
+  (editorial A/B prose fix): filed in the upstream spec tracker 2026-10-24.
+
 - [x] **FIXED 2026-10-20 (uncommitted): device deadlocked after 1000 owner
   KVs in one `IsMoreServiceInfo` run.** Regression from `e85b7b4` (H4: the
   FDO 2.0 client moved onto the shared 1.1 loop). The shared loop buffered a
@@ -218,7 +228,62 @@ See `provisioning-security.md` for the narrative. The four models are:
 - [ ] Add CLI command unit tests
 - [ ] Test edge cases for voucher export (empty database, invalid GUIDs, etc.)
 
+### TPM spec alignment (opened 2026-10-21, deferred)
+
+Spec: `~/internet-of-things-specs/securing-fdo-in-tpm.bs`, branch
+`bgoodman-tpm` (commits 95adc93..6ec5bf0). Evidence for the TPM behaviour
+below came from the go-tpm-tools reference simulator (scratch tests in
+`/tmp/tpmprobe`). Test changes against swtpm and real TPM hardware.
+
+- [ ] **noDA=1 on FDO keys.** Spec Table 11 now says `noDA = 1`; `tpm`
+  key templates (`CreateChildECKey`, `CreateChildHMACKey`,
+  `GenerateSpec*`) leave NoDA unset, so a DA lockout caused by unrelated
+  software makes the DAK/HMAC key unusable (`TPM_RC_LOCKOUT`).
+- [ ] **DCTPM `TPMA_NV_WRITE_STCLEAR=1`** (spec adopted it 2026-10-21 for
+  the optional per-boot write lock). `tpm/nv.go` `nvProfileAttrs(NVProfileDCTPM)`.
+- [ ] **DCTPM `PLATFORMCREATE`**: spec says SHOULD when Platform hierarchy
+  is available; `NVProfileDCTPM` never sets it.
+- [ ] **HMAC/DAK replacement order**: persist new key at a different
+  handle, single `NV_Write` of DCTPM, then evict old (spec HMAC section
+  "Commit order"). Check what the TO2 credential-update path does today.
+- [ ] **Implied `rvserver.local` uses the wrong scheme/port (bug).**
+  `examples/cmd/client.go` (`transferOwnership`) appends
+  `http://rvserver.local:8080` when DCRVInfo has no `rvserver.local`
+  directive. Port 8080 is only what go-fdo's own test setup uses; it is
+  not a spec value. The implied directive is `[RVDns "rvserver.local"]`
+  with the RendezvousInfo defaults (HTTPS, port 443; base spec
+  "RendezvousInfo Guidelines"); its position among the stored directives
+  is implementation-defined (TPM spec, DCRVInfo note in Table 1). Fix the
+  client, and make the
+  tests that rely on 8080 put an explicit directive in RVInfo instead.
+- [ ] **`tpm/spec_compliance_test.go`** still tests the old multi-index /
+  unique-string design (Profiles A/B/C, `*_US_Index`); rewrite against
+  the single-DCTPM spec.
+- [ ] **Device key authPolicy = `PolicyCommandCode(TPM_CC_Certify)`**
+  (spec Table 10/12, adopted 2026-10-23, SHOULD). DAK templates
+  (`CreateChildECKey`, `GenerateSpec*`) set an empty authPolicy; set the
+  digest for the key's nameAlg (SHA256 `048e9a3a…65850`, SHA384
+  `a7108d53…1019a`). The HMAC key stays empty. Signing must still work
+  with an empty password. Test: `TPM2_Certify(DAK, AK)` succeeds via a
+  policy session and `TPM2_ObjectChangeAuth` fails (simulator evidence:
+  `TestCertifyPolicy` in /tmp/tpmprobe/certify_test.go). Prerequisite for
+  the `fdo.tpm-quote` FSIM (~/fdo-sim/fsim-repository/fdo.tpm-quote.md).
+
 ## Medium Priority
+
+### Performance
+
+- [ ] **Owner throughput is bound by SQLite fsync on rotating disks.** The
+      example server (`sqlite/`) commits TO2 session state on every message:
+      strace of `server` during an `fdo.payload` transfer showed ~20
+      `fdatasync` per 60 KB chunk. With the DB on a spinning disk that was
+      **0.47–0.60 s per round (~105 KB/s)**; with the DB on tmpfs the same
+      300 MB payload took ~10 s (2026-10-22, `fdo-uki-build`
+      `TEST-WINDOWS.md`). Large `fdo.bmo` inline / `fdo.payload` transfers
+      (multi-GB ISOs, `install.wim`) make this the bottleneck. Options: WAL +
+      `synchronous=NORMAL`, keep chunk/transfer progress in memory and persist
+      only at FSIM boundaries, or batch writes. Test harnesses: keep the DB on
+      tmpfs until then.
 
 ### Features
 

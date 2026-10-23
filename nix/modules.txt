@@ -17,6 +17,7 @@ github.com/google/go-tpm/tpm2/transport
 github.com/google/go-tpm/tpm2/transport/linuxtpm
 github.com/google/go-tpm/tpm2/transport/linuxudstpm
 github.com/google/go-tpm/tpm2/transport/simulator
+github.com/google/go-tpm/tpm2/transport/windowstpm
 github.com/google/go-tpm/tpmutil
 github.com/google/go-tpm/tpmutil/tbs
 # github.com/google/go-tpm-tools v0.4.7
