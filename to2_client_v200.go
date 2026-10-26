@@ -303,6 +303,7 @@ func sendProveDevice20(ctx context.Context, transport Transport, ack *HelloDevic
 
 	// Initialize key exchange session
 	sess := selectedKex.New(nil, selectedCipher)
+	kex.SetDeviceSentA(sess)
 	xA, err := sess.Parameter(rand.Reader, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("error generating key exchange parameter: %w", err)

@@ -329,6 +329,7 @@ func (s *TO2Server) proveOVHdr20(ctx context.Context, msg io.Reader) (*cose.Sign
 
 	// Initialize key exchange session
 	sess := payload.KexSuiteName.New(payload.XAKeyExchange, payload.CipherSuiteName)
+	kex.SetDeviceSentA(sess)
 	xB, err := sess.Parameter(rand.Reader, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error generating key exchange parameter: %w", err)
