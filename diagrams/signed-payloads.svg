@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="780" height="210" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .label { font-family: Arial, sans-serif; font-size: 14px; font-weight: bold; fill: #fff; }
+      .sublabel { font-family: Arial, sans-serif; font-size: 11px; fill: rgba(255,255,255,0.85); }
+      .arrow-text { font-family: Arial, sans-serif; font-size: 11px; fill: #2c3e50; font-weight: bold; }
+      .arrow-detail { font-family: Arial, sans-serif; font-size: 10px; fill: #7f8c8d; }
+      .note { font-family: Arial, sans-serif; font-size: 11px; fill: #7f8c8d; font-style: italic; }
+      .warn { font-family: Arial, sans-serif; font-size: 10px; fill: #c0392b; font-weight: bold; }
+    </style>
+    <marker id="arr-o" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+      <polygon points="0 1, 10 5, 0 9" fill="#e67e22" />
+    </marker>
+    <marker id="arr-g" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+      <polygon points="0 1, 10 5, 0 9" fill="#95a5a6" />
+    </marker>
+    <marker id="arr-d" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+      <polygon points="0 1, 10 5, 0 9" fill="#2c3e50" />
+    </marker>
+  </defs>
+
+  <rect width="780" height="210" fill="#fafafa" rx="6"/>
+
+  <!-- Owner -->
+  <rect x="20" y="30" width="120" height="70" rx="10" fill="#e67e22"/>
+  <text x="80" y="58" class="label" text-anchor="middle">Owner</text>
+  <text x="80" y="76" class="sublabel" text-anchor="middle">master key</text>
+
+  <!-- Arrow: signs -->
+  <line x1="140" y1="65" x2="190" y2="65" stroke="#e67e22" stroke-width="2.5" marker-end="url(#arr-o)"/>
+  <text x="165" y="55" class="arrow-text" text-anchor="middle">signs</text>
+
+  <!-- Signed Payload -->
+  <rect x="195" y="25" width="155" height="80" rx="10" fill="#f39c12"/>
+  <text x="272" y="52" class="label" text-anchor="middle">Signed Payload</text>
+  <text x="272" y="70" class="sublabel" text-anchor="middle">image + signature</text>
+  <text x="272" y="85" class="sublabel" text-anchor="middle">+ scope constraints</text>
+
+  <!-- Arrow: handed to -->
+  <line x1="350" y1="65" x2="405" y2="65" stroke="#95a5a6" stroke-width="2" stroke-dasharray="5,3" marker-end="url(#arr-g)"/>
+
+  <!-- Any Service -->
+  <rect x="410" y="30" width="140" height="70" rx="10" fill="#95a5a6"/>
+  <text x="480" y="58" class="label" text-anchor="middle">Any Service</text>
+  <text x="480" y="76" class="sublabel" text-anchor="middle">just delivers</text>
+
+  <!-- Arrow: delivers -->
+  <line x1="550" y1="65" x2="600" y2="65" stroke="#95a5a6" stroke-width="2" marker-end="url(#arr-g)"/>
+
+  <!-- Device -->
+  <rect x="605" y="25" width="155" height="80" rx="10" fill="#2c3e50"/>
+  <text x="682" y="52" class="label" text-anchor="middle">Device</text>
+  <text x="682" y="70" class="sublabel" text-anchor="middle">verifies Owner's</text>
+  <text x="682" y="85" class="sublabel" text-anchor="middle">signature directly</text>
+
+  <!-- Can't forge note -->
+  <text x="480" y="125" class="warn" text-anchor="middle">Service cannot forge, alter, or retarget payloads</text>
+
+  <!-- Note -->
+  <text x="390" y="155" class="note" text-anchor="middle">Trust is in the payload, not the messenger. The Owner decides what gets installed.</text>
+  <text x="390" y="172" class="note" text-anchor="middle">The service is just a delivery vehicle.</text>
+</svg>

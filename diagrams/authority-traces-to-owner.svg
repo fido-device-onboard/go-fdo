@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="900" height="420" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .title { font-family: Arial, sans-serif; font-size: 17px; font-weight: bold; fill: #2c3e50; }
+      .subtitle { font-family: Arial, sans-serif; font-size: 12px; fill: #7f8c8d; font-style: italic; }
+      .anchor-label { font-family: Arial, sans-serif; font-size: 13px; font-weight: bold; fill: #fff; }
+      .anchor-sub { font-family: Arial, sans-serif; font-size: 10px; fill: rgba(255,255,255,0.85); }
+      .model-num { font-family: Arial, sans-serif; font-size: 15px; font-weight: bold; fill: #fff; }
+      .box-label { font-family: Arial, sans-serif; font-size: 11px; font-weight: bold; fill: #fff; }
+      .box-sub { font-family: Arial, sans-serif; font-size: 9px; fill: rgba(255,255,255,0.85); }
+      .chain-text { font-family: Arial, sans-serif; font-size: 9px; fill: #7f8c8d; }
+      .verdict { font-family: Arial, sans-serif; font-size: 10px; font-weight: bold; fill: #27ae60; }
+      .footer { font-family: Arial, sans-serif; font-size: 12px; font-weight: bold; fill: #2c3e50; }
+    </style>
+    <marker id="a-o" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <polygon points="0 0, 8 4, 0 8" fill="#e67e22" />
+    </marker>
+    <marker id="a-gray" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <polygon points="0 0, 8 4, 0 8" fill="#95a5a6" />
+    </marker>
+  </defs>
+
+  <rect width="900" height="420" fill="#fafafa" rx="6"/>
+
+  <!-- Title -->
+  <text x="450" y="28" class="title" text-anchor="middle">Every Model Traces Back to the Owner</text>
+  <text x="450" y="47" class="subtitle" text-anchor="middle">Four ways to express the same authority. The Owner is the root in all of them.</text>
+
+  <!-- Left anchor: OWNER -->
+  <rect x="20" y="65" width="95" height="285" rx="8" fill="#e67e22"/>
+  <text x="67" y="195" class="anchor-label" text-anchor="middle" transform="rotate(-90, 67, 195)">OWNER</text>
+  <text x="85" y="195" class="anchor-sub" text-anchor="middle" transform="rotate(-90, 85, 195)">root of all authority</text>
+
+  <!-- Right anchor: DEVICE -->
+  <rect x="785" y="65" width="95" height="285" rx="8" fill="#2c3e50"/>
+  <text x="832" y="195" class="anchor-label" text-anchor="middle" transform="rotate(-90, 832, 195)">DEVICE</text>
+  <text x="850" y="195" class="anchor-sub" text-anchor="middle" transform="rotate(-90, 850, 195)">accepts payload</text>
+
+  <!-- ============ ROW 1 ============ -->
+  <circle cx="140" cy="100" r="13" fill="#27ae60"/>
+  <text x="140" y="105" class="model-num" text-anchor="middle">1</text>
+  <line x1="115" y1="100" x2="127" y2="100" stroke="#e67e22" stroke-width="2"/>
+
+  <line x1="153" y1="100" x2="185" y2="100" stroke="#95a5a6" stroke-width="1.5" marker-end="url(#a-gray)"/>
+  <rect x="190" y="82" width="150" height="36" rx="6" fill="#27ae60"/>
+  <text x="265" y="98" class="box-label" text-anchor="middle">Owner Service</text>
+  <text x="265" y="111" class="box-sub" text-anchor="middle">Owner runs it, holds the key</text>
+
+  <line x1="340" y1="100" x2="775" y2="100" stroke="#95a5a6" stroke-width="1.5" marker-end="url(#a-gray)"/>
+  <text x="557" y="95" class="verdict" text-anchor="middle">Owner is here in person</text>
+
+  <!-- ============ ROW 2 ============ -->
+  <circle cx="140" cy="170" r="13" fill="#2980b9"/>
+  <text x="140" y="175" class="model-num" text-anchor="middle">2</text>
+  <line x1="115" y1="170" x2="127" y2="170" stroke="#e67e22" stroke-width="2"/>
+
+  <line x1="153" y1="170" x2="185" y2="170" stroke="#e67e22" stroke-width="1.5" marker-end="url(#a-o)"/>
+  <rect x="190" y="152" width="115" height="36" rx="6" fill="#f5eef8" stroke="#8e44ad" stroke-width="1.5"/>
+  <text x="247" y="167" class="chain-text" text-anchor="middle" style="font-weight:bold;fill:#8e44ad">CERTIFICATE</text>
+  <text x="247" y="180" class="chain-text" text-anchor="middle">"may run service"</text>
+
+  <line x1="305" y1="170" x2="333" y2="170" stroke="#95a5a6" stroke-width="1.5" marker-end="url(#a-gray)"/>
+  <rect x="338" y="152" width="150" height="36" rx="6" fill="#2980b9"/>
+  <text x="413" y="168" class="box-label" text-anchor="middle">Delegated Service</text>
+  <text x="413" y="181" class="box-sub" text-anchor="middle">runs it on Owner's behalf</text>
+
+  <line x1="488" y1="170" x2="775" y2="170" stroke="#95a5a6" stroke-width="1.5" marker-end="url(#a-gray)"/>
+  <text x="631" y="165" class="verdict" text-anchor="middle">Owner said "they may act for me"</text>
+
+  <!-- ============ ROW 3 ============ -->
+  <circle cx="140" cy="240" r="13" fill="#e67e22"/>
+  <text x="140" y="245" class="model-num" text-anchor="middle">3</text>
+  <line x1="115" y1="240" x2="127" y2="240" stroke="#e67e22" stroke-width="2"/>
+
+  <line x1="153" y1="240" x2="185" y2="240" stroke="#e67e22" stroke-width="1.5" marker-end="url(#a-o)"/>
+  <rect x="190" y="222" width="150" height="36" rx="6" fill="#f39c12"/>
+  <text x="265" y="238" class="box-label" text-anchor="middle">Signed Payload</text>
+  <text x="265" y="251" class="box-sub" text-anchor="middle">Owner's signature on it</text>
+
+  <line x1="340" y1="240" x2="393" y2="240" stroke="#95a5a6" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#a-gray)"/>
+  <rect x="398" y="222" width="110" height="36" rx="6" fill="#95a5a6"/>
+  <text x="453" y="238" class="box-label" text-anchor="middle">Any Service</text>
+  <text x="453" y="251" class="box-sub" text-anchor="middle">just delivers</text>
+
+  <line x1="508" y1="240" x2="775" y2="240" stroke="#95a5a6" stroke-width="1.5" marker-end="url(#a-gray)"/>
+  <text x="641" y="235" class="verdict" text-anchor="middle">Owner signed this exact payload</text>
+
+  <!-- ============ ROW 4 ============ -->
+  <circle cx="140" cy="312" r="13" fill="#8e44ad"/>
+  <text x="140" y="317" class="model-num" text-anchor="middle">4</text>
+  <line x1="115" y1="312" x2="127" y2="312" stroke="#e67e22" stroke-width="2"/>
+
+  <line x1="153" y1="312" x2="178" y2="312" stroke="#e67e22" stroke-width="1.5" marker-end="url(#a-o)"/>
+  <rect x="183" y="294" width="112" height="36" rx="6" fill="#f5eef8" stroke="#8e44ad" stroke-width="1.5"/>
+  <text x="239" y="309" class="chain-text" text-anchor="middle" style="font-weight:bold;fill:#8e44ad">CERTIFICATE</text>
+  <text x="239" y="322" class="chain-text" text-anchor="middle">"may sign payloads"</text>
+
+  <line x1="295" y1="312" x2="318" y2="312" stroke="#8e44ad" stroke-width="1.5" marker-end="url(#a-gray)"/>
+  <rect x="323" y="294" width="105" height="36" rx="6" fill="#8e44ad"/>
+  <text x="375" y="310" class="box-label" text-anchor="middle">Delegate</text>
+  <text x="375" y="323" class="box-sub" text-anchor="middle">signs on Owner's behalf</text>
+
+  <line x1="428" y1="312" x2="450" y2="312" stroke="#8e44ad" stroke-width="1.5" marker-end="url(#a-gray)"/>
+  <rect x="455" y="294" width="118" height="36" rx="6" fill="#f39c12"/>
+  <text x="514" y="310" class="box-label" text-anchor="middle">Signed Payload</text>
+  <text x="514" y="323" class="box-sub" text-anchor="middle">+ the certificate</text>
+
+  <line x1="573" y1="312" x2="608" y2="312" stroke="#95a5a6" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#a-gray)"/>
+  <rect x="613" y="294" width="95" height="36" rx="6" fill="#95a5a6"/>
+  <text x="660" y="310" class="box-label" text-anchor="middle">Any Service</text>
+  <text x="660" y="323" class="box-sub" text-anchor="middle">just delivers</text>
+
+  <line x1="708" y1="312" x2="775" y2="312" stroke="#95a5a6" stroke-width="1.5" marker-end="url(#a-gray)"/>
+  <text x="700" y="348" class="verdict" text-anchor="middle">Owner said "they may sign for me"</text>
+
+  <!-- Footer -->
+  <line x1="20" y1="370" x2="880" y2="370" stroke="#ddd" stroke-width="1"/>
+  <text x="450" y="392" class="footer" text-anchor="middle">In every case the device asks one question: does this trace back to my Owner's key?</text>
+  <text x="450" y="409" class="subtitle" text-anchor="middle">Whether through the service, a certificate, a signature, or a certificate plus a signature -- the answer must be yes.</text>
+</svg>

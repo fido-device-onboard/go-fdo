@@ -14,8 +14,8 @@
 // Device secrets (HMAC and private key) use interfaces from the Go standard
 // library so there are many ways to generate and provide them. Two
 // implementations are included in the library. [blob.DeviceCredential] stores
-// secrets in a binary-encoded file and [tpm.DeviceCredential] uses
-// unexportable keys secured inside a TPM 2.0.
+// secrets in a binary-encoded file and the tpm package uses unexportable keys
+// secured inside a TPM 2.0 with credentials stored in NV indices.
 //
 // For owner services, message handling [protocol.Responder] implementations
 // are provided: [DIServer], [TO0Server], [TO1Server], and [TO2Server]. These

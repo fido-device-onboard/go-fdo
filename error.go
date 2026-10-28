@@ -68,6 +68,11 @@ func errorMsg(ctx context.Context, transport Transport, err error) {
 	if errMsg.Timestamp == 0 {
 		errMsg.Timestamp = time.Now().Unix()
 	}
+	// EMErrorCID is always sent as a uint; 0 means none (FDO 2.0 Errata 1, E4)
+	if errMsg.CorrelationID == nil {
+		var none uint
+		errMsg.CorrelationID = &none
+	}
 
 	// Create a new context, because the previous one may have expired, thus
 	// causing the protocol failure

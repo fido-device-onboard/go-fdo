@@ -44,10 +44,25 @@ func Of(msgType uint8) Protocol {
 	case 30, 31, 32, 33:
 		return TO1Protocol
 	case 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71:
+		// FDO 1.01 TO2 messages
+		return TO2Protocol
+	case 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91:
+		// FDO 2.0 TO2 messages
 		return TO2Protocol
 	case 255:
 		return AnyProtocol
 	default:
 		return UnknownProtocol
+	}
+}
+
+// VersionOf returns the FDO version for a given message type.
+// Returns Version101 for 1.01 messages, Version200 for 2.0 messages.
+func VersionOf(msgType uint8) Version {
+	switch msgType {
+	case 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91:
+		return Version200
+	default:
+		return Version101
 	}
 }

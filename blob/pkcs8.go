@@ -57,3 +57,9 @@ func (p *Pkcs8Key) UnmarshalCBOR(data []byte) error {
 	p.Signer = key.(crypto.Signer)
 	return nil
 }
+
+// UnwrapSigner implements fdo.SignerUnwrapper interface.
+// This allows extractRSAPrivateKey to access the underlying key without reflection.
+func (p Pkcs8Key) UnwrapSigner() crypto.Signer {
+	return p.Signer
+}

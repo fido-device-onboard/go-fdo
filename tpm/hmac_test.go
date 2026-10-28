@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport/simulator"
 
 	"github.com/fido-device-onboard/go-fdo/tpm"
@@ -206,4 +207,69 @@ func tpmHMAC(t *testing.T, sim tpm.Closer, alg crypto.Hash, msg []byte) []byte {
 	}
 
 	return sum
+}
+
+// TestSpecHmacKeyHash: the FDO HMAC key's hash is fixed to its nameAlg,
+// which matches the Device key (TPM spec Table 10). The persisted key computes
+// that HMAC, and the TPM refuses the other one (so a Device uses only its own
+// key's hash, whatever the Owner's key).
+func TestSpecHmacKeyHash(t *testing.T) {
+	sim, err := simulator.OpenSimulator()
+	if err != nil {
+		t.Fatalf("error opening TPM simulator: %v", err)
+	}
+	defer func() { _ = sim.Close() }()
+
+	msg := []byte("ThanksForAllTheFish\n")
+	sum := func(alg crypto.Hash) ([]byte, error) {
+		h, err := tpm.NewSpecHmac(sim, alg, tpm.HMACKeyHandle)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = h.Close() }()
+		_, _ = h.Write(msg)
+		s := h.Sum(nil)
+		return s, h.Err()
+	}
+
+	for _, c := range []struct {
+		nameAlg     tpm2.TPMAlgID
+		own, other  crypto.Hash
+		uniqueBytes int
+	}{
+		{tpm2.TPMAlgSHA256, crypto.SHA256, crypto.SHA384, 32},
+		{tpm2.TPMAlgSHA384, crypto.SHA384, crypto.SHA256, 48},
+	} {
+		us := make([]byte, c.uniqueBytes)
+		us[0] = 0x5a
+		hk, err := tpm.GenerateSpecHMACKey(sim, c.nameAlg, us)
+		if err != nil {
+			t.Fatalf("GenerateSpecHMACKey(%v): %v", c.nameAlg, err)
+		}
+		_ = tpm.EvictPersistentHandle(sim, tpm.HMACKeyHandle)
+		if err := tpm.PersistKey(sim, *hk, tpm.HMACKeyHandle); err != nil {
+			t.Fatalf("persist: %v", err)
+		}
+		pub, err := (tpm2.ReadPublic{ObjectHandle: tpm2.TPMHandle(tpm.HMACKeyHandle)}).Execute(sim)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pt, _ := pub.OutPublic.Contents()
+		kh, _ := pt.Parameters.KeyedHashDetail()
+		d, err := kh.Scheme.Details.HMAC()
+		if pt.NameAlg != c.nameAlg || kh.Scheme.Scheme != tpm2.TPMAlgHMAC || err != nil || d.HashAlg != c.nameAlg {
+			t.Errorf("nameAlg %v: template nameAlg %v scheme %v hash %+v", c.nameAlg, pt.NameAlg, kh.Scheme.Scheme, d)
+		}
+		a, err := sum(c.own)
+		if err != nil {
+			t.Fatalf("nameAlg %v, HMAC %v: %v", c.nameAlg, c.own, err)
+		}
+		b, _ := sum(c.own)
+		if len(a) != c.own.Size() || !bytes.Equal(a, b) {
+			t.Errorf("nameAlg %v, HMAC %v: len %d, repeatable %v", c.nameAlg, c.own, len(a), bytes.Equal(a, b))
+		}
+		if _, err := sum(c.other); err == nil {
+			t.Errorf("nameAlg %v key computed HMAC %v; expected the TPM to refuse", c.nameAlg, c.other)
+		}
+	}
 }

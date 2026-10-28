@@ -40,6 +40,17 @@ type Session interface {
 	Destroy()
 }
 
+// SetDeviceSentA marks a session as using the FDO 2.0 message order, where
+// the Device sends xA (TO2.ProveDevice20) and the Owner sends xB
+// (TO2.ProveOVHdr20). Suites whose key derivation depends on the sender's role
+// (ECDH: ShSe = Shx || DeviceRandom || OwnerRandom) use it; others ignore it.
+// Call it right after [Suite.New], before Parameter or SetParameter.
+func SetDeviceSentA(s Session) {
+	if r, ok := s.(interface{ setDeviceSentA() }); ok {
+		r.setDeviceSentA()
+	}
+}
+
 // DecryptOnly is a session that only performs decryption and key exchange
 // functions.
 type DecryptOnly struct {

@@ -16,22 +16,25 @@ import (
 
 // Rendezvous Variables
 const (
-	RVDevOnly    RvVar = 0
-	RVOwnerOnly  RvVar = 1
-	RVIPAddress  RvVar = 2
-	RVDevPort    RvVar = 3
-	RVOwnerPort  RvVar = 4
-	RVDns        RvVar = 5
-	RVSvCertHash RvVar = 6
-	RVClCertHash RvVar = 7
-	RVUserInput  RvVar = 8
-	RVWifiSsid   RvVar = 9
-	RVWifiPw     RvVar = 10
-	RVMedium     RvVar = 11
-	RVProtocol   RvVar = 12
-	RVDelaysec   RvVar = 13
-	RVBypass     RvVar = 14
-	RVExtRV      RvVar = 15
+	RVDevOnly        RvVar = 0
+	RVOwnerOnly      RvVar = 1
+	RVIPAddress      RvVar = 2
+	RVDevPort        RvVar = 3
+	RVOwnerPort      RvVar = 4
+	RVDns            RvVar = 5
+	RVSvCertHash     RvVar = 6
+	RVClCertHash     RvVar = 7
+	RVUserInput      RvVar = 8
+	RVWifiSsid       RvVar = 9
+	RVWifiPw         RvVar = 10
+	RVMedium         RvVar = 11
+	RVProtocol       RvVar = 12
+	RVDelaysec       RvVar = 13
+	RVBypass         RvVar = 14
+	RVExtRV          RvVar = 15
+	RVFirmwarePath   RvVar = 16 // Extension: firmware image path on HTTP server
+	RVFirmwareURL    RvVar = 17 // Extension: full firmware download URL
+	RVMinFirmwareRev RvVar = 18 // Extension: minimum firmware revision (anti-rollback)
 )
 
 // RvVar is an FDO RVVariable.
@@ -87,6 +90,12 @@ func (a RvTO2Addr) String() string {
 type To1d struct {
 	RV       []RvTO2Addr
 	To0dHash Hash
+
+	// DelegateChain is the FDO 2.0 to1dBlobPayload field
+	// `DelegateChain .cbor CertChainOrNull`. It is absent (nil) in FDO 1.1
+	// blobs. For FDO 2.0 it is always present; a nil Val encodes a null chain
+	// (to1d signed by the Owner key).
+	DelegateChain *cbor.Bstr[*[]*cbor.X509Certificate] `cbor:",omitempty"`
 }
 
 func (to1d To1d) String() string {
@@ -119,6 +128,12 @@ type RvDirective struct {
 
 	ExtMechanism string // first element of RVExtRv array
 	ExtArguments []byte // remaining elements of RVExtRv array (CBOR-encoded)
+
+	// Firmware delivery (RV extension tags 16-18)
+
+	FirmwarePath   string // RVFirmwarePath: image path on HTTP server
+	FirmwareURL    string // RVFirmwareURL: full firmware download URL
+	MinFirmwareRev uint64 // RVMinFirmwareRev: minimum firmware revision (anti-rollback)
 
 	// Other
 
@@ -226,6 +241,24 @@ func parseDirective(vars []RvInstruction, device bool) *RvDirective { //nolint:g
 			var hash Hash
 			if err := cbor.Unmarshal(v.Value, &hash); err == nil {
 				dir.ServerCA = &hash
+			}
+
+		case RVFirmwarePath:
+			var path string
+			if err := cbor.Unmarshal(v.Value, &path); err == nil {
+				dir.FirmwarePath = path
+			}
+
+		case RVFirmwareURL:
+			var fwURL string
+			if err := cbor.Unmarshal(v.Value, &fwURL); err == nil {
+				dir.FirmwareURL = fwURL
+			}
+
+		case RVMinFirmwareRev:
+			var rev uint64
+			if err := cbor.Unmarshal(v.Value, &rev); err == nil {
+				dir.MinFirmwareRev = rev
 			}
 		}
 	}

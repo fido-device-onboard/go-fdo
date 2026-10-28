@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="700" height="170" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .label { font-family: Arial, sans-serif; font-size: 14px; font-weight: bold; fill: #fff; }
+      .sublabel { font-family: Arial, sans-serif; font-size: 11px; fill: rgba(255,255,255,0.85); }
+      .arrow-text { font-family: Arial, sans-serif; font-size: 11px; fill: #2c3e50; font-weight: bold; }
+      .arrow-detail { font-family: Arial, sans-serif; font-size: 10px; fill: #7f8c8d; }
+      .note { font-family: Arial, sans-serif; font-size: 11px; fill: #7f8c8d; font-style: italic; }
+    </style>
+    <marker id="arr" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+      <polygon points="0 1, 10 5, 0 9" fill="#27ae60" />
+    </marker>
+  </defs>
+
+  <rect width="700" height="170" fill="#fafafa" rx="6"/>
+
+  <!-- Owner -->
+  <rect x="30" y="30" width="130" height="70" rx="10" fill="#e67e22"/>
+  <text x="95" y="60" class="label" text-anchor="middle">Owner</text>
+  <text x="95" y="78" class="sublabel" text-anchor="middle">master key</text>
+
+  <!-- Arrow -->
+  <line x1="160" y1="65" x2="220" y2="65" stroke="#27ae60" stroke-width="2.5" marker-end="url(#arr)"/>
+  <text x="190" y="55" class="arrow-text" text-anchor="middle">runs</text>
+
+  <!-- Owner Service -->
+  <rect x="225" y="30" width="180" height="70" rx="10" fill="#27ae60"/>
+  <text x="315" y="58" class="label" text-anchor="middle">Owner Service</text>
+  <text x="315" y="76" class="sublabel" text-anchor="middle">holds Owner key</text>
+
+  <!-- Arrow -->
+  <line x1="405" y1="65" x2="475" y2="65" stroke="#27ae60" stroke-width="2.5" marker-end="url(#arr)"/>
+  <text x="440" y="55" class="arrow-text" text-anchor="middle">payload</text>
+
+  <!-- Device -->
+  <rect x="480" y="30" width="190" height="70" rx="10" fill="#2c3e50"/>
+  <text x="575" y="58" class="label" text-anchor="middle">Device</text>
+  <text x="575" y="76" class="sublabel" text-anchor="middle">trusts Owner directly</text>
+
+  <!-- Note -->
+  <text x="350" y="135" class="note" text-anchor="middle">The Owner runs the service and holds the key.</text>
+  <text x="350" y="152" class="note" text-anchor="middle">Everything it sends is implicitly trusted. No signing needed.</text>
+</svg>

@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="880" height="270" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .label { font-family: Arial, sans-serif; font-size: 13px; font-weight: bold; fill: #fff; }
+      .sublabel { font-family: Arial, sans-serif; font-size: 10px; fill: rgba(255,255,255,0.85); }
+      .arrow-text { font-family: Arial, sans-serif; font-size: 10px; fill: #2c3e50; font-weight: bold; }
+      .note { font-family: Arial, sans-serif; font-size: 11px; fill: #7f8c8d; font-style: italic; }
+      .cert-title { font-family: Arial, sans-serif; font-size: 10px; font-weight: bold; fill: #8e44ad; }
+      .cert-body { font-family: Arial, sans-serif; font-size: 10px; fill: #6c3483; font-style: italic; }
+      .chain { font-family: Arial, sans-serif; font-size: 10px; fill: #e67e22; font-weight: bold; }
+    </style>
+    <marker id="arr-o" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <polygon points="0 1, 9 4.5, 0 8" fill="#e67e22" />
+    </marker>
+    <marker id="arr-p" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <polygon points="0 1, 9 4.5, 0 8" fill="#8e44ad" />
+    </marker>
+    <marker id="arr-g" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <polygon points="0 1, 9 4.5, 0 8" fill="#95a5a6" />
+    </marker>
+  </defs>
+
+  <rect width="880" height="270" fill="#fafafa" rx="6"/>
+
+  <!-- Owner -->
+  <rect x="20" y="45" width="100" height="65" rx="10" fill="#e67e22"/>
+  <text x="70" y="72" class="label" text-anchor="middle">Owner</text>
+  <text x="70" y="89" class="sublabel" text-anchor="middle">master key</text>
+
+  <!-- Arrow: issues -->
+  <line x1="120" y1="77" x2="152" y2="77" stroke="#e67e22" stroke-width="2.5" marker-end="url(#arr-o)"/>
+  <text x="136" y="67" class="arrow-text" text-anchor="middle">issues</text>
+
+  <!-- THE CERTIFICATE as a visible document object -->
+  <rect x="157" y="42" width="145" height="70" rx="4" fill="#f5eef8" stroke="#8e44ad" stroke-width="2"/>
+  <!-- dog-ear corner to look like a document -->
+  <path d="M 287 42 L 302 57 L 287 57 Z" fill="#d7bde2"/>
+  <text x="225" y="62" class="cert-title" text-anchor="middle">CERTIFICATE</text>
+  <line x1="170" y1="68" x2="290" y2="68" stroke="#d7bde2" stroke-width="1"/>
+  <text x="228" y="83" class="cert-body" text-anchor="middle">"This party may</text>
+  <text x="228" y="96" class="cert-body" text-anchor="middle">sign payloads</text>
+  <text x="228" y="108" class="cert-body" text-anchor="middle">for my devices"</text>
+
+  <!-- Arrow: grants authority to -->
+  <line x1="302" y1="77" x2="338" y2="77" stroke="#8e44ad" stroke-width="2.5" marker-end="url(#arr-p)"/>
+  <text x="320" y="67" class="arrow-text" text-anchor="middle">to</text>
+
+  <!-- Delegate Signer -->
+  <rect x="343" y="45" width="130" height="65" rx="10" fill="#8e44ad"/>
+  <text x="408" y="68" class="label" text-anchor="middle">Delegate</text>
+  <text x="408" y="85" class="sublabel" text-anchor="middle">authority comes</text>
+  <text x="408" y="99" class="sublabel" text-anchor="middle">from that cert</text>
+
+  <!-- Arrow: signs -->
+  <line x1="473" y1="77" x2="508" y2="77" stroke="#8e44ad" stroke-width="2.5" marker-end="url(#arr-p)"/>
+  <text x="490" y="67" class="arrow-text" text-anchor="middle">signs</text>
+
+  <!-- Signed Payload (carries the cert along) -->
+  <rect x="513" y="40" width="150" height="75" rx="10" fill="#f39c12"/>
+  <text x="588" y="62" class="label" text-anchor="middle">Signed Payload</text>
+  <text x="588" y="79" class="sublabel" text-anchor="middle">delegate's signature</text>
+  <text x="588" y="93" class="sublabel" text-anchor="middle">+ a copy of the</text>
+  <text x="588" y="106" class="sublabel" text-anchor="middle">certificate above</text>
+
+  <!-- Arrow: handed to -->
+  <line x1="663" y1="77" x2="694" y2="77" stroke="#95a5a6" stroke-width="2" stroke-dasharray="4,3" marker-end="url(#arr-g)"/>
+
+  <!-- Any Service -->
+  <rect x="699" y="45" width="78" height="65" rx="10" fill="#95a5a6"/>
+  <text x="738" y="70" class="label" text-anchor="middle">Any</text>
+  <text x="738" y="86" class="label" text-anchor="middle">Service</text>
+  <text x="738" y="101" class="sublabel" text-anchor="middle">delivers</text>
+
+  <!-- Arrow to device -->
+  <line x1="777" y1="77" x2="800" y2="77" stroke="#95a5a6" stroke-width="2" marker-end="url(#arr-g)"/>
+
+  <!-- Device -->
+  <rect x="805" y="45" width="60" height="65" rx="10" fill="#2c3e50"/>
+  <text x="835" y="72" class="label" text-anchor="middle">Device</text>
+  <text x="835" y="89" class="sublabel" text-anchor="middle">checks</text>
+  <text x="835" y="102" class="sublabel" text-anchor="middle">chain</text>
+
+  <!-- Trust chain: from cert back to Owner, forward to device -->
+  <line x1="70" y1="110" x2="70" y2="145" stroke="#e67e22" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <line x1="70" y1="145" x2="800" y2="145" stroke="#e67e22" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arr-o)"/>
+  <text x="430" y="139" class="chain" text-anchor="middle">the device follows this chain back to the Owner key it already trusts</text>
+
+  <!-- Explanation -->
+  <text x="440" y="180" class="note" text-anchor="middle">The certificate is what makes the delegate's signature count. Without it, the delegate is just a stranger with a key.</text>
+  <text x="440" y="199" class="note" text-anchor="middle">It travels with the payload so the device can verify: the Owner issued this certificate, the certificate permits signing,</text>
+  <text x="440" y="218" class="note" text-anchor="middle">and this signature was made with the key the certificate names.</text>
+  <text x="440" y="243" class="note" text-anchor="middle" style="font-weight:bold;fill:#2c3e50">The Owner's master key never leaves the vault.</text>
+</svg>

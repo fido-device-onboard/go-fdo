@@ -15,10 +15,32 @@ import (
 type Header struct {
 	Protected   HeaderMap
 	Unprotected HeaderMap
+
+	// protectedRaw stores the original serialized protected header bytes.
+	// This is preserved during unmarshaling to ensure the Sig_structure
+	// computation during verification uses the exact same bytes as signing.
+	// Without this, re-serializing Protected can produce different CBOR
+	// bytes due to map key ordering differences.
+	protectedRaw []byte
 }
 
 var _ cbor.StreamMarshaler = (*Header)(nil)
 var _ cbor.StreamUnmarshaler = (*Header)(nil)
+
+// ProtectedRaw returns the original serialized protected header bytes.
+// This is used during signature verification to ensure the Sig_structure
+// uses the exact bytes that were signed. Returns nil if the header was
+// constructed locally (not unmarshaled from wire format).
+func (hdr Header) ProtectedRaw() []byte {
+	return hdr.protectedRaw
+}
+
+// SetProtectedRaw sets the raw protected header bytes. This should be called
+// after signing to ensure the struct is consistent with what would be produced
+// by unmarshaling (for reflect.DeepEqual comparisons in tests).
+func (hdr *Header) SetProtectedRaw(raw []byte) {
+	hdr.protectedRaw = raw
+}
 
 // MarshalCBORStream implements cbor.StreamMarshaler.
 func (hdr Header) MarshalCBORStream(w io.Writer, o cbor.EncoderOptions, flattened int) error {
@@ -61,9 +83,21 @@ func (hdr *Header) UnmarshalCBORStream(r io.Reader, o cbor.DecoderOptions, flatt
 		return fmt.Errorf("Header only supports CBOR decoding with flat2 tag")
 	}
 
-	var protectedHeader emptyOrSerializedMap
-	if err := dec.Decode(&protectedHeader); err != nil {
+	// Decode the raw protected header bytes first and preserve them.
+	// This is critical for signature verification - the Sig_structure must
+	// use the exact same bytes that were signed, not a re-serialization.
+	var protectedRaw []byte
+	if err := dec.Decode(&protectedRaw); err != nil {
 		return err
+	}
+	hdr.protectedRaw = protectedRaw
+
+	// Parse the protected header map from the raw bytes
+	var protectedHeader rawHeaderMap
+	if len(protectedRaw) > 0 {
+		if err := cbor.Unmarshal(protectedRaw, &protectedHeader); err != nil {
+			return fmt.Errorf("error decoding protected header map: %w", err)
+		}
 	}
 
 	var unprotectedHeader rawHeaderMap

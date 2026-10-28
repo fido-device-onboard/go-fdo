@@ -8,7 +8,9 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rsa"
+	_ "crypto/sha512" // SHA-384 for DeviceKeyAuthPolicy
 	"encoding/asn1"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"math"
@@ -300,4 +302,435 @@ func readPublicRsaKey(t TPM, handle tpm2.NamedHandle) (*rsa.PublicKey, error) {
 	}
 
 	return pubkey, nil
+}
+
+// =========================================================================
+// Spec-compliant key creation (UserWithAuth=1, AdminWithPolicy=1, empty authValue)
+// =========================================================================
+
+// DeviceKeyAuthPolicy returns the Device key authPolicy of the FDO TPM spec
+// (Table 12): the digest of TPM2_PolicyCommandCode(TPM_CC_Certify) for the
+// key's nameAlg, H(zero digest || TPM_CC_PolicyCommandCode || TPM_CC_Certify).
+// It lets any party obtain TPM2_Certify evidence that the key is in this TPM;
+// every other ADMIN-role command (e.g. TPM2_ObjectChangeAuth) fails it.
+func DeviceKeyAuthPolicy(nameAlg tpm2.TPMAlgID) (tpm2.TPM2BDigest, error) {
+	var h crypto.Hash
+	switch nameAlg {
+	case tpm2.TPMAlgSHA256:
+		h = crypto.SHA256
+	case tpm2.TPMAlgSHA384:
+		h = crypto.SHA384
+	default:
+		return tpm2.TPM2BDigest{}, fmt.Errorf("unsupported Device key nameAlg 0x%04x", uint16(nameAlg))
+	}
+	d := h.New()
+	d.Write(make([]byte, h.Size()))
+	_ = binary.Write(d, binary.BigEndian, uint32(tpm2.TPMCCPolicyCommandCode))
+	_ = binary.Write(d, binary.BigEndian, uint32(tpm2.TPMCCCertify))
+	return tpm2.TPM2BDigest{Buffer: d.Sum(nil)}, nil
+}
+
+// GenerateSpecECKey creates an ECC signing key per the FDO TPM spec Table 11:
+//   - UserWithAuth = true (key usage via HMAC session with empty authValue)
+//   - AdminWithPolicy = true (admin ops require policy session)
+//   - NoDA = true (unrelated DA lockouts do not disable the key)
+//   - AuthPolicy = DeviceKeyAuthPolicy (Table 12): permits TPM2_Certify only;
+//     signing uses the USER role (empty authValue) and never this policy
+//   - Unique field populated with the unique string bytes
+//
+// The key is created as a transient primary under the Endorsement hierarchy.
+// Caller should persist it via PersistKey() from nv.go.
+//
+// uniqueString must be 2*coordSize bytes (e.g., 64 for P-256, 96 for P-384).
+func GenerateSpecECKey(t TPM, curveID tpm2.TPMECCCurve, hashAlg tpm2.TPMAlgID, uniqueString []byte) (*tpm2.NamedHandle, crypto.PublicKey, error) {
+	authPolicy, err := DeviceKeyAuthPolicy(hashAlg)
+	if err != nil {
+		return nil, nil, err
+	}
+	template := tpm2.TPMTPublic{
+		Type:       tpm2.TPMAlgECC,
+		NameAlg:    hashAlg,
+		AuthPolicy: authPolicy,
+		ObjectAttributes: tpm2.TPMAObject{
+			FixedTPM:            true,
+			FixedParent:         true,
+			SensitiveDataOrigin: true,
+			SignEncrypt:         true,
+			UserWithAuth:        true, // per spec Table 11: empty authValue for key usage
+			AdminWithPolicy:     true, // per spec Table 11: policy required for admin ops
+			NoDA:                true, // per spec Table 11
+		},
+		Parameters: tpm2.NewTPMUPublicParms(tpm2.TPMAlgECC,
+			&tpm2.TPMSECCParms{
+				CurveID: curveID,
+				Scheme: tpm2.TPMTECCScheme{
+					Scheme: tpm2.TPMAlgECDSA,
+					Details: tpm2.NewTPMUAsymScheme(tpm2.TPMAlgECDSA,
+						&tpm2.TPMSSigSchemeECDSA{HashAlg: hashAlg}),
+				},
+			},
+		),
+		Unique: tpm2.NewTPMUPublicID(tpm2.TPMAlgECC, &tpm2.TPMSECCPoint{
+			X: tpm2.TPM2BECCParameter{Buffer: uniqueString[:len(uniqueString)/2]},
+			Y: tpm2.TPM2BECCParameter{Buffer: uniqueString[len(uniqueString)/2:]},
+		}),
+	}
+
+	resp, err := tpm2.CreatePrimary{
+		PrimaryHandle: tpm2.TPMRHEndorsement,
+		InPublic:      tpm2.New2B(template),
+	}.Execute(t)
+	if err != nil {
+		return nil, nil, fmt.Errorf("CreatePrimary (spec ECC): %w", err)
+	}
+
+	pubKey, err := readPublicECKey(t, tpm2.NamedHandle{Handle: resp.ObjectHandle, Name: resp.Name})
+	if err != nil {
+		_, _ = (tpm2.FlushContext{FlushHandle: resp.ObjectHandle}).Execute(t)
+		return nil, nil, fmt.Errorf("reading spec ECC public key: %w", err)
+	}
+
+	return &tpm2.NamedHandle{
+		Handle: resp.ObjectHandle,
+		Name:   resp.Name,
+	}, pubKey, nil
+}
+
+// GenerateSpecHMACKey creates an HMAC key per the FDO TPM spec Table 11:
+//   - UserWithAuth = true (key usage via HMAC session with empty authValue)
+//   - AdminWithPolicy = true (admin ops require policy session)
+//   - NoDA = true (unrelated DA lockouts do not disable the key)
+//   - Empty AuthPolicy (Table 12): the ADMIN role is unavailable
+//   - Unique field populated with the unique string bytes
+//
+// The key is created as a transient primary under the Endorsement hierarchy.
+// Caller should persist it via PersistKey() from nv.go.
+//
+// nameAlg is SHA-256 for a P-256 Device key and SHA-384 for P-384 (the unique
+// string is 32 or 48 bytes to match).
+func GenerateSpecHMACKey(t TPM, nameAlg tpm2.TPMAlgID, uniqueString []byte) (*tpm2.NamedHandle, error) {
+	template := tpm2.TPMTPublic{
+		Type:    tpm2.TPMAlgKeyedHash,
+		NameAlg: nameAlg,
+		ObjectAttributes: tpm2.TPMAObject{
+			FixedTPM:            true,
+			FixedParent:         true,
+			SensitiveDataOrigin: true,
+			SignEncrypt:         true,
+			UserWithAuth:        true, // per spec Table 11: empty authValue for key usage
+			AdminWithPolicy:     true, // per spec Table 11: policy required for admin ops
+			NoDA:                true, // per spec Table 11
+		},
+		Parameters: tpm2.NewTPMUPublicParms(tpm2.TPMAlgKeyedHash,
+			&tpm2.TPMSKeyedHashParms{
+				// HMAC hash = nameAlg = the Device key's hash (TPM spec
+				// Table 10). The Device uses it for every HMAC it computes.
+				Scheme: tpm2.TPMTKeyedHashScheme{
+					Scheme: tpm2.TPMAlgHMAC,
+					Details: tpm2.NewTPMUSchemeKeyedHash(tpm2.TPMAlgHMAC,
+						&tpm2.TPMSSchemeHMAC{HashAlg: nameAlg}),
+				},
+			}),
+		Unique: tpm2.NewTPMUPublicID(tpm2.TPMAlgKeyedHash,
+			&tpm2.TPM2BDigest{Buffer: uniqueString}),
+	}
+
+	resp, err := tpm2.CreatePrimary{
+		PrimaryHandle: tpm2.TPMRHEndorsement,
+		InPublic:      tpm2.New2B(template),
+	}.Execute(t)
+	if err != nil {
+		return nil, fmt.Errorf("CreatePrimary (spec HMAC): %w", err)
+	}
+
+	return &tpm2.NamedHandle{
+		Handle: resp.ObjectHandle,
+		Name:   resp.Name,
+	}, nil
+}
+
+// =========================================================================
+// Child key creation (Approach 1: child of deterministic SRK)
+// =========================================================================
+
+// CreateSRK creates a deterministic Storage Root Key (SRK) under the Owner
+// hierarchy. Uses the TCG-standard SRK template (RSA 2048, AES-128-CFB,
+// empty unique). The same SRK is recreated every time on the same TPM.
+//
+// Returns a transient NamedHandle. Caller should flush after use.
+func CreateSRK(t TPM) (*tpm2.NamedHandle, error) {
+	resp, err := tpm2.CreatePrimary{
+		PrimaryHandle: tpm2.TPMRHOwner,
+		InPublic: tpm2.New2B(tpm2.TPMTPublic{
+			Type:    tpm2.TPMAlgRSA,
+			NameAlg: tpm2.TPMAlgSHA256,
+			ObjectAttributes: tpm2.TPMAObject{
+				FixedTPM:            true,
+				FixedParent:         true,
+				SensitiveDataOrigin: true,
+				UserWithAuth:        true,
+				Restricted:          true,
+				Decrypt:             true,
+			},
+			Parameters: tpm2.NewTPMUPublicParms(tpm2.TPMAlgRSA,
+				&tpm2.TPMSRSAParms{
+					Symmetric: tpm2.TPMTSymDefObject{
+						Algorithm: tpm2.TPMAlgAES,
+						KeyBits:   tpm2.NewTPMUSymKeyBits(tpm2.TPMAlgAES, tpm2.TPMKeyBits(128)),
+						Mode:      tpm2.NewTPMUSymMode(tpm2.TPMAlgAES, tpm2.TPMAlgCFB),
+					},
+					KeyBits: 2048,
+				},
+			),
+		}),
+	}.Execute(t)
+	if err != nil {
+		return nil, fmt.Errorf("CreatePrimary (SRK): %w", err)
+	}
+	return &tpm2.NamedHandle{Handle: resp.ObjectHandle, Name: resp.Name}, nil
+}
+
+// CreateChildECKey creates an ECC signing key as a child of the given parent.
+// The child key is generated from the TPM's RNG (sensitiveDataOrigin=1),
+// so each call produces a unique, unpredictable key.
+//
+// Returns a NamedHandle (loaded, transient). Caller should persist via PersistKey.
+func CreateChildECKey(t TPM, parent tpm2.NamedHandle, curveID tpm2.TPMECCCurve, hashAlg tpm2.TPMAlgID) (*tpm2.NamedHandle, crypto.PublicKey, error) {
+	authPolicy, err := DeviceKeyAuthPolicy(hashAlg)
+	if err != nil {
+		return nil, nil, err
+	}
+	template := tpm2.TPMTPublic{
+		Type:       tpm2.TPMAlgECC,
+		NameAlg:    hashAlg,
+		AuthPolicy: authPolicy,
+		ObjectAttributes: tpm2.TPMAObject{
+			FixedTPM:            true,
+			FixedParent:         true,
+			SensitiveDataOrigin: true,
+			SignEncrypt:         true,
+			UserWithAuth:        true,
+			AdminWithPolicy:     true,
+			NoDA:                true, // per spec Table 11
+		},
+		Parameters: tpm2.NewTPMUPublicParms(tpm2.TPMAlgECC,
+			&tpm2.TPMSECCParms{
+				CurveID: curveID,
+				Scheme: tpm2.TPMTECCScheme{
+					Scheme: tpm2.TPMAlgECDSA,
+					Details: tpm2.NewTPMUAsymScheme(tpm2.TPMAlgECDSA,
+						&tpm2.TPMSSigSchemeECDSA{HashAlg: hashAlg}),
+				},
+			},
+		),
+	}
+
+	createResp, err := tpm2.Create{
+		ParentHandle: tpm2.AuthHandle{
+			Handle: parent.Handle,
+			Name:   parent.Name,
+			Auth:   tpm2.PasswordAuth(nil),
+		},
+		InPublic: tpm2.New2B(template),
+	}.Execute(t)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create child ECC key: %w", err)
+	}
+
+	loadResp, err := tpm2.Load{
+		ParentHandle: tpm2.AuthHandle{
+			Handle: parent.Handle,
+			Name:   parent.Name,
+			Auth:   tpm2.PasswordAuth(nil),
+		},
+		InPrivate: createResp.OutPrivate,
+		InPublic:  createResp.OutPublic,
+	}.Execute(t)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load child ECC key: %w", err)
+	}
+
+	handle := &tpm2.NamedHandle{Handle: loadResp.ObjectHandle, Name: loadResp.Name}
+	pubKey, err := readPublicECKey(t, *handle)
+	if err != nil {
+		_, _ = (tpm2.FlushContext{FlushHandle: loadResp.ObjectHandle}).Execute(t)
+		return nil, nil, fmt.Errorf("reading child ECC public key: %w", err)
+	}
+
+	return handle, pubKey, nil
+}
+
+// CreateChildHMACKey creates an HMAC key as a child of the given parent.
+// The child key is generated from the TPM's RNG (sensitiveDataOrigin=1).
+//
+// Returns a NamedHandle (loaded, transient). Caller should persist via PersistKey.
+// nameAlg follows the Device key as in GenerateSpecHMACKey.
+func CreateChildHMACKey(t TPM, parent tpm2.NamedHandle, nameAlg tpm2.TPMAlgID) (*tpm2.NamedHandle, error) {
+	template := tpm2.TPMTPublic{
+		Type:    tpm2.TPMAlgKeyedHash,
+		NameAlg: nameAlg,
+		ObjectAttributes: tpm2.TPMAObject{
+			FixedTPM:            true,
+			FixedParent:         true,
+			SensitiveDataOrigin: true,
+			SignEncrypt:         true,
+			UserWithAuth:        true,
+			AdminWithPolicy:     true,
+			NoDA:                true, // per spec Table 11
+		},
+		Parameters: tpm2.NewTPMUPublicParms(tpm2.TPMAlgKeyedHash,
+			&tpm2.TPMSKeyedHashParms{
+				// HMAC hash = nameAlg = the Device key's hash (TPM spec
+				// Table 10). The Device uses it for every HMAC it computes.
+				Scheme: tpm2.TPMTKeyedHashScheme{
+					Scheme: tpm2.TPMAlgHMAC,
+					Details: tpm2.NewTPMUSchemeKeyedHash(tpm2.TPMAlgHMAC,
+						&tpm2.TPMSSchemeHMAC{HashAlg: nameAlg}),
+				},
+			}),
+	}
+
+	createResp, err := tpm2.Create{
+		ParentHandle: tpm2.AuthHandle{
+			Handle: parent.Handle,
+			Name:   parent.Name,
+			Auth:   tpm2.PasswordAuth(nil),
+		},
+		InPublic: tpm2.New2B(template),
+	}.Execute(t)
+	if err != nil {
+		return nil, fmt.Errorf("create child HMAC key: %w", err)
+	}
+
+	loadResp, err := tpm2.Load{
+		ParentHandle: tpm2.AuthHandle{
+			Handle: parent.Handle,
+			Name:   parent.Name,
+			Auth:   tpm2.PasswordAuth(nil),
+		},
+		InPrivate: createResp.OutPrivate,
+		InPublic:  createResp.OutPublic,
+	}.Execute(t)
+	if err != nil {
+		return nil, fmt.Errorf("load child HMAC key: %w", err)
+	}
+
+	return &tpm2.NamedHandle{Handle: loadResp.ObjectHandle, Name: loadResp.Name}, nil
+}
+
+// persistentKey wraps a persistent TPM key handle with empty-auth authorization.
+// Per spec Table 11, keys have userWithAuth=1 with empty authValue, so
+// key usage (Sign) requires only an empty password auth session.
+// Unlike the transient `key` type, Close() is a no-op (persistent keys
+// survive across TPM connections).
+type persistentKey struct {
+	Device  TPM
+	PHandle tpm2.TPMHandle // persistent handle (e.g., DAKHandle)
+	Name    tpm2.TPM2BName // key name from ReadPublic
+	PubKey  crypto.PublicKey
+}
+
+func (k *persistentKey) Close() error { return nil }
+
+func (k *persistentKey) Public() crypto.PublicKey { return k.PubKey }
+
+func (k *persistentKey) Sign(_ io.Reader, digest []byte, _ crypto.SignerOpts) ([]byte, error) {
+	sig, err := tpm2.Sign{
+		KeyHandle: tpm2.AuthHandle{
+			Handle: k.PHandle,
+			Name:   k.Name,
+			Auth:   tpm2.PasswordAuth(nil), // empty authValue per spec
+		},
+		Digest:     tpm2.TPM2BDigest{Buffer: digest},
+		Validation: tpm2.TPMTTKHashCheck{Tag: tpm2.TPMSTHashCheck},
+	}.Execute(k.Device)
+	if err != nil {
+		return nil, fmt.Errorf("TPM Sign: %w", err)
+	}
+
+	switch k.PubKey.(type) {
+	case *ecdsa.PublicKey:
+		ecdsaSig, err := sig.Signature.Signature.ECDSA()
+		if err != nil {
+			return nil, fmt.Errorf("extract ECDSA signature: %w", err)
+		}
+		r := new(big.Int).SetBytes(ecdsaSig.SignatureR.Buffer)
+		s := new(big.Int).SetBytes(ecdsaSig.SignatureS.Buffer)
+		return asn1.Marshal(struct {
+			R *big.Int
+			S *big.Int
+		}{R: r, S: s})
+
+	case *rsa.PublicKey:
+		rsaSSASig, err := sig.Signature.Signature.RSASSA()
+		if err != nil {
+			return nil, fmt.Errorf("extract RSA signature: %w", err)
+		}
+		return rsaSSASig.Sig.Buffer, nil
+
+	default:
+		return nil, fmt.Errorf("unsupported key type: %T", k.PubKey)
+	}
+}
+
+// LoadPersistentKey loads an already-persisted signing key from its handle.
+// Per spec Table 11, keys have userWithAuth=1 with empty authValue, so
+// no policy session or Unique String NV index is needed for key usage.
+func LoadPersistentKey(t TPM, persistentHandle uint32) (Key, error) {
+	// Read key's public data and name
+	readResp, err := (tpm2.ReadPublic{ObjectHandle: tpm2.TPMHandle(persistentHandle)}).Execute(t)
+	if err != nil {
+		return nil, fmt.Errorf("ReadPublic 0x%08X: %w", persistentHandle, err)
+	}
+
+	pub, err := readResp.OutPublic.Contents()
+	if err != nil {
+		return nil, fmt.Errorf("parse public 0x%08X: %w", persistentHandle, err)
+	}
+
+	// Extract public key
+	var pubKey crypto.PublicKey
+	switch pub.Type {
+	case tpm2.TPMAlgECC:
+		ecc, err := pub.Unique.ECC()
+		if err != nil {
+			return nil, fmt.Errorf("extract ECC point: %w", err)
+		}
+		var curve elliptic.Curve
+		switch len(ecc.X.Buffer) {
+		case 32:
+			curve = elliptic.P256()
+		case 48:
+			curve = elliptic.P384()
+		default:
+			return nil, fmt.Errorf("unsupported ECC key size: %d bytes", len(ecc.X.Buffer))
+		}
+		pubKey = &ecdsa.PublicKey{
+			Curve: curve,
+			X:     new(big.Int).SetBytes(ecc.X.Buffer),
+			Y:     new(big.Int).SetBytes(ecc.Y.Buffer),
+		}
+	case tpm2.TPMAlgRSA:
+		rsaDetail, err := pub.Parameters.RSADetail()
+		if err != nil {
+			return nil, fmt.Errorf("RSA params: %w", err)
+		}
+		rsaUnique, err := pub.Unique.RSA()
+		if err != nil {
+			return nil, fmt.Errorf("RSA pubkey: %w", err)
+		}
+		pubKey, err = tpm2.RSAPub(rsaDetail, rsaUnique)
+		if err != nil {
+			return nil, fmt.Errorf("marshal rsa.PublicKey: %w", err)
+		}
+	default:
+		return nil, fmt.Errorf("unsupported key type: %v", pub.Type)
+	}
+
+	return &persistentKey{
+		Device:  t,
+		PHandle: tpm2.TPMHandle(persistentHandle),
+		Name:    readResp.Name,
+		PubKey:  pubKey,
+	}, nil
 }
