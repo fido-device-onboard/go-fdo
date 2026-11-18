@@ -134,6 +134,14 @@ type TO2SessionState interface {
 	// TO2.Done2.
 	SetupDeviceNonce(context.Context) (protocol.Nonce, error)
 
+	// SetHelloDeviceAckHash stores the hash of the TO2.HelloDeviceAck20 sent
+	// to the Device (FDO 2.0), checked against TO2.ProveDevice20.hashPrev2.
+	SetHelloDeviceAckHash(context.Context, protocol.Hash) error
+
+	// HelloDeviceAckHash returns the hash of the TO2.HelloDeviceAck20 sent to
+	// the Device (FDO 2.0).
+	HelloDeviceAckHash(context.Context) (protocol.Hash, error)
+
 	// SetMTU sets the max service info size the device may receive.
 	SetMTU(context.Context, uint16) error
 
@@ -165,6 +173,13 @@ type OwnerKeyPersistentState interface {
 	//
 	// The context may hold additional data for selecting the key.
 	OwnerKey(ctx context.Context, keyType protocol.KeyType, rsaBits int) (crypto.Signer, []*x509.Certificate, error)
+}
+
+// DelegateKeyPersistentState maintains the delegate keys and certs.
+type DelegateKeyPersistentState interface {
+	// DelegateKey returns the private delegate key matching a given key type and
+	// its certificate chain.
+	DelegateKey(string) (crypto.Signer, []*x509.Certificate, error)
 }
 
 // VoucherPersistentState maintains vouchers.

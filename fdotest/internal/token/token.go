@@ -61,6 +61,7 @@ type to2State struct {
 	Devmod         *serviceinfo.Devmod
 	Modules        []string
 	DevmodComplete bool
+	HelloAckHash   *protocol.Hash
 }
 
 type keyExchange struct {
@@ -489,6 +490,26 @@ func (s Service) SetupDeviceNonce(ctx context.Context) (protocol.Nonce, error) {
 			return protocol.Nonce{}, fdo.ErrNotFound
 		}
 		return state.SetupDv, nil
+	})
+}
+
+// SetHelloDeviceAckHash stores the hash of the TO2.HelloDeviceAck20 sent to
+// the Device, checked against TO2.ProveDevice20.hashPrev2.
+func (s Service) SetHelloDeviceAckHash(ctx context.Context, hash protocol.Hash) error {
+	return update(ctx, s, func(state *to2State) error {
+		state.HelloAckHash = &hash
+		return nil
+	})
+}
+
+// HelloDeviceAckHash returns the hash of the TO2.HelloDeviceAck20 sent to the
+// Device.
+func (s Service) HelloDeviceAckHash(ctx context.Context) (protocol.Hash, error) {
+	return fetch(ctx, s, func(state to2State) (protocol.Hash, error) {
+		if state.HelloAckHash == nil {
+			return protocol.Hash{}, fdo.ErrNotFound
+		}
+		return *state.HelloAckHash, nil
 	})
 }
 

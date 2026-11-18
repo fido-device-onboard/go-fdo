@@ -51,15 +51,11 @@ func captureErr(ctx context.Context, code uint16, err string) {
 	errMsgFromContext(ctx).ErrString = err
 }
 
-func errorMsg(ctx context.Context, transport Transport, err error) {
-	// If no previous message, then exit, because the protocol hasn't started
+// completeErrMsg returns the ErrorMessage captured in ctx with its defaults
+// filled in: error code 500, the error message of err, the current time, and
+// EMErrorCID 0, meaning none (FDO 2.0 Errata 1, E4: always sent as a uint).
+func completeErrMsg(ctx context.Context, err error) *protocol.ErrorMessage {
 	errMsg := errMsgFromContext(ctx)
-	if errMsg.PrevMsgType == 0 {
-		return
-	}
-
-	// Default to error code 500, error message of err parameter, and timestamp
-	// of the current time
 	if errMsg.Code == 0 {
 		errMsg.Code = protocol.InternalServerErrCode
 	}
@@ -69,6 +65,19 @@ func errorMsg(ctx context.Context, transport Transport, err error) {
 	if errMsg.Timestamp == 0 {
 		errMsg.Timestamp = time.Now().Unix()
 	}
+	if errMsg.CorrelationID == nil {
+		var none uint
+		errMsg.CorrelationID = &none
+	}
+	return errMsg
+}
+
+func errorMsg(ctx context.Context, transport Transport, err error) {
+	// If no previous message, then exit, because the protocol hasn't started
+	if errMsgFromContext(ctx).PrevMsgType == 0 {
+		return
+	}
+	errMsg := completeErrMsg(ctx, err)
 
 	// Create a new context, because the previous one may have expired, thus
 	// causing the protocol failure

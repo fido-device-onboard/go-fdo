@@ -65,6 +65,11 @@ type ECDHSession struct {
 	// Static configuration
 	randSize int
 
+	// deviceSentA is set for FDO 2.0, where the Device sends xA
+	// (TO2.ProveDevice20) and the Owner sends xB (TO2.ProveOVHdr20). In 1.1
+	// the Owner sends xA and the Device sends xB.
+	deviceSentA bool
+
 	// Key exchange data
 	xA   []byte
 	xB   []byte
@@ -73,6 +78,8 @@ type ECDHSession struct {
 	// Session encrypt/decrypt data
 	SessionCrypter
 }
+
+func (s *ECDHSession) setDeviceSentA() { s.deviceSentA = true }
 
 func (s ECDHSession) String() string {
 	var keyBytes []byte
@@ -165,7 +172,7 @@ func (s *ECDHSession) Parameter(rand io.Reader, _ *rsa.PublicKey) ([]byte, error
 	defer clear(s.xB)
 	defer clear(s.xA)
 	defer func() { s.priv = nil }() // No API to zero private component
-	sek, svk, err := ecdhSymmetricKey(ecKey, s.xA, s.xB, s.Cipher)
+	sek, svk, err := ecdhSymmetricKey(ecKey, s.xA, s.xB, s.deviceSentA, s.Cipher)
 	if err != nil {
 		return nil, fmt.Errorf("error computing symmetric keys: %w", err)
 	}
@@ -183,7 +190,7 @@ func (s *ECDHSession) SetParameter(xB []byte, _ *rsa.PrivateKey) error {
 	defer clear(s.xB)
 	defer clear(s.xA)
 	defer func() { s.priv = nil }() // No API to zero private component
-	sek, svk, err := ecdhSymmetricKey(s.priv, s.xA, s.xB, s.Cipher)
+	sek, svk, err := ecdhSymmetricKey(s.priv, s.xA, s.xB, s.deviceSentA, s.Cipher)
 	if err != nil {
 		return fmt.Errorf("error computing symmetric keys: %w", err)
 	}
@@ -244,7 +251,7 @@ func (p *ecdhParam) UnmarshalBinary(b []byte) error {
 	return nil
 }
 
-func ecdhSymmetricKey(ecKey *ecdh.PrivateKey, xA, xB []byte, cipher CipherSuite) (sek, svk []byte, err error) {
+func ecdhSymmetricKey(ecKey *ecdh.PrivateKey, xA, xB []byte, deviceSentA bool, cipher CipherSuite) (sek, svk []byte, err error) {
 	// Decode parameters
 	var paramA, paramB ecdhParam
 	if err := paramA.UnmarshalBinary(xA); err != nil {
@@ -255,7 +262,7 @@ func ecdhSymmetricKey(ecKey *ecdh.PrivateKey, xA, xB []byte, cipher CipherSuite)
 	}
 
 	// Compute shared secret
-	shSe, err := ecdhSharedSecret(ecKey, paramA, paramB)
+	shSe, err := ecdhSharedSecret(ecKey, paramA, paramB, deviceSentA)
 	if err != nil {
 		return nil, nil, fmt.Errorf("error computing shared secret: %w", err)
 	}
@@ -272,7 +279,7 @@ func ecdhSymmetricKey(ecKey *ecdh.PrivateKey, xA, xB []byte, cipher CipherSuite)
 }
 
 // Compute the ECDH shared secret
-func ecdhSharedSecret(key *ecdh.PrivateKey, paramA, paramB ecdhParam) ([]byte, error) {
+func ecdhSharedSecret(key *ecdh.PrivateKey, paramA, paramB ecdhParam, deviceSentA bool) ([]byte, error) {
 	// Determine which param is "other"
 	var other ecdhParam
 	switch {
@@ -296,8 +303,13 @@ func ecdhSharedSecret(key *ecdh.PrivateKey, paramA, paramB ecdhParam) ([]byte, e
 		return nil, err
 	}
 
-	// Combine ECDH shared secret with rand from parameters
-	return append(append(shx, paramB.Rand...), paramA.Rand...), nil
+	// ShSe = Shx || DeviceRandom || OwnerRandom, by role, in every protocol
+	// version. Which parameter is the Device's depends on the version.
+	device, owner := paramB, paramA
+	if deviceSentA {
+		device, owner = paramA, paramB
+	}
+	return append(append(shx, device.Rand...), owner.Rand...), nil
 }
 
 type ecdhPersist struct {
@@ -309,6 +321,10 @@ type ecdhPersist struct {
 	Cipher CipherSuiteID
 	SEK    []byte
 	SVK    []byte
+
+	// Trailing and omitted when false, so sessions persisted before this
+	// field existed still decode.
+	DeviceSentA bool `cbor:",omitempty"`
 }
 
 // MarshalCBOR implements [cbor.Marshaler].
@@ -325,6 +341,8 @@ func (s *ECDHSession) MarshalCBOR() ([]byte, error) {
 		Cipher:   s.ID,
 		SEK:      s.SEK,
 		SVK:      s.SVK,
+
+		DeviceSentA: s.deviceSentA,
 	})
 }
 
@@ -348,10 +366,11 @@ func (s *ECDHSession) UnmarshalCBOR(data []byte) error {
 	}
 
 	*s = ECDHSession{
-		randSize: persist.RandSize,
-		xA:       persist.ParamA,
-		xB:       persist.ParamB,
-		priv:     key,
+		randSize:    persist.RandSize,
+		deviceSentA: persist.DeviceSentA,
+		xA:          persist.ParamA,
+		xB:          persist.ParamB,
+		priv:        key,
 
 		SessionCrypter: SessionCrypter{
 			ID:     persist.Cipher,

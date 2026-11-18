@@ -250,6 +250,36 @@ $ go run ./examples/cmd client -kex ASYMKEX2048
 Success
 ```
 
+### Testing FDO 2.0
+
+The server handles FDO 1.01 and FDO 2.0 at the same time; the version is taken
+from the URL (`/fdo/101/msg/N` or `/fdo/200/msg/N`) and a session stays on the
+version it started with. The client selects the version with `-fdo-version`.
+
+```console
+$ go run ./examples/cmd client -di http://127.0.0.1:9999 -fdo-version 200
+$ go run ./examples/cmd client -fdo-version 200
+Success
+```
+
+In FDO 2.0 the Owner offers key exchange suites in TO2.HelloDeviceAck20 and the
+Device chooses one of them. The Owner offers only the suites the spec allows for
+the device and owner attestation keys (e.g. ECDH256 for P-256 keys, DHKEXid14
+for an RSA2048 owner). ASYMKEX is not offered in FDO 2.0: the Device sends its
+key exchange parameter before it receives the Owner key it would need to
+encrypt with. If the `-kex` suite is not offered, the client uses the Owner's
+first offered suite.
+
+Related server options:
+
+- `-lenient-kex`: NOT spec compliant, for interoperability testing. Also accept
+  any ECDH suite (ECDSA owner key) or DHKEX suite (RSA owner key) that a Device
+  selects, even if it was not offered.
+- `-rv-verify-to1d`: the Rendezvous Server verifies each to1d at TO0 (Owner
+  signature, or a delegate chain rooted in the Owner key that has the
+  `fdo-ekt-permit-redirect` permission) and rejects bad blobs. The Device always
+  verifies the to1d in TO2.
+
 ### Testing Resale Protocol
 
 First, start a server in a separate console.
