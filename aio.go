@@ -142,16 +142,24 @@ func (aio AllInOne) RegisterOwnerAddr(ctx context.Context, ov Voucher) error {
 	if err != nil {
 		return fmt.Errorf("auto-to0: error getting owner service address(es): %w", err)
 	}
-	sign1 := cose.Sign1[protocol.To1d, []byte]{
-		Payload: cbor.NewByteWrap(protocol.To1d{
-			RV: ownerAddrs,
-			To0dHash: protocol.Hash{
-				Algorithm: protocol.Sha256Hash,
-				Value:     make([]byte, 32),
-			},
-		}),
+	payload := protocol.To1d{
+		RV: ownerAddrs,
+		To0dHash: protocol.Hash{
+			Algorithm: protocol.Sha256Hash,
+			Value:     make([]byte, 32),
+		},
 	}
-	if err := sign1.Sign(nextOwner, nil, nil, opts); err != nil {
+	// FDO 2.0 uses domain-specific AAD and a to1d payload with a (null)
+	// DelegateChain; FDO 1.01 uses empty AAD and the 2-element payload
+	var aad []byte
+	if ov.Version >= uint16(protocol.Version200) {
+		aad = cose.AADOwnerSign
+		payload.DelegateChain = cbor.NewBstr[*[]*cbor.X509Certificate](nil)
+	}
+	sign1 := cose.Sign1[protocol.To1d, []byte]{
+		Payload: cbor.NewByteWrap(payload),
+	}
+	if err := sign1.Sign(nextOwner, nil, aad, opts); err != nil {
 		return fmt.Errorf("auto-to0: error signing to1d: %w", err)
 	}
 

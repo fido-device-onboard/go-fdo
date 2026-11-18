@@ -29,3 +29,27 @@ type TokenService interface {
 	// of token-encoded state (i.e. JWTs/CWTs).
 	TokenFromContext(context.Context) (string, bool)
 }
+
+// TokenVersionService may optionally be implemented by a TokenService to pin
+// a session to the protocol version (URL version) of the message that started
+// it. When implemented, the HTTP handler rejects any later message of the
+// session sent under a different protocol version. A client that changes
+// version (e.g. after a CHANGE_CAP_ERROR) restarts the protocol, which issues
+// a new token pinned to the new version.
+type TokenVersionService interface {
+	// SetTokenVersion records the protocol version of the session.
+	SetTokenVersion(context.Context, Version) error
+
+	// TokenVersion returns the protocol version recorded for the session.
+	TokenVersion(context.Context) (Version, error)
+}
+
+// TokenProtocolService may optionally be implemented by a TokenService to
+// report which protocol (DI, TO0, TO1, TO2) a session was started for. When
+// implemented, the HTTP handler rejects a message of a different protocol sent
+// with the session's token, so that state created by one protocol cannot be
+// used by another.
+type TokenProtocolService interface {
+	// TokenProtocol returns the protocol the session was started for.
+	TokenProtocol(context.Context) (Protocol, error)
+}

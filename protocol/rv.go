@@ -88,6 +88,12 @@ func (a RvTO2Addr) String() string {
 type To1d struct {
 	RV       []RvTO2Addr
 	To0dHash Hash
+
+	// DelegateChain is the FDO 2.0 to1dBlobPayload field
+	// `DelegateChain .cbor CertChainOrNull`. It is absent (nil) in FDO 1.1
+	// blobs. For FDO 2.0 it is always present; a nil Val encodes a null chain
+	// (to1d signed by the Owner key).
+	DelegateChain *cbor.Bstr[*[]*cbor.X509Certificate] `cbor:",omitempty"`
 }
 
 func (to1d To1d) String() string {
