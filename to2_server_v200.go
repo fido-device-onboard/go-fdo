@@ -4,6 +4,7 @@
 package fdo
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/ecdsa"
@@ -93,7 +94,7 @@ func (s *TO2Server) helloDeviceAck20(ctx context.Context, msg io.Reader) (*Hello
 		return nil, fmt.Errorf("no key exchange suite is valid for the device and owner attestation keys")
 	}
 
-	return &HelloDeviceAck20Msg{
+	ack := &HelloDeviceAck20Msg{
 		CapabilityFlags:     GlobalCapabilityFlags,
 		GUID:                probe.GUID,
 		MaxOwnerMessageSize: 65535,
@@ -101,7 +102,41 @@ func (s *TO2Server) helloDeviceAck20(ctx context.Context, msg io.Reader) (*Hello
 		CipherSuites:        cipherSuites20,
 		NonceTO2ProveDVPrep: proveDeviceNonce,
 		HashPrev:            probeHash,
-	}, nil
+	}
+
+	if err := s.storeHelloDeviceAckHash(ctx, hashAlg, ack); err != nil {
+		return nil, err
+	}
+	return ack, nil
+}
+
+// storeHelloDeviceAckHash stores hash[TO2.HelloDeviceAck20], which the Device
+// returns as hashPrev2 in TO2.ProveDevice20. The ack is sent with this same
+// deterministic encoding; the hash type is the one used for hashPrev.
+func (s *TO2Server) storeHelloDeviceAckHash(ctx context.Context, alg protocol.HashAlg, ack *HelloDeviceAck20Msg) error {
+	ackBytes, err := cbor.Marshal(ack)
+	if err != nil {
+		return fmt.Errorf("error encoding TO2.HelloDeviceAck20: %w", err)
+	}
+	ackHash, err := hashMessage(alg, ackBytes)
+	if err != nil {
+		return err
+	}
+	if err := s.Session.SetHelloDeviceAckHash(ctx, ackHash); err != nil {
+		return fmt.Errorf("error storing TO2.HelloDeviceAck20 hash: %w", err)
+	}
+	return nil
+}
+
+// checkHashPrev2 checks TO2.ProveDevice20.hashPrev2 against the hash of the
+// TO2.HelloDeviceAck20 the Owner sent. A mismatch means the Device did not
+// receive the ack as sent (e.g. a modified key exchange offer), and the Owner
+// MUST drop the connection.
+func checkHashPrev2(got, sent protocol.Hash) error {
+	if got.Algorithm != sent.Algorithm || !bytes.Equal(got.Value, sent.Value) {
+		return fmt.Errorf("TO2.ProveDevice20 hashPrev2 does not match the TO2.HelloDeviceAck20 sent")
+	}
+	return nil
 }
 
 // selectHashType20 returns the first hash type in the Device's preference
@@ -260,6 +295,14 @@ func (s *TO2Server) proveOVHdr20(ctx context.Context, msg io.Reader) (*cose.Sign
 	}
 	payload, err := parseProveDevice20EAT(eat, storedNonce, guid)
 	if err != nil {
+		captureErr(ctx, protocol.InvalidMessageErrCode, "")
+		return nil, err
+	}
+	ackHash, err := s.Session.HelloDeviceAckHash(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error getting stored TO2.HelloDeviceAck20 hash: %w", err)
+	}
+	if err := checkHashPrev2(payload.HashPrev2, ackHash); err != nil {
 		captureErr(ctx, protocol.InvalidMessageErrCode, "")
 		return nil, err
 	}

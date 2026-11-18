@@ -461,6 +461,24 @@ func RunServerStateSuite(t *testing.T, state AllServerState) { //nolint:gocyclo
 			if !bytes.Equal(setupDeviceNonce[:], gotSetupDeviceNonce[:]) {
 				t.Fatal("setup device nonce state did not match expected")
 			}
+
+			if _, err := state.HelloDeviceAckHash(ctx); !errors.Is(err, fdo.ErrNotFound) {
+				t.Fatalf("expected ErrNotFound, got %v", err)
+			}
+			ackHash := protocol.Hash{Algorithm: protocol.Sha384Hash, Value: make([]byte, 48)}
+			if _, err := rand.Read(ackHash.Value); err != nil {
+				t.Fatal(err)
+			}
+			if err := state.SetHelloDeviceAckHash(ctx, ackHash); err != nil {
+				t.Fatal(err)
+			}
+			gotAckHash, err := state.HelloDeviceAckHash(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if gotAckHash.Algorithm != ackHash.Algorithm || !bytes.Equal(gotAckHash.Value, ackHash.Value) {
+				t.Fatal("hello device ack hash state did not match expected")
+			}
 		})
 
 		t.Run("MTU", func(t *testing.T) {

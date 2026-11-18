@@ -4,10 +4,13 @@
 package fdo
 
 import (
+	"bytes"
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"errors"
 	"strings"
 	"testing"
 
@@ -156,6 +159,43 @@ func TestParseProveDevice20EAT(t *testing.T) {
 	}
 	if _, err := parseProveDevice20EAT(eat, nonce, protocol.GUID{7}); err == nil {
 		t.Error("EAT with wrong UEID was accepted")
+	}
+}
+
+func TestCheckHashPrev2(t *testing.T) {
+	sent, err := hashMessage(protocol.Sha256Hash, []byte("TO2.HelloDeviceAck20"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := checkHashPrev2(sent, sent); err != nil {
+		t.Errorf("matching hashPrev2 rejected: %v", err)
+	}
+	modified, _ := hashMessage(protocol.Sha256Hash, []byte("TO2.HelloDeviceAck20, modified"))
+	if err := checkHashPrev2(modified, sent); err == nil {
+		t.Error("hashPrev2 of a different ack was accepted")
+	}
+	otherAlg, _ := hashMessage(protocol.Sha384Hash, []byte("TO2.HelloDeviceAck20"))
+	if err := checkHashPrev2(otherAlg, sent); err == nil {
+		t.Error("hashPrev2 with a different hash type was accepted")
+	}
+	if err := checkHashPrev2(protocol.Hash{Algorithm: protocol.Sha256Hash}, sent); err == nil {
+		t.Error("empty hashPrev2 was accepted")
+	}
+}
+
+// Every ErrorMessage a server returns carries EMErrorCID as a uint, 0 when
+// there is none, never null (FDO 2.0 Errata 1, E4).
+func TestErrorMessageCorrelationIDIsUint(t *testing.T) {
+	msg := completeErrMsg(contextWithErrMsg(context.Background()), errors.New("boom"))
+	b, err := cbor.Marshal(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg.Code != protocol.InternalServerErrCode || msg.ErrString != "boom" || msg.Timestamp == 0 {
+		t.Errorf("defaults not filled: %+v", msg)
+	}
+	if !bytes.HasSuffix(b, []byte{0x00}) || bytes.HasSuffix(b, []byte{0xf6}) {
+		t.Errorf("EMErrorCID not encoded as uint 0: % x", b)
 	}
 }
 

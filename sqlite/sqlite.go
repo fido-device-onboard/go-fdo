@@ -131,6 +131,11 @@ func Init(db *sql.DB) error {
 			, devmod_complete BOOLEAN CHECK (devmod_complete IN (0, 1))
 			, FOREIGN KEY(session) REFERENCES sessions(id) ON DELETE CASCADE
 			)`,
+		`CREATE TABLE IF NOT EXISTS to2_hello_ack_hashes
+			( session BLOB UNIQUE NOT NULL
+			, hash BLOB NOT NULL
+			, FOREIGN KEY(session) REFERENCES sessions(id) ON DELETE CASCADE
+			)`,
 		`CREATE TABLE IF NOT EXISTS vouchers
 			( guid BLOB PRIMARY KEY
 			, device_info TEXT NOT NULL
@@ -1171,6 +1176,43 @@ func (db *DB) SetupDeviceNonce(ctx context.Context) (protocol.Nonce, error) {
 	var nonce protocol.Nonce
 	_ = copy(nonce[:], into)
 	return nonce, nil
+}
+
+// SetHelloDeviceAckHash stores the hash of the TO2.HelloDeviceAck20 sent to
+// the Device, checked against TO2.ProveDevice20.hashPrev2.
+func (db *DB) SetHelloDeviceAckHash(ctx context.Context, hash protocol.Hash) error {
+	sessID, ok := db.sessionID(ctx)
+	if !ok {
+		return fdo.ErrInvalidSession
+	}
+	blob, err := cbor.Marshal(hash)
+	if err != nil {
+		return fmt.Errorf("error marshaling TO2.HelloDeviceAck20 hash: %w", err)
+	}
+	return db.insert(ctx, "to2_hello_ack_hashes", map[string]any{
+		"session": sessID,
+		"hash":    blob,
+	}, []string{"session"})
+}
+
+// HelloDeviceAckHash returns the hash of the TO2.HelloDeviceAck20 sent to the
+// Device.
+func (db *DB) HelloDeviceAckHash(ctx context.Context) (protocol.Hash, error) {
+	sessID, ok := db.sessionID(ctx)
+	if !ok {
+		return protocol.Hash{}, fdo.ErrInvalidSession
+	}
+	var blob []byte
+	if err := db.query(ctx, "to2_hello_ack_hashes", []string{"hash"}, map[string]any{
+		"session": sessID,
+	}, &blob); err != nil {
+		return protocol.Hash{}, err
+	}
+	var hash protocol.Hash
+	if err := cbor.Unmarshal(blob, &hash); err != nil {
+		return protocol.Hash{}, fmt.Errorf("error unmarshaling TO2.HelloDeviceAck20 hash: %w", err)
+	}
+	return hash, nil
 }
 
 // AddOwnerKey to retrieve with [DB.OwnerKey]. chain may be nil, in which case

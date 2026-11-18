@@ -4,6 +4,7 @@
 package fdo_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
 	"io"
@@ -70,6 +71,70 @@ func TestClientWithMockModule(t *testing.T) {
 	if !deviceModule.ActiveState {
 		t.Error("device module should be active")
 	}
+}
+
+// ackTamperingTransport changes every third TO2.HelloDeviceAck20 in transit,
+// in a field the Device does not check (MaxOwnerMessageSize). Per key type,
+// RunClientTestSuite runs TO2 three times and applies CustomExpect only to the
+// third run ("w/ Modules").
+type ackTamperingTransport struct {
+	fdo.Transport
+	acks, tampered int
+}
+
+func (a *ackTamperingTransport) Send(ctx context.Context, msgType uint8, msg any, sess kex.Session) (uint8, io.ReadCloser, error) {
+	typ, resp, err := a.Transport.Send(ctx, msgType, msg, sess)
+	if err != nil || typ != protocol.TO2HelloDeviceAck20MsgType {
+		return typ, resp, err
+	}
+	if a.acks++; a.acks%3 != 0 {
+		return typ, resp, nil
+	}
+	defer func() { _ = resp.Close() }()
+	var ack fdo.HelloDeviceAck20Msg
+	if err := cbor.NewDecoder(resp).Decode(&ack); err != nil {
+		return 0, nil, err
+	}
+	ack.MaxOwnerMessageSize--
+	body, err := cbor.Marshal(&ack)
+	if err != nil {
+		return 0, nil, err
+	}
+	a.tampered++
+	return typ, io.NopCloser(bytes.NewReader(body)), nil
+}
+
+// TestOwnerChecksHashPrev2FDO20: an Owner MUST drop the connection when
+// TO2.ProveDevice20.hashPrev2 is not the hash of the TO2.HelloDeviceAck20 it
+// sent.
+func TestOwnerChecksHashPrev2FDO20(t *testing.T) {
+	var tamperer *ackTamperingTransport
+	fdotest.RunClientTestSuite(t, fdotest.Config{
+		Version: protocol.Version200,
+		OwnerModules: func(context.Context, protocol.GUID, string, []*x509.Certificate, serviceinfo.Devmod, []string) iter.Seq2[string, serviceinfo.OwnerModule] {
+			return func(func(string, serviceinfo.OwnerModule) bool) {}
+		},
+		NewTransport: func(t *testing.T, tokens protocol.TokenService, di, to0, to1, to2 protocol.Responder) fdo.Transport {
+			tamperer = &ackTamperingTransport{Transport: &fdotest.Transport{
+				T:            t,
+				Tokens:       tokens,
+				DIResponder:  di.(*fdo.DIServer[custom.DeviceMfgInfo]),
+				TO0Responder: to0.(*fdo.TO0Server),
+				TO1Responder: to1.(*fdo.TO1Server),
+				TO2Responder: to2.(*fdo.TO2Server),
+			}}
+			return tamperer
+		},
+		CustomExpect: func(t *testing.T, err error) {
+			if err == nil || !strings.Contains(err.Error(), "hashPrev2") {
+				t.Fatalf("expected the Owner to reject hashPrev2, got %v", err)
+			}
+		},
+	})
+	if tamperer == nil || tamperer.tampered == 0 {
+		t.Fatal("no TO2.HelloDeviceAck20 was modified")
+	}
+	t.Logf("%d of %d TO2.HelloDeviceAck20 messages modified, all rejected; the others onboarded", tamperer.tampered, tamperer.acks)
 }
 
 func TestClientWithMockModuleFDO20(t *testing.T) {

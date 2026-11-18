@@ -12,7 +12,6 @@ import (
 	"crypto/x509"
 	"fmt"
 	"io"
-	"time"
 
 	"github.com/fido-device-onboard/go-fdo/cbor"
 	"github.com/fido-device-onboard/go-fdo/cose"
@@ -82,19 +81,7 @@ func (s *DIServer[T]) Respond(ctx context.Context, msgType uint8, msg io.Reader)
 		return respType, resp
 	}
 
-	// Default to error code 500, error message of err parameter, and timestamp
-	// of the current time
-	errMsg := errMsgFromContext(ctx)
-	if errMsg.Code == 0 {
-		errMsg.Code = protocol.InternalServerErrCode
-	}
-	if errMsg.ErrString == "" {
-		errMsg.ErrString = err.Error()
-	}
-	if errMsg.Timestamp == 0 {
-		errMsg.Timestamp = time.Now().Unix()
-	}
-	return protocol.ErrorMsgType, errMsg
+	return protocol.ErrorMsgType, completeErrMsg(ctx, err)
 }
 
 // HandleError performs session cleanup before the token is invalidated.
@@ -184,19 +171,7 @@ func (s *TO0Server) Respond(ctx context.Context, msgType uint8, msg io.Reader) (
 		return respType, resp
 	}
 
-	// Default to error code 500, error message of err parameter, and timestamp
-	// of the current time
-	errMsg := errMsgFromContext(ctx)
-	if errMsg.Code == 0 {
-		errMsg.Code = protocol.InternalServerErrCode
-	}
-	if errMsg.ErrString == "" {
-		errMsg.ErrString = err.Error()
-	}
-	if errMsg.Timestamp == 0 {
-		errMsg.Timestamp = time.Now().Unix()
-	}
-	return protocol.ErrorMsgType, errMsg
+	return protocol.ErrorMsgType, completeErrMsg(ctx, err)
 }
 
 // HandleError performs session cleanup before the token is invalidated.
@@ -229,19 +204,7 @@ func (s *TO1Server) Respond(ctx context.Context, msgType uint8, msg io.Reader) (
 		return respType, resp
 	}
 
-	// Default to error code 500, error message of err parameter, and timestamp
-	// of the current time
-	errMsg := errMsgFromContext(ctx)
-	if errMsg.Code == 0 {
-		errMsg.Code = protocol.InternalServerErrCode
-	}
-	if errMsg.ErrString == "" {
-		errMsg.ErrString = err.Error()
-	}
-	if errMsg.Timestamp == 0 {
-		errMsg.Timestamp = time.Now().Unix()
-	}
-	return protocol.ErrorMsgType, errMsg
+	return protocol.ErrorMsgType, completeErrMsg(ctx, err)
 }
 
 // HandleError performs session cleanup before the token is invalidated.
@@ -418,19 +381,7 @@ func (s *TO2Server) Respond(ctx context.Context, msgType uint8, msg io.Reader) (
 		return respType, resp
 	}
 
-	// Default to error code 500, error message of err parameter, and timestamp
-	// of the current time
-	errMsg := errMsgFromContext(ctx)
-	if errMsg.Code == 0 {
-		errMsg.Code = protocol.InternalServerErrCode
-	}
-	if errMsg.ErrString == "" {
-		errMsg.ErrString = err.Error()
-	}
-	if errMsg.Timestamp == 0 {
-		errMsg.Timestamp = time.Now().Unix()
-	}
-	return protocol.ErrorMsgType, errMsg
+	return protocol.ErrorMsgType, completeErrMsg(ctx, err)
 }
 
 // CryptSession returns the current encryption session.
