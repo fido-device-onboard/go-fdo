@@ -26,6 +26,7 @@ CRED_FILE="$EPHEMERAL_DIR/cred.bin"
 SERVER_PID=""
 
 # Cleanup function - only kills processes on exit, preserves ephemeral files for debugging
+# shellcheck disable=SC2317 # invoked by the EXIT trap
 cleanup() {
 	if [ -n "$SERVER_PID" ]; then
 		kill "$SERVER_PID" 2>/dev/null || true
