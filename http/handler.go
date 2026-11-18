@@ -39,22 +39,72 @@ type Handler struct {
 	MaxContentLength int64
 }
 
-func msgTypeFromPath(w http.ResponseWriter, r *http.Request) (uint8, bool) {
+// versionAndMsgFromPath parses the FDO version and message type from the URL path.
+// Expected path format: /fdo/{version}/msg/{msgType}
+// Returns version (101, 200), message type, and success flag.
+func versionAndMsgFromPath(w http.ResponseWriter, r *http.Request) (protocol.Version, uint8, bool) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
-		return 0, false
+		return 0, 0, false
 	}
-	path := strings.TrimPrefix(r.URL.Path, "/fdo/101/msg/")
-	if strings.Contains(path, "/") {
+
+	// Parse path: /fdo/{ver}/msg/{type}
+	path := strings.TrimPrefix(r.URL.Path, "/fdo/")
+	parts := strings.Split(path, "/")
+	if len(parts) != 3 || parts[1] != "msg" {
 		w.WriteHeader(http.StatusNotFound)
-		return 0, false
+		return 0, 0, false
 	}
-	typ, err := strconv.ParseUint(path, 10, 8)
+
+	// Parse version
+	ver, err := strconv.ParseUint(parts[0], 10, 16)
+	if err != nil {
+		writeErr(w, 0, fmt.Errorf("invalid FDO version"))
+		return 0, 0, false
+	}
+	version := protocol.Version(ver)
+	if !version.IsValid() {
+		writeErr(w, 0, fmt.Errorf("unsupported FDO version: %d", ver))
+		return 0, 0, false
+	}
+
+	// Parse message type
+	typ, err := strconv.ParseUint(parts[2], 10, 8)
 	if err != nil {
 		writeErr(w, 0, fmt.Errorf("invalid message type"))
-		return 0, false
+		return 0, 0, false
 	}
-	return uint8(typ), true
+
+	return version, uint8(typ), true
+}
+
+// msgTypeAllowedForVersion reports whether a message type may be sent under
+// the given protocol (URL) version: TO2 1.01 messages (60-71) only under
+// 101, and TO2 2.0 messages (80-91) only under 200.
+func msgTypeAllowedForVersion(msgType uint8, version protocol.Version) bool {
+	switch {
+	case protocol.TO2HelloDeviceMsgType <= msgType && msgType <= protocol.TO2Done2MsgType:
+		return version == protocol.Version101
+	case protocol.TO2HelloDeviceProbeMsgType <= msgType && msgType <= protocol.TO2DoneAck20MsgType:
+		return version == protocol.Version200
+	default:
+		return true
+	}
+}
+
+// isEncryptedTO2Message returns true if the message type requires encryption/decryption.
+// In FDO 1.01: messages 65-71 (after ProveDevice/64, key exchange complete)
+// In FDO 2.0: messages 86-91 (after OVNextEntry/85, key exchange complete)
+func isEncryptedTO2Message(msgType uint8) bool {
+	// 1.01: encrypted messages are 65-71
+	if protocol.TO2ProveDeviceMsgType < msgType && msgType <= protocol.TO2Done2MsgType {
+		return true
+	}
+	// 2.0: encrypted messages are 86-91
+	if protocol.TO2OVNextEntry20MsgType < msgType && msgType <= protocol.TO2DoneAck20MsgType {
+		return true
+	}
+	return false
 }
 
 func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -64,11 +114,21 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// Parse message type from request URL
-	msgType, ok := msgTypeFromPath(w, r)
+	// Parse version and message type from request URL
+	version, msgType, ok := versionAndMsgFromPath(w, r)
 	if !ok {
 		return
 	}
+
+	// Inject version into context for downstream handlers
+	ctx = protocol.ContextWithVersion(ctx, version)
+
+	// TO2 message types are version specific
+	if !msgTypeAllowedForVersion(msgType, version) {
+		writeErr(w, msgType, fmt.Errorf("message type %d is not part of FDO version %s", msgType, version))
+		return
+	}
+
 	proto := protocol.Of(msgType)
 
 	// Parse request headers
@@ -79,7 +139,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if token != "" {
 		token = strings.TrimPrefix(token, bearerPrefix)
-		ctx = h.Tokens.TokenContext(r.Context(), token)
+		ctx = h.Tokens.TokenContext(ctx, token)
 	}
 
 	// Immediately respond to an error
@@ -89,22 +149,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get responder for message
-	var resp protocol.Responder
-	var isProtocolStart bool
-	switch proto {
-	case protocol.DIProtocol:
-		resp = h.DIResponder
-		isProtocolStart = msgType == 10
-	case protocol.TO0Protocol:
-		resp = h.TO0Responder
-		isProtocolStart = msgType == 20
-	case protocol.TO1Protocol:
-		resp = h.TO1Responder
-		isProtocolStart = msgType == 30
-	case protocol.TO2Protocol:
-		resp = h.TO2Responder
-		isProtocolStart = msgType == 60
-	}
+	resp, isProtocolStart := h.responder(proto, msgType)
 	if resp == nil {
 		writeErr(w, msgType, fmt.Errorf("unsupported message type"))
 		return
@@ -116,11 +161,10 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		initToken, err := h.Tokens.NewToken(ctx, proto)
 		if err != nil {
 			writeErr(w, msgType, protocol.ErrorMessage{
-				Code:          500,
-				PrevMsgType:   msgType,
-				ErrString:     err.Error(),
-				Timestamp:     time.Now().Unix(),
-				CorrelationID: nil,
+				Code:        500,
+				PrevMsgType: msgType,
+				ErrString:   err.Error(),
+				Timestamp:   time.Now().Unix(),
 			})
 			return
 		}
@@ -132,6 +176,23 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// responder returns the responder for a message and whether the message
+// starts its protocol.
+func (h Handler) responder(proto protocol.Protocol, msgType uint8) (resp protocol.Responder, isProtocolStart bool) {
+	switch proto {
+	case protocol.DIProtocol:
+		return h.DIResponder, msgType == protocol.DIAppStartMsgType
+	case protocol.TO0Protocol:
+		return h.TO0Responder, msgType == protocol.TO0HelloMsgType
+	case protocol.TO1Protocol:
+		return h.TO1Responder, msgType == protocol.TO1HelloRVMsgType
+	case protocol.TO2Protocol:
+		// TO2 starts at msg 60 (1.01) or msg 80 (2.0)
+		return h.TO2Responder, msgType == protocol.TO2HelloDeviceMsgType || msgType == protocol.TO2HelloDeviceProbeMsgType
+	default:
+		return nil, false
+	}
+}
 func (h Handler) handleError(ctx context.Context, token string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var errMsg protocol.ErrorMessage
@@ -189,8 +250,10 @@ func (h Handler) handleRequest(ctx context.Context, w http.ResponseWriter, r *ht
 		})
 	}
 
-	// Decrypt TO2 messages after 64
-	if protocol.TO2ProveDeviceMsgType < msgType && msgType < protocol.ErrorMsgType {
+	// Decrypt TO2 messages after key exchange is complete
+	// 1.01: messages 65-71 (after ProveDevice/64)
+	// 2.0: messages 86-91 (after OVNextEntry/85)
+	if isEncryptedTO2Message(msgType) {
 		sess, err := resp.(interface {
 			CryptSession(ctx context.Context) (kex.Session, error)
 		}).CryptSession(ctx)
@@ -210,7 +273,8 @@ func (h Handler) handleRequest(ctx context.Context, w http.ResponseWriter, r *ht
 		}
 
 		if debugEnabled() {
-			slog.Debug("decrypted request", "msg", msgType, "body", tryDebugNotation(decrypted))
+			// #nosec G706 -- sanitizeLogValue removes newline/control characters
+			slog.Debug("decrypted request", "msg", msgType, "body", sanitizeLogValue(tryDebugNotation(decrypted)))
 		}
 
 		msg = io.NopCloser(bytes.NewBuffer(decrypted))
@@ -229,8 +293,8 @@ func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, msgTy
 		}
 	}
 
-	// Encrypt TO2 messages beginning with 64
-	if protocol.TO2ProveDeviceMsgType < respType && respType < protocol.ErrorMsgType {
+	// Encrypt TO2 messages after key exchange is complete
+	if isEncryptedTO2Message(respType) {
 		sess, err := resp.(interface {
 			CryptSession(ctx context.Context) (kex.Session, error)
 		}).CryptSession(ctx)
@@ -243,7 +307,8 @@ func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, msgTy
 
 		if debugEnabled() {
 			body, _ := cbor.Marshal(respData)
-			slog.Debug("unencrypted response", "msg", respType, "body", tryDebugNotation(body))
+			// #nosec G706 -- sanitizeLogValue removes newline/control characters
+			slog.Debug("unencrypted response", "msg", respType, "body", sanitizeLogValue(tryDebugNotation(body)))
 		}
 
 		respData, err = sess.Encrypt(rand.Reader, respData)
@@ -255,8 +320,10 @@ func (h Handler) writeResponse(ctx context.Context, w http.ResponseWriter, msgTy
 	}
 
 	// Invalidate token when finishing a protocol
+	// DI: 13, TO0: 23, TO1: 33, TO2 1.01: 71, TO2 2.0: 91
 	switch respType {
-	case 13, 23, 33, 71:
+	case protocol.DIDoneMsgType, protocol.TO0AcceptOwnerMsgType, protocol.TO1RVRedirectMsgType,
+		protocol.TO2Done2MsgType, protocol.TO2DoneAck20MsgType:
 		h.invalidateToken(ctx)
 	}
 
@@ -307,8 +374,10 @@ func writeErr(w http.ResponseWriter, prevMsgType uint8, err error) {
 		msg.Timestamp = time.Now().Unix()
 	}
 
-	// TODO: Set correlation ID
-	msg.CorrelationID = nil
+	// TODO: Set correlation ID. EMErrorCID is always sent as a uint; 0
+	// means none (FDO 2.0 Errata 1, E4). Receivers accept null as 0.
+	var none uint
+	msg.CorrelationID = &none
 
 	var body bytes.Buffer
 	_ = cbor.NewEncoder(&body).Encode(msg)
